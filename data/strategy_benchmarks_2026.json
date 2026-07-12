@@ -1,0 +1,41 @@
+{
+  "version": 1,
+  "purpose": "Regression scenarios derived from publicly reported 2026 race-strategy turning points. They test decision invariants, not exact team simulation data.",
+  "cases": [
+    {
+      "id": "australia_vsc_discount",
+      "race": "2026 Australian Grand Prix",
+      "public_observation": "Mercedes stopped under the lap-11 VSC while Ferrari stayed out; the discounted stop and clear air became strategically decisive.",
+      "expected_invariant": "For the same legal tyre plan, VSC risk-adjusted time must be materially lower than green-flag time.",
+      "source_note": "Public race reports from Formula 1 coverage and season reporting. Exact hidden team models are unavailable."
+    },
+    {
+      "id": "japan_safety_car_opportunity",
+      "race": "2026 Japanese Grand Prix",
+      "public_observation": "A well-timed safety-car stop helped Antonelli convert a compromised early phase into the winning position.",
+      "expected_invariant": "A full-SC stop receives a larger discount than VSC and can move the preferred stop earlier when tyre and traffic conditions support it.",
+      "source_note": "Associated Press race report; test uses a synthetic telemetry state, not proprietary Mercedes data."
+    },
+    {
+      "id": "britain_late_sc_track_position",
+      "race": "2026 British Grand Prix",
+      "public_observation": "Hamilton pitted during the late safety car while Russell stayed out; the race ended neutralised and track position decided second place.",
+      "expected_invariant": "With only a few laps left under a full SC, a stop that loses positions must carry a large classification-risk penalty.",
+      "source_note": "Reuters/Guardian race reporting; classification risk is represented as a bounded ranking penalty."
+    },
+    {
+      "id": "red_flag_free_change",
+      "race": "Generic 2026 red-flag restart",
+      "public_observation": "A tyre change during suspension is not modelled as an ordinary green-flag drive-through loss.",
+      "expected_invariant": "Red-flag tyre changes have zero normal pit-loss cost while compound legality still applies for the remaining race.",
+      "source_note": "FIA sporting-rule treatment encoded as a strategy invariant."
+    },
+    {
+      "id": "high_degradation_multistop",
+      "race": "High-degradation 35-lap regression",
+      "public_observation": "A strategy model must not force a lazy one-stop when measured personal per-wheel wear makes the long final stint infeasible.",
+      "expected_invariant": "At sufficiently high measured wear, a two-stop plan outranks every feasible one-stop plan despite the extra pit loss.",
+      "source_note": "Synthetic stress case calibrated from Pit Wall personal telemetry fields."
+    }
+  ]
+}
