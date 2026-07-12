@@ -121,3 +121,30 @@ async def test_session_packet_preserves_safety_car_ending_phase() -> None:
 
     state = await store.snapshot_analysis()
     assert state["race_control_phase"] == "safety_car_ending"
+
+@pytest.mark.asyncio
+async def test_flags_and_unserved_penalties_are_exposed() -> None:
+    store = StateStore()
+    protocol = F1DatagramProtocol(store)
+
+    lap = PacketLapData()
+    lap.header = header(2)
+    player = lap.lap_data[0]
+    player.current_lap_num = 4
+    player.car_position = 10
+    player.safety_car_delta = -0.35
+    player.num_unserved_drive_through_pens = 1
+    player.num_unserved_stop_go_pens = 0
+    player.pit_stop_should_serve_pen = 1
+    await protocol._handle(lap)
+
+    status = PacketCarStatusData()
+    status.header = header(7)
+    status.car_status_data[0].vehicle_fia_flags = 2
+    await protocol._handle(status)
+
+    state = await store.snapshot_analysis()
+    assert state["fia_flag"] == "blue"
+    assert state["unserved_drive_through_penalties"] == 1
+    assert state["pit_stop_should_serve_penalty"] is True
+    assert state["safety_car_delta_s"] == pytest.approx(-0.35, abs=0.01)

@@ -55,6 +55,7 @@ VISUAL_COMPOUNDS = {
     23: "C1",
 }
 STATUS = {0: "garage", 1: "flying", 2: "in lap", 3: "out lap", 4: "on track"}
+FIA_FLAGS = {-1: "invalid", 0: "none", 1: "green", 2: "blue", 3: "yellow", 4: "red"}
 
 
 def normalize_wheels(values: Iterable[Any]) -> list[Any]:
@@ -393,9 +394,19 @@ class F1DatagramProtocol(asyncio.DatagramProtocol):
             state.player_position = int(player.car_position)
             state.sector = int(player.sector)
             state.current_lap_invalid = bool(player.current_lap_invalid)
+            state.safety_car_delta_s = float(player.safety_car_delta)
             state.penalties_s = int(player.penalties)
             state.warnings = int(player.total_warnings)
             state.corner_cutting_warnings = int(player.corner_cutting_warnings)
+            state.unserved_drive_through_penalties = int(
+                player.num_unserved_drive_through_pens
+            )
+            state.unserved_stop_go_penalties = int(
+                player.num_unserved_stop_go_pens
+            )
+            state.pit_stop_should_serve_penalty = bool(
+                player.pit_stop_should_serve_pen
+            )
             state.pit_status = int(player.pit_status)
             state.pit_lane_time_ms = int(player.pit_lane_time_in_lane_in_ms)
             for index, lap in enumerate(packet.lap_data):
@@ -487,6 +498,7 @@ class F1DatagramProtocol(asyncio.DatagramProtocol):
                 car.ers_harvested_this_lap_mguh
             )
             state.drs_allowed = bool(car.drs_allowed)
+            state.fia_flag = FIA_FLAGS.get(int(car.vehicle_fia_flags), "unknown")
             state.tyre.compound = VISUAL_COMPOUNDS.get(
                 int(car.visual_tyre_compound), str(car.visual_tyre_compound)
             )

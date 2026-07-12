@@ -60,12 +60,18 @@ class Settings(BaseSettings):
     wake_preroll_s: float = 0.80
     wake_speech_rms: float = 260.0
     wake_start_blocks: int = 2
-    wake_silence_s: float = 0.90
+    wake_silence_s: float = 0.60
     wake_min_utterance_s: float = 0.35
     wake_max_utterance_s: float = 15.0
     wake_arm_timeout_s: float = 6.0
     wake_tts_cooldown_s: float = 1.50
     wake_block_ms: int = 30
+
+    # Perceived-latency controls. Acknowledgements are cached once and played
+    # while the model works; native TTS streams raw PCM to the output device.
+    voice_ack_enabled: bool = True
+    voice_stream_tts: bool = True
+    voice_clip_queue_size: int = 2
 
     data_dir: Path = Path.home() / "PitWallData"
     open_browser: bool = True

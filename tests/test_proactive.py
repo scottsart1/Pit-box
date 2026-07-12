@@ -192,3 +192,83 @@ async def test_qualifying_progress_payload_uses_best_laps_not_gaps(stack):
     assert event["payload"]["strategy"] == {}
     assert event["payload"]["qualifying"]["session_best"] == "1:28.500"
     assert event["payload"]["qualifying"]["target"] == "1:28.400"
+
+@pytest.mark.asyncio
+async def test_rival_pitting_from_behind_queues_undercut_threat(stack):
+    from pitwall.state import DriverState
+
+    store, database, _, _, _, _ = stack
+    engineer = ProactiveEngineer(
+        store,
+        _Brain(database),  # type: ignore[arg-type]
+        _Voice(),  # type: ignore[arg-type]
+        _Setup(),  # type: ignore[arg-type]
+        _Strategy(),  # type: ignore[arg-type]
+    )
+
+    async def no_refresh(self, state):
+        return state
+
+    engineer._refresh_strategy_if_needed = types.MethodType(no_refresh, engineer)
+
+    def setup(state):
+        state.connected = True
+        state.session_uid = 444
+        state.game_paused = False
+        state.mode_profile = "race"
+        state.current_lap = 12
+        state.total_laps = 35
+        state.player_car_index = 0
+        state.proactive["enabled"] = True
+        state.drivers[0] = DriverState(
+            0, "Sarthak", active=True, position=6, pit_stops=0, gap_to_player_s=0.0
+        )
+        state.drivers[1] = DriverState(
+            1, "Lawson", active=True, position=7, pit_stops=0, gap_to_player_s=8.4
+        )
+
+    await store.mutate(setup)
+    await engineer._reset_for_session(444)
+    await engineer._detect(await store.snapshot_analysis())
+
+    await store.mutate(lambda state: setattr(state.drivers[1], "pit_stops", 1))
+    await engineer._detect(await store.snapshot_analysis())
+
+    threats = [item for item in engineer.pending if item["type"] == "undercut_threat"]
+    assert len(threats) == 1
+    assert threats[0]["payload"]["driver"] == "Lawson"
+    assert threats[0]["payload"]["gap_to_player_s"] == pytest.approx(8.4)
+
+
+@pytest.mark.asyncio
+async def test_qualifying_invalid_lap_queues_deleted_lap_call(stack):
+    store, database, _, _, _, _ = stack
+    engineer = ProactiveEngineer(
+        store,
+        _Brain(database),  # type: ignore[arg-type]
+        _Voice(),  # type: ignore[arg-type]
+        _Setup(),  # type: ignore[arg-type]
+        _Strategy(),  # type: ignore[arg-type]
+    )
+
+    async def no_refresh(self, state):
+        return state
+
+    engineer._refresh_strategy_if_needed = types.MethodType(no_refresh, engineer)
+    await store.update(
+        connected=True,
+        session_uid=555,
+        game_paused=False,
+        mode_profile="qualifying",
+        current_lap=3,
+        current_lap_invalid=False,
+    )
+    await engineer._reset_for_session(555)
+    await engineer._detect(await store.snapshot_analysis())
+
+    await store.update(current_lap_invalid=True, sector=2)
+    await engineer._detect(await store.snapshot_analysis())
+
+    deleted = [item for item in engineer.pending if item["type"] == "lap_deleted"]
+    assert len(deleted) == 1
+    assert deleted[0]["payload"]["lap"] == 3

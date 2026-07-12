@@ -1,4 +1,4 @@
-# Pit Wall 3.0 implementation notes
+# Pit Wall 3.2 implementation notes
 
 ## Reliability boundaries
 
@@ -20,3 +20,12 @@ The deterministic layer creates legal feasible plans and returns transparent sti
 ## Racing line
 
 World X/Z is aligned by lap distance to the stored PB. Signed cross-track distance is calculated from the local PB tangent. Persistent zones combine path, speed, brake and throttle differences. No claim is made that the PB line is globally optimal.
+
+## Radio latency
+
+- Bounded capture remains the stable STT path in 3.2.
+- A cached acknowledgement runs concurrently with answer generation.
+- Raw PCM TTS is played as chunks arrive, with a WAV compatibility fallback.
+- Simple live facts bypass the reasoning/tool loop.
+- Independent function calls are awaited concurrently.
+- The dashboard exposes cumulative stage timestamps and the server-driven radio rail.

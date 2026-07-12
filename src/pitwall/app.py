@@ -112,7 +112,7 @@ async def lifespan(app: FastAPI):
         udp_transport.close()
 
 
-app = FastAPI(title="Pit Wall", version="3.1.0", lifespan=lifespan)
+app = FastAPI(title="Pit Wall", version="3.2.0", lifespan=lifespan)
 
 
 class AskRequest(BaseModel):
@@ -160,6 +160,8 @@ async def health() -> dict[str, object]:
         "wake_enabled": snapshot["wake_enabled"],
         "wake_status": snapshot["wake_status"],
         "wake_phrase": snapshot["wake_phrase"],
+        "radio_indicator": snapshot["radio_indicator"],
+        "radio_latency": snapshot["radio_latency"],
         "proactive": snapshot["proactive"],
         "database": str(database.path),
         "last_error": snapshot["last_error"],

@@ -1,216 +1,74 @@
-# Pit Wall 3.1.0 — OpenAI F1 Race Engineer for PS5 and Windows
+# Pit Wall 3.2.0 — OpenAI F1 race engineer for PS5 and Windows
 
-Pit Wall receives F1 25 / 2026 telemetry from a PS5, records the full driving session, answers L3 radio calls, makes unsolicited race-engineer updates, simulates tyre-and-stop strategy, compares the driver's world-coordinate line with a personal-best reference, and learns setup behavior across weekends.
+Pit Wall receives F1 25 / 2026 Season Pack telemetry from a PS5 over UDP, keeps a persistent race and setup history, answers spoken questions, produces proactive engineer calls, and renders a live/review/setup dashboard at `http://127.0.0.1:8000`.
 
-Dashboard: `http://127.0.0.1:8000`
+## What changed in 3.2
 
-## 3.1.0 — hands-free “Mark” radio and qualifying timing mode
+### Radio state rail
 
-### Hands-free wake radio
+A thin rail runs down the left edge of the dashboard:
 
-Pit Wall now keeps one Windows microphone stream open and uses a local RMS voice-activity gate. Only bounded speech candidates are uploaded for transcription. A command is accepted only when the transcript starts with a configured wake phrase.
+- **Yellow** — Pit Wall is recording/listening.
+- **Green** — the clip was finalized and is being transcribed or processed.
+- **Blue** — the engineer is speaking.
+- **Red** — the voice pipeline failed.
 
-Both patterns work:
+The state is driven by the same server-side voice state used by L3 and hands-free “Mark”; it is not a decorative browser timer.
 
-```text
-Mark, what is the target lap?
+### Less perceived dead air
 
-Mark
-[local beep]
-Give me the top three best laps.
-```
+The voice path now does the highest-impact low-risk latency work:
 
-The default accepted prefixes are `Mark`, `Hey Mark`, `Mark radio`, and `Hey Marc`. Prefix-only matching reduces false activation from commentary that mentions the name later in a sentence. The engineer's own TTS temporarily pauses wake detection and applies a cooldown so it does not trigger itself. A 15-second cap prevents a stuck capture.
+1. End-of-speech silence defaults to `0.60 s` for wake radio.
+2. A short cached **“Copy”** or **“Copy, stand by”** acknowledgement plays while the answer is calculated.
+3. Native TTS uses 24 kHz raw PCM and begins playback as network chunks arrive instead of waiting for a complete audio file.
+4. Common factual radio calls use a deterministic fast path instead of an unnecessary reasoning/tool loop.
+5. Independent telemetry tool calls are executed concurrently.
+6. Deep reasoning is reserved for genuine planning questions rather than ordinary uses of words such as “why”, “corner”, “best lap”, or “target”.
+7. Deep calls have sufficient reasoning-token headroom while the spoken persona remains concise.
 
-The existing controller path is preserved without recalibration:
+The dashboard records elapsed time from finalized audio to final transcript, answer completion, first audio, and total completion. This makes future tuning evidence-based.
 
-```text
-L3 -> F1 UDP Action 1 -> Pit Wall radio
-```
+### Voice robustness
 
-L3 remains a fallback. Brake, throttle, steering, gears, DRS, MFD and every unrelated controller bit remain excluded from the PTT state machine.
+- The saved `L3 -> UDP Action 1` binding is unchanged.
+- Wake on/off is persisted in `%USERPROFILE%\PitWallData\ptt.json`.
+- A new PTT clip arriving while another clip is processing is queued rather than silently discarded.
+- Prompt-echo transcripts and repeated wake-word garbage are rejected.
+- Cached acknowledgement generation is non-fatal; a local tone is used if the cache is not ready.
+- Streaming TTS falls back to the previous full-file path if the audio device or SDK cannot stream cleanly.
 
-Relevant `.env` controls:
+### Additional race-operation calls
 
-```env
-PITWALL_WAKE_ENABLED=true
-PITWALL_WAKE_PHRASE=mark
-PITWALL_WAKE_ALIASES=hey mark,mark radio,hey marc
-PITWALL_WAKE_SPEECH_RMS=260
-PITWALL_WAKE_SILENCE_S=0.90
-PITWALL_WAKE_ARM_TIMEOUT_S=6
-PITWALL_WAKE_TTS_COOLDOWN_S=1.50
-```
+Pit Wall now surfaces and can proactively react to:
 
-Use a headset microphone. If game audio creates too many rejected candidates, increase `PITWALL_WAKE_SPEECH_RMS` in steps of 40–80. The dashboard shows accepted/rejected counts and the last rejection reason.
+- A qualifying lap becoming invalid.
+- A probable clear-air release window during qualifying, labelled as an estimate.
+- A blue flag.
+- Outstanding drive-through or stop-go penalties and whether the game marks a penalty to be served at a stop.
+- A nearby car behind pitting and creating an undercut threat.
+- 2026 sessions use **Manual Override** terminology instead of presenting the overtaking aid as DRS.
 
-### Qualifying is now time-target driven
+The foundational Setup Lab now contains its own canonical track fallback, so Spa/Monza/etc. still resolve even if the third-party enum import is temporarily unavailable.
 
-In qualifying, Pit Wall no longer volunteers race-style gaps ahead or behind. The timing tower is sorted by best lap and shows delta to the session best. Radio and proactive updates prioritize:
+## Important latency scope
 
-- session/pole best lap;
-- the player's best lap;
-- theoretical best from personal sectors;
-- target lap and required improvement;
-- one corner or racing-line opportunity.
-
-Traffic gaps remain available only when explicitly requested. The new `get_qualifying_targets` tool returns the leading best laps and target context without race-gap fields.
-
-### Upgrade
-
-Stop Pit Wall, extract this build into a fresh folder, copy your existing `.env`, then run:
-
-```powershell
-Set-ExecutionPolicy -Scope Process Bypass
-.\install_windows.ps1
-.\start_pitwall.bat
-```
-
-Your database and `%USERPROFILE%\PitWallData\ptt.json` are reused. No L3 recalibration is required.
-
-
-## 3.0.1 database hotfix
-
-F1 telemetry identifies a session with an **unsigned 64-bit** `sessionUID`. SQLite's `INTEGER` type is a **signed 64-bit** value. Some real sessions therefore produced `OverflowError: Python int too large to convert to SQLite INTEGER` when saving radio, strategy, lap, setup, line, proactive or event history.
-
-Version 3.0.1 stores the UID using a reversible signed two's-complement representation and restores the original unsigned value when history is read. No database reset or migration is required. Existing data remains compatible.
-
-## What 3.0 fixes
-
-### L3 / UDP Action 1 no longer breaks when another control is used
-
-Your game mapping stays unchanged:
+3.2 streams **TTS**, but speech recognition is still the proven bounded-clip path:
 
 ```text
-L3 -> F1 UDP Action 1 -> Pit Wall radio
+local VAD -> finalize clip -> upload WAV -> final transcript
 ```
 
-F1's `BUTN` events are not a reliable stream of the controller's complete held state. Earlier builds interpreted a later brake, throttle, gear or MFD event that omitted the UDP Action bit as a release. Version 3.0 instead **latches** the radio when the configured `0x...` bit is observed. Unrelated controller packets cannot close it.
+True incremental Realtime transcription is deliberately not enabled in this maintenance release. It needs a persistent WebSocket session, partial-transcript reconciliation, reconnect handling, and representative headset/game-audio testing. The dashboard timings will show whether STT remains the dominant stage on your hardware. That migration can then be made without guessing.
 
-The normal production flow is:
+Likewise, model output is not yet spoken sentence-by-sentence. Tool-aware response streaming is possible, but the current patch prioritizes reliability: deterministic fast answers plus streamed TTS remove most of the avoidable wait without destabilizing the strategy tool loop.
 
-```text
-L3/UDP Action pulse -> recording starts
-other driving inputs -> ignored by PTT state machine
-speech ends -> post-speech silence finalises the clip
-15 seconds -> hard safety cap if silence is never found
-```
-
-The saved binding in `%USERPROFILE%\PitWallData\ptt.json` is reused and is not recalibrated or overwritten.
-
-A practical limitation remains: if the game does not emit the **initial** UDP Action event at all for a particular simultaneous control combination, software on the laptop cannot observe a missing packet. The new latch fixes the much more common failure where the press arrived and a later unrelated input falsely ended it.
-
-### Proactive engineer every two analysed laps
-
-The cadence is threshold-based, not a fragile `lap % 2 == 0` check. If an analysis cycle misses the exact boundary, the overdue update is emitted on the next analysed lap rather than being lost.
-
-A progress call can include:
-
-- pace versus session/PB target;
-- position and nearby gap trend;
-- tyre wear, degradation and fuel state;
-- current tyre-and-lap stop plan;
-- one repeated corner or racing-line opportunity.
-
-Calls queue while braking or in high lateral-G and are delivered on a safe section. A delivery deadline relaxes the requirement on tracks with no long straight, while still refusing heavy braking. Driver radio always pre-empts proactive speech. Critical SC/VSC/red-flag, weather, damage and penalty calls bypass the ordinary cadence.
-
-The dashboard shows `last queued lap`, `next due lap`, queue age and delivery state so silence is diagnosable rather than mysterious. A **Test call** button queues an immediate progress update for live hardware acceptance testing; it still waits for a safe section before speaking.
-
-### Strategy is now a risk model, not a fresh-tyre shortcut
-
-Candidate plans cover zero, one, two and—on long/high-degradation races—three remaining stops. Each stint is evaluated with:
-
-- four independent FL/FR/RL/RR wear rates;
-- fuel-corrected personal degradation;
-- current-stint evidence;
-- prior personal evidence for that track and compound;
-- fitted and available-set wear, life and transmitted lap delta;
-- setup-induced front/rear wear and pace effects;
-- tyre-age thermal growth, wear penalty and cliff behavior;
-- green/VSC/SC/red-flag stop loss;
-- pit-entry availability;
-- projected rejoin and traffic cost;
-- dry-race two-compound legality and wet waiver;
-- Monte Carlo p25/p50/p75/p90 outcome ranges.
-
-Plans are ranked by the configured risk quantile (`p75` by default), not only nominal time. Repeated stint simulations are cached, keeping a synthetic 70-lap/three-stop search well below one second on the development environment rather than progressively blocking the event loop.
-
-Late Safety Cars are treated specially. When only a few laps remain, positions surrendered in the pits receive a large classification-risk penalty because the race may not restart. This prevents advice that looks fast in seconds but gives away an unrecoverable finishing position.
-
-The strategy dashboard exposes the top plans, confidence, uncertainty, stop requirement, compound legality, effective pit loss, traffic/rejoin, per-wheel finish wear and the evidence source behind the call.
-
-See `docs/2026_STRATEGY_BENCHMARKS.md` and `data/strategy_benchmarks_2026.json` for race-inspired regression cases.
-
-### Personal racing-line map
-
-Motion/world-position telemetry is recorded with speed, brake, throttle and steering. A valid personal-best trace becomes the reference. Each later lap is aligned by lap distance and assessed for:
-
-- signed left/right deviation;
-- mean, p95 and maximum deviation;
-- persistent deviation zones;
-- speed/brake/throttle difference in each zone;
-- a bounded line-consistency score;
-- the most actionable path opportunity.
-
-The Live tab draws current and PB paths. Review stores the metrics by lap. This is a **personal reference line**, not an official ideal line supplied by the game; it improves as the driver's own PB improves.
-
-### Complete pre-weekend Setup Lab
-
-Setup Lab works with no live session. Select a track, then generate:
-
-- **Race:** long-run stability, traction and tyre protection;
-- **Quali:** response, rotation and peak one-lap performance;
-- **Hybrid:** compromise between both.
-
-The output contains the complete setup surface: wings, differentials, geometry, suspension, anti-roll bars, ride heights, brakes, engine braking, all four pressures and ballast. It begins from a circuit-archetype foundation, then conservatively blends stored personal runs, per-wheel wear, temperatures, lock-ups, wheelspin, line score and spoken handling feedback.
-
-During a race, the separate pit-stop card only recommends a permitted front-wing adjustment. It does not pretend the complete setup can be changed in the pits.
-
-### Durable, queryable history
-
-SQLite is stored at:
-
-```text
-%USERPROFILE%\PitWallData\pitwall.sqlite3
-```
-
-Version 3.0 persists:
-
-- sessions and final classification;
-- lap summaries, sectors and full traces;
-- per-corner metrics;
-- racing-line metrics;
-- radio transcript;
-- proactive calls and whether they were delivered;
-- strategy snapshots and alternatives;
-- SC/VSC/red-flag/penalty/overtake/session events;
-- setup recommendations, setup runs and handling feedback.
-
-The Review tab reads the database, and the engineer tool `get_stored_history` can answer questions such as:
-
-```text
-Give me my last five valid laps.
-What strategy did you recommend before the Safety Car?
-What are my recurring line deviations at Spa?
-How did this setup affect rear wear in earlier races?
-```
-
-### Long-race architecture
-
-- UDP datagrams flow through one ordered bounded queue.
-- No task is spawned for every packet.
-- Hot dashboard snapshots exclude full traces and driver history.
-- Full traces are persisted once and removed from hot memory.
-- Repeated strategy stint calculations are cached.
-- Session events use a separate bounded persistence queue.
-- Queue depth and dropped-packet counts are visible in the dashboard/health state.
-
-## Upgrade from a working installation
+## Upgrade from 3.1
 
 1. Stop Pit Wall.
-2. Keep the old folder as a backup.
-3. Extract this package to a new writable folder.
-4. Copy only your existing `.env` into the new folder.
+2. Extract the 3.2 ZIP into a new writable folder.
+3. Copy your existing `.env` into the new folder.
+4. Do **not** copy or replace `%USERPROFILE%\PitWallData`; it contains your SQLite history and saved PTT/wake configuration.
 5. Open PowerShell in the new folder:
 
 ```powershell
@@ -224,97 +82,120 @@ Set-ExecutionPolicy -Scope Process Bypass
 .\start_pitwall.bat
 ```
 
-The database and PTT binding live outside the project folder under `%USERPROFILE%\PitWallData`, so they are reused automatically.
+Your L3/UDP Action 1 mask is reused automatically.
 
-For an in-place update, preserve `.env`, replace the project files, then run:
+## Recommended `.env` additions
 
-```powershell
-Set-ExecutionPolicy -Scope Process Bypass
-.\update_windows.ps1
-```
-
-## Recommended `.env`
-
-Copy `.env.example`, put your own key after `OPENAI_API_KEY=`, and keep it out of Git.
-
-For the stronger strategic-judgement profile:
+Keep your existing API key and model settings. Add or update:
 
 ```env
-PITWALL_MODEL=gpt-5.6-terra
-PITWALL_REASONING_EFFORT=low
-PITWALL_DEEP_REASONING_EFFORT=high
-PITWALL_OPENAI_TIMEOUT_S=45
+PITWALL_VOICE_ACK_ENABLED=true
+PITWALL_VOICE_STREAM_TTS=true
+PITWALL_VOICE_CLIP_QUEUE_SIZE=2
+PITWALL_WAKE_SILENCE_S=0.60
 ```
 
-Routine telemetry calls remain low-effort. Strategy, setup, degradation, comparisons and what-if questions are automatically sent with the deep reasoning effort.
+A complete template is in `.env.example`.
 
-The PTT lines should remain:
+If the wake phrase clips natural pauses, try `0.70`. If it still feels slow and your speech is continuous, test `0.50`. Avoid changing several latency settings at once; use the dashboard timing card to compare runs.
 
-```env
-PITWALL_PTT_RELEASE_MODE=silence
-PITWALL_PTT_SILENCE_RELEASE_S=1.15
-PITWALL_PTT_MAX_RECORDING_S=15
-PITWALL_PTT_RELEASE_WATCHDOG_S=0
+## First shakedown
+
+Run one practice or qualifying session and test:
+
+```text
+Mark, what is my target lap?
+Mark, what are my last two laps?
+Mark, give me a race update.
+Mark, should I pit under this safety car?
 ```
 
-Do not switch back to explicit release for the current PS5 UDP Action behavior.
+Expected dashboard flow:
 
-## PS5 and Windows setup
+```text
+yellow -> green -> blue -> idle
+```
 
-Use 64-bit Python 3.11 or 3.12. Then:
+For a simple factual call, the timing card should identify it as `fast`. Strategy/setup/what-if calls should identify as `deep` and play “Copy, stand by” while working.
+
+During qualifying, Pit Wall continues to prioritize field best laps, your best, theoretical best, required target, run preparation, and clear-air estimates rather than volunteering race gaps.
+
+## Windows installation from scratch
+
+Use 64-bit Python 3.11 or 3.12.
 
 ```powershell
 Set-ExecutionPolicy -Scope Process Bypass
 .\install_windows.ps1
 ```
 
-Run `check_windows_firewall.ps1` as Administrator. In F1:
+Then edit `.env`:
 
-- UDP telemetry: On
-- Destination IP: laptop IPv4
-- Port: `20777`
-- UDP format: `2026`
-- Send rate: `60 Hz` (or `30 Hz` on unreliable Wi-Fi)
-- Your Telemetry: Public
-- L3 mapped to UDP Action 1
-
-Start with `start_pitwall.bat`.
-
-## Acceptance checks
-
-Open:
-
-```text
-http://127.0.0.1:8000/api/health
+```env
+OPENAI_API_KEY=your_actual_key
 ```
 
-Confirm the model, key, PTT state and UDP listener. Then complete three clean practice laps and verify:
+Run the Windows firewall helper as administrator if UDP 20777 is blocked, then:
 
-1. L3 begins recording; braking, throttle, gear and MFD inputs do not end it.
-2. Silence after speech finalises the clip.
-3. A proactive update appears at analysed lap 2, then lap 4 (or the next analysed lap if processing was late).
-4. The racing-line map builds a PB reference and shows later deviation zones.
-5. Review contains radio, laps, strategy snapshots and line metrics after restart.
-6. Setup Lab can generate a complete setup after selecting a track with no PS5 session running.
+```powershell
+.\start_pitwall.bat
+```
 
-## Verification for this package
-
-The recorded verification run is in `docs/VERIFICATION.md`.
+PS5 telemetry:
 
 ```text
-40 automated tests passed
+Telemetry: On
+Destination IP: Windows laptop IPv4 address
+Port: 20777
+UDP format: 2026
+Send rate: 60 Hz
+```
+
+For controller radio, retain:
+
+```text
+Physical L3 -> F1 UDP Action 1 -> Pit Wall saved mask
+```
+
+## Data and privacy
+
+Runtime data is stored in:
+
+```text
+%USERPROFILE%\PitWallData
+```
+
+This includes:
+
+- `pitwall.sqlite3`
+- `ptt.json`
+- latest bounded driver/wake clips
+- latest engineer audio
+- cached acknowledgement WAVs
+
+The `.env` file is excluded by `.gitignore`. Never commit or share it.
+
+## Verification
+
+The release was checked with:
+
+```text
+57 automated tests passed
 Ruff static checks passed
 Python compilation passed
 Dashboard JavaScript syntax passed
-FastAPI startup/health smoke test passed
-70-lap strategy performance smoke test passed
+FastAPI startup and /api/health passed
 ```
 
-The automated suite covers controller-event latching, silence release, proactive cadence recovery, current 2026 enums, two-compound legality, per-wheel degradation, setup interaction, VSC/SC/red-flag behavior, late-SC track-position protection, multi-stop selection, racing-line deviation, persistent history and long-race snapshots.
+Tests cover the original strategy, setup, persistence, racing-line and UDP behavior plus:
 
-## Honest limits
+- Fast/normal/deep request routing.
+- Prompt-echo rejection.
+- Wake-setting persistence.
+- Radio-state rail presence.
+- Correct Setup Lab fallback tracks.
+- FIA flag and unserved-penalty parsing.
+- Qualifying invalid-lap calls.
+- Nearby rival undercut-threat calls.
 
-- A laptop cannot react to a controller event that the PS5 game never transmits. The latch prevents false releases after a received press; it cannot manufacture a missing initial UDP Action packet.
-- The line reference is personal-best based, not an official optimal racing line.
-- Public 2026 race reports provide useful regression mechanisms, but not team-private degradation curves or strategy simulations.
-- Recommendations become materially stronger after several clean, comparable personal laps and repeated sessions with the same setup/track/compound.
+See `docs/VERIFICATION.md` and `docs/LATENCY_ARCHITECTURE.md`.

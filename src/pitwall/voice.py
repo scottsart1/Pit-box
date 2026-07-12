@@ -54,6 +54,13 @@ class NativeVoiceController:
         self.stream: Any = None
         self.frames: list[np.ndarray] = []
         self.busy = False
+        self._pending_clips: deque[np.ndarray] = deque(
+            maxlen=max(1, settings.voice_clip_queue_size)
+        )
+        self._ack_prepare_task: asyncio.Task[None] | None = None
+        self._persisted_wake_enabled: bool | None = None
+        self._interaction_source = ""
+        self._interaction_finalized_at = 0.0
 
         self._signal_pressed = False
         self._transition_lock = asyncio.Lock()
@@ -102,12 +109,81 @@ class NativeVoiceController:
         try:
             if self.config_path.exists():
                 payload = json.loads(self.config_path.read_text(encoding="utf-8"))
-                self.mask = int(payload["mask"])
+                self.mask = int(payload.get("mask", self.mask))
+                if "wake_enabled" in payload:
+                    self._persisted_wake_enabled = bool(payload["wake_enabled"])
         except Exception:
-            log.exception("Could not load PTT configuration")
+            log.exception("Could not load PTT/voice configuration")
+
+    def _save_config(self) -> None:
+        settings.data_dir.mkdir(parents=True, exist_ok=True)
+        self.config_path.write_text(
+            json.dumps(
+                {
+                    "mask": int(self.mask),
+                    "wake_enabled": bool(settings.wake_enabled),
+                },
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+
+    async def _begin_interaction(self, source: str) -> None:
+        self._interaction_source = source
+        await self.store.update(
+            radio_indicator="listening",
+            radio_source=source,
+            radio_latency={
+                "stage": "listening",
+                "source": source,
+                "route": "",
+                "capture_finalized_ms": None,
+                "transcript_ms": None,
+                "model_ms": None,
+                "first_audio_ms": None,
+                "complete_ms": None,
+                "ack": "",
+            },
+        )
+
+    async def _finalize_interaction(self, source: str) -> None:
+        self._interaction_source = source
+        self._interaction_finalized_at = time.perf_counter()
+        await self.store.update(
+            radio_indicator="processing",
+            radio_source=source,
+            radio_latency={
+                "stage": "processing",
+                "source": source,
+                "route": "",
+                "capture_finalized_ms": 0,
+                "transcript_ms": None,
+                "model_ms": None,
+                "first_audio_ms": None,
+                "complete_ms": None,
+                "ack": "",
+            },
+        )
+
+    async def _mark_latency(self, field: str, value: Any | None = None) -> None:
+        if not self._interaction_finalized_at:
+            return
+        elapsed = round((time.perf_counter() - self._interaction_finalized_at) * 1000)
+        snapshot = await self.store.snapshot_live()
+        latency = dict(snapshot.get("radio_latency", {}))
+        latency[field] = elapsed if value is None else value
+        if field in {"transcript_ms", "model_ms"}:
+            latency["stage"] = "processing"
+        elif field == "first_audio_ms":
+            latency["stage"] = "speaking"
+        elif field == "complete_ms":
+            latency["stage"] = "complete"
+        await self.store.update(radio_latency=latency)
 
     async def initialize(self) -> None:
         settings.data_dir.mkdir(parents=True, exist_ok=True)
+        if self._persisted_wake_enabled is not None:
+            settings.wake_enabled = self._persisted_wake_enabled
         await self.store.update(
             ptt_mask=self.mask,
             ptt_status="ready" if self.mask else "calibration required",
@@ -125,6 +201,16 @@ class NativeVoiceController:
         )
         if settings.native_voice:
             await self._ensure_input_stream()
+        prepare_acknowledgements = getattr(
+            self.audio,
+            "prepare_acknowledgements",
+            None,
+        )
+        if callable(prepare_acknowledgements):
+            self._ack_prepare_task = self.loop.create_task(
+                prepare_acknowledgements(),
+                name="pitwall-ack-cache",
+            )
 
     async def shutdown(self) -> None:
         self._shutdown = True
@@ -134,6 +220,7 @@ class NativeVoiceController:
             self._speech_task,
             self._wake_process_task,
             self._wake_arm_task,
+            self._ack_prepare_task,
         ):
             if task and not task.done():
                 task.cancel()
@@ -151,6 +238,7 @@ class NativeVoiceController:
 
     async def configure_wake(self, enabled: bool) -> dict[str, Any]:
         settings.wake_enabled = bool(enabled)
+        self._save_config()
         self._clear_wake_capture()
         await self._disarm_wake("disabled" if not enabled else "ready")
         if enabled and settings.native_voice:
@@ -195,11 +283,7 @@ class NativeVoiceController:
                 mask = changed_on & -changed_on
                 self.mask = int(mask)
                 self.calibrating = False
-                settings.data_dir.mkdir(parents=True, exist_ok=True)
-                self.config_path.write_text(
-                    json.dumps({"mask": self.mask}, indent=2),
-                    encoding="utf-8",
-                )
+                self._save_config()
                 self.loop.create_task(
                     self.store.update(
                         ptt_mask=self.mask,
@@ -281,6 +365,9 @@ class NativeVoiceController:
                 ptt_pressed=False,
                 ptt_release_reason=reason,
             )
+            await self._finalize_interaction("ptt")
+            with contextlib.suppress(Exception):
+                await self.audio.play_tone(760.0, 0.07, 0.08)
             await self._stop_recording(
                 process=held_ms >= settings.ptt_min_hold_ms
             )
@@ -431,6 +518,11 @@ class NativeVoiceController:
                 self._wake_preroll.clear()
                 self.loop.call_soon_threadsafe(
                     lambda: self.loop.create_task(
+                        self._begin_interaction("wake")
+                    )
+                )
+                self.loop.call_soon_threadsafe(
+                    lambda: self.loop.create_task(
                         self.store.update(wake_status="hearing speech")
                     )
                 )
@@ -456,6 +548,11 @@ class NativeVoiceController:
         self._wake_finalize_pending = True
         frames = self._wake_frames
         self._clear_wake_capture(keep_pending=True)
+        self.loop.call_soon_threadsafe(
+            lambda: self.loop.create_task(
+                self._finalize_interaction("wake")
+            )
+        )
         self.loop.call_soon_threadsafe(
             self._launch_wake_candidate,
             frames,
@@ -494,12 +591,16 @@ class NativeVoiceController:
     ) -> None:
         try:
             if self._signal_pressed or not frames:
+                await self.store.update(radio_indicator="idle")
+                self._interaction_finalized_at = 0.0
                 return
             data = np.concatenate(frames, axis=0)
             duration = data.shape[0] / max(1, settings.audio_sample_rate)
             if duration < settings.wake_min_utterance_s:
+                await self._reject_wake("clip too short", "")
                 return
             if self._rms(data) < settings.audio_min_rms:
+                await self._reject_wake("clip too quiet", "")
                 return
 
             source = settings.data_dir / "latest_wake.wav"
@@ -511,6 +612,8 @@ class NativeVoiceController:
             snapshot = await self.store.snapshot_live()
             names = [driver["name"] for driver in snapshot["drivers"]]
             text = await self.audio.transcribe(source, names)
+            await self._mark_latency("transcript_ms")
+            await self.store.update(radio_last_transcript=text)
             if not text:
                 await self._reject_wake("empty transcript", "")
                 return
@@ -572,6 +675,8 @@ class NativeVoiceController:
             wake_trigger_count=count,
             wake_status="armed — say the command",
             wake_last_reason=f'heard "{phrase}"',
+            radio_indicator="listening",
+            engineer_status="listening",
         )
         self._wake_cooldown_until = time.monotonic() + 0.20
         with contextlib.suppress(Exception):
@@ -599,12 +704,43 @@ class NativeVoiceController:
         await self.store.update(
             wake_armed=False,
             wake_last_reason=reason,
+            radio_indicator="idle",
             wake_status=(
                 f'ready — say "{settings.wake_phrase.title()}"'
                 if settings.wake_enabled
                 else "disabled"
             ),
         )
+
+    async def _run_command(self, command: str, source: str) -> None:
+        route = self.brain.classify_request(command)
+        ack_kind = "standby" if route == "deep" else "copy"
+        snapshot = await self.store.snapshot_live()
+        latency = dict(snapshot.get("radio_latency", {}))
+        latency.update({"route": route, "ack": ack_kind, "stage": "processing"})
+        await self.store.update(
+            engineer_status="thinking",
+            radio_indicator="processing",
+            radio_source=source,
+            radio_latency=latency,
+            last_error="",
+        )
+
+        # Start the actual work before the acknowledgement. The short cached
+        # radio response fills the perceived vacuum without adding model time.
+        brain_task = self.loop.create_task(
+            self.brain.ask(command),
+            name=f"pitwall-brain-{route}",
+        )
+        ack_task = self.loop.create_task(
+            self.audio.play_ack(ack_kind),
+            name="pitwall-radio-ack",
+        )
+        with contextlib.suppress(Exception):
+            await ack_task
+        reply = await brain_task
+        await self._mark_latency("model_ms")
+        await self.speak_text(reply)
 
     async def _accept_wake(self, command: str, phrase: str) -> None:
         cleaned = command.strip()
@@ -619,15 +755,13 @@ class NativeVoiceController:
         await self.store.update(
             wake_armed=False,
             wake_trigger_count=count,
-            wake_status="thinking",
+            wake_status="processing command",
             wake_last_reason=f'accepted via {phrase}',
-            engineer_status="thinking",
             last_error="",
         )
         self.busy = True
         try:
-            reply = await self.brain.ask(cleaned)
-            await self.speak_text(reply)
+            await self._run_command(cleaned, "wake")
         finally:
             self.busy = False
             if not self._signal_pressed:
@@ -636,12 +770,17 @@ class NativeVoiceController:
     async def _reject_wake(self, reason: str, transcript: str) -> None:
         snapshot = await self.store.snapshot_live()
         count = int(snapshot.get("wake_rejected_count", 0)) + 1
+        latency = dict(snapshot.get("radio_latency", {}))
+        latency["stage"] = "rejected"
         await self.store.update(
             wake_rejected_count=count,
             wake_last_transcript=transcript,
             wake_last_reason=reason,
             wake_status=f'ready — say "{settings.wake_phrase.title()}"',
+            radio_indicator="idle",
+            radio_latency=latency,
         )
+        self._interaction_finalized_at = 0.0
 
     async def _interrupt_pipeline(self) -> None:
         self.audio.stop_playback()
@@ -676,6 +815,7 @@ class NativeVoiceController:
             await self.store.update(ptt_pressed=False)
             return
         self.frames = []
+        await self._begin_interaction("ptt")
         await self.store.update(
             engineer_status="listening",
             last_error="",
@@ -707,21 +847,40 @@ class NativeVoiceController:
 
     async def _process(self, data: np.ndarray) -> None:
         if self.busy:
+            if len(self._pending_clips) < self._pending_clips.maxlen:
+                self._pending_clips.append(data)
+                await self.store.update(
+                    radio_queue_depth=len(self._pending_clips),
+                    last_error="Radio busy; your latest PTT clip is queued.",
+                )
+            else:
+                await self.store.update(
+                    last_error="Radio queue full; repeat the call after the engineer finishes."
+                )
             return
+
         self.busy = True
         source = settings.data_dir / "latest_driver.wav"
         try:
             self._write_wav(source, data)
-            await self.store.update(engineer_status="transcribing")
+            await self.store.update(
+                engineer_status="transcribing",
+                radio_indicator="processing",
+            )
             snapshot = await self.store.snapshot_live()
             names = [driver["name"] for driver in snapshot["drivers"]]
             text = await self.audio.transcribe(source, names)
+            await self._mark_latency("transcript_ms")
+            await self.store.update(radio_last_transcript=text)
             if not text:
-                await self.store.update(engineer_status="standing by")
+                await self.store.update(
+                    engineer_status="standing by",
+                    radio_indicator="idle",
+                    last_error="No usable speech was transcribed.",
+                )
+                self._interaction_finalized_at = 0.0
                 return
-            await self.store.update(engineer_status="thinking")
-            reply = await self.brain.ask(text)
-            await self.speak_text(reply)
+            await self._run_command(text, "ptt")
         except asyncio.CancelledError:
             raise
         except Exception as exc:
@@ -729,15 +888,30 @@ class NativeVoiceController:
             await self.store.update(
                 last_error=str(exc),
                 engineer_status="error",
+                radio_indicator="error",
             )
         finally:
             self.busy = False
             if not self._signal_pressed:
                 await self.store.update(engineer_status="standing by")
+            if self._pending_clips and not self._shutdown:
+                queued = self._pending_clips.popleft()
+                await self.store.update(radio_queue_depth=len(self._pending_clips))
+                self._process_task = self.loop.create_task(
+                    self._process(queued),
+                    name="pitwall-queued-ptt",
+                )
 
     async def speak_text(self, text: str) -> bool:
         if not text.strip() or self._signal_pressed:
             return False
+
+        async def first_audio() -> None:
+            await self.store.update(
+                radio_indicator="speaking",
+                engineer_status="speaking",
+            )
+            await self._mark_latency("first_audio_ms")
 
         async def perform() -> bool:
             async with self._speech_lock:
@@ -750,15 +924,24 @@ class NativeVoiceController:
                     engineer_status="speaking",
                     wake_status="paused while engineer speaks",
                 )
+                if settings.voice_stream_tts:
+                    return await self.audio.stream_speech(
+                        text,
+                        target=target,
+                        on_first_audio=first_audio,
+                    )
                 await self.audio.synthesize(text, target, "wav")
                 if self._signal_pressed:
                     return False
+                await first_audio()
                 await self.audio.play_wav(target)
                 return True
 
         self._speech_task = asyncio.create_task(perform())
+        delivered = False
         try:
-            return await self._speech_task
+            delivered = await self._speech_task
+            return delivered
         except asyncio.CancelledError:
             self.audio.stop_playback()
             raise
@@ -768,8 +951,12 @@ class NativeVoiceController:
             self._wake_cooldown_until = (
                 time.monotonic() + settings.wake_tts_cooldown_s
             )
+            if self._interaction_finalized_at:
+                await self._mark_latency("complete_ms")
+            self._interaction_finalized_at = 0.0
             if not self._signal_pressed and not self.busy:
                 await self.store.update(engineer_status="standing by")
+            await self.store.update(radio_indicator="idle")
             if settings.wake_enabled:
                 await self.store.update(
                     wake_status=f'ready — say "{settings.wake_phrase.title()}"'
