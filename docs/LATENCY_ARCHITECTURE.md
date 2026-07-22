@@ -1,4 +1,4 @@
-# Pit Wall 3.2 latency architecture
+# Pit Wall 3.2/3.3 latency architecture
 
 ## Production path
 

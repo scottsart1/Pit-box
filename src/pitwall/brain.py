@@ -1,14 +1,12 @@
 from __future__ import annotations
 
-import asyncio
 import json
 import re
 from typing import Any
 
-from openai import AsyncOpenAI
-
 from .config import settings
 from .database import PitWallDatabase
+from .providers import ProviderResult, ProviderRouter
 from .state import StateStore
 from .tools import TelemetryTools
 
@@ -106,15 +104,8 @@ class EngineerBrain:
         self.store = store
         self.tools = tools
         self.database = database
-        self.client = (
-            AsyncOpenAI(
-                api_key=settings.api_key,
-                timeout=settings.openai_timeout_s,
-                max_retries=2,
-            )
-            if settings.api_key
-            else None
-        )
+        self.router = ProviderRouter(settings)
+        self.last_provider_result: ProviderResult | None = None
 
     async def _header(self) -> str:
         state = await self.store.snapshot_analysis()
@@ -355,80 +346,75 @@ class EngineerBrain:
                 )
                 break
 
-    @staticmethod
-    def _safe_output_item(item: Any) -> dict[str, Any] | None:
-        item_type = getattr(item, "type", None)
-        if item_type == "function_call":
-            return {
-                "type": "function_call",
-                "call_id": item.call_id,
-                "name": item.name,
-                "arguments": item.arguments,
-            }
-        if hasattr(item, "model_dump"):
-            return item.model_dump(exclude_none=True, exclude={"id", "status"})
-        return None
-
     async def _run(
         self,
         input_items: list[dict[str, Any]],
         effort: str,
         instructions: str,
         max_rounds: int = 3,
+        route: str = "normal",
+        provider: str | None = None,
     ) -> str:
-        if self.client is None:
-            return "OpenAI key not configured. Add OPENAI_API_KEY to .env and restart Pit Wall."
+        prompt = "\n".join(
+            str(item.get("content", ""))
+            for item in input_items
+            if item.get("role") == "user"
+        ).strip()
+        if not prompt:
+            raise RuntimeError("The engineer request contained no user prompt.")
 
-        for _ in range(max_rounds):
-            if effort in {"high", "xhigh", "max"}:
-                token_budget = 2000
-            elif effort == "medium":
-                token_budget = 1100
-            else:
-                token_budget = 520
-            request: dict[str, Any] = {
-                "model": settings.model,
-                "instructions": instructions,
-                "input": input_items,
-                "tools": self.tools.schemas(),
-                "max_output_tokens": token_budget,
-                "parallel_tool_calls": True,
-            }
-            if settings.model.startswith("gpt-5"):
-                request["reasoning"] = {"effort": effort}
-            response = await self.client.responses.create(**request)
-            calls = [
-                item
-                for item in response.output
-                if getattr(item, "type", None) == "function_call"
-            ]
-            if not calls:
-                return response.output_text.strip() or "Stand by."
+        try:
+            result = await self.router.generate(
+                prompt=prompt,
+                instructions=instructions,
+                route=route,
+                effort=effort,
+                tools=self.tools.schemas(),
+                execute_tool=self.tools.call,
+                max_rounds=max_rounds,
+                provider=provider,
+            )
+        except Exception as exc:
+            message = f"{type(exc).__name__}: {exc}"
+            await self.store.update(llm_last_error=message)
+            raise
+        self.last_provider_result = result
+        await self.store.update(
+            llm_provider=result.provider,
+            llm_model=result.model,
+            llm_last_latency_ms=round(result.latency_ms, 1),
+            llm_last_tool_rounds=result.tool_rounds,
+            llm_last_error="",
+        )
+        return result.text
 
-            for output_item in response.output:
-                safe = self._safe_output_item(output_item)
-                if safe is not None:
-                    input_items.append(safe)
-
-            async def execute(call: Any) -> tuple[Any, dict[str, Any]]:
-                try:
-                    arguments = json.loads(call.arguments or "{}")
-                except json.JSONDecodeError:
-                    arguments = {}
-                result = await self.tools.call(call.name, arguments)
-                return call, result
-
-            results = await asyncio.gather(*(execute(call) for call in calls))
-            for call, result in results:
-                input_items.append(
-                    {
-                        "type": "function_call_output",
-                        "call_id": call.call_id,
-                        "output": json.dumps(result, ensure_ascii=False),
-                    }
-                )
-
-        return "Stand by. I could not resolve that cleanly from the available telemetry."
+    async def compare(self, utterance: str) -> dict[str, Any]:
+        """Run an opt-in, non-spoken A/B comparison on one frozen context."""
+        state = await self.store.snapshot_analysis()
+        recent = state["radio_log"][-10:]
+        history = "\n".join(
+            f"{entry['role'].upper()}: {entry['text']}" for entry in recent
+        )
+        prompt = (
+            f"{await self._header()}\n"
+            f"RECENT RADIO:\n{history}\n"
+            f"DRIVER: {utterance}"
+        )
+        route = self.classify_request(utterance)
+        effort = (
+            settings.deep_reasoning_effort
+            if route == "deep"
+            else settings.reasoning_effort
+        )
+        return await self.router.compare(
+            prompt=prompt,
+            instructions=PERSONA,
+            route=route,
+            effort=effort,
+            tools=self.tools.schemas(),
+            execute_tool=self.tools.call,
+            max_rounds=4 if route == "deep" else 3,
+        )
 
     async def ask(self, utterance: str) -> str:
         await self._capture_feedback(utterance)
@@ -440,6 +426,13 @@ class EngineerBrain:
         if route == "fast":
             direct = await self._fast_answer(utterance)
             if direct:
+                await self.store.update(
+                    llm_provider="local",
+                    llm_model="deterministic-fast-path",
+                    llm_last_latency_ms=0.0,
+                    llm_last_tool_rounds=0,
+                    llm_last_error="",
+                )
                 await self.store.append_radio("engineer", direct)
                 await self.database.save_radio_message(
                     await self.store.snapshot_analysis(),
@@ -468,10 +461,22 @@ class EngineerBrain:
             if route == "deep"
             else settings.reasoning_effort
         )
-        text = await self._run(input_items, effort, PERSONA)
+        text = await self._run(
+            input_items, effort, PERSONA,
+            max_rounds=4 if route == "deep" else 3,
+            route=route,
+        )
         await self.store.append_radio("engineer", text)
+        provider_name = (
+            self.last_provider_result.provider
+            if self.last_provider_result is not None
+            else "unknown"
+        )
         await self.database.save_radio_message(
-            await self.store.snapshot_analysis(), "engineer", text, "response"
+            await self.store.snapshot_analysis(),
+            "engineer",
+            text,
+            f"response:{provider_name}",
         )
         return text
 
@@ -497,6 +502,7 @@ class EngineerBrain:
             settings.reasoning_effort,
             f"{PERSONA}\n\n{PROACTIVE_PERSONA}",
             max_rounds=2,
+            route="normal",
         )
         await self.store.append_radio("engineer", text)
         await self.database.save_radio_message(

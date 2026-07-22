@@ -1,29 +1,54 @@
-# Pit Wall 3.2 verification record
+# Pit Wall 3.3.0 verification
 
-Verification performed on the packaged source tree:
+## Completed in the build environment
 
 ```text
-python -m compileall -q src tests                 PASS
-ruff check src tests                              PASS
-pytest -q                                         57 passed
-node --check extracted-dashboard-script.js        PASS
-FastAPI TestClient startup                        PASS
-GET /api/health                                   HTTP 200, version 3.2.0
+49 automated tests passed
+Ruff static checks passed
+Python compileall passed
+Dashboard JavaScript syntax passed with Node.js
 ```
 
-## Added regression coverage
+The 49 executed tests cover:
 
-- Routine target/corner questions do not silently escalate to deep reasoning.
-- Genuine strategy/stint planning does use deep routing.
-- Long STT prompt echo and repeated wake-word garbage are discarded.
-- Wake enabled/disabled state survives a controller restart.
-- The dashboard includes the listening/processing/speaking state rail and timing card.
-- Setup track fallback includes Spa ID 10 and Monza ID 11.
-- Player FIA blue flag, Safety Car delta and unserved penalties enter hot state.
-- A qualifying lap invalidation creates an operational radio event.
-- A nearby car behind pitting creates an undercut-threat event.
-- Existing PTT tests still prove unrelated throttle/brake/gear/MFD button packets cannot release the configured UDP Action radio.
+- strategy and Monte Carlo planning;
+- FIA compound-rule logic;
+- SC/VSC/red-flag strategy distinctions;
+- setup foundations and learning;
+- SQLite history and unsigned session UID persistence;
+- racing-line analysis;
+- proactive radio cadence and relevance;
+- wake phrase and PTT behavior;
+- latency routing and dashboard state rail;
+- telemetry tools;
+- DeepSeek and OpenAI provider adapters;
+- provider fallback, circuit behavior and A/B safety.
 
-## Hardware boundary
+## Provider-specific tests
 
-The container cannot reproduce the user’s PS5, DualSense/wheel, Windows microphone, speakers or live account latency. Streaming audio therefore includes a tested compatibility fallback to the previous WAV path. Final acceptance remains one live Windows shakedown with the dashboard timing card visible.
+1. Normal DeepSeek requests select `deepseek-v4-flash` and explicitly disable thinking.
+2. Deep requests select `deepseek-v4-pro`, enable thinking and send `reasoning_effort=high`.
+3. Thinking-mode tool loops preserve `reasoning_content` on the following request.
+4. Invalid or hallucinated tool arguments do not execute.
+5. A DeepSeek failure falls back to OpenAI.
+6. Tool results are reused across provider failover.
+7. A/B comparison shares matching evidence and blocks setup-mutating tools.
+
+## Tests requiring the parser package
+
+Twelve tests import packet structures from `f1-packets==2026.1.1`. That distribution was not available through the isolated build environment's package mirror, so those tests could not be executed here. They are unchanged from the working 3.2 UDP/parser code path.
+
+The Windows installer installs `f1-packets` from PyPI and runs the complete suite. The repository contains 61 test functions in total.
+
+## No live API claims
+
+No DeepSeek or OpenAI reasoning API call was made during packaging because user credentials are not available in the build environment. API behavior is tested with response-shaped asynchronous fakes, including tool loops and fallback.
+
+A live shakedown should verify:
+
+```text
+/api/health -> both credentials configured
+normal question -> deepseek-v4-flash
+strategy question -> deepseek-v4-pro
+invalid DeepSeek key -> OpenAI fallback
+```

@@ -14,6 +14,11 @@ class Settings(BaseSettings):
         case_sensitive=False,
     )
 
+    # Provider routing. Audio remains OpenAI-backed unless the user explicitly
+    # changes the STT/TTS implementation in a future release.
+    llm_provider: str = "deepseek"
+    llm_fallback_provider: str = "openai"
+
     openai_api_key: SecretStr | None = Field(
         default=None,
         validation_alias="OPENAI_API_KEY",
@@ -22,6 +27,20 @@ class Settings(BaseSettings):
     reasoning_effort: str = "low"
     deep_reasoning_effort: str = "high"
     openai_timeout_s: float = 45.0
+
+    deepseek_api_key: SecretStr | None = Field(
+        default=None,
+        validation_alias="DEEPSEEK_API_KEY",
+    )
+    deepseek_base_url: str = "https://api.deepseek.com"
+    deepseek_fast_model: str = "deepseek-v4-flash"
+    deepseek_deep_model: str = "deepseek-v4-pro"
+    deepseek_thinking_effort: str = "high"
+    deepseek_timeout_s: float = 45.0
+    deepseek_max_tool_rounds: int = 4
+    deepseek_strict_tools: bool = False
+    llm_failure_cooldown_s: float = 20.0
+    llm_compare_enabled: bool = True
 
     tts_model: str = "gpt-4o-mini-tts"
     stt_model: str = "gpt-4o-mini-transcribe"
@@ -110,6 +129,23 @@ class Settings(BaseSettings):
     def validate_cadence(cls, value: int) -> int:
         return max(1, min(10, value))
 
+    @field_validator("llm_provider", "llm_fallback_provider")
+    @classmethod
+    def validate_provider(cls, value: str) -> str:
+        normalized = value.strip().lower()
+        return normalized if normalized in {"openai", "deepseek", "auto", "none"} else "openai"
+
+    @field_validator("deepseek_thinking_effort")
+    @classmethod
+    def validate_deepseek_effort(cls, value: str) -> str:
+        normalized = value.strip().lower()
+        return "max" if normalized in {"max", "xhigh"} else "high"
+
+    @field_validator("deepseek_max_tool_rounds")
+    @classmethod
+    def validate_deepseek_rounds(cls, value: int) -> int:
+        return max(1, min(8, value))
+
     @property
     def wake_phrases(self) -> list[str]:
         values = [self.wake_phrase, *self.wake_aliases.split(",")]
@@ -122,9 +158,29 @@ class Settings(BaseSettings):
                 result.append(normalized)
         return result
 
+    @staticmethod
+    def _usable_secret(secret: SecretStr | None) -> str | None:
+        if secret is None:
+            return None
+        value = secret.get_secret_value().strip()
+        placeholders = {
+            "",
+            "replace_me",
+            "your_key_here",
+            "your_actual_key",
+            "api_key",
+        }
+        if value.lower() in placeholders or value.startswith("<"):
+            return None
+        return value
+
     @property
     def api_key(self) -> str | None:
-        return self.openai_api_key.get_secret_value() if self.openai_api_key else None
+        return self._usable_secret(self.openai_api_key)
+
+    @property
+    def deepseek_key(self) -> str | None:
+        return self._usable_secret(self.deepseek_api_key)
 
 
 settings = Settings()

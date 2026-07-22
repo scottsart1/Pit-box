@@ -1,4 +1,14 @@
-# Pit Wall 3.2 implementation notes
+# Pit Wall 3.3 implementation notes
+
+## Provider-neutral engineer brain
+
+Version 3.3 adds `ProviderRouter`, `DeepSeekChatProvider`, and
+`OpenAIResponsesProvider`. F1 prompts and deterministic tools remain in
+`EngineerBrain`; providers only translate the same compact request and tool
+schemas to their API format. Request-scoped tool memoization prevents duplicate
+execution during failover. DeepSeek thinking-mode tool turns preserve
+`reasoning_content` internally as required by the provider.
+
 
 ## Reliability boundaries
 

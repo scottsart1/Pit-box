@@ -71,6 +71,17 @@ async def lifespan(app: FastAPI):
     global voice, proactive, udp_transport, watchdog_task, event_persistence_task
     settings.data_dir.mkdir(parents=True, exist_ok=True)
     await database.initialize()
+    initial_provider = settings.llm_provider
+    if initial_provider == "auto":
+        initial_provider = "deepseek" if settings.deepseek_key else "openai"
+    await store.update(
+        llm_provider=initial_provider,
+        llm_model=(
+            settings.deepseek_fast_model
+            if initial_provider == "deepseek"
+            else settings.model
+        ),
+    )
     await analysis.start()
     voice = NativeVoiceController(store, brain, audio)
     await voice.initialize()
@@ -112,10 +123,14 @@ async def lifespan(app: FastAPI):
         udp_transport.close()
 
 
-app = FastAPI(title="Pit Wall", version="3.2.0", lifespan=lifespan)
+app = FastAPI(title="Pit Wall", version="3.3.0", lifespan=lifespan)
 
 
 class AskRequest(BaseModel):
+    text: str
+
+
+class CompareRequest(BaseModel):
     text: str
 
 
@@ -153,7 +168,9 @@ async def health() -> dict[str, object]:
         "telemetry_connected": snapshot["connected"],
         "telemetry_stale": snapshot["telemetry_stale"],
         "openai_key_configured": bool(settings.api_key),
+        "deepseek_key_configured": bool(settings.deepseek_key),
         "model": settings.model,
+        "llm": brain.router.status(),
         "stt_model": settings.stt_model,
         "tts_model": settings.tts_model,
         "ptt_status": snapshot["ptt_status"],
@@ -227,6 +244,25 @@ async def ask(request: AskRequest) -> dict[str, str]:
         snapshot = await store.snapshot_live()
         if not snapshot.get("ptt_pressed"):
             await store.update(engineer_status="standing by")
+
+
+
+
+@app.get("/api/llm/providers")
+async def llm_providers() -> dict[str, object]:
+    return brain.router.status()
+
+
+@app.post("/api/llm/compare")
+async def compare_llms(request: CompareRequest) -> dict[str, object]:
+    if not settings.llm_compare_enabled:
+        raise HTTPException(403, "LLM comparison is disabled in .env")
+    if not request.text.strip():
+        raise HTTPException(400, "Text is required")
+    try:
+        return await brain.compare(request.text.strip())
+    except Exception as exc:
+        raise HTTPException(503, str(exc)) from exc
 
 
 @app.post("/api/ptt/calibrate")

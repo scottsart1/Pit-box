@@ -165,6 +165,11 @@ class SessionState:
     wake_last_transcript: str = ""
     wake_last_reason: str = ""
     engineer_status: str = "standing by"
+    llm_provider: str = ""
+    llm_model: str = ""
+    llm_last_latency_ms: float = 0.0
+    llm_last_tool_rounds: int = 0
+    llm_last_error: str = ""
     # Dashboard radio rail: idle, listening (yellow), processing (green),
     # speaking (blue), or error (red).
     radio_indicator: str = "idle"
@@ -354,6 +359,11 @@ class StateStore:
                     wake_rejected_count=self.state.wake_rejected_count,
                     wake_last_transcript=self.state.wake_last_transcript,
                     wake_last_reason=self.state.wake_last_reason,
+                    llm_provider=self.state.llm_provider,
+                    llm_model=self.state.llm_model,
+                    llm_last_latency_ms=self.state.llm_last_latency_ms,
+                    llm_last_tool_rounds=self.state.llm_last_tool_rounds,
+                    llm_last_error=self.state.llm_last_error,
                     proactive=proactive,
                     session_mode_override=session_mode_override,
                 )
