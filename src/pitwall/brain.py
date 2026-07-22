@@ -348,18 +348,14 @@ class EngineerBrain:
 
     async def _run(
         self,
-        input_items: list[dict[str, Any]],
+        prompt: str,
         effort: str,
         instructions: str,
         max_rounds: int = 3,
         route: str = "normal",
         provider: str | None = None,
     ) -> str:
-        prompt = "\n".join(
-            str(item.get("content", ""))
-            for item in input_items
-            if item.get("role") == "user"
-        ).strip()
+        prompt = prompt.strip()
         if not prompt:
             raise RuntimeError("The engineer request contained no user prompt.")
 
@@ -446,23 +442,18 @@ class EngineerBrain:
         history = "\n".join(
             f"{entry['role'].upper()}: {entry['text']}" for entry in recent[:-1]
         )
-        input_items = [
-            {
-                "role": "user",
-                "content": (
-                    f"{await self._header()}\n"
-                    f"RECENT RADIO:\n{history}\n"
-                    f"DRIVER: {utterance}"
-                ),
-            }
-        ]
+        prompt = (
+            f"{await self._header()}\n"
+            f"RECENT RADIO:\n{history}\n"
+            f"DRIVER: {utterance}"
+        )
         effort = (
             settings.deep_reasoning_effort
             if route == "deep"
             else settings.reasoning_effort
         )
         text = await self._run(
-            input_items, effort, PERSONA,
+            prompt, effort, PERSONA,
             max_rounds=4 if route == "deep" else 3,
             route=route,
         )
@@ -487,18 +478,13 @@ class EngineerBrain:
             for entry in state.get("radio_log", [])[-8:]
             if entry.get("role") == "engineer"
         ]
-        input_items = [
-            {
-                "role": "user",
-                "content": (
-                    f"{await self._header()}\n"
-                    f"PROACTIVE EVENT: {json.dumps(event, ensure_ascii=False)}\n"
-                    f"RECENT ENGINEER CALLS: {json.dumps(recent_engineer, ensure_ascii=False)}"
-                ),
-            }
-        ]
+        prompt = (
+            f"{await self._header()}\n"
+            f"PROACTIVE EVENT: {json.dumps(event, ensure_ascii=False)}\n"
+            f"RECENT ENGINEER CALLS: {json.dumps(recent_engineer, ensure_ascii=False)}"
+        )
         text = await self._run(
-            input_items,
+            prompt,
             settings.reasoning_effort,
             f"{PERSONA}\n\n{PROACTIVE_PERSONA}",
             max_rounds=2,

@@ -71,9 +71,8 @@ async def lifespan(app: FastAPI):
     global voice, proactive, udp_transport, watchdog_task, event_persistence_task
     settings.data_dir.mkdir(parents=True, exist_ok=True)
     await database.initialize()
-    initial_provider = settings.llm_provider
-    if initial_provider == "auto":
-        initial_provider = "deepseek" if settings.deepseek_key else "openai"
+    router_status = brain.router.status()
+    initial_provider = str(router_status["resolved_provider"])
     await store.update(
         llm_provider=initial_provider,
         llm_model=(
@@ -123,7 +122,7 @@ async def lifespan(app: FastAPI):
         udp_transport.close()
 
 
-app = FastAPI(title="Pit Wall", version="3.3.0", lifespan=lifespan)
+app = FastAPI(title="Pit Wall", version="3.3.1", lifespan=lifespan)
 
 
 class AskRequest(BaseModel):
@@ -183,7 +182,6 @@ async def health() -> dict[str, object]:
         "database": str(database.path),
         "last_error": snapshot["last_error"],
     }
-
 
 
 @app.get("/api/tracks")
@@ -246,8 +244,6 @@ async def ask(request: AskRequest) -> dict[str, str]:
             await store.update(engineer_status="standing by")
 
 
-
-
 @app.get("/api/llm/providers")
 async def llm_providers() -> dict[str, object]:
     return brain.router.status()
@@ -261,6 +257,15 @@ async def compare_llms(request: CompareRequest) -> dict[str, object]:
         raise HTTPException(400, "Text is required")
     try:
         return await brain.compare(request.text.strip())
+    except Exception as exc:
+        raise HTTPException(503, str(exc)) from exc
+
+
+@app.post("/api/llm/shakedown")
+async def llm_shakedown() -> dict[str, object]:
+    """Run a small, explicit live provider wire-contract check."""
+    try:
+        return await brain.router.shakedown()
     except Exception as exc:
         raise HTTPException(503, str(exc)) from exc
 

@@ -1,8 +1,8 @@
-# Pit Wall 3.3.0 — DeepSeek + OpenAI race engineer for PS5 and Windows
+# Pit Wall 3.3.1 — DeepSeek + OpenAI race engineer for PS5 and Windows
 
 Pit Wall receives F1 25 / 2026 Season Pack telemetry from a PS5 over UDP, runs deterministic strategy/corner/setup analysis locally, keeps persistent SQLite history, answers spoken questions, makes proactive radio calls, and serves a live dashboard at `http://127.0.0.1:8000`.
 
-Version 3.3 makes the engineer brain provider-neutral:
+Version 3.3.1 hardens the provider-neutral engineer for race-day failover:
 
 ```text
 Routine and normal reasoning  -> DeepSeek V4 Flash
@@ -13,7 +13,35 @@ Speech-to-text and TTS         -> OpenAI audio models
 
 The existing `L3 -> F1 UDP Action 1` binding, hands-free “Mark” trigger, dashboard, strategy engine, SQLite data, and audio pipeline are unchanged.
 
-## What changed in 3.3
+## What changed in 3.3.1
+
+### Race-radio provider deadlines and zero SDK retries
+
+Each provider now gets one bounded wall-clock attempt before the router moves to the fallback:
+
+```text
+normal call  -> 12 seconds
+strategy call -> 25 seconds
+SDK retries  -> 0
+```
+
+This prevents a first provider outage from creating multiple hidden SDK retries and a long radio vacuum. The route deadline covers the complete provider/tool loop, not only one HTTP request.
+
+### Truncation recovery without poisoning provider health
+
+If a model exhausts its output budget, Pit Wall retries that same provider once with a larger budget. Only after the enlarged retry fails may the fallback provider answer. Token truncation does not increment the circuit breaker because it is not a provider outage.
+
+### Safer provider configuration and diagnostics
+
+- `none` is valid only for the fallback provider; an invalid primary resolves to `auto`.
+- A/B comparison is disabled by default and has a 30-second cooldown when enabled.
+- `/api/health` and `/api/llm/providers` report configured, resolved, active, and fallback providers separately.
+- `POST /api/llm/shakedown` performs an explicit live text, non-thinking tool, and thinking-tool continuation check for every configured provider.
+- The dashboard includes a **Test providers** button and displays the latest shakedown result.
+- DeepSeek thinking requests omit `tool_choice`, while still preserving required `reasoning_content` across tool turns.
+- Circuit breakers count only provider-health failures such as timeout, connection, rate-limit, server, or malformed-response failures. Authentication, bad-request, and token-budget errors remain visible without marking the provider temporarily unhealthy.
+
+## Provider-neutral foundation retained
 
 ### DeepSeek provider
 
@@ -80,18 +108,26 @@ PITWALL_DEEPSEEK_BASE_URL=https://api.deepseek.com
 PITWALL_DEEPSEEK_FAST_MODEL=deepseek-v4-flash
 PITWALL_DEEPSEEK_DEEP_MODEL=deepseek-v4-pro
 PITWALL_DEEPSEEK_THINKING_EFFORT=high
-PITWALL_DEEPSEEK_TIMEOUT_S=45
+PITWALL_DEEPSEEK_TIMEOUT_S=30
 PITWALL_DEEPSEEK_MAX_TOOL_ROUNDS=4
 PITWALL_DEEPSEEK_STRICT_TOOLS=false
 PITWALL_LLM_FAILURE_COOLDOWN_S=20
-PITWALL_LLM_COMPARE_ENABLED=true
+PITWALL_LLM_NORMAL_DEADLINE_S=12
+PITWALL_LLM_DEEP_DEADLINE_S=25
+PITWALL_LLM_SHAKEDOWN_TIMEOUT_S=20
+PITWALL_LLM_COMPARE_ENABLED=false
+PITWALL_LLM_COMPARE_COOLDOWN_S=30
+PITWALL_DEEPSEEK_DEEP_MAX_TOKENS=2200
+PITWALL_DEEPSEEK_DEEP_RETRY_MAX_TOKENS=6000
 
 # OpenAI is retained for voice and LLM fallback
 OPENAI_API_KEY=your_openai_api_key
 PITWALL_MODEL=gpt-5.6-terra
 PITWALL_REASONING_EFFORT=low
 PITWALL_DEEP_REASONING_EFFORT=high
-PITWALL_OPENAI_TIMEOUT_S=45
+PITWALL_OPENAI_TIMEOUT_S=30
+PITWALL_OPENAI_DEEP_MAX_OUTPUT_TOKENS=2200
+PITWALL_OPENAI_DEEP_RETRY_MAX_OUTPUT_TOKENS=6000
 PITWALL_STT_MODEL=gpt-4o-mini-transcribe
 PITWALL_TTS_MODEL=gpt-4o-mini-tts
 PITWALL_VOICE=coral
@@ -163,6 +199,8 @@ Expected provider fields:
   "deepseek_key_configured": true,
   "llm": {
     "selected": "deepseek",
+    "configured_provider": "deepseek",
+    "resolved_provider": "deepseek",
     "fallback": "openai",
     "providers": {
       "deepseek": {"configured": true},
@@ -176,7 +214,13 @@ After a model-backed question, `active_provider` and `active_model` identify whi
 
 ## First shakedown
 
-Use a practice or qualifying session:
+Before entering a session, click **Test providers** on the dashboard or run:
+
+```powershell
+Invoke-RestMethod -Uri "http://127.0.0.1:8000/api/llm/shakedown" -Method Post
+```
+
+This is a manual, low-volume live API diagnostic and consumes a small amount of credit. It checks basic text, a non-thinking tool continuation, and a thinking-tool continuation. Then use a practice or qualifying session:
 
 ```text
 Mark, what is my target lap?
@@ -226,7 +270,7 @@ Never commit or share `.env`.
 
 ### DeepSeek fails but radio still answers
 
-Check `/api/llm/providers`. If `active_provider` is `openai`, failover worked. The DeepSeek error remains visible under its provider status.
+Check `/api/llm/providers`. If `active_provider` is `openai`, failover worked. Normal calls fail over after 12 seconds and deep calls after 25 seconds by default; the SDK itself does not retry. The DeepSeek error remains visible under its provider status.
 
 Common causes:
 
@@ -255,25 +299,28 @@ Strict mode uses DeepSeek's beta endpoint and supports a narrower JSON-schema su
 
 ## Verification
 
-The provider-neutral changes were checked with:
+Completed in this build environment:
 
 ```text
-49 locally executable automated tests passed
-Ruff static checks passed
-Python compilation passed
-Dashboard JavaScript syntax passed
+59 automated test cases passed
+1 OpenAI-SDK serialization test deselected because the SDK wheel was unavailable
+15 UDP/parser/reliability test functions excluded because f1-packets was unavailable
+Python compileall passed
+Dashboard JavaScript syntax passed with Node.js
 ```
 
-The 49 tests include all strategy, setup, persistence, racing-line, proactive, latency, wake, tools and provider tests executable in this build environment. Twelve UDP/parser tests require the `f1-packets` distribution, which the Windows installer installs from PyPI and runs as part of the complete 61-test suite.
+The repository contains **71 test functions**. On the Windows installation where `openai` and `f1-packets` are installed, `install_windows.ps1` runs the complete suite.
 
-New provider tests cover:
+New 3.3.1 tests cover:
 
-- DeepSeek Flash non-thinking routing.
-- DeepSeek Pro thinking routing.
-- Preservation of `reasoning_content` during tool loops.
-- Local rejection of malformed tool arguments.
-- DeepSeek-to-OpenAI fallback.
-- Shared tool results during fallback.
-- Shared evidence and blocked setup mutation during A/B comparison.
+- Primary-provider validation (`none` cannot silently disable radio).
+- Route deadline and immediate fallback behavior.
+- Truncation retry with a larger budget.
+- Truncation not opening the provider circuit.
+- DeepSeek thinking requests omitting `tool_choice`.
+- Resolved-provider health reporting.
+- A/B comparison cooldown.
+- Live provider shakedown stages.
+- Existing tool-result memoization across failover.
 
 See `docs/PROVIDER_ARCHITECTURE.md` and `docs/VERIFICATION.md`.

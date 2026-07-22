@@ -26,6 +26,18 @@ class ProviderResponseError(ProviderError):
     """Raised when a provider returns an unusable response."""
 
 
+class ProviderTruncationError(ProviderResponseError):
+    """Raised when a provider exhausts its output budget after one larger retry."""
+
+
+class ProviderDeadlineError(ProviderError):
+    """Raised when a provider exceeds the race-radio route deadline."""
+
+
+class ProviderRateLimitError(ProviderError):
+    """Raised when an opt-in diagnostic is invoked too frequently."""
+
+
 @dataclass(slots=True)
 class ProviderResult:
     text: str
@@ -72,11 +84,74 @@ def _usage_dict(usage: Any) -> dict[str, int]:
     return result
 
 
-
-
 def _merge_usage(total: dict[str, int], current: dict[str, int]) -> None:
     for key, value in current.items():
         total[key] = total.get(key, 0) + int(value)
+
+
+def _provider_error_code(exc: BaseException) -> str:
+    """Best-effort extraction of stable provider error codes without SDK coupling."""
+    direct = getattr(exc, "code", None)
+    if isinstance(direct, str):
+        return direct.strip().lower()
+
+    body = getattr(exc, "body", None)
+    if isinstance(body, dict):
+        candidate = body.get("code")
+        error = body.get("error")
+        if isinstance(error, dict):
+            candidate = error.get("code", candidate)
+        if isinstance(candidate, str):
+            return candidate.strip().lower()
+    return ""
+
+
+def _is_health_failure(exc: BaseException) -> bool:
+    """Return True only for failures that indicate provider availability trouble."""
+    if isinstance(exc, (ProviderConfigurationError, ProviderTruncationError)):
+        return False
+    if isinstance(exc, (ProviderDeadlineError, asyncio.TimeoutError, TimeoutError)):
+        return True
+
+    name = type(exc).__name__
+    status_code = getattr(exc, "status_code", None)
+    code = _provider_error_code(exc)
+    non_transient_codes = {
+        "insufficient_quota",
+        "billing_hard_limit_reached",
+        "invalid_api_key",
+        "account_deactivated",
+        "credit_balance_insufficient",
+    }
+    if code in non_transient_codes or status_code == 402:
+        return False
+    if name in {
+        "AuthenticationError",
+        "PermissionDeniedError",
+        "BadRequestError",
+        "UnprocessableEntityError",
+    }:
+        return False
+    if name in {
+        "APIConnectionError",
+        "APITimeoutError",
+        "InternalServerError",
+    }:
+        return True
+    if name == "RateLimitError":
+        return True
+    if isinstance(status_code, int):
+        return status_code == 429 or status_code >= 500
+    # Malformed/empty provider responses and unknown transport failures should
+    # count, while known request/configuration failures above should not.
+    return isinstance(exc, ProviderResponseError) or not isinstance(exc, ProviderError)
+
+
+def _openai_response_truncated(response: Any) -> bool:
+    status = getattr(response, "status", None)
+    details = getattr(response, "incomplete_details", None)
+    reason = getattr(details, "reason", None) if details is not None else None
+    return status == "incomplete" and reason in {"max_output_tokens", "length"}
 
 
 def _parse_and_validate_arguments(
@@ -116,7 +191,7 @@ class OpenAIResponsesProvider:
             AsyncOpenAI(
                 api_key=config.api_key,
                 timeout=config.openai_timeout_s,
-                max_retries=2,
+                max_retries=0,
             )
             if config.api_key
             else None
@@ -162,24 +237,39 @@ class OpenAIResponsesProvider:
 
         for round_index in range(max_rounds):
             if effort in {"high", "xhigh", "max"}:
-                token_budget = 2000
+                base_budget = self.config.openai_deep_max_output_tokens
+                retry_budget = self.config.openai_deep_retry_max_output_tokens
             elif effort == "medium":
-                token_budget = 1100
+                base_budget = 1100
+                retry_budget = 2600
             else:
-                token_budget = 520
-            request: dict[str, Any] = {
-                "model": self.config.model,
-                "instructions": instructions,
-                "input": input_items,
-                "tools": tools,
-                "max_output_tokens": token_budget,
-                "parallel_tool_calls": True,
-            }
-            if self.config.model.startswith("gpt-5"):
-                request["reasoning"] = {"effort": effort}
+                base_budget = 520
+                retry_budget = 1200
 
-            response = await self.client.responses.create(**request)
-            _merge_usage(total_usage, _usage_dict(getattr(response, "usage", None)))
+            response: Any | None = None
+            for attempt, token_budget in enumerate((base_budget, retry_budget)):
+                request: dict[str, Any] = {
+                    "model": self.config.model,
+                    "instructions": instructions,
+                    "input": input_items,
+                    "tools": tools,
+                    "max_output_tokens": token_budget,
+                    "parallel_tool_calls": True,
+                }
+                if self.config.model.startswith("gpt-5"):
+                    request["reasoning"] = {"effort": effort}
+
+                response = await self.client.responses.create(**request)
+                _merge_usage(total_usage, _usage_dict(getattr(response, "usage", None)))
+                if _openai_response_truncated(response):
+                    if attempt == 0:
+                        continue
+                    raise ProviderTruncationError(
+                        "OpenAI exhausted the enlarged output-token budget."
+                    )
+                break
+
+            assert response is not None
             calls = [
                 item
                 for item in response.output
@@ -215,7 +305,9 @@ class OpenAIResponsesProvider:
                 try:
                     result = await execute_tool(call.name, arguments)
                 except Exception as exc:  # tool errors must not crash the provider loop
-                    result = {"error": f"Tool execution failed: {type(exc).__name__}: {exc}"}
+                    result = {
+                        "error": f"Tool execution failed: {type(exc).__name__}: {exc}"
+                    }
                 return call, result
 
             results = await asyncio.gather(*(run_call(call) for call in calls))
@@ -250,7 +342,7 @@ class DeepSeekChatProvider:
                 api_key=config.deepseek_key,
                 base_url=base_url,
                 timeout=config.deepseek_timeout_s,
-                max_retries=2,
+                max_retries=0,
             )
             if config.deepseek_key
             else None
@@ -332,27 +424,51 @@ class DeepSeekChatProvider:
         rounds = min(max_rounds, self.config.deepseek_max_tool_rounds)
 
         for round_index in range(rounds):
-            request: dict[str, Any] = {
-                "model": model,
-                "messages": messages,
-                "tools": chat_tools,
-                "tool_choice": "auto",
-                "max_tokens": 2200 if thinking_enabled else 650,
-                "extra_body": {
-                    "thinking": {
-                        "type": "enabled" if thinking_enabled else "disabled"
-                    }
-                },
-            }
             if thinking_enabled:
-                request["reasoning_effort"] = self.config.deepseek_thinking_effort
+                base_budget = self.config.deepseek_deep_max_tokens
+                retry_budget = self.config.deepseek_deep_retry_max_tokens
+            else:
+                base_budget = 650
+                retry_budget = 1400
 
-            response = await self.client.chat.completions.create(**request)
-            _merge_usage(total_usage, _usage_dict(getattr(response, "usage", None)))
-            if not response.choices:
-                raise ProviderResponseError("DeepSeek returned no choices.")
-            choice = response.choices[0]
-            message = choice.message
+            response: Any | None = None
+            choice: Any | None = None
+            message: Any | None = None
+            for attempt, token_budget in enumerate((base_budget, retry_budget)):
+                request: dict[str, Any] = {
+                    "model": model,
+                    "messages": messages,
+                    "max_tokens": token_budget,
+                    "extra_body": {
+                        "thinking": {
+                            "type": "enabled" if thinking_enabled else "disabled"
+                        }
+                    },
+                }
+                if chat_tools:
+                    request["tools"] = chat_tools
+                    # DeepSeek V4 thinking mode rejects tool_choice on some official
+                    # integrations. Omit it entirely there; non-thinking mode accepts auto.
+                    if not thinking_enabled:
+                        request["tool_choice"] = "auto"
+                if thinking_enabled:
+                    request["reasoning_effort"] = self.config.deepseek_thinking_effort
+
+                response = await self.client.chat.completions.create(**request)
+                _merge_usage(total_usage, _usage_dict(getattr(response, "usage", None)))
+                if not response.choices:
+                    raise ProviderResponseError("DeepSeek returned no choices.")
+                choice = response.choices[0]
+                if getattr(choice, "finish_reason", None) == "length":
+                    if attempt == 0:
+                        continue
+                    raise ProviderTruncationError(
+                        "DeepSeek exhausted the enlarged output-token budget."
+                    )
+                message = choice.message
+                break
+
+            assert response is not None and choice is not None and message is not None
             calls = list(getattr(message, "tool_calls", None) or [])
             if not calls:
                 text = (getattr(message, "content", None) or "").strip()
@@ -370,8 +486,8 @@ class DeepSeekChatProvider:
                     usage=total_usage,
                 )
 
-            # DeepSeek thinking-mode tool loops require reasoning_content to be
-            # replayed with the assistant tool-call message. This helper preserves it.
+            # DeepSeek V4 thinking-mode tool loops require reasoning_content to be
+            # replayed with the assistant tool-call message.
             messages.append(self._assistant_message(message))
 
             async def run_call(call: Any) -> tuple[Any, dict[str, Any]]:
@@ -386,7 +502,9 @@ class DeepSeekChatProvider:
                 try:
                     result = await execute_tool(call.function.name, arguments)
                 except Exception as exc:
-                    result = {"error": f"Tool execution failed: {type(exc).__name__}: {exc}"}
+                    result = {
+                        "error": f"Tool execution failed: {type(exc).__name__}: {exc}"
+                    }
                 return call, result
 
             results = await asyncio.gather(*(run_call(call) for call in calls))
@@ -412,7 +530,7 @@ class _CircuitState:
 
 
 class ProviderRouter:
-    """Selects the requested provider and fails over without changing race logic."""
+    """Select providers, fail over quickly, and preserve deterministic tool evidence."""
 
     def __init__(
         self,
@@ -426,13 +544,22 @@ class ProviderRouter:
         }
         self.circuits = {name: _CircuitState() for name in self.providers}
         self.last_result: ProviderResult | None = None
+        self.last_shakedown: dict[str, Any] | None = None
+        self._last_compare_at = 0.0
+
+    def _resolved_primary(self, explicit: str | None = None) -> str:
+        primary = (explicit or self.config.llm_provider).strip().lower()
+        if primary not in {"openai", "deepseek", "auto"}:
+            primary = "auto"
+        if primary == "auto":
+            deepseek = self.providers.get("deepseek")
+            primary = "deepseek" if deepseek is not None and deepseek.available else "openai"
+        return primary
 
     def _preferred_order(self, explicit: str | None = None) -> list[str]:
-        primary = (explicit or self.config.llm_provider).lower()
-        if primary == "auto":
-            primary = "deepseek" if self.providers.get("deepseek", None) and self.providers["deepseek"].available else "openai"
+        primary = self._resolved_primary(explicit)
         order = [primary]
-        fallback = self.config.llm_fallback_provider.lower()
+        fallback = self.config.llm_fallback_provider.strip().lower()
         if fallback not in {"none", "auto", primary}:
             order.append(fallback)
         if fallback == "auto":
@@ -440,6 +567,13 @@ class ProviderRouter:
                 if name not in order:
                     order.append(name)
         return [name for name in order if name in self.providers]
+
+    def _deadline_for(self, route: str) -> float:
+        return (
+            self.config.llm_deep_deadline_s
+            if route == "deep"
+            else self.config.llm_normal_deadline_s
+        )
 
     async def generate(
         self,
@@ -454,7 +588,6 @@ class ProviderRouter:
         provider: str | None = None,
     ) -> ProviderResult:
         errors: list[str] = []
-        now = time.monotonic()
         tool_cache: dict[str, dict[str, Any]] = {}
         tool_locks: dict[str, asyncio.Lock] = {}
 
@@ -474,9 +607,11 @@ class ProviderRouter:
                     tool_cache[key] = await execute_tool(tool_name, arguments)
                 return tool_cache[key]
 
+        deadline = self._deadline_for(route)
         for name in self._preferred_order(provider):
             implementation = self.providers[name]
             circuit = self.circuits[name]
+            now = time.monotonic()
             if not implementation.available:
                 errors.append(f"{name}: credentials not configured")
                 continue
@@ -484,29 +619,35 @@ class ProviderRouter:
                 errors.append(f"{name}: temporarily cooling down after an API failure")
                 continue
             try:
-                result = await implementation.generate(
-                    prompt=prompt,
-                    instructions=instructions,
-                    route=route,
-                    effort=effort,
-                    tools=tools,
-                    execute_tool=execute_once,
-                    max_rounds=max_rounds,
-                )
+                try:
+                    async with asyncio.timeout(deadline):
+                        result = await implementation.generate(
+                            prompt=prompt,
+                            instructions=instructions,
+                            route=route,
+                            effort=effort,
+                            tools=tools,
+                            execute_tool=execute_once,
+                            max_rounds=max_rounds,
+                        )
+                except TimeoutError as exc:
+                    raise ProviderDeadlineError(
+                        f"{name} exceeded the {deadline:.0f}-second {route} deadline."
+                    ) from exc
+
                 circuit.failures = 0
                 circuit.blocked_until = 0.0
                 circuit.last_error = ""
                 self.last_result = result
                 return result
             except Exception as exc:
-                circuit.failures += 1
+                if _is_health_failure(exc):
+                    circuit.failures += 1
+                    if circuit.failures >= 2:
+                        circuit.blocked_until = (
+                            time.monotonic() + self.config.llm_failure_cooldown_s
+                        )
                 circuit.last_error = f"{type(exc).__name__}: {exc}"
-                # One transient failure immediately allows fallback, while repeated
-                # failures open a short circuit to avoid adding race-radio latency.
-                if circuit.failures >= 2:
-                    circuit.blocked_until = (
-                        time.monotonic() + self.config.llm_failure_cooldown_s
-                    )
                 errors.append(f"{name}: {circuit.last_error}")
 
         raise ProviderError(
@@ -524,9 +665,19 @@ class ProviderRouter:
         execute_tool: ToolExecutor,
         max_rounds: int,
     ) -> dict[str, Any]:
+        if not self.config.llm_compare_enabled:
+            raise ProviderConfigurationError("LLM comparison is disabled in .env")
+        now = time.monotonic()
+        elapsed = now - self._last_compare_at
+        if elapsed < self.config.llm_compare_cooldown_s:
+            remaining = self.config.llm_compare_cooldown_s - elapsed
+            raise ProviderRateLimitError(
+                f"A/B comparison is cooling down for {remaining:.1f} more seconds."
+            )
+        self._last_compare_at = now
+
         # Both providers share one memoized tool executor. Matching tool calls see
-        # byte-for-byte identical evidence, and potentially stateful setup tools
-        # are blocked so an A/B diagnostic cannot alter the live race setup state.
+        # byte-for-byte identical evidence, and stateful setup tools are blocked.
         cache: dict[str, dict[str, Any]] = {}
         locks: dict[str, asyncio.Lock] = {}
         blocked = {"generate_setup", "get_front_wing_adjustment"}
@@ -559,15 +710,16 @@ class ProviderRouter:
             if not provider.available:
                 return name, {"available": False, "error": "credentials not configured"}
             try:
-                result = await provider.generate(
-                    prompt=prompt,
-                    instructions=instructions,
-                    route=route,
-                    effort=effort,
-                    tools=tools,
-                    execute_tool=execute_frozen,
-                    max_rounds=max_rounds,
-                )
+                async with asyncio.timeout(self._deadline_for(route)):
+                    result = await provider.generate(
+                        prompt=prompt,
+                        instructions=instructions,
+                        route=route,
+                        effort=effort,
+                        tools=tools,
+                        execute_tool=execute_frozen,
+                        max_rounds=max_rounds,
+                    )
                 return name, {
                     "available": True,
                     "reply": result.text,
@@ -586,12 +738,136 @@ class ProviderRouter:
         results = await asyncio.gather(*(run(name) for name in names))
         return {"results": dict(results), "shared_tool_results": len(cache)}
 
+    async def shakedown(self, provider: str | None = None) -> dict[str, Any]:
+        """Run a small live wire-contract check without touching race state."""
+        names = self._preferred_order(provider) if provider else [
+            name for name in ("deepseek", "openai") if name in self.providers
+        ]
+        diagnostic_tool = {
+            "type": "function",
+            "name": "diagnostic_echo",
+            "description": "Return the supplied diagnostic token unchanged.",
+            "parameters": {
+                "type": "object",
+                "properties": {"token": {"type": "string"}},
+                "required": ["token"],
+                "additionalProperties": False,
+            },
+            "strict": True,
+        }
+
+        async def execute_diagnostic(
+            tool_name: str,
+            arguments: dict[str, Any],
+        ) -> dict[str, Any]:
+            if tool_name != "diagnostic_echo":
+                return {"error": f"Unexpected diagnostic tool: {tool_name}"}
+            return {"token": arguments.get("token"), "ok": True}
+
+        async def stage(
+            implementation: EngineerProvider,
+            *,
+            route: str,
+            tools: list[dict[str, Any]],
+            prompt: str,
+            require_tool: bool,
+        ) -> dict[str, Any]:
+            started = time.perf_counter()
+            try:
+                async with asyncio.timeout(self.config.llm_shakedown_timeout_s):
+                    result = await implementation.generate(
+                        prompt=prompt,
+                        instructions=(
+                            "This is a Pit Wall provider diagnostic. Follow the request "
+                            "exactly and keep the final answer to one word: READY."
+                        ),
+                        route=route,
+                        effort="high" if route == "deep" else "low",
+                        tools=tools,
+                        execute_tool=execute_diagnostic,
+                        max_rounds=3,
+                    )
+                tool_ok = not require_tool or result.tool_rounds >= 1
+                return {
+                    "ok": tool_ok,
+                    "latency_ms": round((time.perf_counter() - started) * 1000.0, 1),
+                    "model": result.model,
+                    "tool_rounds": result.tool_rounds,
+                    "detail": "ready" if tool_ok else "model did not call the diagnostic tool",
+                }
+            except Exception as exc:
+                return {
+                    "ok": False,
+                    "latency_ms": round((time.perf_counter() - started) * 1000.0, 1),
+                    "error": f"{type(exc).__name__}: {exc}",
+                }
+
+        async def run(name: str) -> tuple[str, dict[str, Any]]:
+            implementation = self.providers[name]
+            if not implementation.available:
+                return name, {"configured": False, "ready": False}
+            basic = await stage(
+                implementation,
+                route="normal",
+                tools=[],
+                prompt="Reply exactly READY.",
+                require_tool=False,
+            )
+            nonthinking = await stage(
+                implementation,
+                route="normal",
+                tools=[diagnostic_tool],
+                prompt=(
+                    "Call diagnostic_echo with token pitwall-ready, then reply READY. "
+                    "You must use the tool before answering."
+                ),
+                require_tool=True,
+            )
+            thinking = await stage(
+                implementation,
+                route="deep",
+                tools=[diagnostic_tool],
+                prompt=(
+                    "Call diagnostic_echo with token pitwall-deep-ready, then reply READY. "
+                    "You must use the tool before answering."
+                ),
+                require_tool=True,
+            )
+            stages = {
+                "basic": basic,
+                "nonthinking_tool": nonthinking,
+                "thinking_tool": thinking,
+            }
+            return name, {
+                "configured": True,
+                "ready": all(item.get("ok") for item in stages.values()),
+                "stages": stages,
+            }
+
+        results = dict(await asyncio.gather(*(run(name) for name in names)))
+        payload = {
+            "checked_at_monotonic": round(time.monotonic(), 3),
+            "providers": results,
+            "ready": bool(results) and all(item.get("ready") for item in results.values()),
+        }
+        self.last_shakedown = payload
+        return payload
+
     def status(self) -> dict[str, Any]:
+        resolved = self._resolved_primary()
         return {
-            "selected": self.config.llm_provider,
+            # selected remains for backward compatibility, but now reports the
+            # concrete provider instead of the unresolved literal "auto".
+            "selected": resolved,
+            "configured_provider": self.config.llm_provider,
+            "resolved_provider": resolved,
             "fallback": self.config.llm_fallback_provider,
             "active_provider": self.last_result.provider if self.last_result else None,
             "active_model": self.last_result.model if self.last_result else None,
+            "normal_deadline_s": self.config.llm_normal_deadline_s,
+            "deep_deadline_s": self.config.llm_deep_deadline_s,
+            "compare_enabled": self.config.llm_compare_enabled,
+            "last_shakedown": self.last_shakedown,
             "providers": {
                 name: {
                     "configured": provider.available,

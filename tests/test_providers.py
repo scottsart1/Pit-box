@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 from types import SimpleNamespace
 from typing import Any
@@ -11,6 +12,8 @@ from pitwall.providers import (
     DeepSeekChatProvider,
     ProviderResult,
     ProviderRouter,
+    ProviderTruncationError,
+    _is_health_failure,
 )
 
 
@@ -43,6 +46,7 @@ def _settings(**overrides: Any) -> Settings:
         "OPENAI_API_KEY": "openai-test",
         "llm_provider": "deepseek",
         "llm_fallback_provider": "openai",
+        "llm_compare_enabled": True,
     }
     values.update(overrides)
     return Settings(_env_file=None, **values)
@@ -450,3 +454,215 @@ def test_placeholder_api_keys_are_not_treated_as_configured() -> None:
     )
     assert config.deepseek_key is None
     assert config.api_key is None
+
+
+def test_primary_none_is_rejected_but_fallback_none_is_allowed() -> None:
+    config = Settings(
+        _env_file=None,
+        llm_provider="none",
+        llm_fallback_provider="none",
+    )
+    assert config.llm_provider == "auto"
+    assert config.llm_fallback_provider == "none"
+
+
+def test_compare_is_opt_in_by_default() -> None:
+    config = Settings(_env_file=None)
+    assert config.llm_compare_enabled is False
+
+
+@pytest.mark.asyncio
+async def test_deepseek_thinking_omits_tool_choice() -> None:
+    message = SimpleNamespace(content="READY", reasoning_content="checked", tool_calls=None)
+    client = _DeepSeekClient([_choice(message)])
+    provider = DeepSeekChatProvider(_settings(), client=client)  # type: ignore[arg-type]
+
+    await provider.generate(
+        prompt="deep check",
+        instructions="brief",
+        route="deep",
+        effort="high",
+        tools=[],
+        execute_tool=lambda name, args: None,  # type: ignore[arg-type]
+        max_rounds=2,
+    )
+
+    request = client.completions.requests[0]
+    assert "tool_choice" not in request
+    assert "tools" not in request
+    assert request["extra_body"]["thinking"]["type"] == "enabled"
+
+
+@pytest.mark.asyncio
+async def test_deepseek_length_retries_with_larger_budget() -> None:
+    first = SimpleNamespace(content="", reasoning_content="long", tool_calls=None)
+    second = SimpleNamespace(content="Recovered answer", reasoning_content="done", tool_calls=None)
+    client = _DeepSeekClient([_choice(first, "length"), _choice(second, "stop")])
+    config = _settings(
+        deepseek_deep_max_tokens=1234,
+        deepseek_deep_retry_max_tokens=5678,
+    )
+    provider = DeepSeekChatProvider(config, client=client)  # type: ignore[arg-type]
+
+    result = await provider.generate(
+        prompt="deep check",
+        instructions="brief",
+        route="deep",
+        effort="high",
+        tools=[],
+        execute_tool=lambda name, args: None,  # type: ignore[arg-type]
+        max_rounds=2,
+    )
+
+    assert result.text == "Recovered answer"
+    assert [request["max_tokens"] for request in client.completions.requests] == [1234, 5678]
+
+
+class _AlwaysTruncatedProvider:
+    name = "deepseek"
+    available = True
+
+    async def generate(self, **kwargs: Any) -> ProviderResult:
+        del kwargs
+        raise ProviderTruncationError("budget exhausted")
+
+
+@pytest.mark.asyncio
+async def test_truncation_falls_back_without_opening_circuit() -> None:
+    openai = _FakeProvider("openai", "Fallback answer")
+    router = ProviderRouter(
+        _settings(),
+        providers={
+            "deepseek": _AlwaysTruncatedProvider(),
+            "openai": openai,
+        },  # type: ignore[arg-type]
+    )
+
+    result = await router.generate(
+        prompt="test",
+        instructions="test",
+        route="deep",
+        effort="high",
+        tools=[],
+        execute_tool=lambda name, args: None,  # type: ignore[arg-type]
+        max_rounds=2,
+    )
+
+    assert result.provider == "openai"
+    assert router.circuits["deepseek"].failures == 0
+
+
+class _SlowProvider:
+    name = "deepseek"
+    available = True
+
+    async def generate(self, **kwargs: Any) -> ProviderResult:
+        del kwargs
+        await asyncio.sleep(0.2)
+        return ProviderResult("late", "deepseek", "slow", 200.0)
+
+
+@pytest.mark.asyncio
+async def test_route_deadline_fails_over_quickly() -> None:
+    openai = _FakeProvider("openai", "fast fallback")
+    router = ProviderRouter(
+        _settings(llm_normal_deadline_s=0.02),
+        providers={"deepseek": _SlowProvider(), "openai": openai},  # type: ignore[arg-type]
+    )
+    started = asyncio.get_running_loop().time()
+    result = await router.generate(
+        prompt="test",
+        instructions="test",
+        route="normal",
+        effort="low",
+        tools=[],
+        execute_tool=lambda name, args: None,  # type: ignore[arg-type]
+        max_rounds=2,
+    )
+    elapsed = asyncio.get_running_loop().time() - started
+
+    assert result.provider == "openai"
+    assert elapsed < 0.15
+    assert router.circuits["deepseek"].failures == 1
+
+
+def test_status_reports_resolved_auto_provider() -> None:
+    deepseek = _FakeProvider("deepseek", "ok")
+    openai = _FakeProvider("openai", "ok")
+    router = ProviderRouter(
+        _settings(llm_provider="auto"),
+        providers={"deepseek": deepseek, "openai": openai},  # type: ignore[arg-type]
+    )
+    status = router.status()
+    assert status["configured_provider"] == "auto"
+    assert status["resolved_provider"] == "deepseek"
+    assert status["selected"] == "deepseek"
+
+
+@pytest.mark.asyncio
+async def test_compare_cooldown_is_enforced() -> None:
+    router = ProviderRouter(
+        _settings(llm_compare_enabled=True, llm_compare_cooldown_s=60),
+        providers={
+            "deepseek": _FakeProvider("deepseek", "one"),
+            "openai": _FakeProvider("openai", "two"),
+        },  # type: ignore[arg-type]
+    )
+    kwargs = dict(
+        prompt="test",
+        instructions="test",
+        route="deep",
+        effort="high",
+        tools=[],
+        execute_tool=lambda name, args: None,  # type: ignore[arg-type]
+        max_rounds=2,
+    )
+    await router.compare(**kwargs)
+    with pytest.raises(Exception, match="cooling down"):
+        await router.compare(**kwargs)
+
+
+class _DiagnosticProvider:
+    def __init__(self, name: str) -> None:
+        self.name = name
+        self.available = True
+
+    async def generate(self, **kwargs: Any) -> ProviderResult:
+        tools = kwargs["tools"]
+        rounds = 0
+        if tools:
+            result = await kwargs["execute_tool"](
+                "diagnostic_echo", {"token": "pitwall-ready"}
+            )
+            assert result["ok"] is True
+            rounds = 1
+        return ProviderResult("READY", self.name, f"{self.name}-model", 1.0, rounds)
+
+
+@pytest.mark.asyncio
+async def test_live_shakedown_checks_basic_and_tool_continuations() -> None:
+    router = ProviderRouter(
+        _settings(),
+        providers={
+            "deepseek": _DiagnosticProvider("deepseek"),
+            "openai": _DiagnosticProvider("openai"),
+        },  # type: ignore[arg-type]
+    )
+    result = await router.shakedown()
+    assert result["ready"] is True
+    assert result["providers"]["deepseek"]["stages"]["thinking_tool"]["ok"] is True
+    assert router.status()["last_shakedown"] == result
+
+
+class _InsufficientQuotaError(Exception):
+    status_code = 429
+    code = "insufficient_quota"
+
+
+class _TransientRateLimitError(Exception):
+    status_code = 429
+
+
+def test_billing_exhaustion_does_not_open_provider_circuit() -> None:
+    assert _is_health_failure(_InsufficientQuotaError()) is False
+    assert _is_health_failure(_TransientRateLimitError()) is True

@@ -26,7 +26,7 @@ class Settings(BaseSettings):
     model: str = "gpt-5.6-terra"
     reasoning_effort: str = "low"
     deep_reasoning_effort: str = "high"
-    openai_timeout_s: float = 45.0
+    openai_timeout_s: float = 30.0
 
     deepseek_api_key: SecretStr | None = Field(
         default=None,
@@ -36,11 +36,19 @@ class Settings(BaseSettings):
     deepseek_fast_model: str = "deepseek-v4-flash"
     deepseek_deep_model: str = "deepseek-v4-pro"
     deepseek_thinking_effort: str = "high"
-    deepseek_timeout_s: float = 45.0
+    deepseek_timeout_s: float = 30.0
     deepseek_max_tool_rounds: int = 4
     deepseek_strict_tools: bool = False
     llm_failure_cooldown_s: float = 20.0
-    llm_compare_enabled: bool = True
+    llm_normal_deadline_s: float = 12.0
+    llm_deep_deadline_s: float = 25.0
+    llm_shakedown_timeout_s: float = 20.0
+    llm_compare_enabled: bool = False
+    llm_compare_cooldown_s: float = 30.0
+    openai_deep_max_output_tokens: int = 2200
+    openai_deep_retry_max_output_tokens: int = 6000
+    deepseek_deep_max_tokens: int = 2200
+    deepseek_deep_retry_max_tokens: int = 6000
 
     tts_model: str = "gpt-4o-mini-tts"
     stt_model: str = "gpt-4o-mini-transcribe"
@@ -129,9 +137,15 @@ class Settings(BaseSettings):
     def validate_cadence(cls, value: int) -> int:
         return max(1, min(10, value))
 
-    @field_validator("llm_provider", "llm_fallback_provider")
+    @field_validator("llm_provider")
     @classmethod
-    def validate_provider(cls, value: str) -> str:
+    def validate_primary_provider(cls, value: str) -> str:
+        normalized = value.strip().lower()
+        return normalized if normalized in {"openai", "deepseek", "auto"} else "auto"
+
+    @field_validator("llm_fallback_provider")
+    @classmethod
+    def validate_fallback_provider(cls, value: str) -> str:
         normalized = value.strip().lower()
         return normalized if normalized in {"openai", "deepseek", "auto", "none"} else "openai"
 
@@ -145,6 +159,27 @@ class Settings(BaseSettings):
     @classmethod
     def validate_deepseek_rounds(cls, value: int) -> int:
         return max(1, min(8, value))
+
+    @field_validator(
+        "llm_failure_cooldown_s",
+        "llm_normal_deadline_s",
+        "llm_deep_deadline_s",
+        "llm_shakedown_timeout_s",
+        "llm_compare_cooldown_s",
+    )
+    @classmethod
+    def validate_positive_seconds(cls, value: float) -> float:
+        return max(0.1, float(value))
+
+    @field_validator(
+        "openai_deep_max_output_tokens",
+        "openai_deep_retry_max_output_tokens",
+        "deepseek_deep_max_tokens",
+        "deepseek_deep_retry_max_tokens",
+    )
+    @classmethod
+    def validate_token_budgets(cls, value: int) -> int:
+        return max(256, min(128_000, int(value)))
 
     @property
     def wake_phrases(self) -> list[str]:
