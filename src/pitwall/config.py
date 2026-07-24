@@ -14,6 +14,11 @@ class Settings(BaseSettings):
         case_sensitive=False,
     )
 
+    # Provider routing. Audio remains OpenAI-backed unless the user explicitly
+    # changes the STT/TTS implementation in a future release.
+    llm_provider: str = "deepseek"
+    llm_fallback_provider: str = "openai"
+
     openai_api_key: SecretStr | None = Field(
         default=None,
         validation_alias="OPENAI_API_KEY",
@@ -21,7 +26,29 @@ class Settings(BaseSettings):
     model: str = "gpt-5.6-terra"
     reasoning_effort: str = "low"
     deep_reasoning_effort: str = "high"
-    openai_timeout_s: float = 45.0
+    openai_timeout_s: float = 30.0
+
+    deepseek_api_key: SecretStr | None = Field(
+        default=None,
+        validation_alias="DEEPSEEK_API_KEY",
+    )
+    deepseek_base_url: str = "https://api.deepseek.com"
+    deepseek_fast_model: str = "deepseek-v4-flash"
+    deepseek_deep_model: str = "deepseek-v4-pro"
+    deepseek_thinking_effort: str = "high"
+    deepseek_timeout_s: float = 30.0
+    deepseek_max_tool_rounds: int = 4
+    deepseek_strict_tools: bool = False
+    llm_failure_cooldown_s: float = 20.0
+    llm_normal_deadline_s: float = 12.0
+    llm_deep_deadline_s: float = 25.0
+    llm_shakedown_timeout_s: float = 20.0
+    llm_compare_enabled: bool = False
+    llm_compare_cooldown_s: float = 30.0
+    openai_deep_max_output_tokens: int = 2200
+    openai_deep_retry_max_output_tokens: int = 6000
+    deepseek_deep_max_tokens: int = 2200
+    deepseek_deep_retry_max_tokens: int = 6000
 
     tts_model: str = "gpt-4o-mini-tts"
     stt_model: str = "gpt-4o-mini-transcribe"
@@ -60,15 +87,26 @@ class Settings(BaseSettings):
     wake_preroll_s: float = 0.80
     wake_speech_rms: float = 260.0
     wake_start_blocks: int = 2
-    wake_silence_s: float = 0.90
+    wake_silence_s: float = 0.60
     wake_min_utterance_s: float = 0.35
     wake_max_utterance_s: float = 15.0
     wake_arm_timeout_s: float = 6.0
     wake_tts_cooldown_s: float = 1.50
     wake_block_ms: int = 30
 
+    # Perceived-latency controls. Acknowledgements are cached once and played
+    # while the model works; native TTS streams raw PCM to the output device.
+    voice_ack_enabled: bool = True
+    voice_stream_tts: bool = True
+    voice_clip_queue_size: int = 2
+
     data_dir: Path = Path.home() / "PitWallData"
     open_browser: bool = True
+    # Logs are written to data_dir/pitwall.log so a session can be diagnosed
+    # after the console window has closed.
+    log_level: str = "info"
+    log_max_bytes: int = 2_000_000
+    log_backup_count: int = 3
 
     proactive_enabled: bool = True
     proactive_cadence_laps: int = 2
@@ -78,6 +116,11 @@ class Settings(BaseSettings):
     proactive_max_lateral_g: float = 1.35
     proactive_safe_hold_s: float = 0.45
     proactive_delivery_deadline_s: float = 35.0
+    # Under a safety car or VSC the car must stay above the delta time. The
+    # telemetry delta goes negative when the driver is running too fast, which
+    # is a penalty risk. Raise the threshold for an earlier, more cautious call.
+    proactive_sc_delta_min_s: float = 0.0
+    proactive_sc_delta_cooldown_s: float = 12.0
 
     strategy_monte_carlo_samples: int = 320
     strategy_risk_quantile: float = 0.75
@@ -104,6 +147,50 @@ class Settings(BaseSettings):
     def validate_cadence(cls, value: int) -> int:
         return max(1, min(10, value))
 
+    @field_validator("llm_provider")
+    @classmethod
+    def validate_primary_provider(cls, value: str) -> str:
+        normalized = value.strip().lower()
+        return normalized if normalized in {"openai", "deepseek", "auto"} else "auto"
+
+    @field_validator("llm_fallback_provider")
+    @classmethod
+    def validate_fallback_provider(cls, value: str) -> str:
+        normalized = value.strip().lower()
+        return normalized if normalized in {"openai", "deepseek", "auto", "none"} else "openai"
+
+    @field_validator("deepseek_thinking_effort")
+    @classmethod
+    def validate_deepseek_effort(cls, value: str) -> str:
+        normalized = value.strip().lower()
+        return "max" if normalized in {"max", "xhigh"} else "high"
+
+    @field_validator("deepseek_max_tool_rounds")
+    @classmethod
+    def validate_deepseek_rounds(cls, value: int) -> int:
+        return max(1, min(8, value))
+
+    @field_validator(
+        "llm_failure_cooldown_s",
+        "llm_normal_deadline_s",
+        "llm_deep_deadline_s",
+        "llm_shakedown_timeout_s",
+        "llm_compare_cooldown_s",
+    )
+    @classmethod
+    def validate_positive_seconds(cls, value: float) -> float:
+        return max(0.1, float(value))
+
+    @field_validator(
+        "openai_deep_max_output_tokens",
+        "openai_deep_retry_max_output_tokens",
+        "deepseek_deep_max_tokens",
+        "deepseek_deep_retry_max_tokens",
+    )
+    @classmethod
+    def validate_token_budgets(cls, value: int) -> int:
+        return max(256, min(128_000, int(value)))
+
     @property
     def wake_phrases(self) -> list[str]:
         values = [self.wake_phrase, *self.wake_aliases.split(",")]
@@ -116,9 +203,29 @@ class Settings(BaseSettings):
                 result.append(normalized)
         return result
 
+    @staticmethod
+    def _usable_secret(secret: SecretStr | None) -> str | None:
+        if secret is None:
+            return None
+        value = secret.get_secret_value().strip()
+        placeholders = {
+            "",
+            "replace_me",
+            "your_key_here",
+            "your_actual_key",
+            "api_key",
+        }
+        if value.lower() in placeholders or value.startswith("<"):
+            return None
+        return value
+
     @property
     def api_key(self) -> str | None:
-        return self.openai_api_key.get_secret_value() if self.openai_api_key else None
+        return self._usable_secret(self.openai_api_key)
+
+    @property
+    def deepseek_key(self) -> str | None:
+        return self._usable_secret(self.deepseek_api_key)
 
 
 settings = Settings()

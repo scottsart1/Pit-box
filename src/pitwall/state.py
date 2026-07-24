@@ -30,7 +30,12 @@ class TyreState:
 class DriverState:
     car_idx: int
     name: str = "Unknown"
+    # ``team`` stays empty until a verified team-id name table exists for the
+    # current title; ``team_id`` is the authoritative value from the packet and
+    # is what teammate detection uses.
     team: str = ""
+    team_id: int = -1
+    is_teammate: bool = False
     active: bool = False
     position: int = 0
     current_lap: int = 0
@@ -78,6 +83,10 @@ class SessionState:
     sector2_start_m: float = 0.0
     sector3_start_m: float = 0.0
     current_lap_invalid: bool = False
+    safety_car_delta_s: float = 0.0
+    unserved_drive_through_penalties: int = 0
+    unserved_stop_go_penalties: int = 0
+    pit_stop_should_serve_penalty: bool = False
     game_paused: bool = False
     active_cars: int = 0
     player_car_index: int = 0
@@ -136,6 +145,7 @@ class SessionState:
     penalties_s: int = 0
     warnings: int = 0
     corner_cutting_warnings: int = 0
+    fia_flag: str = "none"
     pit_status: int = 0
     pit_lane_time_ms: int = 0
     packet_rate_hz: float = 0.0
@@ -160,6 +170,30 @@ class SessionState:
     wake_last_transcript: str = ""
     wake_last_reason: str = ""
     engineer_status: str = "standing by"
+    llm_provider: str = ""
+    llm_model: str = ""
+    llm_last_latency_ms: float = 0.0
+    llm_last_tool_rounds: int = 0
+    llm_last_error: str = ""
+    # Dashboard radio rail: idle, listening (yellow), processing (green),
+    # speaking (blue), or error (red).
+    radio_indicator: str = "idle"
+    radio_source: str = ""
+    radio_queue_depth: int = 0
+    radio_last_transcript: str = ""
+    radio_latency: dict[str, Any] = field(
+        default_factory=lambda: {
+            "stage": "idle",
+            "source": "",
+            "route": "",
+            "capture_finalized_ms": None,
+            "transcript_ms": None,
+            "model_ms": None,
+            "first_audio_ms": None,
+            "complete_ms": None,
+            "ack": "",
+        }
+    )
     last_error: str = ""
     drivers: list[DriverState] = field(
         default_factory=lambda: [DriverState(i) for i in range(24)]
@@ -330,6 +364,11 @@ class StateStore:
                     wake_rejected_count=self.state.wake_rejected_count,
                     wake_last_transcript=self.state.wake_last_transcript,
                     wake_last_reason=self.state.wake_last_reason,
+                    llm_provider=self.state.llm_provider,
+                    llm_model=self.state.llm_model,
+                    llm_last_latency_ms=self.state.llm_last_latency_ms,
+                    llm_last_tool_rounds=self.state.llm_last_tool_rounds,
+                    llm_last_error=self.state.llm_last_error,
                     proactive=proactive,
                     session_mode_override=session_mode_override,
                 )

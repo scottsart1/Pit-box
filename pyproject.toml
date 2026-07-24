@@ -1,7 +1,7 @@
 [project]
 name = "pit-wall-openai"
-version = "3.1.0"
-description = "OpenAI-powered live F1 2026 race engineer for PS5 telemetry"
+version = "3.4.0"
+description = "Provider-neutral live F1 2026 race engineer for PS5 telemetry"
 requires-python = ">=3.11,<3.15"
 dependencies = [
   "fastapi>=0.115",
@@ -14,6 +14,7 @@ dependencies = [
   "numpy>=2.0",
   "sounddevice>=0.5",
   "soundfile>=0.12",
+  "jsonschema>=4.23",
 ]
 
 [project.optional-dependencies]

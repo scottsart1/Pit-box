@@ -342,6 +342,13 @@ class TelemetryTools:
                 "damage",
                 "penalties_s",
                 "warnings",
+                "corner_cutting_warnings",
+                "fia_flag",
+                "race_control_phase",
+                "safety_car_delta_s",
+                "unserved_drive_through_penalties",
+                "unserved_stop_go_penalties",
+                "pit_stop_should_serve_penalty",
             )
         }
 
@@ -453,11 +460,18 @@ class TelemetryTools:
         tyre_offset = rival_age - own_age
         line = state.get("analysis", {}).get("racing_line", {})
         corner = state.get("analysis", {}).get("flagged_corners", [])
-        preparation = "Stay inside DRS and prioritise the exit onto the longest straight."
+        assist_name = "Manual Override" if state.get("regulations_2026") else "DRS"
+        preparation = (
+            f"Stay within the {assist_name} activation window and prioritise the "
+            "exit onto the longest straight."
+        )
         if state.get("ers_pct", 0) < 25:
-            preparation = "Harvest for one lap, remain in DRS, then attack with a fuller battery."
+            preparation = (
+                f"Harvest for one lap, stay in the {assist_name} window, then "
+                "attack with a fuller battery."
+            )
         elif gap > 1.0:
-            preparation = f"Close the {gap:.1f}s gap without overheating the tyres; do not spend full ERS yet."
+            preparation = f"Close the {gap:.1f}s gap without overheating the tyres; do not spend full energy yet."
         opportunity = line.get("top_opportunity") or (corner[0].get("instruction") if corner else None)
         return {
             "available": True,
@@ -467,7 +481,12 @@ class TelemetryTools:
             "rival_tyre": {"compound": target.get("tyre_compound"), "age": rival_age},
             "tyre_age_offset_laps": tyre_offset,
             "ers_pct": state.get("ers_pct"),
-            "drs_allowed": state.get("drs_allowed"),
+            "overtaking_assist": assist_name,
+            "assist_available": (
+                state.get("overtake_available")
+                if state.get("regulations_2026")
+                else state.get("drs_allowed")
+            ),
             "preparation": preparation,
             "driving_opportunity": opportunity,
             "attack_window": "next lap" if gap <= 1.0 and state.get("ers_pct", 0) >= 30 else "build the gap/energy first",
@@ -480,7 +499,11 @@ class TelemetryTools:
         if not target or target.get("gap_to_player_s") is None:
             return {"available": False, "reason": "Target driver or live gap is unavailable."}
         gap = abs(float(target.get("gap_to_player_s", 0.0)))
-        recommendation = "Prioritise exits and deploy only where the following car can use DRS."
+        assist_name = "Manual Override" if state.get("regulations_2026") else "DRS"
+        recommendation = (
+            "Prioritise exits and deploy energy where the following car is most "
+            f"likely to use {assist_name}."
+        )
         if gap > 1.2:
             recommendation = "Do not compromise your line yet; build a clean exit and manage tyres."
         elif state.get("ers_pct", 0) < 20:
@@ -676,7 +699,7 @@ class TelemetryTools:
             ),
             (
                 "get_attack_plan",
-                "Build a live attack plan against a rival using gap, tyres, ERS, DRS and driving evidence.",
+                "Build a live attack plan against a rival using gap, tyres, energy deployment, overtaking assistance and driving evidence.",
                 {"driver": {"type": "string"}},
             ),
             (

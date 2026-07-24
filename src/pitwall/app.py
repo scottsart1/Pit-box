@@ -47,14 +47,29 @@ event_persistence_task: asyncio.Task[None] | None = None
 
 async def _connection_watchdog() -> None:
     last_session_write = 0.0
+    classified_sessions: set[int] = set()
     while True:
         await asyncio.sleep(1.0)
         await store.mark_disconnected_if_stale(settings.disconnect_after_s)
         snapshot = await store.snapshot_live()
         loop_time = asyncio.get_running_loop().time()
-        if snapshot.get("session_uid") and loop_time - last_session_write >= 10:
+        session_uid = int(snapshot.get("session_uid") or 0)
+        # A finished session must be recorded immediately: waiting for the next
+        # periodic write risks losing the result if Pit Wall is closed straight
+        # after the chequered flag.
+        classification = snapshot.get("final_classification") or {}
+        newly_classified = bool(
+            session_uid
+            and int(classification.get("position", 0) or 0) > 0
+            and session_uid not in classified_sessions
+        )
+        if session_uid and (
+            newly_classified or loop_time - last_session_write >= 10
+        ):
             await database.upsert_session(snapshot)
             last_session_write = loop_time
+            if newly_classified:
+                classified_sessions.add(session_uid)
 
 
 async def _event_persistence_worker() -> None:
@@ -71,6 +86,16 @@ async def lifespan(app: FastAPI):
     global voice, proactive, udp_transport, watchdog_task, event_persistence_task
     settings.data_dir.mkdir(parents=True, exist_ok=True)
     await database.initialize()
+    router_status = brain.router.status()
+    initial_provider = str(router_status["resolved_provider"])
+    await store.update(
+        llm_provider=initial_provider,
+        llm_model=(
+            settings.deepseek_fast_model
+            if initial_provider == "deepseek"
+            else settings.model
+        ),
+    )
     await analysis.start()
     voice = NativeVoiceController(store, brain, audio)
     await voice.initialize()
@@ -112,10 +137,14 @@ async def lifespan(app: FastAPI):
         udp_transport.close()
 
 
-app = FastAPI(title="Pit Wall", version="3.1.0", lifespan=lifespan)
+app = FastAPI(title="Pit Wall", version="3.4.0", lifespan=lifespan)
 
 
 class AskRequest(BaseModel):
+    text: str
+
+
+class CompareRequest(BaseModel):
     text: str
 
 
@@ -153,18 +182,21 @@ async def health() -> dict[str, object]:
         "telemetry_connected": snapshot["connected"],
         "telemetry_stale": snapshot["telemetry_stale"],
         "openai_key_configured": bool(settings.api_key),
+        "deepseek_key_configured": bool(settings.deepseek_key),
         "model": settings.model,
+        "llm": brain.router.status(),
         "stt_model": settings.stt_model,
         "tts_model": settings.tts_model,
         "ptt_status": snapshot["ptt_status"],
         "wake_enabled": snapshot["wake_enabled"],
         "wake_status": snapshot["wake_status"],
         "wake_phrase": snapshot["wake_phrase"],
+        "radio_indicator": snapshot["radio_indicator"],
+        "radio_latency": snapshot["radio_latency"],
         "proactive": snapshot["proactive"],
         "database": str(database.path),
         "last_error": snapshot["last_error"],
     }
-
 
 
 @app.get("/api/tracks")
@@ -225,6 +257,32 @@ async def ask(request: AskRequest) -> dict[str, str]:
         snapshot = await store.snapshot_live()
         if not snapshot.get("ptt_pressed"):
             await store.update(engineer_status="standing by")
+
+
+@app.get("/api/llm/providers")
+async def llm_providers() -> dict[str, object]:
+    return brain.router.status()
+
+
+@app.post("/api/llm/compare")
+async def compare_llms(request: CompareRequest) -> dict[str, object]:
+    if not settings.llm_compare_enabled:
+        raise HTTPException(403, "LLM comparison is disabled in .env")
+    if not request.text.strip():
+        raise HTTPException(400, "Text is required")
+    try:
+        return await brain.compare(request.text.strip())
+    except Exception as exc:
+        raise HTTPException(503, str(exc)) from exc
+
+
+@app.post("/api/llm/shakedown")
+async def llm_shakedown() -> dict[str, object]:
+    """Run a small, explicit live provider wire-contract check."""
+    try:
+        return await brain.router.shakedown()
+    except Exception as exc:
+        raise HTTPException(503, str(exc)) from exc
 
 
 @app.post("/api/ptt/calibrate")

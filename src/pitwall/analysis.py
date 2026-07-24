@@ -83,7 +83,12 @@ class AnalysisEngine:
             lap.get("trace", []),
             pb.get("trace", []) if pb else None,
         )
-        lap_summary = self.build_lap_summary(lap, corners, pb)
+        lap_summary = self.build_lap_summary(
+            lap,
+            corners,
+            pb,
+            self.sector_fields(state, int(lap["lap_num"])),
+        )
         lap_summary["racing_line"] = {
             key: value
             for key, value in racing_line.items()
@@ -92,6 +97,12 @@ class AnalysisEngine:
         timing_fields = lap_summary.get("timing_fields", {})
         lap.update(timing_fields)
         await self.database.save_lap(lap, corners)
+        # Laps saved before their session-history packet arrived carry zero
+        # sectors; fill them once the game has reported the split.
+        await self.database.backfill_lap_sectors(
+            int(lap["session_uid"]),
+            state.get("completed_laps", []),
+        )
         await self.database.save_line_metrics(
             int(lap["session_uid"]),
             int(lap["track_id"]),
@@ -298,7 +309,9 @@ class AnalysisEngine:
                     pb_metric.get("time_in_corner_s") or time_in_corner
                 )
                 metric["loss_vs_pb_s"] = round(loss, 3)
-                metric["cause"] = self._cause(metric, pb_metric)
+                deltas = self._reference_deltas(metric, pb_metric)
+                metric.update(deltas)
+                metric["cause"] = self._cause(metric, pb_metric, deltas)
                 if pb_metric.get("name"):
                     metric["reference_name"] = pb_metric["name"]
             elif wheel_lock:
@@ -328,20 +341,49 @@ class AnalysisEngine:
         )
 
     @staticmethod
-    def _cause(metric: dict[str, Any], reference: dict[str, Any]) -> str:
+    def _reference_deltas(
+        metric: dict[str, Any],
+        reference: dict[str, Any],
+    ) -> dict[str, float]:
+        """Signed differences from the personal-best corner.
+
+        Positive brake delta means the brake point was later than the
+        reference; negative apex-speed delta means slower through the apex.
+        These are kept on the metric so coaching can quote the actual numbers
+        instead of only naming a cause.
+        """
+        return {
+            "brake_point_delta_m": round(
+                float(metric.get("brake_point_m", 0))
+                - float(reference.get("brake_point_m", 0) or 0),
+                1,
+            ),
+            "apex_speed_delta_kph": round(
+                float(metric.get("min_speed_kph", 0))
+                - float(reference.get("min_speed_kph", 0) or 0),
+                1,
+            ),
+            "throttle_on_delta_m": round(
+                float(metric.get("throttle_on_m", 0))
+                - float(reference.get("throttle_on_m", 0) or 0),
+                1,
+            ),
+        }
+
+    @staticmethod
+    def _cause(
+        metric: dict[str, Any],
+        reference: dict[str, Any],
+        deltas: dict[str, float] | None = None,
+    ) -> str:
         if metric.get("wheel_lock"):
             return "lock-up"
         if metric.get("wheelspin"):
             return "wheelspin"
-        brake_delta = float(metric.get("brake_point_m", 0)) - float(
-            reference.get("brake_point_m", 0) or 0
-        )
-        speed_delta = float(metric.get("min_speed_kph", 0)) - float(
-            reference.get("min_speed_kph", 0) or 0
-        )
-        throttle_delta = float(metric.get("throttle_on_m", 0)) - float(
-            reference.get("throttle_on_m", 0) or 0
-        )
+        resolved = deltas or AnalysisEngine._reference_deltas(metric, reference)
+        brake_delta = resolved["brake_point_delta_m"]
+        speed_delta = resolved["apex_speed_delta_kph"]
+        throttle_delta = resolved["throttle_on_delta_m"]
         if brake_delta < -8:
             return "early brake"
         if brake_delta > 12 and speed_delta < -5:
@@ -352,11 +394,30 @@ class AnalysisEngine:
             return "late throttle"
         return "line or minimum-speed loss"
 
+    @staticmethod
+    def sector_fields(state: dict[str, Any], lap_num: int) -> dict[str, int]:
+        """Sector times for a completed lap, when the game has reported them.
+
+        Sectors arrive in the session-history packet rather than at the lap
+        transition, so they are frequently not yet known when the lap is first
+        analysed. Only a complete set is returned; partial data would persist a
+        misleading zero for the missing sector.
+        """
+        for lap in reversed(state.get("completed_laps", [])):
+            if int(lap.get("lap_num", -1)) != int(lap_num):
+                continue
+            sectors = {
+                key: int(lap.get(key, 0) or 0) for key in ("s1_ms", "s2_ms", "s3_ms")
+            }
+            return sectors if all(sectors.values()) else {}
+        return {}
+
     def build_lap_summary(
         self,
         lap: dict[str, Any],
         corners: list[dict[str, Any]],
         pb: dict[str, Any] | None,
+        sectors: dict[str, int] | None = None,
     ) -> dict[str, Any]:
         losses = [corner for corner in corners if (corner.get("loss_vs_pb_s") or 0) > 0]
         top = sorted(
@@ -376,7 +437,7 @@ class AnalysisEngine:
             else None,
             "top_corner_losses": top,
             "corner_count": len(corners),
-            "timing_fields": {},
+            "timing_fields": dict(sectors or {}),
         }
 
     @staticmethod
@@ -604,24 +665,58 @@ class AnalysisEngine:
                         "name": latest["name"],
                         "average_loss_s": round(sum(losses) / len(losses), 3),
                         "cause": latest.get("cause", ""),
+                        "brake_point_delta_m": latest.get("brake_point_delta_m"),
+                        "apex_speed_delta_kph": latest.get("apex_speed_delta_kph"),
+                        "throttle_on_delta_m": latest.get("throttle_on_delta_m"),
                         "instruction": AnalysisEngine.corner_instruction(latest),
                     }
                 )
         return sorted(flagged, key=lambda item: item["average_loss_s"], reverse=True)
 
     @staticmethod
+    def _quantity(value: Any, unit: str, minimum: float = 1.0) -> str:
+        """Render a delta for radio use, or an empty string when it is noise."""
+        if value is None:
+            return ""
+        magnitude = abs(float(value))
+        if magnitude < minimum:
+            return ""
+        return f"{magnitude:.0f} {unit}"
+
+    @staticmethod
     def corner_instruction(corner: dict[str, Any]) -> str:
         cause = corner.get("cause", "")
         name = corner.get("name", f"Corner {corner.get('corner_no', '?')}")
+        brake = AnalysisEngine._quantity(
+            corner.get("brake_point_delta_m"), "metres", 2.0
+        )
+        apex = AnalysisEngine._quantity(
+            corner.get("apex_speed_delta_kph"), "km/h", 2.0
+        )
+        throttle = AnalysisEngine._quantity(
+            corner.get("throttle_on_delta_m"), "metres", 2.0
+        )
         if cause == "early brake":
+            if brake:
+                return f"At {name}, brake {brake} later while protecting apex speed."
             return f"At {name}, release the brake point a little later while keeping the same apex speed."
         if cause == "late brake / overslow":
+            if brake and apex:
+                return (
+                    f"At {name}, brake {brake} earlier — you are {apex} down at the apex."
+                )
+            if brake:
+                return f"At {name}, brake {brake} earlier and carry the release more smoothly."
             return (
                 f"At {name}, brake a touch earlier and carry the release more smoothly."
             )
         if cause == "low apex speed":
+            if apex:
+                return f"At {name}, open the entry and protect minimum speed; you are {apex} down at the apex."
             return f"At {name}, open the entry and protect minimum speed."
         if cause == "late throttle":
+            if throttle:
+                return f"At {name}, finish rotation earlier and pick up throttle {throttle} sooner."
             return f"At {name}, finish rotation earlier and pick up throttle sooner."
         if cause == "lock-up":
             return f"At {name}, reduce peak brake pressure and trail off more progressively."

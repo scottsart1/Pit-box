@@ -50,6 +50,6 @@ if ($LASTEXITCODE -ne 0) {
   exit 1
 }
 
-Write-Host "Pit Wall 3.1.0 installed and tested successfully." -ForegroundColor Green
+Write-Host "Pit Wall 3.3.0 installed and tested successfully." -ForegroundColor Green
 Write-Host "Next: edit .env, run the firewall script as Administrator, then start_pitwall.bat." -ForegroundColor Green
 Read-Host "Press Enter to close"
