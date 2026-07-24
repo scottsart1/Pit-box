@@ -30,7 +30,12 @@ class TyreState:
 class DriverState:
     car_idx: int
     name: str = "Unknown"
+    # ``team`` stays empty until a verified team-id name table exists for the
+    # current title; ``team_id`` is the authoritative value from the packet and
+    # is what teammate detection uses.
     team: str = ""
+    team_id: int = -1
+    is_teammate: bool = False
     active: bool = False
     position: int = 0
     current_lap: int = 0

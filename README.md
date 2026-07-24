@@ -1,8 +1,88 @@
-# Pit Wall 3.3.1 — DeepSeek + OpenAI race engineer for PS5 and Windows
+# Pit Wall 3.4.0 — DeepSeek + OpenAI race engineer for PS5 and Windows
 
 Pit Wall receives F1 25 / 2026 Season Pack telemetry from a PS5 over UDP, runs deterministic strategy/corner/setup analysis locally, keeps persistent SQLite history, answers spoken questions, makes proactive radio calls, and serves a live dashboard at `http://127.0.0.1:8000`.
 
-Version 3.3.1 hardens the provider-neutral engineer for race-day failover:
+## What changed in 3.4.0
+
+3.4 is an extraction release. It adds no new subsystems; it recovers telemetry
+and analysis that Pit Wall already received or computed and then discarded, and
+fixes two session-classification defects. Existing databases are reused with no
+migration.
+
+### Coaching now quotes the numbers
+
+Corner coaching already measured how far off the personal best each corner was,
+but only reported a cause. The measured deltas are now kept and spoken:
+
+```text
+before  At Corner 3, release the brake point a little later.
+after   At Corner 3, brake 8 metres later while protecting apex speed.
+after   At Corner 3, brake 8 metres earlier — you are 6 km/h down at the apex.
+```
+
+Brake-point, apex-speed and throttle-application deltas are attached to each
+corner metric and passed to the engineer, so the radio and the dashboard can
+both reference real figures. Differences below a couple of metres or km/h are
+treated as noise and left unspoken.
+
+### Sector times are actually stored
+
+Lap sector times were persisted as zero because the lap summary carried an empty
+timing payload. Sectors are now written, including the common case where the
+session-history packet arrives after the lap has already been analysed — those
+rows are backfilled once the game reports the split. This unlocks per-sector
+analysis and theoretical-best history from stored data.
+
+### Sessions record their result
+
+`ended_at` and `result_position` existed in the schema but were never written, so
+there was no record of how any session finished. The result is now saved when the
+final classification arrives, and written immediately rather than waiting for the
+next periodic flush, so closing Pit Wall after the chequered flag does not lose
+it.
+
+### Sprint weekends are classified correctly
+
+Two defects are fixed:
+
+- A sprint race is reported by the game as "Race 2"/"Race 3" and was classified
+  as a grand prix, which applied the mandatory two-dry-compound rule. Sprints
+  have no mandatory tyre change, so the engineer could demand a stop that the
+  rules do not require.
+- "One-Shot Sprint Shootout" is reported with a truncated label that never
+  matched the shootout test, so it was treated as a race-like session and missed
+  the qualifying target path entirely.
+
+Session classification is now keyed on the session-type identifier rather than
+substring matching on the display label. Race distance is deliberately not used
+to tell a sprint from a grand prix, because a shortened-distance race can be
+fewer laps than a sprint.
+
+### Power-unit damage and safety-car delta calls
+
+- Engine, gearbox and DRS/ERS faults were captured but excluded from the damage
+  change signature, so a failing power unit never produced a radio call. They are
+  now included, and a DRS or ERS fault is called regardless of damage percentage.
+- `safety_car_delta` was captured and never read. Running under the delta during
+  a safety car or VSC is a penalty risk and is now called, repeating on a short
+  cooldown while the breach lasts. Tune with `PITWALL_PROACTIVE_SC_DELTA_MIN_S`.
+
+### Diagnostics
+
+- Logs are written to a rotating `%USERPROFILE%\PitWallData\pitwall.log` as well
+  as the console, so a session can be investigated after the console window
+  closes.
+- Unhandled UDP packet types are reported once instead of being dropped silently.
+- All 18 proactive event types now have specific fallback text. Nine previously
+  degraded to "Engineer update available on the dashboard" whenever the model
+  call failed.
+- Participants populate `team_id` and teammate detection. Human-readable team
+  names are intentionally not guessed; `team` stays empty until a verified
+  team-id table exists for the current title.
+
+## Provider-neutral engineer retained from 3.3.1
+
+Version 3.3.1 hardened the provider-neutral engineer for race-day failover:
 
 ```text
 Routine and normal reasoning  -> DeepSeek V4 Flash
@@ -12,8 +92,6 @@ Speech-to-text and TTS         -> OpenAI audio models
 ```
 
 The existing `L3 -> F1 UDP Action 1` binding, hands-free “Mark” trigger, dashboard, strategy engine, SQLite data, and audio pipeline are unchanged.
-
-## What changed in 3.3.1
 
 ### Race-radio provider deadlines and zero SDK retries
 
@@ -299,19 +377,28 @@ Strict mode uses DeepSeek's beta endpoint and supports a narrower JSON-schema su
 
 ## Verification
 
-Completed in this build environment:
+Completed for 3.4.0 with the full dependency set installed — nothing stubbed,
+nothing deselected:
 
 ```text
-59 automated test cases passed
-1 OpenAI-SDK serialization test deselected because the SDK wheel was unavailable
-15 UDP/parser/reliability test functions excluded because f1-packets was unavailable
+95 automated tests passed
+Ruff static checks passed
 Python compileall passed
-Dashboard JavaScript syntax passed with Node.js
+FastAPI startup and /api/health passed (version 3.4.0)
+Rotating file log created and written
 ```
 
-The repository contains **71 test functions**. On the Windows installation where `openai` and `f1-packets` are installed, `install_windows.ps1` runs the complete suite.
+The repository contains **95 test functions**. `install_windows.ps1` runs the
+complete suite on your Windows installation.
 
-New 3.3.1 tests cover:
+New 3.4.0 tests cover sprint/shootout classification, the sprint two-compound
+exemption, quantified corner deltas and their suppression at noise level, sector
+extraction and backfill, session-result persistence, power-unit damage detection,
+safety-car delta relevance, complete proactive fallback text, and teammate
+detection. Two production paths — quantified coaching and sector persistence —
+were additionally driven end to end; see `docs/VERIFICATION.md`.
+
+Earlier 3.3.1 tests cover:
 
 - Primary-provider validation (`none` cannot silently disable radio).
 - Route deadline and immediate fallback behavior.

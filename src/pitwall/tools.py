@@ -344,6 +344,8 @@ class TelemetryTools:
                 "warnings",
                 "corner_cutting_warnings",
                 "fia_flag",
+                "race_control_phase",
+                "safety_car_delta_s",
                 "unserved_drive_through_penalties",
                 "unserved_stop_go_penalties",
                 "pit_stop_should_serve_penalty",

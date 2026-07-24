@@ -250,18 +250,31 @@ class PitWallDatabase:
     def _upsert_session_sync(self, state: dict[str, Any]) -> None:
         if not state.get("session_uid"):
             return
+        # The final-classification packet is the only signal that a session
+        # actually finished, so the result is recorded here rather than needing
+        # a separate write path. COALESCE keeps a result already on record if a
+        # later upsert happens to run without classification data.
+        classification = state.get("final_classification") or {}
+        position = int(classification.get("position", 0) or 0)
+        finished_at = time.time() if position > 0 else None
+        result_position = position if position > 0 else None
         with self._connect() as db:
             db.execute(
                 """
                 INSERT INTO sessions(
                     session_uid, track_id, track_name, session_type,
-                    mode_profile, started_at, total_laps, setup_json
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    mode_profile, started_at, ended_at, result_position,
+                    total_laps, setup_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(session_uid) DO UPDATE SET
                     track_id=excluded.track_id,
                     track_name=excluded.track_name,
                     session_type=excluded.session_type,
                     mode_profile=excluded.mode_profile,
+                    ended_at=COALESCE(excluded.ended_at, sessions.ended_at),
+                    result_position=COALESCE(
+                        excluded.result_position, sessions.result_position
+                    ),
                     total_laps=excluded.total_laps,
                     setup_json=excluded.setup_json
                 """,
@@ -272,6 +285,8 @@ class PitWallDatabase:
                     state.get("session_type", "Unknown"),
                     state.get("mode_profile", "idle"),
                     time.time(),
+                    finished_at,
+                    result_position,
                     int(state.get("total_laps", 0)),
                     json.dumps(state.get("car_setup", {})),
                 ),
@@ -422,6 +437,51 @@ class PitWallDatabase:
             ).fetchall()
             result["corner_metrics"] = [_restore_session_uid(dict(item)) for item in corners]
             return result
+
+    async def backfill_lap_sectors(
+        self,
+        session_uid: int,
+        laps: list[dict[str, Any]],
+    ) -> int:
+        """Fill sector times on rows that were saved before the game reported them.
+
+        The session-history packet usually arrives after a lap has already been
+        analysed and persisted, which would otherwise leave the sector columns
+        at zero for the rest of the session. Only complete splits are written,
+        and only over rows that are still missing one.
+        """
+        pending: list[tuple[int, int, int, int]] = []
+        for lap in laps:
+            lap_num = int(lap.get("lap_num", -1))
+            sectors = [int(lap.get(key, 0) or 0) for key in ("s1_ms", "s2_ms", "s3_ms")]
+            if lap_num >= 0 and all(sectors):
+                pending.append((sectors[0], sectors[1], sectors[2], lap_num))
+        if not pending:
+            return 0
+        async with self._lock:
+            return await asyncio.to_thread(
+                self._backfill_lap_sectors_sync, session_uid, pending
+            )
+
+    def _backfill_lap_sectors_sync(
+        self,
+        session_uid: int,
+        pending: list[tuple[int, int, int, int]],
+    ) -> int:
+        stored_uid = _session_uid_to_sqlite(session_uid)
+        with self._connect() as db:
+            updated = 0
+            for s1_ms, s2_ms, s3_ms, lap_num in pending:
+                cursor = db.execute(
+                    """
+                    UPDATE laps SET s1_ms=?, s2_ms=?, s3_ms=?
+                    WHERE session_uid=? AND lap_num=?
+                      AND (s1_ms=0 OR s2_ms=0 OR s3_ms=0)
+                    """,
+                    (s1_ms, s2_ms, s3_ms, stored_uid, lap_num),
+                )
+                updated += cursor.rowcount or 0
+            return updated
 
     async def recent_laps(
         self,

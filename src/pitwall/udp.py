@@ -30,6 +30,35 @@ OVERRIDE_LABELS = {
     "practice": "Practice",
     "time_trial": "Time Trial",
 }
+# Session type identifiers are a more reliable classifier than the display
+# label. Two label-matching hazards this avoids: "One-Shot Sprint Shoot" is
+# truncated and never matches "shootout", and F1 reports the sprint race as
+# "Race 2"/"Race 3", which naive matching treats as a grand prix. A sprint has
+# no mandatory tyre change, so misclassifying it makes the engineer demand an
+# unnecessary compound switch. Race distance cannot be used to tell them apart
+# because a shortened-distance grand prix can be fewer laps than a sprint.
+SESSION_MODE_BY_TYPE_ID = {
+    0: "idle",
+    1: "practice",
+    2: "practice",
+    3: "practice",
+    4: "practice",
+    5: "qualifying",
+    6: "qualifying",
+    7: "qualifying",
+    8: "qualifying",
+    9: "qualifying",
+    # Sprint Shootout sessions are qualifying sessions that set the sprint grid.
+    10: "qualifying",
+    11: "qualifying",
+    12: "qualifying",
+    13: "qualifying",
+    14: "qualifying",
+    15: "race",
+    16: "sprint",
+    17: "sprint",
+    18: "time_trial",
+}
 WEATHER = {
     0: "Clear",
     1: "Light cloud",
@@ -67,10 +96,17 @@ def normalize_wheels(values: Iterable[Any]) -> list[Any]:
 
 
 def mode_profile(session_type: str) -> str:
+    """Label-based fallback classifier for when the type id is unrecognised.
+
+    ``SESSION_MODE_BY_TYPE_ID`` is the primary source; this matches on "shoot"
+    rather than "shootout" so the truncated "One-Shot Sprint Shoot" label is
+    still recognised as a qualifying session instead of falling through to
+    the sprint branch below.
+    """
     lowered = session_type.lower()
     if "practice" in lowered:
         return "practice"
-    if "qualifying" in lowered or "shootout" in lowered:
+    if "qualifying" in lowered or "shoot" in lowered:
         return "qualifying"
     if "sprint" in lowered:
         return "sprint"
@@ -108,7 +144,7 @@ def classify_session(
             f"Manual dashboard override; raw UDP type was {raw_label} ({raw_type_id}).",
         )
 
-    raw_mode = mode_profile(raw_label)
+    raw_mode = SESSION_MODE_BY_TYPE_ID.get(int(raw_type_id)) or mode_profile(raw_label)
     longest_clock = max(int(session_time_left_s), int(session_duration_s))
     race_distance_is_coherent = (
         int(total_laps) >= max(3, int(current_lap)) and longest_clock >= 3_600
@@ -175,6 +211,7 @@ class F1DatagramProtocol(asyncio.DatagramProtocol):
         self.packet_queue: asyncio.Queue[Any] = asyncio.Queue(maxsize=queue_capacity)
         self.consumer_task: asyncio.Task[None] | None = None
         self._stats_counter = 0
+        self._unhandled_packets: set[str] = set()
 
     def connection_made(self, transport: asyncio.BaseTransport) -> None:
         self.transport = transport  # type: ignore[assignment]
@@ -242,9 +279,15 @@ class F1DatagramProtocol(asyncio.DatagramProtocol):
             header.game_year,
             header.session_uid,
         )
-        handler = getattr(self, f"handle_{packet.__class__.__name__}", None)
+        name = packet.__class__.__name__
+        handler = getattr(self, f"handle_{name}", None)
         if handler:
             await handler(packet)
+        elif name not in self._unhandled_packets:
+            # Report each unknown packet type once. Silently discarding them
+            # makes a newly added telemetry packet invisible during diagnosis.
+            self._unhandled_packets.add(name)
+            log.info("No handler for %s; packet ignored", name)
 
     async def handle_PacketSessionData(self, packet: Any) -> None:
         samples = list(packet.weather_forecast_samples)[
@@ -361,8 +404,19 @@ class F1DatagramProtocol(asyncio.DatagramProtocol):
                 participant = packet.participants[index]
                 driver.name = _name(participant.name)
                 driver.car_idx = index
+                driver.team_id = int(getattr(participant, "team_id", -1))
                 driver.restricted = (
                     int(participant.your_telemetry) == 0
+                    and index != state.player_car_index
+                )
+            # Teammate identification needs every team_id read first, so it runs
+            # as a second pass rather than inside the loop above.
+            player = state.drivers[state.player_car_index]
+            for index, driver in enumerate(state.drivers):
+                driver.is_teammate = bool(
+                    driver.active
+                    and player.team_id >= 0
+                    and driver.team_id == player.team_id
                     and index != state.player_car_index
                 )
 

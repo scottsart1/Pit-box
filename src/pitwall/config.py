@@ -102,6 +102,11 @@ class Settings(BaseSettings):
 
     data_dir: Path = Path.home() / "PitWallData"
     open_browser: bool = True
+    # Logs are written to data_dir/pitwall.log so a session can be diagnosed
+    # after the console window has closed.
+    log_level: str = "info"
+    log_max_bytes: int = 2_000_000
+    log_backup_count: int = 3
 
     proactive_enabled: bool = True
     proactive_cadence_laps: int = 2
@@ -111,6 +116,11 @@ class Settings(BaseSettings):
     proactive_max_lateral_g: float = 1.35
     proactive_safe_hold_s: float = 0.45
     proactive_delivery_deadline_s: float = 35.0
+    # Under a safety car or VSC the car must stay above the delta time. The
+    # telemetry delta goes negative when the driver is running too fast, which
+    # is a penalty risk. Raise the threshold for an earlier, more cautious call.
+    proactive_sc_delta_min_s: float = 0.0
+    proactive_sc_delta_cooldown_s: float = 12.0
 
     strategy_monte_carlo_samples: int = 320
     strategy_risk_quantile: float = 0.75

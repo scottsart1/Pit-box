@@ -13,6 +13,33 @@ from .state import StateStore
 from .strategy import StrategyEngine
 from .voice import NativeVoiceController
 
+# Reliability damage matters as much as aero damage, but gearbox, engine and
+# DRS/ERS faults were previously invisible to the radio: they are captured in
+# state yet were excluded from both the change signature and the severity test,
+# so a failing power unit never produced a call.
+DAMAGE_KEYS = (
+    "front_left_wing",
+    "front_right_wing",
+    "rear_wing",
+    "floor",
+    "diffuser",
+    "sidepod",
+    "gearbox",
+    "engine",
+)
+DAMAGE_FAULT_KEYS = ("drs_fault", "ers_fault")
+# Phases in which a safety-car delta time is being enforced.
+NEUTRALISED_PHASES = frozenset(
+    {
+        "safety_car",
+        "vsc",
+        "formation",
+        "safety_car_ending",
+        "vsc_ending",
+        "formation_ending",
+    }
+)
+
 
 class ProactiveEngineer:
     """Reliable cadence-driven and event-driven unsolicited race radio."""
@@ -211,6 +238,7 @@ class ProactiveEngineer:
             "progress_update", "corner_coaching", "race_control", "weather_crossover",
             "fuel_warning", "tyre_wear", "damage", "strategy_change", "compound_requirement",
             "quali_clear_air", "blue_flag", "penalty_service", "undercut_threat",
+            "safety_car_delta",
         }
         if event_type in coalesced:
             self.pending = deque((item for item in self.pending if item.get("type") != event_type), maxlen=24)
@@ -253,9 +281,10 @@ class ProactiveEngineer:
 
     @staticmethod
     def _damage_signature(damage: dict[str, Any]) -> str:
-        return ":".join(str(damage.get(k, 0)) for k in (
-            "front_left_wing", "front_right_wing", "rear_wing", "floor", "sidepod"
-        ))
+        return ":".join(
+            str(damage.get(key, 0))
+            for key in (*DAMAGE_KEYS, *DAMAGE_FAULT_KEYS)
+        )
 
     @staticmethod
     def _event_still_relevant(event: dict[str, Any], state: dict[str, Any]) -> bool:
@@ -274,7 +303,15 @@ class ProactiveEngineer:
             return max(state.get("tyre", {}).get("wear", [0]) or [0]) >= 62
         if kind == "damage":
             d = state.get("damage", {})
-            return max([int(d.get(k, 0)) for k in ("front_left_wing", "front_right_wing", "rear_wing", "floor", "sidepod")] or [0]) > 10
+            return max([int(d.get(key, 0)) for key in DAMAGE_KEYS] or [0]) > 10 or any(
+                bool(d.get(key)) for key in DAMAGE_FAULT_KEYS
+            )
+        if kind == "safety_car_delta":
+            return str(
+                state.get("race_control_phase", "green")
+            ) in NEUTRALISED_PHASES and float(
+                state.get("safety_car_delta_s", 0.0) or 0.0
+            ) < settings.proactive_sc_delta_min_s
         if kind == "compound_requirement":
             return bool(state.get("strategy", {}).get("compound_rule", {}).get("change_outstanding"))
         if kind == "blue_flag":
@@ -419,8 +456,11 @@ class ProactiveEngineer:
         signature = self._damage_signature(damage)
         if signature != self._last_damage_signature:
             self._last_damage_signature = signature
-            maximum = max([int(damage.get(k, 0)) for k in ("front_left_wing", "front_right_wing", "rear_wing", "floor", "sidepod")] or [0])
-            if maximum > 10:
+            maximum = max([int(damage.get(key, 0)) for key in DAMAGE_KEYS] or [0])
+            # A DRS or ERS fault has no percentage but is immediately
+            # race-affecting, so it is called regardless of damage level.
+            fault = any(bool(damage.get(key)) for key in DAMAGE_FAULT_KEYS)
+            if maximum > 10 or fault:
                 self._enqueue("damage", damage, critical=True, cooldown_s=0.0)
 
         invalid = bool(state.get("current_lap_invalid"))
@@ -451,6 +491,25 @@ class ProactiveEngineer:
                 expires_s=25.0,
             )
         self._last_blue_flag = blue
+
+        # Safety-car / VSC delta compliance. The delta must stay above the
+        # threshold; going under it is a penalty risk, so this repeats on a
+        # short cooldown while the breach lasts rather than firing once.
+        phase = str(state.get("race_control_phase", "green"))
+        if phase in NEUTRALISED_PHASES:
+            delta = float(state.get("safety_car_delta_s", 0.0) or 0.0)
+            if delta < settings.proactive_sc_delta_min_s:
+                self._enqueue(
+                    "safety_car_delta",
+                    {
+                        "phase": phase,
+                        "safety_car_delta_s": round(delta, 2),
+                        "threshold_s": settings.proactive_sc_delta_min_s,
+                    },
+                    critical=True,
+                    cooldown_s=settings.proactive_sc_delta_cooldown_s,
+                    expires_s=10.0,
+                )
 
         unserved = (
             int(state.get("unserved_drive_through_penalties", 0)),
@@ -622,6 +681,51 @@ class ProactiveEngineer:
             return "Penalty is marked to be served at the stop; the strategy has been updated."
         if kind == "undercut_threat":
             return str(payload.get("instruction") or "Car behind has boxed for the undercut. Push now and stand by for the cover call.")
+        if kind == "safety_car_delta":
+            return (
+                f"You are under the safety-car delta at "
+                f"{payload.get('safety_car_delta_s')} seconds. Back off now to stay legal."
+            )
+        if kind == "corner_coaching":
+            return str(
+                payload.get("instruction")
+                or f"Repeated time loss at {payload.get('name', 'the same corner')}; rebuild that corner next lap."
+            )
+        if kind == "fuel_warning":
+            delta = state.get("fuel_laps_delta")
+            return (
+                f"Fuel is short by {abs(float(delta)):.1f} laps. Start lifting and coasting on the long straights."
+                if isinstance(delta, (int, float))
+                else "Fuel is short of race distance. Start lifting and coasting on the long straights."
+            )
+        if kind == "damage":
+            if payload.get("ers_fault"):
+                return "ERS fault reported. Expect reduced deployment; we are reassessing the plan."
+            if payload.get("drs_fault"):
+                return "DRS fault reported. Do not rely on the overtaking aid this lap."
+            for key, label in (("engine", "Engine"), ("gearbox", "Gearbox")):
+                if int(payload.get(key, 0) or 0) > 10:
+                    return f"{label} damage detected. Short-shift where you can and report any change in feel."
+            return "Aero damage detected. Report the balance change and we will assess a wing adjustment."
+        if kind == "compound_requirement":
+            return "You still owe a second dry compound. We must fit a different compound before the finish."
+        if kind == "weather_crossover":
+            return (
+                f"Rain risk is {payload.get('rain_15_pct')} percent within fifteen minutes. "
+                "Stand by for a crossover call."
+            )
+        if kind == "penalty":
+            return f"You have picked up a {payload.get('penalties_s')} second penalty. Keep it clean from here."
+        if kind == "warning":
+            return (
+                f"That is {payload.get('corner_cutting_warnings')} track-limit warnings. "
+                "Tighten the exits before this becomes a penalty."
+            )
+        if kind == "rival_pitted":
+            return str(
+                payload.get("instruction")
+                or f"{payload.get('driver', 'A rival')} has boxed. We are recalculating the response."
+            )
         return "Engineer update available on the dashboard."
 
     async def _deliver(self, state: dict[str, Any]) -> None:

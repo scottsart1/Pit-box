@@ -47,14 +47,29 @@ event_persistence_task: asyncio.Task[None] | None = None
 
 async def _connection_watchdog() -> None:
     last_session_write = 0.0
+    classified_sessions: set[int] = set()
     while True:
         await asyncio.sleep(1.0)
         await store.mark_disconnected_if_stale(settings.disconnect_after_s)
         snapshot = await store.snapshot_live()
         loop_time = asyncio.get_running_loop().time()
-        if snapshot.get("session_uid") and loop_time - last_session_write >= 10:
+        session_uid = int(snapshot.get("session_uid") or 0)
+        # A finished session must be recorded immediately: waiting for the next
+        # periodic write risks losing the result if Pit Wall is closed straight
+        # after the chequered flag.
+        classification = snapshot.get("final_classification") or {}
+        newly_classified = bool(
+            session_uid
+            and int(classification.get("position", 0) or 0) > 0
+            and session_uid not in classified_sessions
+        )
+        if session_uid and (
+            newly_classified or loop_time - last_session_write >= 10
+        ):
             await database.upsert_session(snapshot)
             last_session_write = loop_time
+            if newly_classified:
+                classified_sessions.add(session_uid)
 
 
 async def _event_persistence_worker() -> None:
@@ -122,7 +137,7 @@ async def lifespan(app: FastAPI):
         udp_transport.close()
 
 
-app = FastAPI(title="Pit Wall", version="3.3.1", lifespan=lifespan)
+app = FastAPI(title="Pit Wall", version="3.4.0", lifespan=lifespan)
 
 
 class AskRequest(BaseModel):
