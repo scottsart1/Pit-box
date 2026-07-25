@@ -1,0 +1,105 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Pit Wall Overlay</title>
+<style>
+/* Transparent by default for OBS browser sources. Append ?bg=1 for an opaque
+   panel when using this as a phone/tablet second screen. */
+:root{font-family:Segoe UI,system-ui,sans-serif;color:#eef4f8}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:transparent}
+body.solid{background:#070b0f}
+.wrap{position:fixed;left:12px;top:12px;display:flex;flex-direction:column;gap:8px;
+  max-width:340px}
+.card{background:rgba(9,14,20,.82);border:1px solid #26414f;border-radius:10px;
+  padding:10px 12px;backdrop-filter:blur(2px)}
+.row{display:flex;justify-content:space-between;align-items:baseline;gap:12px}
+.pos{font-size:34px;font-weight:900;line-height:1}
+.label{font-size:10px;letter-spacing:.14em;color:#8fa4b7;text-transform:uppercase}
+.big{font-size:20px;font-weight:800}
+.delta.pos-good{color:#49d17d}
+.delta.pos-bad{color:#ff6969}
+.tyre{font-size:13px}
+.wear{color:#ffc15c}
+.instr{font-size:13px;color:#cfe0ee;line-height:1.35}
+.radio{font-size:13px;color:#9fd0ff;line-height:1.35;font-style:italic}
+.muted{color:#8fa4b7}
+.hidden{display:none}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="card">
+    <div class="row">
+      <div><div class="label">Pos</div><div class="pos" id="pos">—</div></div>
+      <div style="text-align:right">
+        <div class="label">Delta to PB</div>
+        <div class="big delta" id="delta">—</div>
+      </div>
+    </div>
+  </div>
+  <div class="card">
+    <div class="row"><span class="label">Tyres</span><span class="tyre" id="tyre">—</span></div>
+    <div class="row"><span class="label">Wear FL/FR/RL/RR</span><span class="tyre wear" id="wear">—</span></div>
+    <div class="row"><span class="label">Fuel Δ</span><span class="tyre" id="fuel">—</span></div>
+  </div>
+  <div class="card" id="stratCard">
+    <div class="label">Strategy</div>
+    <div class="instr" id="strat">Building…</div>
+  </div>
+  <div class="card" id="radioCard">
+    <div class="label">Last radio</div>
+    <div class="radio" id="radio">—</div>
+  </div>
+</div>
+<script>
+if (new URLSearchParams(location.search).get("bg") === "1") document.body.classList.add("solid");
+
+function fmtDelta(v){
+  if (v === null || v === undefined) return "—";
+  const s = (v >= 0 ? "+" : "") + Number(v).toFixed(2);
+  return s;
+}
+
+function render(state){
+  const pos = state.player_position || 0;
+  document.getElementById("pos").textContent = pos ? "P" + pos : "—";
+
+  const delta = state.live_delta_s;
+  const el = document.getElementById("delta");
+  el.textContent = fmtDelta(delta);
+  el.classList.toggle("pos-good", typeof delta === "number" && delta < 0);
+  el.classList.toggle("pos-bad", typeof delta === "number" && delta > 0);
+
+  const tyre = state.tyre || {};
+  document.getElementById("tyre").textContent =
+    (tyre.compound || "—") + (tyre.age_laps != null ? " · " + tyre.age_laps + " laps" : "");
+  document.getElementById("wear").textContent =
+    Array.isArray(tyre.wear) ? tyre.wear.map(w => Math.round(w) + "%").join(" ") : "—";
+
+  const fuel = state.fuel_laps_delta;
+  document.getElementById("fuel").textContent =
+    typeof fuel === "number" ? (fuel >= 0 ? "+" : "") + fuel.toFixed(1) + " laps" : "—";
+
+  const rec = (state.strategy && state.strategy.recommended) || {};
+  document.getElementById("strat").textContent = rec.instruction || "Building…";
+
+  const log = state.radio_log || [];
+  let last = "";
+  for (let i = log.length - 1; i >= 0; i--) {
+    if (log[i].role === "engineer") { last = log[i].text; break; }
+  }
+  document.getElementById("radio").textContent = last || "—";
+}
+
+function connect(){
+  const ws = new WebSocket((location.protocol === "https:" ? "wss://" : "ws://") + location.host + "/ws");
+  ws.onmessage = (ev) => { try { render(JSON.parse(ev.data)); } catch (e) {} };
+  ws.onclose = () => setTimeout(connect, 1000);
+}
+connect();
+</script>
+</body>
+</html>

@@ -11,6 +11,9 @@ import types
 
 import pytest
 
+from pitwall import brain as brain_module
+from pitwall.config import Settings
+from pitwall.database import PitWallDatabase
 from pitwall.proactive import ProactiveEngineer
 from pitwall.state import DriverState, StateStore
 from pitwall.strategy import TYPICAL_STINT_LAPS, points_for_position
@@ -420,3 +423,67 @@ async def test_batch3_energy_tool_registered(stack) -> None:
     _, _, _, _, _, tools = stack
     names = {schema["name"] for schema in tools.schemas()}
     assert "get_energy_plan" in names
+
+
+# ==========================================================================
+# Batch 4 — personalization & surfaces
+# ==========================================================================
+
+
+def test_compose_persona_folds_name_custom_and_verbosity(monkeypatch) -> None:
+    monkeypatch.setattr(brain_module.settings, "engineer_name", "Bono")
+    monkeypatch.setattr(brain_module.settings, "engineer_persona", "Mention the title fight.")
+    monkeypatch.setattr(brain_module.settings, "radio_verbosity", "terse")
+    composed = brain_module.compose_persona(brain_module.PERSONA)
+    assert "call sign is Bono" in composed
+    assert "Mention the title fight." in composed
+    assert "terse" in composed.lower()
+    # The safety-critical base is preserved.
+    assert "Never invent a number" in composed
+
+
+def test_compose_persona_default_is_base_only(monkeypatch) -> None:
+    monkeypatch.setattr(brain_module.settings, "engineer_name", "Mark")
+    monkeypatch.setattr(brain_module.settings, "engineer_persona", "")
+    monkeypatch.setattr(brain_module.settings, "radio_verbosity", "standard")
+    composed = brain_module.compose_persona(brain_module.PERSONA)
+    assert composed == brain_module.PERSONA
+
+
+def test_radio_verbosity_validator_rejects_unknown() -> None:
+    assert Settings(_env_file=None, radio_verbosity="loud").radio_verbosity == "standard"
+    assert Settings(_env_file=None, radio_verbosity="TERSE").radio_verbosity == "terse"
+
+
+@pytest.mark.asyncio
+async def test_export_csv_and_json_endpoints(monkeypatch, tmp_path) -> None:
+    # Exercise the export endpoints against a fresh app-level database.
+    import pitwall.app as app_module
+    from fastapi.testclient import TestClient
+
+    database = PitWallDatabase(tmp_path / "export.sqlite3")
+    await database.initialize()
+    monkeypatch.setattr(app_module, "database", database)
+    uid = 2**63 + 3
+    await app_module.store.update(track_id=10, track_name="Spa", session_uid=uid)
+    await database.upsert_session(
+        {"session_uid": uid, "track_id": 10, "track_name": "Spa",
+         "session_type": "Race", "mode_profile": "race", "total_laps": 20}
+    )
+    await database.save_lap(_lap(uid, 1, 104_000, 33_000, 36_000, 35_000, 1.0), [])
+
+    with TestClient(app_module.app) as client:
+        csv = client.get("/api/export/laps.csv?track_id=10")
+        assert csv.status_code == 200
+        assert csv.headers["content-type"].startswith("text/csv")
+        assert "attachment" in csv.headers["content-disposition"]
+        assert "lap_num" in csv.text and "104000" in csv.text
+
+        js = client.get("/api/export/session.json?scope=current_track")
+        assert js.status_code == 200
+        assert "attachment" in js.headers["content-disposition"]
+        assert "laps" in js.json()
+
+        overlay = client.get("/overlay")
+        assert overlay.status_code == 200
+        assert "background:transparent" in overlay.text

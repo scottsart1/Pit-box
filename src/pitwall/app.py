@@ -14,7 +14,7 @@ from fastapi import (
     WebSocket,
     WebSocketDisconnect,
 )
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse
 from pydantic import BaseModel
 
 from .analysis import AnalysisEngine
@@ -182,6 +182,13 @@ async def index() -> HTMLResponse:
     return HTMLResponse(path.read_text(encoding="utf-8"))
 
 
+@app.get("/overlay", response_class=HTMLResponse)
+async def overlay() -> HTMLResponse:
+    """Transparent OBS/second-screen overlay. Append ?bg=1 for an opaque panel."""
+    path = Path(__file__).resolve().parents[2] / "static" / "overlay.html"
+    return HTMLResponse(path.read_text(encoding="utf-8"))
+
+
 @app.get("/api/health")
 async def health() -> dict[str, object]:
     snapshot = await store.snapshot_live()
@@ -239,6 +246,44 @@ async def review(track_id: int | None = Query(default=None)) -> dict[str, object
     snapshot = await store.snapshot_live()
     selected = int(track_id if track_id is not None else snapshot.get("track_id", -1))
     return await database.track_review(selected, 50)
+
+
+@app.get("/api/export/laps.csv")
+async def export_laps_csv(track_id: int | None = Query(default=None)) -> PlainTextResponse:
+    """Export stored laps for a track (or the current track) as CSV."""
+    snapshot = await store.snapshot_live()
+    selected = int(track_id if track_id is not None else snapshot.get("track_id", -1))
+    laps = await database.recent_laps(selected, 500)
+    columns = [
+        "session_uid", "lap_num", "lap_time_ms", "valid", "compound",
+        "tyre_age_start", "tyre_age_end", "s1_ms", "s2_ms", "s3_ms",
+        "fuel_start_kg", "fuel_end_kg", "position", "created_at",
+    ]
+    lines = [",".join(columns)]
+    for lap in laps:
+        lines.append(",".join(str(lap.get(column, "")) for column in columns))
+    body = "\n".join(lines) + "\n"
+    return PlainTextResponse(
+        body,
+        media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="pitwall_laps_{selected}.csv"'},
+    )
+
+
+@app.get("/api/export/session.json")
+async def export_session_json(
+    scope: str = Query(default="current_session"),
+    limit: int = Query(default=200, ge=1, le=1000),
+) -> JSONResponse:
+    """Export the full stored history bundle as a downloadable JSON file."""
+    snapshot = await store.snapshot_live()
+    session_uid = int(snapshot.get("session_uid", 0)) if scope == "current_session" else None
+    track_id = int(snapshot.get("track_id", -1)) if scope in {"current_session", "current_track"} else None
+    data = await database.history_query(track_id=track_id, session_uid=session_uid, limit=limit)
+    return JSONResponse(
+        data,
+        headers={"Content-Disposition": 'attachment; filename="pitwall_session.json"'},
+    )
 
 
 @app.websocket("/ws")
