@@ -81,6 +81,11 @@ async def _event_persistence_worker() -> None:
             store.event_queue.task_done()
 
 
+async def _persist_finished_session() -> None:
+    """Persist the final result in the same packet-handling cycle."""
+    await database.upsert_session(await store.snapshot_live())
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global voice, proactive, udp_transport, watchdog_task, event_persistence_task
@@ -104,7 +109,12 @@ async def lifespan(app: FastAPI):
     loop = asyncio.get_running_loop()
     try:
         udp_transport, _ = await loop.create_datagram_endpoint(
-            lambda: F1DatagramProtocol(store, voice.on_button_status),
+            lambda: F1DatagramProtocol(
+                store,
+                voice.on_button_status,
+                on_player_lap_history=database.backfill_lap_sectors,
+                on_final_classification=_persist_finished_session,
+            ),
             local_addr=(settings.udp_host, settings.udp_port),
         )
     except OSError as exc:
@@ -137,7 +147,7 @@ async def lifespan(app: FastAPI):
         udp_transport.close()
 
 
-app = FastAPI(title="Pit Wall", version="3.4.0", lifespan=lifespan)
+app = FastAPI(title="Pit Wall", version="3.4.1", lifespan=lifespan)
 
 
 class AskRequest(BaseModel):
@@ -338,6 +348,7 @@ async def session_mode(request: SessionModeRequest) -> dict[str, object]:
         session_time_left_s=int(snapshot.get("session_time_left_s", 0)),
         session_duration_s=int(snapshot.get("session_duration_s", 0)),
         session_length_id=int(snapshot.get("session_length_id", 0)),
+        weekend_structure=snapshot.get("weekend_structure", []),
         override=mode,
     )
     await store.update(

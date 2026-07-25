@@ -68,6 +68,8 @@ class SessionState:
     session_detection_reason: str = ""
     session_length_id: int = 0
     session_length_label: str = "None"
+    num_sessions_in_weekend: int = 0
+    weekend_structure: list[int] = field(default_factory=list)
     session_mode_override: str = "auto"
     track_id: int = -1
     track_name: str = "—"
@@ -84,6 +86,7 @@ class SessionState:
     sector3_start_m: float = 0.0
     current_lap_invalid: bool = False
     safety_car_delta_s: float = 0.0
+    safety_car_delta_valid: bool = False
     unserved_drive_through_penalties: int = 0
     unserved_stop_go_penalties: int = 0
     pit_stop_should_serve_penalty: bool = False

@@ -271,9 +271,9 @@ class PitWallDatabase:
                     track_name=excluded.track_name,
                     session_type=excluded.session_type,
                     mode_profile=excluded.mode_profile,
-                    ended_at=COALESCE(excluded.ended_at, sessions.ended_at),
+                    ended_at=COALESCE(sessions.ended_at, excluded.ended_at),
                     result_position=COALESCE(
-                        excluded.result_position, sessions.result_position
+                        sessions.result_position, excluded.result_position
                     ),
                     total_laps=excluded.total_laps,
                     setup_json=excluded.setup_json
