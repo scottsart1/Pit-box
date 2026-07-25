@@ -1,78 +1,74 @@
-# Pit Wall 3.4.1 verification
+# Pit Wall 3.5.0 verification
 
-## Independent review result
+## Completed in this environment
 
-The 3.4.0 extraction work was reviewed at packet-handler, state, persistence,
-strategy-rule and proactive-radio boundaries. The corrected build contains 97
-Python test functions and collects 101 cases.
-
-## Reproduced in this environment
-
-The package mirror did not provide `openai`, `f1-packets`, `sounddevice` or Ruff.
-Temporary import-only stubs outside the release tree were used to collect and run
-code that does not depend on those wheels. No stub is included in this build.
+The full dependency set (`openai`, `f1-packets`, `sounddevice`, Ruff, Node.js)
+was installed, so the whole suite ran with nothing stubbed or deselected.
 
 ```text
-101 test cases collected
-100 tests passed
-1 OpenAI-SDK serialization test deselected
+137 automated tests passed
+Ruff static checks passed
 Python compileall passed
-Python AST parse passed
-Dashboard JavaScript syntax passed with Node.js
-FastAPI import and /api/health smoke check passed (version 3.4.1)
-Rotating file log creation and write passed
+FastAPI startup and /api/health passed (version 3.5.0)
+/overlay, /api/export/laps.csv, /api/export/session.json served (200)
+/api/debrief returns 404 with no active session (correct)
+Dashboard and overlay JavaScript passed node --check
 ```
 
-The missing SDK test must be rerun by `install_windows.ps1`, which installs the
-real dependency set before invoking pytest.
+The tool surface grew from 33 to 42 tools.
 
-## Defects corrected after reviewing 3.4.0
+## What 3.5 adds and how it was checked
 
-1. **Sprint mapping:** Race 2 and Race 3 were hardcoded as Sprint. The game uses
-   race IDs as weekend sequence slots, so that mapping could treat the Grand Prix
-   as a Sprint and waive the dry two-compound rule. Classification now uses
-   `weekend_structure`: Race (15) is Sprint only when a later Race 2/3 slot is in
-   the sequence; later race slots remain Grand Prix. Unknown sequences default to
-   Grand Prix rules.
-2. **Sector backfill wiring:** the database backfill method existed, but the
-   session-history packet did not call it. The packet handler now backfills the
-   player lap immediately, including the last lap of a session.
-3. **Finish timestamp drift:** every periodic upsert after classification replaced
-   `ended_at` with a newer time. The first non-null finish time is now preserved.
-4. **Final-result durability:** final classification now invokes persistence in
-   the same packet cycle; the watchdog remains a secondary safety net.
-5. **Spectator sentinel:** `player_car_index=255` could index 24-car packet arrays.
-   Player-only handlers now validate the index and safely ignore spectator-only
-   packets.
-6. **Safety-car false alert:** a positive configured delta threshold could treat
-   the default zero value as a breach before Lap Data arrived. Calls now require a
-   valid delta sample.
-7. **Version and test-count drift:** the dashboard still displayed 3.3.1, and the
-   documentation confused test functions with parametrized cases. Version labels
-   and counts now match the source.
+Each feature is driven through its deterministic layer in
+`tests/test_features_3_5.py` (36 tests) so the numbers are pinned independently
+of any language model.
 
-## New and retained regression coverage
+**Analytics (items 12–14).** Sector bests compose the theoretical best from the
+independent per-sector minima and ignore pre-3.4 zero-sector rows; the progress
+trend orders sessions and signs improvement; setup correlation ranks stored runs
+by score.
 
-`tests/test_extraction_3_4.py` contains 26 tests covering:
+**Strategy depth (items 6–9).** The cold-tyre penalty applies only to fresh
+stints (verified against a continuing stint that shows no out-lap spike); the
+rival predictor flags a car behind on dying tyres and leaves a car ahead on
+fresh hards unflagged; pace mode recommends saving on a fuel deficit and pushing
+on a surplus; the championship view scores plans by the F1 points of their
+projected finish.
 
-- weekend-structure Sprint/Grand Prix classification and safe fallback;
-- Sprint Shootout classification and dry-compound behavior;
-- quantified corner coaching and noise suppression;
-- complete sector extraction and packet-driven database backfill;
-- final-result persistence and immutable `ended_at`;
-- engine, gearbox, ERS and DRS damage calls;
-- safety-car delta phase, threshold and validity;
-- all proactive fallback text paths;
-- team/teammate extraction and spectator sentinel handling.
+**Proactive & real-time (items 1–5, 15).** The live-delta reference interpolates
+time-into-lap and clamps at the lap boundaries; race-start fires once on green
+and never in qualifying; component wear escalates by 10-point band; energy-low
+fires only while attacking on a low battery; rival-pace flags a closing car
+behind; the safety-car restart fires on the transition into an ending phase.
+Every new event type has specific fallback text.
 
-The broader suite retains strategy, setup, SQLite uint64 session IDs, racing-line,
-wake/PTT, latency, UDP parsing, provider routing, timeout, truncation, failover,
-A/B protection and shakedown coverage.
+**Surfaces & personalisation (items 16–20).** `compose_persona` folds a call
+sign, custom persona and verbosity into the base persona while keeping the
+safety-critical instructions; verbosity is validated; the CSV/JSON export routes
+carry attachment headers; the overlay is transparent by default and uses
+`wss://` under HTTPS.
+
+**Debrief & bigger bets (items 11, 25, 26).** The debrief aggregates pace,
+consistency, spread, compounds and top losses; the collision event decodes
+severity and player involvement; the lobby handler counts players and ready
+state; practice focus returns heuristic guidance only in practice sessions.
+
+## Deferred
+
+Item 24 (a local offline STT/TTS + wake-word pipeline) is not implemented: it
+requires downloading speech models and evaluating real microphone/speaker
+latency, which this build environment cannot provide. The cloud pipeline and the
+provider router are unchanged.
 
 ## Hardware and live-service boundary
 
 This environment cannot reproduce a PS5, controller, Windows audio devices, or
-real OpenAI/DeepSeek credentials. On the target Windows machine run:
+real OpenAI/DeepSeek credentials. On the target machine, confirm live UDP
+packets, run the dashboard provider shakedown, and complete one race and one
+qualifying session. The live delta, race-start, restart and energy calls in
+particular should be observed once against real telemetry.
+
+## Reproduction on Windows
 
 ```powershell
 Set-ExecutionPolicy -Scope Process Bypass
@@ -80,6 +76,3 @@ Set-ExecutionPolicy -Scope Process Bypass
 .\.venv\Scripts\python.exe -m pytest -q
 .\start_pitwall.bat
 ```
-
-Then use **Test providers**, confirm live UDP packets, complete one Sprint weekend
-and one normal race weekend, and verify stored sector splits after the final lap.

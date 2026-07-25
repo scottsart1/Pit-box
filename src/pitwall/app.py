@@ -147,7 +147,7 @@ async def lifespan(app: FastAPI):
         udp_transport.close()
 
 
-app = FastAPI(title="Pit Wall", version="3.4.1", lifespan=lifespan)
+app = FastAPI(title="Pit Wall", version="3.5.0", lifespan=lifespan)
 
 
 class AskRequest(BaseModel):
