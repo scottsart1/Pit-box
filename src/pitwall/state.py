@@ -99,6 +99,8 @@ class SessionState:
     live_delta_reference: str = ""
     # Power-unit component wear (percent used), from the car-damage packet.
     component_wear: dict[str, float] = field(default_factory=dict)
+    # Multiplayer lobby roster, when a lobby-info packet is received.
+    lobby: dict[str, int] = field(default_factory=dict)
     game_paused: bool = False
     active_cars: int = 0
     player_car_index: int = 0

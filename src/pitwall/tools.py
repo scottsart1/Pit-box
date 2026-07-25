@@ -652,6 +652,62 @@ class TelemetryTools:
             "typical_weak_corners": review.get("corner_opportunities", [])[:5],
         }
 
+    async def get_practice_focus(self) -> dict[str, Any]:
+        """Heuristic practice guidance (not the game's programme scoring).
+
+        Suggests what to work on this practice session from lap count, compound
+        variety and consistency. Deliberately framed as advice, not a claim to
+        mirror F1's internal practice-programme objectives, which telemetry does
+        not report directly.
+        """
+        state = await self.store.snapshot_analysis()
+        if state.get("mode_profile") != "practice":
+            return {"available": False, "reason": "Not a practice session."}
+        laps_done = int(state.get("current_lap", 0))
+        consistency = await self.analysis.get_consistency()
+        tyre = state.get("tyre", {})
+        focus: list[str] = []
+        if laps_done < 3:
+            focus.append("Track acclimatisation: build clean laps and learn braking points.")
+        if int(tyre.get("age_laps", 0)) >= 8:
+            focus.append("Long-run race pace: monitor degradation and manage the tyre.")
+        else:
+            focus.append("Qualifying simulation: a low-fuel push lap on fresh tyres.")
+        stddev = consistency.get("lap_time_stddev_s")
+        if isinstance(stddev, (int, float)) and stddev > 0.4:
+            focus.append(
+                f"Consistency: lap-time spread is {stddev:.2f}s — tighten repeatability."
+            )
+        return {
+            "available": True,
+            "laps_completed": laps_done,
+            "current_compound": tyre.get("compound"),
+            "lap_time_stddev_s": stddev,
+            "suggested_focus": focus,
+            "note": "Heuristic advice, not the game's practice-programme tracker.",
+        }
+
+    async def get_session_debrief(self) -> dict[str, Any]:
+        state = await self.store.snapshot_analysis()
+        session_uid = int(state.get("session_uid", 0))
+        if not session_uid:
+            return {"available": False, "reason": "No active session."}
+        data = await self.database.session_debrief(session_uid)
+        return {
+            "available": bool(data.get("valid_lap_count")),
+            "track": data.get("track_name"),
+            "result_position": data.get("result_position"),
+            "fastest_lap": fmt_ms(data["fastest_lap_ms"]) if data.get("fastest_lap_ms") else None,
+            "average_lap": fmt_ms(data["average_lap_ms"]) if data.get("average_lap_ms") else None,
+            "consistency_stdev_s": (
+                round(data["consistency_stdev_ms"] / 1000, 3)
+                if data.get("consistency_stdev_ms") is not None
+                else None
+            ),
+            "compounds_used": data.get("compounds_used", []),
+            "top_time_losses": data.get("top_time_losses", []),
+        }
+
     async def get_sector_bests(self) -> dict[str, Any]:
         state = await self.store.snapshot_analysis()
         track_id = int(state.get("track_id", -1))
@@ -907,6 +963,22 @@ class TelemetryTools:
             (
                 "get_front_wing_adjustment",
                 "Get the recommended front-wing change for the next pit stop.",
+                {},
+            ),
+            (
+                "get_session_debrief",
+                (
+                    "Get the deterministic end-of-session summary: pace, "
+                    "consistency, tyres, result and the biggest corner losses."
+                ),
+                {},
+            ),
+            (
+                "get_practice_focus",
+                (
+                    "Get heuristic practice-session guidance on what to work on "
+                    "(acclimatisation, race pace, quali sim, consistency)."
+                ),
                 {},
             ),
             (

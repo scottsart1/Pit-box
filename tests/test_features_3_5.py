@@ -17,6 +17,7 @@ from pitwall.database import PitWallDatabase
 from pitwall.proactive import ProactiveEngineer
 from pitwall.state import DriverState, StateStore
 from pitwall.strategy import TYPICAL_STINT_LAPS, points_for_position
+from pitwall.udp import F1DatagramProtocol as _UdpProtocol
 
 
 def _lap(uid: int, num: int, ms: int, s1: int, s2: int, s3: int, created: float) -> dict:
@@ -455,35 +456,148 @@ def test_radio_verbosity_validator_rejects_unknown() -> None:
     assert Settings(_env_file=None, radio_verbosity="TERSE").radio_verbosity == "terse"
 
 
+async def _app_with_fresh_state(monkeypatch, tmp_path, name: str):
+    """Point the app module's globals at fresh instances bound to this test's
+    event loop, so route functions can be called directly without starting the
+    full lifespan (which would bind the shared singletons across loops)."""
+    import pitwall.app as app_module
+
+    database = PitWallDatabase(tmp_path / f"{name}.sqlite3")
+    await database.initialize()
+    store = StateStore()
+    monkeypatch.setattr(app_module, "database", database)
+    monkeypatch.setattr(app_module, "store", store)
+    return app_module, store, database
+
+
 @pytest.mark.asyncio
 async def test_export_csv_and_json_endpoints(monkeypatch, tmp_path) -> None:
-    # Exercise the export endpoints against a fresh app-level database.
-    import pitwall.app as app_module
-    from fastapi.testclient import TestClient
-
-    database = PitWallDatabase(tmp_path / "export.sqlite3")
-    await database.initialize()
-    monkeypatch.setattr(app_module, "database", database)
+    app_module, store, database = await _app_with_fresh_state(monkeypatch, tmp_path, "export")
     uid = 2**63 + 3
-    await app_module.store.update(track_id=10, track_name="Spa", session_uid=uid)
+    await store.update(track_id=10, track_name="Spa", session_uid=uid)
     await database.upsert_session(
         {"session_uid": uid, "track_id": 10, "track_name": "Spa",
          "session_type": "Race", "mode_profile": "race", "total_laps": 20}
     )
     await database.save_lap(_lap(uid, 1, 104_000, 33_000, 36_000, 35_000, 1.0), [])
 
-    with TestClient(app_module.app) as client:
-        csv = client.get("/api/export/laps.csv?track_id=10")
-        assert csv.status_code == 200
-        assert csv.headers["content-type"].startswith("text/csv")
-        assert "attachment" in csv.headers["content-disposition"]
-        assert "lap_num" in csv.text and "104000" in csv.text
+    csv = await app_module.export_laps_csv(track_id=10)
+    assert csv.status_code == 200
+    assert csv.media_type == "text/csv"
+    assert "attachment" in csv.headers["content-disposition"]
+    body = csv.body.decode()
+    assert "lap_num" in body and "104000" in body
 
-        js = client.get("/api/export/session.json?scope=current_track")
-        assert js.status_code == 200
-        assert "attachment" in js.headers["content-disposition"]
-        assert "laps" in js.json()
+    js = await app_module.export_session_json(scope="current_track", limit=200)
+    assert js.status_code == 200
+    assert "attachment" in js.headers["content-disposition"]
 
-        overlay = client.get("/overlay")
-        assert overlay.status_code == 200
-        assert "background:transparent" in overlay.text
+    overlay = await app_module.overlay()
+    assert overlay.status_code == 200
+    assert "background:transparent" in overlay.body.decode()
+
+
+# ==========================================================================
+# Batch 5 — debrief & bigger bets
+# ==========================================================================
+
+
+@pytest.mark.asyncio
+async def test_session_debrief_aggregates_pace_and_consistency(stack) -> None:
+    store, database, _, _, _, tools = stack
+    uid = 2**63 + 30
+    await store.update(track_id=10, track_name="Spa", session_uid=uid)
+    await database.upsert_session(
+        {"session_uid": uid, "track_id": 10, "track_name": "Spa",
+         "session_type": "Race", "mode_profile": "race", "total_laps": 20}
+    )
+    for num, ms in [(1, 104_000), (2, 104_500), (3, 105_200)]:
+        await database.save_lap(_lap(uid, num, ms, 33_000, 36_000, ms - 69_000, float(num)), [])
+    data = await database.session_debrief(uid)
+    assert data["fastest_lap_ms"] == 104_000
+    assert data["valid_lap_count"] == 3
+    assert data["lap_time_spread_ms"] == 105_200 - 104_000
+    assert data["consistency_stdev_ms"] is not None
+    assert data["compounds_used"] == ["MEDIUM"]
+    tool = await tools.get_session_debrief()
+    assert tool["available"] is True
+    assert tool["fastest_lap"] == "1:44.000"
+
+
+@pytest.mark.asyncio
+async def test_debrief_endpoint_returns_summary_for_active_session(monkeypatch, tmp_path) -> None:
+    app_module, store, database = await _app_with_fresh_state(monkeypatch, tmp_path, "debrief")
+    uid = 2**63 + 31
+    await store.update(session_uid=uid, track_id=10, track_name="Spa")
+    await database.upsert_session(
+        {"session_uid": uid, "track_id": 10, "track_name": "Spa",
+         "session_type": "Race", "mode_profile": "race", "total_laps": 20}
+    )
+    await database.save_lap(_lap(uid, 1, 104_000, 33_000, 36_000, 35_000, 1.0), [])
+    result = await app_module.debrief(session_uid=None)
+    assert result["fastest_lap_ms"] == 104_000
+
+
+@pytest.mark.asyncio
+async def test_debrief_endpoint_404_without_session(monkeypatch, tmp_path) -> None:
+    from fastapi import HTTPException
+
+    app_module, store, _ = await _app_with_fresh_state(monkeypatch, tmp_path, "debrief_empty")
+    await store.update(session_uid=0)
+    with pytest.raises(HTTPException) as excinfo:
+        await app_module.debrief(session_uid=None)
+    assert excinfo.value.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_practice_focus_only_in_practice(stack) -> None:
+    store, _, _, _, _, tools = stack
+    await store.update(mode_profile="race")
+    assert (await tools.get_practice_focus())["available"] is False
+    await store.update(mode_profile="practice", current_lap=1, tyre={"compound": "SOFT", "age_laps": 2})
+    focus = await tools.get_practice_focus()
+    assert focus["available"] is True
+    assert any("acclimatisation" in item.lower() for item in focus["suggested_focus"])
+
+
+@pytest.mark.asyncio
+async def test_collision_event_decodes_severity_and_player_involvement() -> None:
+    store = StateStore()
+    protocol = _UdpProtocol(store)
+    packet = types.SimpleNamespace(
+        header=types.SimpleNamespace(player_car_index=0, packet_format=2026, game_year=25, session_uid=1),
+        event_string_code=b"COLL",
+        event_details=types.SimpleNamespace(
+            collision=types.SimpleNamespace(vehicle1_idx=0, vehicle2_idx=5, severity=7)
+        ),
+    )
+    await protocol.handle_PacketEventData(packet)
+    event = (await store.snapshot_analysis())["events_log"][-1]
+    assert event["type"] == "COLL"
+    assert event["payload"]["severity"] == 7
+    assert event["payload"]["involves_player"] is True
+
+
+@pytest.mark.asyncio
+async def test_lobby_info_counts_players_and_ready() -> None:
+    store = StateStore()
+    protocol = _UdpProtocol(store)
+    packet = types.SimpleNamespace(
+        header=types.SimpleNamespace(),
+        num_players=3,
+        lobby_players=[
+            types.SimpleNamespace(ready_status=2, ai_controlled=False),
+            types.SimpleNamespace(ready_status=0, ai_controlled=False),
+            types.SimpleNamespace(ready_status=2, ai_controlled=True),
+        ],
+    )
+    await protocol.handle_PacketLobbyInfoData(packet)
+    assert store.state.lobby == {"num_players": 3, "human_players": 2, "ready_players": 2}
+
+
+@pytest.mark.asyncio
+async def test_batch5_tools_registered(stack) -> None:
+    _, _, _, _, _, tools = stack
+    names = {schema["name"] for schema in tools.schemas()}
+    assert "get_session_debrief" in names
+    assert "get_practice_focus" in names

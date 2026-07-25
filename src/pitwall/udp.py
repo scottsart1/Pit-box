@@ -797,6 +797,19 @@ class F1DatagramProtocol(asyncio.DatagramProtocol):
             next_front_wing_value=float(packet.next_front_wing_value),
         )
 
+    async def handle_PacketLobbyInfoData(self, packet: Any) -> None:
+        """Multiplayer lobby roster: how many players and how many are ready."""
+        players = list(getattr(packet, "lobby_players", []))[: int(getattr(packet, "num_players", 0))]
+        ready = sum(1 for player in players if int(getattr(player, "ready_status", 0)) == 2)
+        human = sum(1 for player in players if not bool(getattr(player, "ai_controlled", True)))
+        await self.store.update(
+            lobby={
+                "num_players": int(getattr(packet, "num_players", 0)),
+                "human_players": human,
+                "ready_players": ready,
+            }
+        )
+
     async def handle_PacketTyreSetsData(self, packet: Any) -> None:
         snapshot = await self.store.snapshot_live()
         if int(packet.car_idx) != int(snapshot.get("player_car_index", 0)):
@@ -962,4 +975,14 @@ class F1DatagramProtocol(asyncio.DatagramProtocol):
                 "session_time": float(detail.flashback_session_time),
             }
             await self.store.mutate(lambda state: state.traces.clear())
+        elif code == "COLL":
+            detail = packet.event_details.collision
+            player_index = int(getattr(packet.header, "player_car_index", 255))
+            v1, v2 = int(detail.vehicle1_idx), int(detail.vehicle2_idx)
+            payload = {
+                "vehicle1_idx": v1,
+                "vehicle2_idx": v2,
+                "severity": int(getattr(detail, "severity", 0)),
+                "involves_player": player_index in {v1, v2},
+            }
         await self.store.append_event(code, payload)

@@ -248,6 +248,16 @@ async def review(track_id: int | None = Query(default=None)) -> dict[str, object
     return await database.track_review(selected, 50)
 
 
+@app.get("/api/debrief")
+async def debrief(session_uid: int | None = Query(default=None)) -> dict[str, object]:
+    """Deterministic end-of-session debrief for the current or a named session."""
+    snapshot = await store.snapshot_live()
+    selected = int(session_uid if session_uid is not None else snapshot.get("session_uid", 0))
+    if not selected:
+        raise HTTPException(404, "No session is active or specified.")
+    return await database.session_debrief(selected)
+
+
 @app.get("/api/export/laps.csv")
 async def export_laps_csv(track_id: int | None = Query(default=None)) -> PlainTextResponse:
     """Export stored laps for a track (or the current track) as CSV."""
