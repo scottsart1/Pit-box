@@ -6,7 +6,9 @@ previously discarded, plus two session-classification defects.
 
 from __future__ import annotations
 
+import asyncio
 import time
+from types import SimpleNamespace
 
 import pytest
 
@@ -16,7 +18,11 @@ from pitwall.strategy import StrategyEngine
 from pitwall.udp import SESSION_MODE_BY_TYPE_ID, classify_session, mode_profile
 
 
-def _classify(raw_type_id: int, total_laps: int = 20) -> str:
+def _classify(
+    raw_type_id: int,
+    total_laps: int = 20,
+    weekend_structure: list[int] | None = None,
+) -> str:
     _, mode, _, _ = classify_session(
         raw_type_id=raw_type_id,
         total_laps=total_laps,
@@ -24,6 +30,7 @@ def _classify(raw_type_id: int, total_laps: int = 20) -> str:
         session_time_left_s=1_800,
         session_duration_s=1_800,
         session_length_id=4,
+        weekend_structure=weekend_structure,
     )
     return mode
 
@@ -31,11 +38,19 @@ def _classify(raw_type_id: int, total_laps: int = 20) -> str:
 # --- session classification -------------------------------------------------
 
 
-def test_sprint_race_is_not_classified_as_a_grand_prix() -> None:
-    """Race 2/3 are sprint races and must not inherit grand-prix rules."""
+def test_race_slots_default_to_grand_prix_rules_without_weekend_context() -> None:
+    """Unknown sequences must not silently waive the two-compound rule."""
     assert _classify(15) == "race"
-    assert _classify(16) == "sprint"
-    assert _classify(17) == "sprint"
+    assert _classify(16) == "race"
+    assert _classify(17) == "race"
+
+
+def test_weekend_structure_distinguishes_sprint_from_grand_prix() -> None:
+    """On sprint weekends Race (15) can be Sprint and Race 2 (16) the GP."""
+    sprint_weekend = [1, 9, 15, 5, 16]
+    assert _classify(15, weekend_structure=sprint_weekend) == "sprint"
+    assert _classify(16, weekend_structure=sprint_weekend) == "race"
+    assert _classify(15, weekend_structure=[1, 5, 15]) == "race"
 
 
 def test_one_shot_sprint_shootout_is_a_qualifying_session() -> None:
@@ -53,6 +68,36 @@ def test_label_fallback_still_recognises_truncated_shootout() -> None:
 def test_every_known_session_type_has_a_mode() -> None:
     for type_id in range(19):
         assert SESSION_MODE_BY_TYPE_ID.get(type_id), f"missing mode for {type_id}"
+
+
+@pytest.mark.asyncio
+async def test_session_packet_uses_weekend_structure_for_sprint_mode() -> None:
+    from f1.packets import PacketHeader, PacketSessionData
+
+    from pitwall.state import StateStore
+    from pitwall.udp import F1DatagramProtocol
+
+    store = StateStore()
+    protocol = F1DatagramProtocol(store)
+    header = PacketHeader()
+    header.packet_format = 2026
+    header.game_year = 25
+    header.session_uid = 987
+    header.player_car_index = 0
+    packet = PacketSessionData()
+    packet.header = header
+    packet.session_type = 15
+    packet.track_id = 10
+    packet.total_laps = 19
+    packet.num_sessions_in_weekend = 5
+    for index, session_id in enumerate((1, 9, 15, 5, 16)):
+        packet.weekend_structure[index] = session_id
+
+    await protocol._handle(packet)
+    state = await store.snapshot_analysis()
+    assert state["mode_profile"] == "sprint"
+    assert state["session_type"] == "Sprint"
+    assert state["weekend_structure"] == [1, 9, 15, 5, 16]
 
 
 def test_two_compound_rule_does_not_apply_to_a_sprint() -> None:
@@ -207,6 +252,14 @@ async def test_session_result_is_recorded_on_final_classification(stack) -> None
     row = (await database.history_query(limit=5))["sessions"][0]
     assert row["result_position"] == 3
     assert row["ended_at"] is not None
+    first_ended_at = row["ended_at"]
+
+    # Repeated periodic writes while classification remains in state must not
+    # move the historical finish timestamp forward.
+    await asyncio.sleep(0.01)
+    await database.upsert_session(await store.snapshot_live())
+    row = (await database.history_query(limit=5))["sessions"][0]
+    assert row["ended_at"] == first_ended_at
 
     # A later write without classification must not erase the recorded result.
     await store.update(final_classification={})
@@ -250,13 +303,31 @@ def test_damage_relevance_accepts_power_unit_and_fault_events() -> None:
 # --- safety car delta -------------------------------------------------------
 
 
-def test_safety_car_delta_relevance_tracks_phase_and_delta() -> None:
-    under = {"race_control_phase": "vsc", "safety_car_delta_s": -0.8}
-    compliant = {"race_control_phase": "vsc", "safety_car_delta_s": 1.4}
-    green = {"race_control_phase": "green", "safety_car_delta_s": -0.8}
+def test_safety_car_delta_relevance_tracks_phase_delta_and_validity() -> None:
+    under = {
+        "race_control_phase": "vsc",
+        "safety_car_delta_s": -0.8,
+        "safety_car_delta_valid": True,
+    }
+    compliant = {
+        "race_control_phase": "vsc",
+        "safety_car_delta_s": 1.4,
+        "safety_car_delta_valid": True,
+    }
+    green = {
+        "race_control_phase": "green",
+        "safety_car_delta_s": -0.8,
+        "safety_car_delta_valid": True,
+    }
+    missing_packet = {
+        "race_control_phase": "vsc",
+        "safety_car_delta_s": 0.0,
+        "safety_car_delta_valid": False,
+    }
     assert _still_relevant("safety_car_delta", under) is True
     assert _still_relevant("safety_car_delta", compliant) is False
     assert _still_relevant("safety_car_delta", green) is False
+    assert _still_relevant("safety_car_delta", missing_packet) is False
 
 
 # --- fallback radio text ----------------------------------------------------
@@ -332,6 +403,146 @@ async def test_participants_populate_team_id_and_teammate() -> None:
     assert drivers[0].is_teammate is False
     assert drivers[2].is_teammate is False
 
+
+
+@pytest.mark.asyncio
+async def test_player_only_packet_ignores_spectator_index_255() -> None:
+    from f1.packets import PacketHeader, PacketLapData
+
+    from pitwall.state import StateStore
+    from pitwall.udp import F1DatagramProtocol
+
+    store = StateStore()
+    protocol = F1DatagramProtocol(store)
+    head = PacketHeader()
+    head.packet_format = 2026
+    head.game_year = 25
+    head.session_uid = 455
+    head.player_car_index = 255
+    packet = PacketLapData()
+    packet.header = head
+
+    await protocol._handle(packet)
+    state = await store.snapshot_analysis()
+    assert state["current_lap"] == 0
+    assert state["player_position"] == 0
+
+
+@pytest.mark.asyncio
+async def test_spectator_participants_do_not_index_player_255() -> None:
+    from f1.packets import PacketHeader, PacketParticipantsData
+
+    from pitwall.state import StateStore
+    from pitwall.udp import F1DatagramProtocol
+
+    store = StateStore()
+    protocol = F1DatagramProtocol(store)
+    head = PacketHeader()
+    head.packet_format = 2026
+    head.game_year = 25
+    head.session_uid = 456
+    head.player_car_index = 255
+    packet = PacketParticipantsData()
+    packet.header = head
+    packet.num_active_cars = 1
+    packet.participants[0].team_id = 5
+    packet.participants[0].your_telemetry = 1
+
+    await protocol._handle(packet)
+    assert store.state.player_car_index == 255
+    assert not any(driver.is_teammate for driver in store.state.drivers)
+
+
+@pytest.mark.asyncio
+async def test_history_packet_immediately_backfills_saved_player_lap(stack) -> None:
+    """Backfill must run when history arrives, not only after another lap."""
+    store, database, _, _, _, _ = stack
+    from pitwall.udp import F1DatagramProtocol
+
+    session_uid = 2**63 + 19
+    await store.update(session_uid=session_uid, player_car_index=0)
+    await database.save_lap(
+        {
+            "session_uid": session_uid,
+            "track_id": 10,
+            "track_name": "Spa",
+            "session_type": "Race",
+            "lap_num": 1,
+            "lap_time_ms": 95_000,
+            "valid": True,
+            "compound": "MEDIUM",
+            "trace": [],
+            "setup": {},
+        },
+        [],
+    )
+    protocol = F1DatagramProtocol(
+        store, on_player_lap_history=database.backfill_lap_sectors
+    )
+    lap = SimpleNamespace(
+        lap_time_in_ms=95_000,
+        sector1_time_minutes_part=0,
+        sector1_time_ms_part=30_000,
+        sector2_time_minutes_part=0,
+        sector2_time_ms_part=32_000,
+        sector3_time_minutes_part=0,
+        sector3_time_ms_part=33_000,
+        lap_valid_bit_flags=1,
+    )
+    packet = SimpleNamespace(
+        car_idx=0,
+        num_laps=1,
+        lap_history_data=[lap],
+        num_tyre_stints=0,
+        tyre_stints_history_data=[],
+        header=SimpleNamespace(session_time=100.0, player_car_index=0),
+    )
+
+    await protocol.handle_PacketSessionHistoryData(packet)
+    stored = (await database.recent_laps(10, 5))[0]
+    assert (stored["s1_ms"], stored["s2_ms"], stored["s3_ms"]) == (
+        30_000,
+        32_000,
+        33_000,
+    )
+
+
+@pytest.mark.asyncio
+async def test_final_classification_callback_persists_before_watchdog(stack) -> None:
+    store, database, _, _, _, _ = stack
+    from pitwall.udp import F1DatagramProtocol
+
+    await store.update(
+        session_uid=2**63 + 23,
+        track_id=10,
+        track_name="Spa",
+        session_type="Race",
+        mode_profile="race",
+        total_laps=44,
+    )
+
+    async def persist() -> None:
+        await database.upsert_session(await store.snapshot_live())
+
+    protocol = F1DatagramProtocol(store, on_final_classification=persist)
+    result = SimpleNamespace(
+        position=2,
+        num_laps=44,
+        grid_position=4,
+        points=18,
+        num_pit_stops=1,
+        best_lap_time_in_ms=91_000,
+        total_race_time=5_000.0,
+        penalties_time=0,
+    )
+    packet = SimpleNamespace(
+        header=SimpleNamespace(player_car_index=0),
+        classification_data=[result],
+    )
+    await protocol.handle_PacketFinalClassificationData(packet)
+    row = (await database.history_query(limit=5))["sessions"][0]
+    assert row["result_position"] == 2
+    assert row["ended_at"] is not None
 
 def test_damage_fallback_distinguishes_power_unit_from_aero() -> None:
     def text(payload: dict) -> str:

@@ -1,91 +1,78 @@
-# Pit Wall 3.4.0 verification
+# Pit Wall 3.4.1 verification
 
-## Completed in this environment
+## Independent review result
 
-Unlike the 3.3.1 packaging run, this environment had the full dependency set
-installed (`openai`, `f1-packets`, `sounddevice`, Ruff), so the whole suite ran
-with no stubs and nothing deselected:
+The 3.4.0 extraction work was reviewed at packet-handler, state, persistence,
+strategy-rule and proactive-radio boundaries. The corrected build contains 97
+Python test functions and collects 101 cases.
+
+## Reproduced in this environment
+
+The package mirror did not provide `openai`, `f1-packets`, `sounddevice` or Ruff.
+Temporary import-only stubs outside the release tree were used to collect and run
+code that does not depend on those wheels. No stub is included in this build.
 
 ```text
-95 automated tests passed
-Ruff static checks passed
+101 test cases collected
+100 tests passed
+1 OpenAI-SDK serialization test deselected
 Python compileall passed
-FastAPI startup and /api/health passed (reports version 3.4.0)
-Rotating file log created and written
+Python AST parse passed
+Dashboard JavaScript syntax passed with Node.js
+FastAPI import and /api/health smoke check passed (version 3.4.1)
+Rotating file log creation and write passed
 ```
 
-The repository contained 75 test functions before this release; 3.4 adds 20, all
-in `tests/test_extraction_3_4.py`.
+The missing SDK test must be rerun by `install_windows.ps1`, which installs the
+real dependency set before invoking pytest.
 
-## New 3.4.0 coverage
+## Defects corrected after reviewing 3.4.0
 
-1. Race 2 / Race 3 classify as `sprint`, not `race`.
-2. The two-compound dry rule does not apply to a sprint.
-3. All five Sprint Shootout session types classify as `qualifying`, including the
-   truncated "One-Shot Sprint Shoot" label.
-4. The label fallback classifier recognises the truncated shootout label.
-5. Every known session type id resolves to a mode.
-6. Reference deltas are signed correctly against the personal-best corner.
-7. Corner instructions quote measured metres and km/h.
-8. Corner instructions still work when no personal-best corner matched.
-9. Noise-level deltas are suppressed rather than spoken as "0 metres".
-10. Sector extraction requires a complete split.
-11. Lap summaries carry sectors into `timing_fields`.
-12. Sector backfill fills rows saved before the history packet arrived, and does
-    not overwrite a complete split.
-13. Backfill ignores incomplete splits.
-14. `ended_at` and `result_position` are written on final classification and are
-    not erased by a later write without classification data.
-15. The damage signature covers engine, gearbox and DRS/ERS faults.
-16. The damage relevance filter accepts power-unit and fault events.
-17. Safety-car delta relevance tracks both race-control phase and delta.
-18. Every one of the 18 proactive event types has specific fallback text.
-19. Damage fallback text distinguishes power-unit from aero damage.
-20. Participants populate `team_id`, and teammate detection matches the player's
-    team.
+1. **Sprint mapping:** Race 2 and Race 3 were hardcoded as Sprint. The game uses
+   race IDs as weekend sequence slots, so that mapping could treat the Grand Prix
+   as a Sprint and waive the dry two-compound rule. Classification now uses
+   `weekend_structure`: Race (15) is Sprint only when a later Race 2/3 slot is in
+   the sequence; later race slots remain Grand Prix. Unknown sequences default to
+   Grand Prix rules.
+2. **Sector backfill wiring:** the database backfill method existed, but the
+   session-history packet did not call it. The packet handler now backfills the
+   player lap immediately, including the last lap of a session.
+3. **Finish timestamp drift:** every periodic upsert after classification replaced
+   `ended_at` with a newer time. The first non-null finish time is now preserved.
+4. **Final-result durability:** final classification now invokes persistence in
+   the same packet cycle; the watchdog remains a secondary safety net.
+5. **Spectator sentinel:** `player_car_index=255` could index 24-car packet arrays.
+   Player-only handlers now validate the index and safely ignore spectator-only
+   packets.
+6. **Safety-car false alert:** a positive configured delta threshold could treat
+   the default zero value as a breach before Lap Data arrived. Calls now require a
+   valid delta sample.
+7. **Version and test-count drift:** the dashboard still displayed 3.3.1, and the
+   documentation confused test functions with parametrized cases. Version labels
+   and counts now match the source.
 
-## Verified end to end beyond unit tests
+## New and retained regression coverage
 
-Two production paths were driven directly rather than only asserted in isolation.
+`tests/test_extraction_3_4.py` contains 26 tests covering:
 
-**Quantified coaching.** A synthetic reference lap plus two slower laps produced:
+- weekend-structure Sprint/Grand Prix classification and safe fallback;
+- Sprint Shootout classification and dry-compound behavior;
+- quantified corner coaching and noise suppression;
+- complete sector extraction and packet-driven database backfill;
+- final-result persistence and immutable `ended_at`;
+- engine, gearbox, ERS and DRS damage calls;
+- safety-car delta phase, threshold and validity;
+- all proactive fallback text paths;
+- team/teammate extraction and spectator sentinel handling.
 
-```text
-corner: cause='early brake' loss=0.678s brake_delta=-80.0m apex_delta=-30.0km/h
-spoken: "At Corner 1 @ 640 m, brake 80 metres later while protecting apex speed."
-```
+The broader suite retains strategy, setup, SQLite uint64 session IDs, racing-line,
+wake/PTT, latency, UDP parsing, provider routing, timeout, truncation, failover,
+A/B protection and shakedown coverage.
 
-Previously the same corner produced only "release the brake point a little
-later", because the deltas were computed and then discarded.
+## Hardware and live-service boundary
 
-**Sector persistence.** Driving the real order of events — lap completes, then
-the session-history packet arrives with the split — persisted
-`(s1, s2, s3) = (31000, 36000, 38000)`, summing exactly to the 105000 ms lap
-time. Before 3.4 these columns were always written as zero.
-
-## Existing behavior retained
-
-The broader suite continues to cover deterministic and Monte Carlo strategy
-planning, dry-compound legality, SC/VSC/red-flag distinctions, setup foundations
-and learning, SQLite history and unsigned session UID persistence, racing-line
-analysis, proactive radio cadence and relevance, wake phrase and L3/UDP Action
-behavior, latency routing and the dashboard state rail, telemetry tool schemas,
-and provider routing, failover, A/B evidence freezing and shakedown stages.
-
-## Hardware boundary
-
-The container cannot reproduce the PS5, controller, Windows microphone or
-speakers. The safety-car delta sign convention in particular is taken from the
-telemetry field's documented meaning and should be confirmed in one live
-neutralised session: the call should fire while running too fast under a VSC and
-stay silent when compliant. `PITWALL_PROACTIVE_SC_DELTA_MIN_S` tunes the
-threshold without a code change.
-
-No schema change was made in this release, so existing databases are reused
-without migration. Adding columns would require a `PRAGMA user_version`
-migration mechanism, which does not exist yet.
-
-## Reproduction on Windows
+This environment cannot reproduce a PS5, controller, Windows audio devices, or
+real OpenAI/DeepSeek credentials. On the target Windows machine run:
 
 ```powershell
 Set-ExecutionPolicy -Scope Process Bypass
@@ -94,6 +81,5 @@ Set-ExecutionPolicy -Scope Process Bypass
 .\start_pitwall.bat
 ```
 
-Then confirm `%USERPROFILE%\PitWallData\pitwall.log` is being written, and run
-one session to check that sector times appear on stored laps and that corner
-coaching quotes numbers.
+Then use **Test providers**, confirm live UDP packets, complete one Sprint weekend
+and one normal race weekend, and verify stored sector splits after the final lap.

@@ -307,11 +307,13 @@ class ProactiveEngineer:
                 bool(d.get(key)) for key in DAMAGE_FAULT_KEYS
             )
         if kind == "safety_car_delta":
-            return str(
-                state.get("race_control_phase", "green")
-            ) in NEUTRALISED_PHASES and float(
-                state.get("safety_car_delta_s", 0.0) or 0.0
-            ) < settings.proactive_sc_delta_min_s
+            return (
+                bool(state.get("safety_car_delta_valid"))
+                and str(state.get("race_control_phase", "green"))
+                in NEUTRALISED_PHASES
+                and float(state.get("safety_car_delta_s", 0.0) or 0.0)
+                < settings.proactive_sc_delta_min_s
+            )
         if kind == "compound_requirement":
             return bool(state.get("strategy", {}).get("compound_rule", {}).get("change_outstanding"))
         if kind == "blue_flag":
@@ -496,7 +498,9 @@ class ProactiveEngineer:
         # threshold; going under it is a penalty risk, so this repeats on a
         # short cooldown while the breach lasts rather than firing once.
         phase = str(state.get("race_control_phase", "green"))
-        if phase in NEUTRALISED_PHASES:
+        if phase in NEUTRALISED_PHASES and bool(
+            state.get("safety_car_delta_valid")
+        ):
             delta = float(state.get("safety_car_delta_s", 0.0) or 0.0)
             if delta < settings.proactive_sc_delta_min_s:
                 self._enqueue(

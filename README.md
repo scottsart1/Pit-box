@@ -1,13 +1,12 @@
-# Pit Wall 3.4.0 — DeepSeek + OpenAI race engineer for PS5 and Windows
+# Pit Wall 3.4.1 — DeepSeek + OpenAI race engineer for PS5 and Windows
 
 Pit Wall receives F1 25 / 2026 Season Pack telemetry from a PS5 over UDP, runs deterministic strategy/corner/setup analysis locally, keeps persistent SQLite history, answers spoken questions, makes proactive radio calls, and serves a live dashboard at `http://127.0.0.1:8000`.
 
-## What changed in 3.4.0
+## What changed in 3.4.1
 
-3.4 is an extraction release. It adds no new subsystems; it recovers telemetry
-and analysis that Pit Wall already received or computed and then discarded, and
-fixes two session-classification defects. Existing databases are reused with no
-migration.
+3.4.1 is the reviewed and corrected form of the 3.4 extraction release. It
+retains the recovered telemetry and analysis, fixes the defects found during an
+independent code review, and requires no database migration.
 
 ### Coaching now quotes the numbers
 
@@ -28,35 +27,30 @@ treated as noise and left unspoken.
 ### Sector times are actually stored
 
 Lap sector times were persisted as zero because the lap summary carried an empty
-timing payload. Sectors are now written, including the common case where the
-session-history packet arrives after the lap has already been analysed — those
-rows are backfilled once the game reports the split. This unlocks per-sector
-analysis and theoretical-best history from stored data.
+timing payload. Sectors are now written, and the session-history packet directly
+triggers database backfill when it arrives after lap analysis. This also covers
+the final lap, when no later lap exists to trigger another analysis cycle.
 
 ### Sessions record their result
 
 `ended_at` and `result_position` existed in the schema but were never written, so
-there was no record of how any session finished. The result is now saved when the
-final classification arrives, and written immediately rather than waiting for the
-next periodic flush, so closing Pit Wall after the chequered flag does not lose
-it.
+there was no record of how any session finished. The result is now saved in
+the same packet-handling cycle as final
+classification instead of relying on the periodic watchdog. Repeated watchdog
+writes preserve the first `ended_at` timestamp rather than moving it forward.
 
-### Sprint weekends are classified correctly
+### Sprint weekends are classified from the weekend sequence
 
-Two defects are fixed:
+The 2026 packet enum names IDs 15, 16 and 17 as Race, Race 2 and Race 3; those
+are sequence slots, not permanent "Sprint" labels. On a sprint weekend the
+Sprint can be Race (15) and the Grand Prix Race 2 (16). Pit Wall now reads
+`weekend_structure`: when Race (15) is followed by Race 2 or Race 3, the first
+slot is treated as the Sprint and the later slot remains the Grand Prix. Without
+that evidence, every race slot defaults to Grand Prix rules so the mandatory
+two-dry-compound requirement is never silently waived.
 
-- A sprint race is reported by the game as "Race 2"/"Race 3" and was classified
-  as a grand prix, which applied the mandatory two-dry-compound rule. Sprints
-  have no mandatory tyre change, so the engineer could demand a stop that the
-  rules do not require.
-- "One-Shot Sprint Shootout" is reported with a truncated label that never
-  matched the shootout test, so it was treated as a race-like session and missed
-  the qualifying target path entirely.
-
-Session classification is now keyed on the session-type identifier rather than
-substring matching on the display label. Race distance is deliberately not used
-to tell a sprint from a grand prix, because a shortened-distance race can be
-fewer laps than a sprint.
+"One-Shot Sprint Shootout" is also recognised as qualifying despite the
+truncated display label.
 
 ### Power-unit damage and safety-car delta calls
 
@@ -79,6 +73,10 @@ fewer laps than a sprint.
 - Participants populate `team_id` and teammate detection. Human-readable team
   names are intentionally not guessed; `team` stays empty until a verified
   team-id table exists for the current title.
+- Spectator packets (`player_car_index=255`) are ignored safely by player-only
+  telemetry handlers instead of indexing beyond the 24-car arrays.
+- Safety-car delta calls require a real Lap Data sample, preventing a configured
+  positive threshold from treating the default zero value as a breach.
 
 ## Provider-neutral engineer retained from 3.3.1
 
@@ -377,37 +375,27 @@ Strict mode uses DeepSeek's beta endpoint and supports a narrower JSON-schema su
 
 ## Verification
 
-Completed for 3.4.0 with the full dependency set installed — nothing stubbed,
-nothing deselected:
+Reproduced for 3.4.1 in this review environment:
 
 ```text
-95 automated tests passed
-Ruff static checks passed
-Python compileall passed
-FastAPI startup and /api/health passed (version 3.4.0)
-Rotating file log created and written
+101 test cases collected
+100 dependency-independent tests passed
+1 OpenAI-SDK serialization test deselected because the SDK wheel was unavailable
+Python compileall and AST parsing passed
+Dashboard JavaScript syntax passed with Node.js
+FastAPI import and /api/health smoke check passed (version 3.4.1)
+Rotating file log creation and write passed
 ```
 
-The repository contains **95 test functions**. `install_windows.ps1` runs the
-complete suite on your Windows installation.
+The repository contains **97 test functions**, producing 101 collected cases
+through parametrization. `tests/test_extraction_3_4.py` now contains 26 focused
+regressions, including the corrected weekend-sequence classifier, packet-driven
+sector backfill, immutable finish timestamps, immediate final-result persistence,
+spectator sentinels, and safety-car-delta validity.
 
-New 3.4.0 tests cover sprint/shootout classification, the sprint two-compound
-exemption, quantified corner deltas and their suppression at noise level, sector
-extraction and backfill, session-result persistence, power-unit damage detection,
-safety-car delta relevance, complete proactive fallback text, and teammate
-detection. Two production paths — quantified coaching and sector persistence —
-were additionally driven end to end; see `docs/VERIFICATION.md`.
+The one deselected test exercises the real OpenAI SDK object's serialization.
+`install_windows.ps1` installs that SDK and runs the complete suite on Windows.
+Live PS5 telemetry, microphone, speakers and provider credentials remain hardware
+or account boundaries and must be checked with the dashboard shakedown.
 
-Earlier 3.3.1 tests cover:
-
-- Primary-provider validation (`none` cannot silently disable radio).
-- Route deadline and immediate fallback behavior.
-- Truncation retry with a larger budget.
-- Truncation not opening the provider circuit.
-- DeepSeek thinking requests omitting `tool_choice`.
-- Resolved-provider health reporting.
-- A/B comparison cooldown.
-- Live provider shakedown stages.
-- Existing tool-result memoization across failover.
-
-See `docs/PROVIDER_ARCHITECTURE.md` and `docs/VERIFICATION.md`.
+See `docs/VERIFICATION.md` and `docs/CLAUDE_REVIEW_3.4.1.md`.

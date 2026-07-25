@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from typing import Any, Iterable
 
 from f1.packets import SESSIONS, TRACKS as F1_TRACKS, resolve
@@ -30,13 +30,11 @@ OVERRIDE_LABELS = {
     "practice": "Practice",
     "time_trial": "Time Trial",
 }
-# Session type identifiers are a more reliable classifier than the display
-# label. Two label-matching hazards this avoids: "One-Shot Sprint Shoot" is
-# truncated and never matches "shootout", and F1 reports the sprint race as
-# "Race 2"/"Race 3", which naive matching treats as a grand prix. A sprint has
-# no mandatory tyre change, so misclassifying it makes the engineer demand an
-# unnecessary compound switch. Race distance cannot be used to tell them apart
-# because a shortened-distance grand prix can be fewer laps than a sprint.
+# Session type identifiers are more reliable than display-label matching, but
+# Race/Race 2/Race 3 are sequence slots rather than fixed "GP versus sprint"
+# meanings. On a sprint weekend the Sprint can be Race (15) and the Grand Prix
+# Race 2 (16). ``classify_session`` therefore combines these IDs with the
+# weekend structure instead of permanently labelling Race 2/3 as sprint.
 SESSION_MODE_BY_TYPE_ID = {
     0: "idle",
     1: "practice",
@@ -55,8 +53,8 @@ SESSION_MODE_BY_TYPE_ID = {
     13: "qualifying",
     14: "qualifying",
     15: "race",
-    16: "sprint",
-    17: "sprint",
+    16: "race",
+    17: "race",
     18: "time_trial",
 }
 WEATHER = {
@@ -125,6 +123,7 @@ def classify_session(
     session_time_left_s: int,
     session_duration_s: int,
     session_length_id: int,
+    weekend_structure: Iterable[int] | None = None,
     override: str = "auto",
 ) -> tuple[str, str, str, str]:
     """Return effective label, mode profile, source and explanation.
@@ -145,6 +144,31 @@ def classify_session(
         )
 
     raw_mode = SESSION_MODE_BY_TYPE_ID.get(int(raw_type_id)) or mode_profile(raw_label)
+    weekend_session_ids = [int(value) for value in (weekend_structure or [])]
+    # The first race slot is the Sprint when the same weekend contains a later
+    # race slot. The later Race 2/Race 3 slot remains the Grand Prix. Without
+    # weekend structure, default every race slot to the safer grand-prix mode:
+    # incorrectly waiving the two-compound rule is worse than a visible manual
+    # override being required for an unusual/unsupported packet sequence.
+    try:
+        first_race_index = weekend_session_ids.index(15)
+    except ValueError:
+        first_race_index = -1
+    has_later_race_slot = first_race_index >= 0 and any(
+        value in {16, 17}
+        for value in weekend_session_ids[first_race_index + 1 :]
+    )
+    if int(raw_type_id) == 15 and has_later_race_slot:
+        return (
+            "Sprint",
+            "sprint",
+            "udp",
+            (
+                "Weekend structure contains a later race slot "
+                f"({weekend_session_ids}); treating Race (15) as the Sprint."
+            ),
+        )
+
     longest_clock = max(int(session_time_left_s), int(session_duration_s))
     race_distance_is_coherent = (
         int(total_laps) >= max(3, int(current_lap)) and longest_clock >= 3_600
@@ -195,6 +219,16 @@ def _ms(minutes: int, milliseconds: int) -> int:
     return int(minutes) * 60_000 + int(milliseconds)
 
 
+def _packet_player_index(packet: Any, values: Any) -> int | None:
+    """Return a safe player index, ignoring the 255 spectator sentinel."""
+    index = int(packet.header.player_car_index)
+    try:
+        count = len(values)
+    except TypeError:
+        count = 24
+    return index if 0 <= index < count else None
+
+
 class F1DatagramProtocol(asyncio.DatagramProtocol):
     """Live F1 2026 UDP receiver using the f1-packets parser."""
 
@@ -203,9 +237,15 @@ class F1DatagramProtocol(asyncio.DatagramProtocol):
         store: StateStore,
         on_button_status: Callable[[int], None] | None = None,
         queue_capacity: int = 2048,
+        on_player_lap_history: (
+            Callable[[int, list[dict[str, Any]]], Awaitable[Any]] | None
+        ) = None,
+        on_final_classification: Callable[[], Awaitable[Any]] | None = None,
     ) -> None:
         self.store = store
         self.on_button_status = on_button_status
+        self.on_player_lap_history = on_player_lap_history
+        self.on_final_classification = on_final_classification
         self.loop = asyncio.get_running_loop()
         self.transport: asyncio.DatagramTransport | None = None
         self.packet_queue: asyncio.Queue[Any] = asyncio.Queue(maxsize=queue_capacity)
@@ -313,6 +353,13 @@ class F1DatagramProtocol(asyncio.DatagramProtocol):
         snapshot = await self.store.snapshot_live()
         raw_session_type_id = int(packet.session_type)
         session_length_id = int(getattr(packet, "session_length", 0))
+        num_sessions_in_weekend = int(getattr(packet, "num_sessions_in_weekend", 0))
+        weekend_structure = [
+            int(value)
+            for value in list(getattr(packet, "weekend_structure", []))[
+                :num_sessions_in_weekend
+            ]
+        ]
         session_type, effective_mode, detection_source, detection_reason = (
             classify_session(
                 raw_type_id=raw_session_type_id,
@@ -321,6 +368,7 @@ class F1DatagramProtocol(asyncio.DatagramProtocol):
                 session_time_left_s=int(packet.session_time_left),
                 session_duration_s=int(packet.session_duration),
                 session_length_id=session_length_id,
+                weekend_structure=weekend_structure,
                 override=str(snapshot.get("session_mode_override", "auto")),
             )
         )
@@ -366,6 +414,8 @@ class F1DatagramProtocol(asyncio.DatagramProtocol):
             session_length_label=SESSION_LENGTHS.get(
                 session_length_id, f"Value {session_length_id}"
             ),
+            num_sessions_in_weekend=num_sessions_in_weekend,
+            weekend_structure=weekend_structure,
             track_id=int(packet.track_id),
             track_name=TRACKS.get(int(packet.track_id), f"Track {packet.track_id}"),
             track_length_m=int(packet.track_length),
@@ -410,20 +460,30 @@ class F1DatagramProtocol(asyncio.DatagramProtocol):
                     and index != state.player_car_index
                 )
             # Teammate identification needs every team_id read first, so it runs
-            # as a second pass rather than inside the loop above.
-            player = state.drivers[state.player_car_index]
+            # as a second pass rather than inside the loop above. Spectator
+            # packets use player_car_index=255; never index the driver array with
+            # that sentinel.
+            player_index = state.player_car_index
+            player = (
+                state.drivers[player_index]
+                if 0 <= player_index < count and player_index < len(state.drivers)
+                else None
+            )
             for index, driver in enumerate(state.drivers):
                 driver.is_teammate = bool(
-                    driver.active
+                    player is not None
+                    and driver.active
                     and player.team_id >= 0
                     and driver.team_id == player.team_id
-                    and index != state.player_car_index
+                    and index != player_index
                 )
 
         await self.store.mutate(apply)
 
     async def handle_PacketLapData(self, packet: Any) -> None:
-        player_index = int(packet.header.player_car_index)
+        player_index = _packet_player_index(packet, packet.lap_data)
+        if player_index is None:
+            return
         player = packet.lap_data[player_index]
         await self.store.transition_lap(
             new_lap=int(player.current_lap_num),
@@ -449,6 +509,7 @@ class F1DatagramProtocol(asyncio.DatagramProtocol):
             state.sector = int(player.sector)
             state.current_lap_invalid = bool(player.current_lap_invalid)
             state.safety_car_delta_s = float(player.safety_car_delta)
+            state.safety_car_delta_valid = True
             state.penalties_s = int(player.penalties)
             state.warnings = int(player.total_warnings)
             state.corner_cutting_warnings = int(player.corner_cutting_warnings)
@@ -496,7 +557,9 @@ class F1DatagramProtocol(asyncio.DatagramProtocol):
         await self.store.mutate(apply)
 
     async def handle_PacketCarTelemetryData(self, packet: Any) -> None:
-        player_index = int(packet.header.player_car_index)
+        player_index = _packet_player_index(packet, packet.car_telemetry_data)
+        if player_index is None:
+            return
         telemetry = packet.car_telemetry_data[player_index]
         await self.store.update_telemetry_and_trace(
             session_time=float(packet.header.session_time),
@@ -519,7 +582,10 @@ class F1DatagramProtocol(asyncio.DatagramProtocol):
         )
 
     async def handle_PacketCarTelemetry2Data(self, packet: Any) -> None:
-        telemetry = packet.car_telemetry2_data[int(packet.header.player_car_index)]
+        player_index = _packet_player_index(packet, packet.car_telemetry2_data)
+        if player_index is None:
+            return
+        telemetry = packet.car_telemetry2_data[player_index]
         await self.store.update(
             active_aero_mode=int(telemetry.active_aero_mode),
             active_aero_available=bool(telemetry.active_aero_available),
@@ -534,7 +600,9 @@ class F1DatagramProtocol(asyncio.DatagramProtocol):
         )
 
     async def handle_PacketCarStatusData(self, packet: Any) -> None:
-        player_index = int(packet.header.player_car_index)
+        player_index = _packet_player_index(packet, packet.car_status_data)
+        if player_index is None:
+            return
         car = packet.car_status_data[player_index]
 
         def apply(state):  # type: ignore[no-untyped-def]
@@ -570,7 +638,10 @@ class F1DatagramProtocol(asyncio.DatagramProtocol):
         await self.store.mutate(apply)
 
     async def handle_PacketCarDamageData(self, packet: Any) -> None:
-        damage = packet.car_damage_data[int(packet.header.player_car_index)]
+        player_index = _packet_player_index(packet, packet.car_damage_data)
+        if player_index is None:
+            return
+        damage = packet.car_damage_data[player_index]
         wear = [float(value) for value in normalize_wheels(damage.tyres_wear)]
         tyre_damage = [int(value) for value in normalize_wheels(damage.tyres_damage)]
         blisters = [int(value) for value in normalize_wheels(damage.tyre_blisters)]
@@ -596,7 +667,10 @@ class F1DatagramProtocol(asyncio.DatagramProtocol):
         await self.store.mutate(apply)
 
     async def handle_PacketMotionData(self, packet: Any) -> None:
-        motion = packet.car_motion_data[int(packet.header.player_car_index)]
+        player_index = _packet_player_index(packet, packet.car_motion_data)
+        if player_index is None:
+            return
+        motion = packet.car_motion_data[player_index]
         forward_x = float(getattr(motion, "world_forward_dir_x", 0)) / 32767.0
         forward_z = float(getattr(motion, "world_forward_dir_z", 32767)) / 32767.0
         await self.store.update(
@@ -621,6 +695,8 @@ class F1DatagramProtocol(asyncio.DatagramProtocol):
 
     async def handle_PacketSessionHistoryData(self, packet: Any) -> None:
         index = int(packet.car_idx)
+        if not 0 <= index < 24:
+            return
         history = []
         for lap_number, lap in enumerate(
             list(packet.lap_history_data)[: int(packet.num_laps)], start=1
@@ -676,11 +752,20 @@ class F1DatagramProtocol(asyncio.DatagramProtocol):
 
         await self.store.mutate(apply)
         snapshot = await self.store.snapshot_live()
-        if index == int(snapshot.get("player_car_index", 0)):
+        packet_player_index = int(getattr(packet.header, "player_car_index", 255))
+        if index == packet_player_index and 0 <= packet_player_index < 24:
+            await self.store.update(player_car_index=packet_player_index)
             await self.store.merge_player_lap_history(history)
+            if self.on_player_lap_history:
+                await self.on_player_lap_history(
+                    int(snapshot.get("session_uid", 0)), history
+                )
 
     async def handle_PacketCarSetupData(self, packet: Any) -> None:
-        setup = packet.car_setup_data[int(packet.header.player_car_index)]
+        player_index = _packet_player_index(packet, packet.car_setup_data)
+        if player_index is None:
+            return
+        setup = packet.car_setup_data[player_index]
         data = {field: getattr(setup, field) for field, _ in setup._fields_}
         await self.store.update(
             car_setup=data,
@@ -738,7 +823,9 @@ class F1DatagramProtocol(asyncio.DatagramProtocol):
         await self.store.mutate(apply)
 
     async def handle_PacketFinalClassificationData(self, packet: Any) -> None:
-        player_index = int(packet.header.player_car_index)
+        player_index = _packet_player_index(packet, packet.classification_data)
+        if player_index is None:
+            return
         result = packet.classification_data[player_index]
         await self.store.update(
             final_classification={
@@ -753,6 +840,8 @@ class F1DatagramProtocol(asyncio.DatagramProtocol):
             }
         )
         await self.store.append_event("CHQF", {"position": int(result.position)})
+        if self.on_final_classification:
+            await self.on_final_classification()
 
     async def handle_PacketEventData(self, packet: Any) -> None:
         code = _event_code(packet)
