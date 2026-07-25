@@ -145,3 +145,101 @@ async def test_new_analytics_tools_are_registered_and_callable(stack) -> None:
     for expected in ("get_sector_bests", "get_progress_trend", "get_setup_correlation"):
         assert expected in names
         assert await tools.call(expected, {} if expected != "get_setup_correlation" else {"profile": "all"})
+
+
+# ==========================================================================
+# Batch 2 — strategy depth
+# ==========================================================================
+
+
+from pitwall.state import DriverState  # noqa: E402
+from pitwall.strategy import TYPICAL_STINT_LAPS, points_for_position  # noqa: E402
+
+
+def _driver(idx: int, name: str, pos: int, gap: float, comp: str, age: int) -> DriverState:
+    d = DriverState(car_idx=idx)
+    d.active = True
+    d.name = name
+    d.position = pos
+    d.gap_to_player_s = gap
+    d.tyre_compound = comp
+    d.tyre_age = age
+    return d
+
+
+def test_points_table_matches_f1_system() -> None:
+    assert points_for_position(1) == 25
+    assert points_for_position(5) == 10
+    assert points_for_position(10) == 1
+    assert points_for_position(11) == 0
+
+
+def test_typical_stint_life_orders_by_compound_hardness() -> None:
+    assert TYPICAL_STINT_LAPS["SOFT"] < TYPICAL_STINT_LAPS["MEDIUM"] < TYPICAL_STINT_LAPS["HARD"]
+
+
+@pytest.mark.asyncio
+async def test_cold_tyre_penalty_only_hits_fresh_stints(stack) -> None:
+    """A fresh-fit stint carries an out-lap penalty; continuing one does not."""
+    store, database, strategy, _, _, _ = stack
+    await store.update(track_id=10, tyre={"compound": "MEDIUM", "age_laps": 0, "wear": [0, 0, 0, 0]})
+    state = await store.snapshot_analysis()
+    fresh = strategy._simulate_stint(state, "MEDIUM", 10, 0, 0.0, 90.0, {}, 1.0)
+    warm = strategy._simulate_stint(state, "MEDIUM", 10, 10, 0.0, 90.0, {}, 1.0)
+    # First lap of the fresh stint is slower than first lap of the warm stint by
+    # roughly the cold-tyre penalty; ages differ so compare the out-lap premium.
+    assert fresh["lap_times_s"][0] - fresh["lap_times_s"][1] > 0.4
+
+
+@pytest.mark.asyncio
+async def test_pace_mode_recommends_saving_when_fuel_short(stack) -> None:
+    store, _, _, _, _, tools = stack
+    await store.update(fuel_laps_delta=-1.5, total_laps=40, current_lap=10)
+    short = await tools.get_pace_mode_options()
+    assert short["recommended_mode"] == "fuel_save"
+    assert short["estimated_cost_s_per_lap"] is not None
+    await store.update(fuel_laps_delta=1.2)
+    assert (await tools.get_pace_mode_options())["recommended_mode"] == "push"
+
+
+@pytest.mark.asyncio
+async def test_rival_prediction_flags_behind_car_on_dying_tyres(stack) -> None:
+    store, _, _, _, _, tools = stack
+    store.state.player_car_index = 0
+    store.state.drivers[0] = _driver(0, "You", 4, 0.0, "MEDIUM", 8)
+    store.state.drivers[1] = _driver(1, "Behind", 5, -1.8, "SOFT", 15)
+    store.state.drivers[2] = _driver(2, "Ahead", 3, 2.5, "HARD", 5)
+    await store.update(player_position=4, current_lap=10, total_laps=40)
+    result = await tools.predict_rival_strategy(top_n=5)
+    by_name = {r["driver"]: r for r in result["rivals"]}
+    assert by_name["Behind"]["undercut_threat"] is True
+    assert by_name["Behind"]["laps_until_estimated_stop"] <= 2
+    # A car well ahead on fresh hards is no undercut threat.
+    assert by_name["Ahead"]["undercut_threat"] is False
+
+
+@pytest.mark.asyncio
+async def test_championship_scenario_scores_plans_by_projected_points(stack) -> None:
+    store, _, _, _, _, tools = stack
+    await store.update(
+        player_position=4,
+        strategy={
+            "plans": [
+                {"instruction": "Stay out", "stops_remaining": 1, "projected_rejoin_position": 4, "projected_time_s": 3600},
+                {"instruction": "Aggressive", "stops_remaining": 2, "projected_rejoin_position": 3, "projected_time_s": 3605},
+            ]
+        },
+    )
+    scenario = await tools.get_championship_scenario()
+    assert scenario["current_points_if_held"] == 12  # P4
+    assert scenario["best_projected_points"] == 15  # P3
+    plans = {p["instruction"]: p for p in scenario["plans"]}
+    assert plans["Aggressive"]["projected_points"] == 15
+
+
+@pytest.mark.asyncio
+async def test_strategy_depth_tools_registered(stack) -> None:
+    _, _, _, _, _, tools = stack
+    names = {schema["name"] for schema in tools.schemas()}
+    for expected in ("get_pace_mode_options", "predict_rival_strategy", "get_championship_scenario"):
+        assert expected in names

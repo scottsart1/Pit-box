@@ -4,6 +4,7 @@ from statistics import median
 from typing import Any
 
 from .analysis import AnalysisEngine, fmt_ms
+from .config import settings
 from .database import PitWallDatabase
 from .setup_advisor import SetupAdvisor
 from .state import StateStore
@@ -395,6 +396,56 @@ class TelemetryTools:
             "overtake_available": state["overtake_available"],
             "overtake_active": state["overtake_active"],
         }
+
+    async def get_pace_mode_options(self) -> dict[str, Any]:
+        """Deterministic fuel-vs-pace trade for the current fuel margin.
+
+        fuel_laps_delta is the margin in laps: negative means the tank is short
+        of race distance and the driver must save. Each lap of fuel recovered by
+        lifting and coasting costs a fixed per-lap time, so the required saving
+        translates directly into a lap-time cost.
+        """
+        state = await self.store.snapshot_analysis()
+        delta = float(state.get("fuel_laps_delta", 0.0))
+        laps_remaining = max(
+            0,
+            int(state.get("total_laps", 0)) - int(state.get("current_lap", 0)),
+        )
+        rate = settings.strategy_fuel_save_s_per_lap
+        if delta < -0.05:
+            deficit = abs(delta)
+            per_lap_cost = (
+                round(deficit * rate / laps_remaining, 3) if laps_remaining else None
+            )
+            recommendation = (
+                f"Save {deficit:.1f} laps of fuel. Lift and coast into the heaviest "
+                "braking zones; expect a small lap-time cost spread over the stint."
+            )
+            mode = "fuel_save"
+        elif delta > 0.6:
+            per_lap_cost = None
+            recommendation = (
+                f"Fuel is healthy (+{delta:.1f} laps). You can run a richer mix and "
+                "push; no lift-and-coast required."
+            )
+            mode = "push"
+        else:
+            per_lap_cost = None
+            recommendation = "Fuel is on target. Hold the current pace mode."
+            mode = "neutral"
+        return {
+            "recommended_mode": mode,
+            "fuel_laps_delta": round(delta, 2),
+            "laps_remaining": laps_remaining,
+            "estimated_cost_s_per_lap": per_lap_cost,
+            "recommendation": recommendation,
+        }
+
+    async def predict_rival_strategy(self, top_n: int = 6) -> dict[str, Any]:
+        return await self.strategy.predict_rival_strategy(top_n)
+
+    async def get_championship_scenario(self) -> dict[str, Any]:
+        return await self.strategy.championship_scenario()
 
     async def get_damage_report(self) -> dict[str, Any]:
         state = await self.store.snapshot_analysis()
@@ -846,6 +897,30 @@ class TelemetryTools:
                     "choices with measured performance. profile: race/quali/hybrid/all."
                 ),
                 {"profile": {"type": "string"}},
+            ),
+            (
+                "get_pace_mode_options",
+                (
+                    "Get the fuel-save versus push trade for the current fuel "
+                    "margin, with the estimated lap-time cost of saving."
+                ),
+                {},
+            ),
+            (
+                "predict_rival_strategy",
+                (
+                    "Estimate nearby rivals' likely next pit laps from tyre age "
+                    "and compound, flagging pre-emptive undercut threats."
+                ),
+                {"top_n": {"type": "integer", "minimum": 1, "maximum": 12}},
+            ),
+            (
+                "get_championship_scenario",
+                (
+                    "Attach championship points to each strategy plan's projected "
+                    "finish position to weigh a safe finish against a gamble."
+                ),
+                {},
             ),
         ]
         return [

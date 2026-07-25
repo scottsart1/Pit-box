@@ -125,6 +125,13 @@ class Settings(BaseSettings):
     strategy_monte_carlo_samples: int = 320
     strategy_risk_quantile: float = 0.75
     strategy_max_stops: int = 3
+    # Cold-tyre out-lap penalty (seconds) applied to the first lap of a fresh
+    # stint, halved on the second lap. Ignoring warm-up makes an undercut look
+    # better than it is, because the cold in/out laps are where the time goes.
+    strategy_cold_tyre_penalty_s: float = 1.1
+    # Fuel-save trade: seconds gained per lap of fuel saved by lifting and
+    # coasting, used to cost out a pace mode against a fuel deficit.
+    strategy_fuel_save_s_per_lap: float = 0.35
     map_distance_bin_m: float = 6.0
     map_deviation_threshold_m: float = 1.25
 
