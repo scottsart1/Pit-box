@@ -78,6 +78,12 @@ class AnalysisEngine:
     async def process_lap(self, lap: dict[str, Any]) -> dict[str, Any]:
         state = await self.store.snapshot_analysis()
         pb = await self.database.get_personal_best(int(lap["track_id"]))
+        # Keep the live delta reference pointed at the current personal best so
+        # the next lap is compared against it in real time.
+        if pb and pb.get("trace"):
+            await self.store.set_delta_reference(
+                pb["trace"], f"PB {fmt_ms(int(pb.get('lap_time_ms', 0)))}"
+            )
         corners = self.segment_corners(lap.get("trace", []), pb)
         racing_line = compare_lines(
             lap.get("trace", []),

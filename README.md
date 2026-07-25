@@ -1,6 +1,63 @@
-# Pit Wall 3.4.1 — DeepSeek + OpenAI race engineer for PS5 and Windows
+# Pit Wall 3.5.0 — DeepSeek + OpenAI race engineer for PS5 and Windows
 
 Pit Wall receives F1 25 / 2026 Season Pack telemetry from a PS5 over UDP, runs deterministic strategy/corner/setup analysis locally, keeps persistent SQLite history, answers spoken questions, makes proactive radio calls, and serves a live dashboard at `http://127.0.0.1:8000`.
+
+## What changed in 3.5.0
+
+3.5 is a capability release. It adds nine engineer tools, six proactive radio
+calls, a real-time delta, an overlay/second-screen surface, data export and
+personalisation. The design invariant is unchanged: deterministic code computes
+the numbers and the language model narrates them. No database migration is
+required.
+
+### Race intelligence and real-time
+
+- **Live delta** to your personal best, interpolated each telemetry tick from a
+  normalised reference lap, shown on the overlay and in `get_my_car_state`.
+- **Race-start call**: grid slot, clean/dirty side and a lap-one plan, from the
+  now-read `grid_position`.
+- **Safety-car restart prep** on the transition into an ending neutralisation.
+- **Rival pace radar**: flags a car behind closing over a rolling window.
+- **Energy deployment**: a low-battery warning while an attack aid is available,
+  plus a `get_energy_plan` deploy/harvest tool (2026 Manual Override aware).
+- **Component wear**: escalating power-unit wear warnings toward grid penalties,
+  from the previously-unused engine-wear fields.
+
+### Strategy depth
+
+- **Rival strategy prediction** (`predict_rival_strategy`): estimated pit
+  windows and pre-emptive undercut threats from tyre age and compound life.
+- **Cold-tyre out-lap penalty** in the stint model, so undercut maths accounts
+  for warm-up.
+- **Fuel-save vs push** trade (`get_pace_mode_options`).
+- **Championship view** (`get_championship_scenario`): F1 points per plan's
+  projected finish, to weigh a safe result against a gamble.
+
+### Analytics and debrief
+
+- **Sector bests / theoretical best**, **cross-session progress trend**, and
+  **setup-to-performance correlation** tools, unblocked by persisted sectors and
+  results.
+- **Post-session debrief**: `GET /api/debrief` and `get_session_debrief`
+  summarise pace, consistency, tyres, result and the biggest corner losses.
+
+### Surfaces and personalisation
+
+- **OBS / second-screen overlay** at `/overlay` (transparent for a browser
+  source; `?bg=1` for an opaque phone panel), using `wss://` under HTTPS.
+- **Data export**: `GET /api/export/laps.csv` and `/api/export/session.json`,
+  linked from the Review tab.
+- **Custom engineer** name, persona and radio verbosity (terse/standard/chatty)
+  via `.env`, folded into the persona without dropping safety-critical rules.
+
+### Multiplayer foundation
+
+- The **collision** event now decodes severity and player involvement, and a
+  **lobby-info** handler tracks player/ready counts. Both were previously
+  ignored.
+
+Deferred: a local offline speech pipeline (item 24) — it requires model
+downloads and real audio-device evaluation outside this build's scope.
 
 ## What changed in 3.4.1
 
@@ -375,23 +432,24 @@ Strict mode uses DeepSeek's beta endpoint and supports a narrower JSON-schema su
 
 ## Verification
 
-Reproduced for 3.4.1 in this review environment:
+Completed for 3.5.0 with the full dependency set installed:
 
 ```text
-101 test cases collected
-100 dependency-independent tests passed
-1 OpenAI-SDK serialization test deselected because the SDK wheel was unavailable
-Python compileall and AST parsing passed
-Dashboard JavaScript syntax passed with Node.js
-FastAPI import and /api/health smoke check passed (version 3.4.1)
-Rotating file log creation and write passed
+144 automated tests passed
+Ruff static checks passed
+Python compileall passed
+FastAPI startup and /api/health passed (version 3.5.0)
+/overlay, /api/export/laps.csv, /api/export/session.json and /api/debrief served
+Dashboard and overlay JavaScript syntax passed with Node.js
 ```
 
-The repository contains **97 test functions**, producing 101 collected cases
-through parametrization. `tests/test_extraction_3_4.py` now contains 26 focused
-regressions, including the corrected weekend-sequence classifier, packet-driven
-sector backfill, immutable finish timestamps, immediate final-result persistence,
-spectator sentinels, and safety-car-delta validity.
+The 3.5 features add `tests/test_features_3_5.py` (43 tests) on top of the
+existing suite. Each feature is driven through its deterministic layer so the
+numbers are pinned independently of any language model; two representative
+end-to-end paths (quantified coaching and sector persistence) were exercised in
+earlier releases and remain covered. Live PS5 telemetry, microphone, speakers
+and provider credentials remain hardware/account boundaries checked with the
+dashboard shakedown and a live session.
 
 The one deselected test exercises the real OpenAI SDK object's serialization.
 `install_windows.ps1` installs that SDK and runs the complete suite on Windows.

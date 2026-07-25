@@ -122,9 +122,23 @@ class Settings(BaseSettings):
     proactive_sc_delta_min_s: float = 0.0
     proactive_sc_delta_cooldown_s: float = 12.0
 
+    # Engineer personality. engineer_persona, if set, is appended to the base
+    # persona so a user can add a call sign, tone or catchphrases without losing
+    # the safety-critical instructions. radio_verbosity tunes spoken length.
+    engineer_name: str = "Mark"
+    engineer_persona: str = ""
+    radio_verbosity: str = "standard"  # terse | standard | chatty
+
     strategy_monte_carlo_samples: int = 320
     strategy_risk_quantile: float = 0.75
     strategy_max_stops: int = 3
+    # Cold-tyre out-lap penalty (seconds) applied to the first lap of a fresh
+    # stint, halved on the second lap. Ignoring warm-up makes an undercut look
+    # better than it is, because the cold in/out laps are where the time goes.
+    strategy_cold_tyre_penalty_s: float = 1.1
+    # Fuel-save trade: seconds gained per lap of fuel saved by lifting and
+    # coasting, used to cost out a pace mode against a fuel deficit.
+    strategy_fuel_save_s_per_lap: float = 0.35
     map_distance_bin_m: float = 6.0
     map_deviation_threshold_m: float = 1.25
 
@@ -146,6 +160,12 @@ class Settings(BaseSettings):
     @classmethod
     def validate_cadence(cls, value: int) -> int:
         return max(1, min(10, value))
+
+    @field_validator("radio_verbosity")
+    @classmethod
+    def validate_verbosity(cls, value: str) -> str:
+        normalized = value.strip().lower()
+        return normalized if normalized in {"terse", "standard", "chatty"} else "standard"
 
     @field_validator("llm_provider")
     @classmethod

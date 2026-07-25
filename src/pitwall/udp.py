@@ -506,7 +506,16 @@ class F1DatagramProtocol(asyncio.DatagramProtocol):
             state.current_lap_time_ms = int(player.current_lap_time_in_ms)
             state.lap_distance_m = max(0.0, float(player.lap_distance))
             state.player_position = int(player.car_position)
+            state.grid_position = int(getattr(player, "grid_position", 0))
             state.sector = int(player.sector)
+            # Live delta to the reference lap at the current lap distance.
+            reference_time = self.store.reference_time_at(state.lap_distance_m)
+            if reference_time is not None and state.current_lap_time_ms > 0:
+                state.live_delta_s = round(
+                    state.current_lap_time_ms / 1000.0 - reference_time, 3
+                )
+            else:
+                state.live_delta_s = None
             state.current_lap_invalid = bool(player.current_lap_invalid)
             state.safety_car_delta_s = float(player.safety_car_delta)
             state.safety_car_delta_valid = True
@@ -646,10 +655,24 @@ class F1DatagramProtocol(asyncio.DatagramProtocol):
         tyre_damage = [int(value) for value in normalize_wheels(damage.tyres_damage)]
         blisters = [int(value) for value in normalize_wheels(damage.tyre_blisters)]
 
+        # Power-unit component wear (percent used) is distinct from crash damage
+        # and accumulates across a season toward grid-penalty thresholds.
+        component_wear = {
+            "ice": float(getattr(damage, "engine_ice_wear", 0.0)),
+            "mguk": float(getattr(damage, "engine_mguk_wear", 0.0)),
+            "mguh": float(getattr(damage, "engine_mguh_wear", 0.0)),
+            "es": float(getattr(damage, "engine_es_wear", 0.0)),
+            "ce": float(getattr(damage, "engine_ce_wear", 0.0)),
+            "tc": float(getattr(damage, "engine_tc_wear", 0.0)),
+        }
+        engine_blown = bool(getattr(damage, "engine_blown", False))
+        engine_seized = bool(getattr(damage, "engine_seized", False))
+
         def apply(state):  # type: ignore[no-untyped-def]
             state.tyre.wear = wear
             state.tyre.damage = tyre_damage
             state.tyre.blisters = blisters
+            state.component_wear = component_wear
             state.damage = {
                 "front_left_wing": int(damage.front_left_wing_damage),
                 "front_right_wing": int(damage.front_right_wing_damage),
@@ -661,6 +684,8 @@ class F1DatagramProtocol(asyncio.DatagramProtocol):
                 "engine": int(damage.engine_damage),
                 "drs_fault": bool(damage.drs_fault),
                 "ers_fault": bool(damage.ers_fault),
+                "engine_blown": engine_blown,
+                "engine_seized": engine_seized,
                 "blisters": blisters,
             }
 
@@ -770,6 +795,25 @@ class F1DatagramProtocol(asyncio.DatagramProtocol):
         await self.store.update(
             car_setup=data,
             next_front_wing_value=float(packet.next_front_wing_value),
+        )
+
+    async def handle_PacketLobbyInfoData(self, packet: Any) -> None:
+        """Multiplayer lobby roster: how many players, human, ready, spectating.
+
+        readyStatus is 0 = not ready, 1 = ready, 2 = spectating; only 1 counts
+        as ready.
+        """
+        players = list(getattr(packet, "lobby_players", []))[: int(getattr(packet, "num_players", 0))]
+        ready = sum(1 for player in players if int(getattr(player, "ready_status", 0)) == 1)
+        spectating = sum(1 for player in players if int(getattr(player, "ready_status", 0)) == 2)
+        human = sum(1 for player in players if not bool(getattr(player, "ai_controlled", True)))
+        await self.store.update(
+            lobby={
+                "num_players": int(getattr(packet, "num_players", 0)),
+                "human_players": human,
+                "ready_players": ready,
+                "spectating_players": spectating,
+            }
         )
 
     async def handle_PacketTyreSetsData(self, packet: Any) -> None:
@@ -937,4 +981,14 @@ class F1DatagramProtocol(asyncio.DatagramProtocol):
                 "session_time": float(detail.flashback_session_time),
             }
             await self.store.mutate(lambda state: state.traces.clear())
+        elif code == "COLL":
+            detail = packet.event_details.collision
+            player_index = int(getattr(packet.header, "player_car_index", 255))
+            v1, v2 = int(detail.vehicle1_idx), int(detail.vehicle2_idx)
+            payload = {
+                "vehicle1_idx": v1,
+                "vehicle2_idx": v2,
+                "severity": int(getattr(detail, "severity", 0)),
+                "involves_player": player_index in {v1, v2},
+            }
         await self.store.append_event(code, payload)

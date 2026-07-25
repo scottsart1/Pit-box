@@ -546,6 +546,219 @@ class PitWallDatabase:
                 "corner_opportunities": [dict(row) for row in corner_rows],
             }
 
+    async def session_debrief(self, session_uid: int) -> dict[str, Any]:
+        async with self._lock:
+            return await asyncio.to_thread(self._session_debrief_sync, session_uid)
+
+    def _session_debrief_sync(self, session_uid: int) -> dict[str, Any]:
+        """Deterministic end-of-session summary: pace, consistency, tyre use,
+        result and the biggest recurring corner losses. The language model
+        narrates this; it does not compute it.
+        """
+        stored_uid = _session_uid_to_sqlite(session_uid)
+        with self._connect() as db:
+            session = db.execute(
+                "SELECT * FROM sessions WHERE session_uid=?", (stored_uid,)
+            ).fetchone()
+            valid = db.execute(
+                """
+                SELECT lap_num, lap_time_ms, compound, tyre_age_end,
+                       s1_ms, s2_ms, s3_ms
+                FROM laps
+                WHERE session_uid=? AND valid=1 AND lap_time_ms>0
+                ORDER BY lap_num
+                """,
+                (stored_uid,),
+            ).fetchall()
+            lap_times = [int(row["lap_time_ms"]) for row in valid]
+            fastest = min(lap_times) if lap_times else None
+            mean_ms = int(sum(lap_times) / len(lap_times)) if lap_times else None
+            spread_ms = (max(lap_times) - min(lap_times)) if lap_times else None
+            if len(lap_times) > 1:
+                mean = sum(lap_times) / len(lap_times)
+                variance = sum((value - mean) ** 2 for value in lap_times) / len(lap_times)
+                consistency_ms = int(variance**0.5)
+            else:
+                consistency_ms = None
+            compounds = sorted({str(row["compound"]) for row in valid if row["compound"]})
+            corners = db.execute(
+                """
+                SELECT corner_no, name,
+                       AVG(loss_vs_pb_s) AS avg_loss_s,
+                       COUNT(*) AS samples
+                FROM corner_metrics
+                WHERE session_uid=? AND loss_vs_pb_s IS NOT NULL AND loss_vs_pb_s>0
+                GROUP BY corner_no, name
+                ORDER BY avg_loss_s DESC
+                LIMIT 3
+                """,
+                (stored_uid,),
+            ).fetchall()
+            return {
+                "session_uid": session_uid,
+                "track_name": session["track_name"] if session else None,
+                "session_type": session["session_type"] if session else None,
+                "result_position": session["result_position"] if session else None,
+                "valid_lap_count": len(lap_times),
+                "fastest_lap_ms": fastest,
+                "average_lap_ms": mean_ms,
+                "lap_time_spread_ms": spread_ms,
+                "consistency_stdev_ms": consistency_ms,
+                "compounds_used": compounds,
+                "top_time_losses": [dict(row) for row in corners],
+            }
+
+    async def sector_bests(self, track_id: int) -> dict[str, Any]:
+        async with self._lock:
+            return await asyncio.to_thread(self._sector_bests_sync, track_id)
+
+    def _sector_bests_sync(self, track_id: int) -> dict[str, Any]:
+        """Best-ever sector times and the theoretical-best lap they compose.
+
+        Each sector best is taken only from laps where that sector was actually
+        recorded (non-zero), so the historical zero-sector rows from before the
+        3.4 sector fix do not poison the minimum. The theoretical best is the
+        sum of the three independent minima and is only reported when all three
+        are present.
+        """
+        with self._connect() as db:
+            sectors: dict[str, dict[str, Any] | None] = {}
+            for key in ("s1_ms", "s2_ms", "s3_ms"):
+                row = db.execute(
+                    f"""
+                    SELECT {key} AS ms, session_uid, lap_num, compound, created_at
+                    FROM laps
+                    WHERE track_id=? AND valid=1 AND {key}>0
+                    ORDER BY {key} ASC LIMIT 1
+                    """,
+                    (track_id,),
+                ).fetchone()
+                sectors[key] = _restore_session_uid(dict(row)) if row else None
+            best_lap = db.execute(
+                """
+                SELECT lap_time_ms, session_uid, lap_num, compound
+                FROM laps WHERE track_id=? AND valid=1 AND lap_time_ms>0
+                ORDER BY lap_time_ms ASC LIMIT 1
+                """,
+                (track_id,),
+            ).fetchone()
+            complete = all(sectors[key] for key in ("s1_ms", "s2_ms", "s3_ms"))
+            theoretical_ms = (
+                sum(int(sectors[key]["ms"]) for key in ("s1_ms", "s2_ms", "s3_ms"))
+                if complete
+                else None
+            )
+            best_lap_ms = int(best_lap["lap_time_ms"]) if best_lap else None
+            return {
+                "track_id": track_id,
+                "sector_bests": sectors,
+                "personal_best_lap_ms": best_lap_ms,
+                "theoretical_best_ms": theoretical_ms,
+                # How much is left on the table between the best real lap and the
+                # sum of the best individual sectors.
+                "time_left_on_table_ms": (
+                    best_lap_ms - theoretical_ms
+                    if best_lap_ms and theoretical_ms
+                    else None
+                ),
+            }
+
+    async def progress_trend(
+        self,
+        track_id: int,
+        limit: int = 20,
+    ) -> dict[str, Any]:
+        async with self._lock:
+            return await asyncio.to_thread(self._progress_trend_sync, track_id, limit)
+
+    def _progress_trend_sync(self, track_id: int, limit: int) -> dict[str, Any]:
+        """Per-session best valid lap over time, for a track, oldest to newest.
+
+        This is the raw material for "am I faster at Spa than I was a month
+        ago". One row per session, so a weekend's improvement curve is visible
+        without returning every individual lap.
+        """
+        with self._connect() as db:
+            # Take the most recent `limit` sessions, then present them oldest to
+            # newest. Ordering ASC before LIMIT would keep the *oldest* sessions
+            # and hide recent progress once history grows past the limit.
+            rows = db.execute(
+                """
+                SELECT * FROM (
+                    SELECT s.session_uid AS session_uid,
+                           s.session_type AS session_type,
+                           s.mode_profile AS mode_profile,
+                           s.started_at AS started_at,
+                           MIN(l.lap_time_ms) AS best_lap_ms,
+                           COUNT(l.id) AS valid_laps
+                    FROM sessions s
+                    JOIN laps l ON l.session_uid = s.session_uid
+                    WHERE s.track_id=? AND l.valid=1 AND l.lap_time_ms>0
+                    GROUP BY s.session_uid
+                    ORDER BY s.started_at DESC
+                    LIMIT ?
+                )
+                ORDER BY started_at ASC
+                """,
+                (track_id, limit),
+            ).fetchall()
+            sessions = [_restore_session_uid(dict(row)) for row in rows]
+            first = sessions[0]["best_lap_ms"] if sessions else None
+            latest = sessions[-1]["best_lap_ms"] if sessions else None
+            return {
+                "track_id": track_id,
+                "sessions": sessions,
+                "session_count": len(sessions),
+                "first_best_ms": first,
+                "latest_best_ms": latest,
+                # Negative = improvement (latest lap is quicker than the first).
+                "improvement_ms": (latest - first) if first and latest else None,
+            }
+
+    async def setup_correlation(
+        self,
+        track_id: int,
+        profile: str | None = None,
+    ) -> dict[str, Any]:
+        async with self._lock:
+            return await asyncio.to_thread(
+                self._setup_correlation_sync, track_id, profile
+            )
+
+    def _setup_correlation_sync(
+        self,
+        track_id: int,
+        profile: str | None,
+    ) -> dict[str, Any]:
+        """Best and worst stored setup runs so setup choices can be linked to
+        measured performance. The deterministic layer returns the paired runs;
+        the language model narrates which setting moved which outcome, rather
+        than inventing a regression the sample size cannot support.
+        """
+        query = "SELECT * FROM setup_runs WHERE track_id=?"
+        params: list[Any] = [track_id]
+        if profile:
+            query += " AND profile=?"
+            params.append(profile)
+        with self._connect() as db:
+            rows = [
+                _restore_session_uid(dict(row))
+                for row in db.execute(
+                    query + " ORDER BY score ASC", params
+                ).fetchall()
+            ]
+        for row in rows:
+            row["setup"] = json.loads(row.pop("setup_json") or "{}")
+            row["performance"] = json.loads(row.pop("performance_json") or "{}")
+        return {
+            "track_id": track_id,
+            "profile": profile,
+            "run_count": len(rows),
+            "best_run": rows[0] if rows else None,
+            "worst_run": rows[-1] if len(rows) > 1 else None,
+            "runs": rows[:10],
+        }
+
     async def save_setup_run(
         self,
         session_uid: int,

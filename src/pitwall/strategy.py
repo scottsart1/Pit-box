@@ -117,6 +117,22 @@ DEFAULT_WEAR_PER_LAP = {
 DRY_COMPOUNDS = {"SOFT", "MEDIUM", "HARD"}
 WET_COMPOUNDS = {"INTER", "WET"}
 
+# Typical usable stint length per compound, derived from the operational wear
+# limit and default wear rate. Used only to *estimate* when a rival is likely to
+# stop; the game AI may deviate, so anything built on this is labelled an
+# estimate.
+TYPICAL_STINT_LAPS = {
+    compound: max(6, round(OPERATIONAL_WEAR_LIMIT[compound] / DEFAULT_WEAR_PER_LAP[compound]))
+    for compound in DEFAULT_WEAR_PER_LAP
+}
+
+# F1 points for finishing positions 1..10 (2026 system unchanged from 2010+).
+F1_POINTS = {1: 25, 2: 18, 3: 15, 4: 12, 5: 10, 6: 8, 7: 6, 8: 4, 9: 2, 10: 1}
+
+
+def points_for_position(position: int) -> int:
+    return F1_POINTS.get(int(position), 0)
+
 
 class StrategyEngine:
     """Deterministic, explainable tyre, stop and neutralisation strategy model."""
@@ -597,6 +613,12 @@ class StrategyEngine:
         peak_wear = max(wear)
         lap_times: list[float] = []
         wheel_projection: list[list[float]] = []
+        # A fresh set is cold for its first laps. Only a stint that begins on a
+        # new tyre (starting_age == 0) pays this; continuing the current stint
+        # does not. Full penalty on the out-lap, half on the following lap.
+        cold_penalty_s = (
+            settings.strategy_cold_tyre_penalty_s if starting_age == 0 else 0.0
+        )
         for offset in range(max(0, laps)):
             age = starting_age + offset
             thermal_growth = 1.0 + max(0, age - 8) * 0.012
@@ -606,7 +628,8 @@ class StrategyEngine:
             average_wear = sum(wear) / 4
             wear_penalty = max(0.0, average_wear - 52.0) * 0.009 + max(0.0, peak_wear - 58.0) * 0.008
             cliff = max(0.0, peak_wear - 70.0) * 0.060
-            expected_lap = base_lap_s + compound_delta + set_delta_s + setup_delta_s + deg * age + wear_penalty + cliff
+            warm_up = cold_penalty_s if offset == 0 else (cold_penalty_s * 0.5 if offset == 1 else 0.0)
+            expected_lap = base_lap_s + compound_delta + set_delta_s + setup_delta_s + deg * age + wear_penalty + cliff + warm_up
             uncertainty = 0.045 + (0.24 if compound == "SOFT" else 0.12 if compound == "MEDIUM" else 0.075) * (1.0 if min(deg_samples, wear_samples) < 3 else 0.35)
             conservative_lap = expected_lap + uncertainty + max(0.0, peak_wear - 65.0) * 0.020
             expected += expected_lap
@@ -1235,6 +1258,113 @@ class StrategyEngine:
         if current.get("recommended") or current.get("available") is False:
             return current
         return await self.recompute()
+
+    async def predict_rival_strategy(self, top_n: int = 6) -> dict[str, Any]:
+        """Estimate each nearby rival's likely next stop and undercut threat.
+
+        The estimate is deterministic: a rival on a compound with typical stint
+        life L who is A laps into that set is projected to stop in L - A laps.
+        Anyone projected to stop within a couple of laps who sits just behind is
+        flagged as an undercut threat before they actually box.
+        """
+        state = await self.store.snapshot_analysis()
+        current_lap = int(state.get("current_lap", 0))
+        total_laps = int(state.get("total_laps", 0))
+        player_pos = int(state.get("player_position", 0))
+        rivals: list[dict[str, Any]] = []
+        for driver in state.get("drivers", []):
+            if int(driver.get("car_idx", -1)) == int(state.get("player_car_index", -1)):
+                continue
+            gap = driver.get("gap_to_player_s")
+            compound = str(driver.get("tyre_compound", "UNKNOWN")).upper()
+            age = int(driver.get("tyre_age", 0))
+            typical = TYPICAL_STINT_LAPS.get(compound)
+            laps_to_stop = max(0, typical - age) if typical else None
+            projected_stop_lap = (
+                current_lap + laps_to_stop
+                if laps_to_stop is not None and current_lap > 0
+                else None
+            )
+            # gap_to_player_s is positive for a car behind, negative for a car
+            # ahead. A car just behind on dying tyres is the classic undercut.
+            behind = gap is not None and float(gap) > 0
+            # A car just behind on tyres near the end of their life is the
+            # classic pre-emptive undercut threat.
+            undercut_threat = bool(
+                behind
+                and laps_to_stop is not None
+                and laps_to_stop <= 2
+                and abs(float(gap)) <= 3.0
+            )
+            rivals.append(
+                {
+                    "driver": driver.get("name"),
+                    "position": driver.get("position"),
+                    "gap_to_player_s": round(float(gap), 2) if gap is not None else None,
+                    "compound": compound,
+                    "tyre_age": age,
+                    "typical_stint_laps": typical,
+                    "laps_until_estimated_stop": laps_to_stop,
+                    "projected_stop_lap": (
+                        projected_stop_lap
+                        if projected_stop_lap is None or projected_stop_lap <= total_laps or total_laps == 0
+                        else None
+                    ),
+                    "undercut_threat": undercut_threat,
+                }
+            )
+        rivals.sort(
+            key=lambda item: abs(item["gap_to_player_s"])
+            if item["gap_to_player_s"] is not None
+            else 1e9
+        )
+        return {
+            "available": bool(rivals),
+            "player_position": player_pos,
+            "current_lap": current_lap,
+            "rivals": rivals[: max(1, top_n)],
+            "note": (
+                "Stop laps are estimated from typical compound life; the game AI "
+                "may pit earlier or later."
+            ),
+        }
+
+    async def championship_scenario(self) -> dict[str, Any]:
+        """Attach F1 points to each ranked plan's projected finish position so
+        the trade-off between a safe finish and an aggressive one is explicit.
+        """
+        current = await self.store.snapshot_analysis()
+        strategy = current.get("strategy", {})
+        plans = strategy.get("plans", []) or []
+        player_pos = int(current.get("player_position", 0))
+        scored: list[dict[str, Any]] = []
+        for plan in plans:
+            projected = int(
+                plan.get("projected_rejoin_position", player_pos) or player_pos
+            )
+            scored.append(
+                {
+                    "instruction": plan.get("instruction"),
+                    "stops_remaining": plan.get("stops_remaining"),
+                    "projected_position": projected,
+                    "projected_points": points_for_position(projected),
+                    "risk_time_s": plan.get("projected_time_s"),
+                    "confidence": plan.get("confidence"),
+                }
+            )
+        current_points = points_for_position(player_pos)
+        best_points = max((item["projected_points"] for item in scored), default=current_points)
+        return {
+            "available": bool(scored),
+            "current_position": player_pos,
+            "current_points_if_held": current_points,
+            "best_projected_points": best_points,
+            "plans": scored,
+            "note": (
+                "Points use the projected finishing position of each plan; a "
+                "safe finish can outweigh a higher-variance gamble."
+            ),
+        }
 
     async def evaluate_undercut(self, driver: str = "ahead") -> dict[str, Any]:
         state = await self.store.snapshot_analysis()

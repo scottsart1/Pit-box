@@ -4,6 +4,7 @@ from statistics import median
 from typing import Any
 
 from .analysis import AnalysisEngine, fmt_ms
+from .config import settings
 from .database import PitWallDatabase
 from .setup_advisor import SetupAdvisor
 from .state import StateStore
@@ -346,6 +347,9 @@ class TelemetryTools:
                 "fia_flag",
                 "race_control_phase",
                 "safety_car_delta_s",
+                "grid_position",
+                "live_delta_s",
+                "component_wear",
                 "unserved_drive_through_penalties",
                 "unserved_stop_go_penalties",
                 "pit_stop_should_serve_penalty",
@@ -395,6 +399,88 @@ class TelemetryTools:
             "overtake_available": state["overtake_available"],
             "overtake_active": state["overtake_active"],
         }
+
+    async def get_energy_plan(self) -> dict[str, Any]:
+        """Lap-level deploy/harvest guidance from the current battery state.
+
+        This is deterministic guidance from ERS store and attack context, not a
+        per-corner map (which would need track geometry the telemetry does not
+        provide). 2026 sessions use Manual Override terminology.
+        """
+        state = await self.store.snapshot_analysis()
+        ers = float(state.get("ers_pct", 0.0))
+        regs_2026 = bool(state.get("regulations_2026"))
+        aid = "Manual Override" if regs_2026 else "DRS"
+        aid_available = bool(
+            state.get("overtake_available") if regs_2026 else state.get("drs_allowed")
+        )
+        if ers < 15.0:
+            mode = "harvest"
+            recommendation = f"Harvest this lap; hold {aid} until the battery recovers."
+        elif ers > 80.0:
+            mode = "deploy"
+            recommendation = f"Battery is full — deploy freely and use {aid} where available."
+        else:
+            mode = "balanced"
+            recommendation = "Deploy onto the main straights and harvest through the slow sections."
+        return {
+            "store_pct": round(ers, 1),
+            "recommended_mode": mode,
+            "overtaking_aid": aid,
+            "aid_available": aid_available,
+            "attack_window_open": bool(aid_available and ers >= 30.0),
+            "recommendation": recommendation,
+        }
+
+    async def get_pace_mode_options(self) -> dict[str, Any]:
+        """Deterministic fuel-vs-pace trade for the current fuel margin.
+
+        fuel_laps_delta is the margin in laps: negative means the tank is short
+        of race distance and the driver must save. Each lap of fuel recovered by
+        lifting and coasting costs a fixed per-lap time, so the required saving
+        translates directly into a lap-time cost.
+        """
+        state = await self.store.snapshot_analysis()
+        delta = float(state.get("fuel_laps_delta", 0.0))
+        laps_remaining = max(
+            0,
+            int(state.get("total_laps", 0)) - int(state.get("current_lap", 0)),
+        )
+        rate = settings.strategy_fuel_save_s_per_lap
+        if delta < -0.05:
+            deficit = abs(delta)
+            per_lap_cost = (
+                round(deficit * rate / laps_remaining, 3) if laps_remaining else None
+            )
+            recommendation = (
+                f"Save {deficit:.1f} laps of fuel. Lift and coast into the heaviest "
+                "braking zones; expect a small lap-time cost spread over the stint."
+            )
+            mode = "fuel_save"
+        elif delta > 0.6:
+            per_lap_cost = None
+            recommendation = (
+                f"Fuel is healthy (+{delta:.1f} laps). You can run a richer mix and "
+                "push; no lift-and-coast required."
+            )
+            mode = "push"
+        else:
+            per_lap_cost = None
+            recommendation = "Fuel is on target. Hold the current pace mode."
+            mode = "neutral"
+        return {
+            "recommended_mode": mode,
+            "fuel_laps_delta": round(delta, 2),
+            "laps_remaining": laps_remaining,
+            "estimated_cost_s_per_lap": per_lap_cost,
+            "recommendation": recommendation,
+        }
+
+    async def predict_rival_strategy(self, top_n: int = 6) -> dict[str, Any]:
+        return await self.strategy.predict_rival_strategy(top_n)
+
+    async def get_championship_scenario(self) -> dict[str, Any]:
+        return await self.strategy.championship_scenario()
 
     async def get_damage_report(self) -> dict[str, Any]:
         state = await self.store.snapshot_analysis()
@@ -564,6 +650,120 @@ class TelemetryTools:
             else None,
             "recent_laps": review.get("laps", []),
             "typical_weak_corners": review.get("corner_opportunities", [])[:5],
+        }
+
+    async def get_practice_focus(self) -> dict[str, Any]:
+        """Heuristic practice guidance (not the game's programme scoring).
+
+        Suggests what to work on this practice session from lap count, compound
+        variety and consistency. Deliberately framed as advice, not a claim to
+        mirror F1's internal practice-programme objectives, which telemetry does
+        not report directly.
+        """
+        state = await self.store.snapshot_analysis()
+        if state.get("mode_profile") != "practice":
+            return {"available": False, "reason": "Not a practice session."}
+        laps_done = int(state.get("current_lap", 0))
+        consistency = await self.analysis.get_consistency()
+        tyre = state.get("tyre", {})
+        focus: list[str] = []
+        if laps_done < 3:
+            focus.append("Track acclimatisation: build clean laps and learn braking points.")
+        if int(tyre.get("age_laps", 0)) >= 8:
+            focus.append("Long-run race pace: monitor degradation and manage the tyre.")
+        else:
+            focus.append("Qualifying simulation: a low-fuel push lap on fresh tyres.")
+        stddev = consistency.get("lap_time_stddev_s")
+        if isinstance(stddev, (int, float)) and stddev > 0.4:
+            focus.append(
+                f"Consistency: lap-time spread is {stddev:.2f}s — tighten repeatability."
+            )
+        return {
+            "available": True,
+            "laps_completed": laps_done,
+            "current_compound": tyre.get("compound"),
+            "lap_time_stddev_s": stddev,
+            "suggested_focus": focus,
+            "note": "Heuristic advice, not the game's practice-programme tracker.",
+        }
+
+    async def get_session_debrief(self) -> dict[str, Any]:
+        state = await self.store.snapshot_analysis()
+        session_uid = int(state.get("session_uid", 0))
+        if not session_uid:
+            return {"available": False, "reason": "No active session."}
+        data = await self.database.session_debrief(session_uid)
+        return {
+            "available": bool(data.get("valid_lap_count")),
+            "track": data.get("track_name"),
+            "result_position": data.get("result_position"),
+            "fastest_lap": fmt_ms(data["fastest_lap_ms"]) if data.get("fastest_lap_ms") else None,
+            "average_lap": fmt_ms(data["average_lap_ms"]) if data.get("average_lap_ms") else None,
+            "consistency_stdev_s": (
+                round(data["consistency_stdev_ms"] / 1000, 3)
+                if data.get("consistency_stdev_ms") is not None
+                else None
+            ),
+            "compounds_used": data.get("compounds_used", []),
+            "top_time_losses": data.get("top_time_losses", []),
+        }
+
+    async def get_sector_bests(self) -> dict[str, Any]:
+        state = await self.store.snapshot_analysis()
+        track_id = int(state.get("track_id", -1))
+        data = await self.database.sector_bests(track_id)
+        return {
+            "track": state.get("track_name"),
+            "sector_bests": {
+                key: (fmt_ms(int(value["ms"])) if value else None)
+                for key, value in data.get("sector_bests", {}).items()
+            },
+            "personal_best": fmt_ms(data["personal_best_lap_ms"])
+            if data.get("personal_best_lap_ms")
+            else None,
+            "theoretical_best": fmt_ms(data["theoretical_best_ms"])
+            if data.get("theoretical_best_ms")
+            else None,
+            "time_left_on_table_s": (
+                round(data["time_left_on_table_ms"] / 1000, 3)
+                if data.get("time_left_on_table_ms") is not None
+                else None
+            ),
+        }
+
+    async def get_progress_trend(self) -> dict[str, Any]:
+        state = await self.store.snapshot_analysis()
+        track_id = int(state.get("track_id", -1))
+        data = await self.database.progress_trend(track_id, 20)
+        sessions = [
+            {
+                "session_type": row.get("session_type"),
+                "best_lap": fmt_ms(int(row["best_lap_ms"])) if row.get("best_lap_ms") else None,
+                "valid_laps": row.get("valid_laps"),
+            }
+            for row in data.get("sessions", [])
+        ]
+        improvement = data.get("improvement_ms")
+        return {
+            "track": state.get("track_name"),
+            "session_count": data.get("session_count", 0),
+            "sessions": sessions,
+            "improvement_s": round(improvement / 1000, 3) if improvement is not None else None,
+            "faster_than_first": bool(improvement is not None and improvement < 0),
+        }
+
+    async def get_setup_correlation(self, profile: str = "all") -> dict[str, Any]:
+        state = await self.store.snapshot_analysis()
+        track_id = int(state.get("track_id", -1))
+        data = await self.database.setup_correlation(
+            track_id, None if profile in {"all", ""} else profile
+        )
+        return {
+            "track": state.get("track_name"),
+            "profile": profile,
+            "run_count": data.get("run_count", 0),
+            "best_run": data.get("best_run"),
+            "worst_run": data.get("worst_run"),
         }
 
     async def generate_setup(
@@ -763,6 +963,78 @@ class TelemetryTools:
             (
                 "get_front_wing_adjustment",
                 "Get the recommended front-wing change for the next pit stop.",
+                {},
+            ),
+            (
+                "get_session_debrief",
+                (
+                    "Get the deterministic end-of-session summary: pace, "
+                    "consistency, tyres, result and the biggest corner losses."
+                ),
+                {},
+            ),
+            (
+                "get_practice_focus",
+                (
+                    "Get heuristic practice-session guidance on what to work on "
+                    "(acclimatisation, race pace, quali sim, consistency)."
+                ),
+                {},
+            ),
+            (
+                "get_sector_bests",
+                (
+                    "Get best-ever sector times for this track and the "
+                    "theoretical-best lap they compose, versus the real best lap."
+                ),
+                {},
+            ),
+            (
+                "get_progress_trend",
+                (
+                    "Get the driver's best lap per past session at this track "
+                    "over time to show improvement or regression."
+                ),
+                {},
+            ),
+            (
+                "get_setup_correlation",
+                (
+                    "Compare stored setup runs at this track to link setup "
+                    "choices with measured performance. profile: race/quali/hybrid/all."
+                ),
+                {"profile": {"type": "string"}},
+            ),
+            (
+                "get_energy_plan",
+                (
+                    "Get lap-level battery deploy/harvest guidance and whether "
+                    "the overtaking-aid attack window is open."
+                ),
+                {},
+            ),
+            (
+                "get_pace_mode_options",
+                (
+                    "Get the fuel-save versus push trade for the current fuel "
+                    "margin, with the estimated lap-time cost of saving."
+                ),
+                {},
+            ),
+            (
+                "predict_rival_strategy",
+                (
+                    "Estimate nearby rivals' likely next pit laps from tyre age "
+                    "and compound, flagging pre-emptive undercut threats."
+                ),
+                {"top_n": {"type": "integer", "minimum": 1, "maximum": 12}},
+            ),
+            (
+                "get_championship_scenario",
+                (
+                    "Attach championship points to each strategy plan's projected "
+                    "finish position to weigh a safe finish against a gamble."
+                ),
                 {},
             ),
         ]

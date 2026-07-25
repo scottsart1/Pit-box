@@ -78,6 +78,14 @@ class ProactiveEngineer:
         self._last_blue_flag = False
         self._last_unserved_penalties = (0, 0)
         self._last_quali_release_lap = 0
+        # car_idx -> (gap_s, monotonic timestamp), for rival gap-trend detection.
+        self._rival_gap_history: dict[int, tuple[float, float]] = {}
+        # Per-component wear band already alerted, so each PU element escalates
+        # independently rather than one shared band hiding the others.
+        self._component_alert_bands: dict[str, int] = {}
+        self._engine_failure_alerted = False
+        self._energy_alert_lap = 0
+        self._race_start_done = False
         self._cooldowns: dict[str, float] = {}
         self._safe_since = 0.0
 
@@ -238,7 +246,8 @@ class ProactiveEngineer:
             "progress_update", "corner_coaching", "race_control", "weather_crossover",
             "fuel_warning", "tyre_wear", "damage", "strategy_change", "compound_requirement",
             "quali_clear_air", "blue_flag", "penalty_service", "undercut_threat",
-            "safety_car_delta",
+            "safety_car_delta", "sc_restart", "energy_low", "component_wear",
+            "rival_pace", "engine_failure",
         }
         if event_type in coalesced:
             self.pending = deque((item for item in self.pending if item.get("type") != event_type), maxlen=24)
@@ -271,6 +280,11 @@ class ProactiveEngineer:
         self._last_blue_flag = False
         self._last_unserved_penalties = (0, 0)
         self._last_quali_release_lap = 0
+        self._rival_gap_history = {}
+        self._component_alert_bands = {}
+        self._engine_failure_alerted = False
+        self._energy_alert_lap = 0
+        self._race_start_done = False
         self._cooldowns.clear()
         self._safe_since = 0.0
         await self.store.mutate(lambda s: s.proactive.update({
@@ -285,6 +299,122 @@ class ProactiveEngineer:
             str(damage.get(key, 0))
             for key in (*DAMAGE_KEYS, *DAMAGE_FAULT_KEYS)
         )
+
+    def _detect_race_start(self, state: dict[str, Any]) -> None:
+        """One race-start call on the first green flag: grid slot and lap-1 plan."""
+        if self._race_start_done or state.get("mode_profile") not in {"race", "sprint"}:
+            return
+        phase = str(state.get("race_control_phase", "green"))
+        current_lap = int(state.get("current_lap", 0))
+        grid = int(state.get("grid_position", 0) or 0)
+        # Require a real grid slot: at the exact green moment grid_position can
+        # still be 0 (not yet received), which would produce a bogus "P0" call.
+        if phase == "green" and current_lap <= 1 and grid > 0:
+            self._race_start_done = True
+            # Odd grid slots are the (usually grippier) racing-line side.
+            clean_side = grid % 2 == 1
+            self._enqueue(
+                "race_start",
+                {
+                    "grid_position": grid,
+                    "clean_side": clean_side,
+                    "ers_pct": state.get("ers_pct"),
+                    "front_temps_c": state.get("tyre", {}).get("inner_temps_c", [])[:2],
+                },
+                critical=True,
+                cooldown_s=0.0,
+                expires_s=20.0,
+            )
+
+    def _detect_component_wear(self, state: dict[str, Any]) -> None:
+        """Warn as each power-unit component crosses successive wear thresholds,
+        and immediately on a blown or seized engine."""
+        damage = state.get("damage", {}) or {}
+        if (damage.get("engine_blown") or damage.get("engine_seized")) and not self._engine_failure_alerted:
+            self._engine_failure_alerted = True
+            self._enqueue(
+                "engine_failure",
+                {
+                    "blown": bool(damage.get("engine_blown")),
+                    "seized": bool(damage.get("engine_seized")),
+                },
+                critical=True,
+                cooldown_s=0.0,
+                expires_s=60.0,
+            )
+        wear = state.get("component_wear", {}) or {}
+        if not wear:
+            return
+        # Track a per-component band so a second component crossing 70% is not
+        # suppressed by the first (a single shared band hid every later one).
+        for key, raw in wear.items():
+            value = float(raw)
+            band = (int(value) // 10) * 10
+            if value >= 70.0 and band > self._component_alert_bands.get(key, 0):
+                self._component_alert_bands[key] = band
+                self._enqueue(
+                    "component_wear",
+                    {"component": key, "wear_pct": round(value, 1), "all": wear},
+                    critical=value >= 90.0,
+                    cooldown_s=120.0,
+                    expires_s=120.0,
+                )
+
+    def _detect_energy(self, state: dict[str, Any]) -> None:
+        """Low-battery warning while attacking, at most once per lap."""
+        if state.get("mode_profile") not in {"race", "sprint"}:
+            return
+        ers = float(state.get("ers_pct", 100.0))
+        lap = int(state.get("current_lap", 0))
+        drs_or_override = bool(state.get("overtake_available") or state.get("drs_allowed"))
+        if ers < 15.0 and drs_or_override and lap != self._energy_alert_lap:
+            self._energy_alert_lap = lap
+            self._enqueue(
+                "energy_low",
+                {"ers_pct": round(ers, 1), "regulations_2026": state.get("regulations_2026")},
+                cooldown_s=25.0,
+                expires_s=15.0,
+            )
+
+    def _detect_rival_pace(self, state: dict[str, Any]) -> None:
+        """Flag a rival closing fast enough to be in range within a few laps."""
+        if state.get("mode_profile") not in {"race", "sprint"}:
+            return
+        now = time.monotonic()
+        player_idx = int(state.get("player_car_index", -1))
+        for driver in state.get("drivers", []):
+            idx = int(driver.get("car_idx", -1))
+            gap = driver.get("gap_to_player_s")
+            if idx == player_idx or gap is None:
+                continue
+            gap = float(gap)
+            previous = self._rival_gap_history.get(idx)
+            if previous is None:
+                self._rival_gap_history[idx] = (gap, now)
+                continue
+            prev_gap, prev_t = previous
+            elapsed = now - prev_t
+            # Keep the anchor sample until a full comparison window has passed;
+            # overwriting it every poll left elapsed at ~one tick, so the trend
+            # never accumulated and the call never fired.
+            if elapsed < 8.0:
+                continue
+            self._rival_gap_history[idx] = (gap, now)
+            # gap_to_player_s is negative for a car ahead and positive for a car
+            # behind; a closing car behind has a shrinking positive gap.
+            behind = gap > 0
+            closing = abs(gap) < abs(prev_gap) - 0.15
+            if behind and closing and abs(gap) <= 3.0:
+                self._enqueue(
+                    "rival_pace",
+                    {
+                        "driver": driver.get("name"),
+                        "gap_to_player_s": round(gap, 2),
+                        "closing": True,
+                    },
+                    cooldown_s=30.0,
+                    expires_s=20.0,
+                )
 
     @staticmethod
     def _event_still_relevant(event: dict[str, Any], state: dict[str, Any]) -> bool:
@@ -435,6 +565,21 @@ class ProactiveEngineer:
             previous = self._last_race_control_phase
             self._last_race_control_phase, self._last_safety_car = phase, safety
             self._enqueue("race_control", {"from": previous, "to": phase, "strategy": state.get("strategy", {}).get("recommended", {}), "neutralisation": state.get("strategy", {}).get("neutralisation", {})}, critical=True, cooldown_s=0.0)
+            # A transition into an "ending" phase means the restart is imminent:
+            # prep battery, temperatures and the expected go point.
+            if phase in {"safety_car_ending", "vsc_ending"}:
+                self._enqueue(
+                    "sc_restart",
+                    {
+                        "phase": phase,
+                        "position": state.get("player_position"),
+                        "ers_pct": state.get("ers_pct"),
+                        "front_temps_c": state.get("tyre", {}).get("inner_temps_c", [])[:2],
+                    },
+                    critical=True,
+                    cooldown_s=0.0,
+                    expires_s=20.0,
+                )
 
         wet = int(state.get("rain_next_15_pct", 0)) >= 60
         if wet and not self._last_weather_alert:
@@ -514,6 +659,11 @@ class ProactiveEngineer:
                     cooldown_s=settings.proactive_sc_delta_cooldown_s,
                     expires_s=10.0,
                 )
+
+        self._detect_race_start(state)
+        self._detect_component_wear(state)
+        self._detect_energy(state)
+        self._detect_rival_pace(state)
 
         unserved = (
             int(state.get("unserved_drive_through_penalties", 0)),
@@ -729,6 +879,41 @@ class ProactiveEngineer:
             return str(
                 payload.get("instruction")
                 or f"{payload.get('driver', 'A rival')} has boxed. We are recalculating the response."
+            )
+        if kind == "race_start":
+            side = "clean side" if payload.get("clean_side") else "dirty side"
+            return (
+                f"Lights out from P{payload.get('grid_position')}, {side}. "
+                "Get temperature into the tyres and commit to your turn-one line."
+            )
+        if kind == "sc_restart":
+            return (
+                "Restart coming. Charge the battery, keep temperature in the tyres "
+                "and brakes, and watch the leader for the go point."
+            )
+        if kind == "energy_low":
+            aid = "Manual Override" if payload.get("regulations_2026") else "DRS"
+            return (
+                f"Battery low at {payload.get('ers_pct')} percent. Harvest a lap "
+                f"before you commit {aid} again."
+            )
+        if kind == "component_wear":
+            return (
+                f"{str(payload.get('component', 'engine')).upper()} wear at "
+                f"{payload.get('wear_pct')} percent. Manage it to avoid a component "
+                "penalty later in the season."
+            )
+        if kind == "engine_failure":
+            state_word = "seized" if payload.get("seized") else "blown"
+            return (
+                f"Engine {state_word}. Report any power loss immediately; we are "
+                "assessing whether to continue."
+            )
+        if kind == "rival_pace":
+            return (
+                f"{payload.get('driver', 'Car behind')} is catching, "
+                f"{abs(float(payload.get('gap_to_player_s', 0.0))):.1f} seconds back "
+                "and closing. Protect the tyres you will need to defend."
             )
         return "Engineer update available on the dashboard."
 
