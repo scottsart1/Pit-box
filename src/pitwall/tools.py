@@ -566,6 +566,64 @@ class TelemetryTools:
             "typical_weak_corners": review.get("corner_opportunities", [])[:5],
         }
 
+    async def get_sector_bests(self) -> dict[str, Any]:
+        state = await self.store.snapshot_analysis()
+        track_id = int(state.get("track_id", -1))
+        data = await self.database.sector_bests(track_id)
+        return {
+            "track": state.get("track_name"),
+            "sector_bests": {
+                key: (fmt_ms(int(value["ms"])) if value else None)
+                for key, value in data.get("sector_bests", {}).items()
+            },
+            "personal_best": fmt_ms(data["personal_best_lap_ms"])
+            if data.get("personal_best_lap_ms")
+            else None,
+            "theoretical_best": fmt_ms(data["theoretical_best_ms"])
+            if data.get("theoretical_best_ms")
+            else None,
+            "time_left_on_table_s": (
+                round(data["time_left_on_table_ms"] / 1000, 3)
+                if data.get("time_left_on_table_ms") is not None
+                else None
+            ),
+        }
+
+    async def get_progress_trend(self) -> dict[str, Any]:
+        state = await self.store.snapshot_analysis()
+        track_id = int(state.get("track_id", -1))
+        data = await self.database.progress_trend(track_id, 20)
+        sessions = [
+            {
+                "session_type": row.get("session_type"),
+                "best_lap": fmt_ms(int(row["best_lap_ms"])) if row.get("best_lap_ms") else None,
+                "valid_laps": row.get("valid_laps"),
+            }
+            for row in data.get("sessions", [])
+        ]
+        improvement = data.get("improvement_ms")
+        return {
+            "track": state.get("track_name"),
+            "session_count": data.get("session_count", 0),
+            "sessions": sessions,
+            "improvement_s": round(improvement / 1000, 3) if improvement is not None else None,
+            "faster_than_first": bool(improvement is not None and improvement < 0),
+        }
+
+    async def get_setup_correlation(self, profile: str = "all") -> dict[str, Any]:
+        state = await self.store.snapshot_analysis()
+        track_id = int(state.get("track_id", -1))
+        data = await self.database.setup_correlation(
+            track_id, None if profile in {"all", ""} else profile
+        )
+        return {
+            "track": state.get("track_name"),
+            "profile": profile,
+            "run_count": data.get("run_count", 0),
+            "best_run": data.get("best_run"),
+            "worst_run": data.get("worst_run"),
+        }
+
     async def generate_setup(
         self,
         profile: str = "hybrid",
@@ -764,6 +822,30 @@ class TelemetryTools:
                 "get_front_wing_adjustment",
                 "Get the recommended front-wing change for the next pit stop.",
                 {},
+            ),
+            (
+                "get_sector_bests",
+                (
+                    "Get best-ever sector times for this track and the "
+                    "theoretical-best lap they compose, versus the real best lap."
+                ),
+                {},
+            ),
+            (
+                "get_progress_trend",
+                (
+                    "Get the driver's best lap per past session at this track "
+                    "over time to show improvement or regression."
+                ),
+                {},
+            ),
+            (
+                "get_setup_correlation",
+                (
+                    "Compare stored setup runs at this track to link setup "
+                    "choices with measured performance. profile: race/quali/hybrid/all."
+                ),
+                {"profile": {"type": "string"}},
             ),
         ]
         return [
