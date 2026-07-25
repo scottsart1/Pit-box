@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+import bisect
 import copy
+import math
 import time
 from collections import deque
 from dataclasses import asdict, dataclass, field, fields, is_dataclass
@@ -85,11 +87,18 @@ class SessionState:
     sector2_start_m: float = 0.0
     sector3_start_m: float = 0.0
     current_lap_invalid: bool = False
+    grid_position: int = 0
     safety_car_delta_s: float = 0.0
     safety_car_delta_valid: bool = False
     unserved_drive_through_penalties: int = 0
     unserved_stop_go_penalties: int = 0
     pit_stop_should_serve_penalty: bool = False
+    # Live delta (seconds) to the reference lap at the current lap distance;
+    # negative is ahead of reference. Computed per telemetry tick.
+    live_delta_s: float | None = None
+    live_delta_reference: str = ""
+    # Power-unit component wear (percent used), from the car-damage packet.
+    component_wear: dict[str, float] = field(default_factory=dict)
     game_paused: bool = False
     active_cars: int = 0
     player_car_index: int = 0
@@ -248,6 +257,60 @@ class StateStore:
         self._packet_times: deque[float] = deque()
         self.lap_queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue(maxsize=8)
         self.event_queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue(maxsize=256)
+        # Reference lap for the live delta: sorted (lap_distance_m, time_into_lap_s).
+        self._delta_ref: list[tuple[float, float]] = []
+
+    async def set_delta_reference(
+        self,
+        trace: list[dict[str, Any]],
+        label: str,
+    ) -> None:
+        """Install a reference lap for the live delta.
+
+        Trace ``t`` values are absolute session time, so they are normalised to
+        time-into-lap by subtracting the lap's first sample. Distances must be
+        monotonic for the interpolation, so out-of-order points are dropped.
+        """
+        pairs: list[tuple[float, float]] = []
+        base_t: float | None = None
+        last_d = -1.0
+        for point in trace:
+            if "d" not in point or "t" not in point:
+                continue
+            distance = float(point["d"])
+            if base_t is None:
+                base_t = float(point["t"])
+            if distance < last_d:
+                continue
+            last_d = distance
+            pairs.append((distance, float(point["t"]) - base_t))
+        async with self._lock:
+            self._delta_ref = pairs
+            self.state.live_delta_reference = label if pairs else ""
+            if not pairs:
+                self.state.live_delta_s = None
+
+    def reference_time_at(self, distance: float) -> float | None:
+        """Interpolated reference time-into-lap at a lap distance, or None.
+
+        Pure read of the cached reference; safe to call while already holding
+        the store lock (e.g. from inside a mutate callback).
+        """
+        ref = self._delta_ref
+        if not ref:
+            return None
+        if distance <= ref[0][0]:
+            return ref[0][1]
+        if distance >= ref[-1][0]:
+            return ref[-1][1]
+        index = bisect.bisect_left(ref, (distance, -math.inf))
+        low_d, low_t = ref[index - 1]
+        high_d, high_t = ref[index]
+        span = high_d - low_d
+        if span <= 0:
+            return low_t
+        fraction = (distance - low_d) / span
+        return low_t + fraction * (high_t - low_t)
 
     def _serialize_locked(self, profile: SnapshotProfile) -> dict[str, Any]:
         data: dict[str, Any] = {}

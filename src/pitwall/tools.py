@@ -347,6 +347,9 @@ class TelemetryTools:
                 "fia_flag",
                 "race_control_phase",
                 "safety_car_delta_s",
+                "grid_position",
+                "live_delta_s",
+                "component_wear",
                 "unserved_drive_through_penalties",
                 "unserved_stop_go_penalties",
                 "pit_stop_should_serve_penalty",
@@ -395,6 +398,38 @@ class TelemetryTools:
             "harvested_this_lap_j": state["ers_harvested_lap_j"],
             "overtake_available": state["overtake_available"],
             "overtake_active": state["overtake_active"],
+        }
+
+    async def get_energy_plan(self) -> dict[str, Any]:
+        """Lap-level deploy/harvest guidance from the current battery state.
+
+        This is deterministic guidance from ERS store and attack context, not a
+        per-corner map (which would need track geometry the telemetry does not
+        provide). 2026 sessions use Manual Override terminology.
+        """
+        state = await self.store.snapshot_analysis()
+        ers = float(state.get("ers_pct", 0.0))
+        regs_2026 = bool(state.get("regulations_2026"))
+        aid = "Manual Override" if regs_2026 else "DRS"
+        aid_available = bool(
+            state.get("overtake_available") if regs_2026 else state.get("drs_allowed")
+        )
+        if ers < 15.0:
+            mode = "harvest"
+            recommendation = f"Harvest this lap; hold {aid} until the battery recovers."
+        elif ers > 80.0:
+            mode = "deploy"
+            recommendation = f"Battery is full — deploy freely and use {aid} where available."
+        else:
+            mode = "balanced"
+            recommendation = "Deploy onto the main straights and harvest through the slow sections."
+        return {
+            "store_pct": round(ers, 1),
+            "recommended_mode": mode,
+            "overtaking_aid": aid,
+            "aid_available": aid_available,
+            "attack_window_open": bool(aid_available and ers >= 30.0),
+            "recommendation": recommendation,
         }
 
     async def get_pace_mode_options(self) -> dict[str, Any]:
@@ -897,6 +932,14 @@ class TelemetryTools:
                     "choices with measured performance. profile: race/quali/hybrid/all."
                 ),
                 {"profile": {"type": "string"}},
+            ),
+            (
+                "get_energy_plan",
+                (
+                    "Get lap-level battery deploy/harvest guidance and whether "
+                    "the overtaking-aid attack window is open."
+                ),
+                {},
             ),
             (
                 "get_pace_mode_options",
