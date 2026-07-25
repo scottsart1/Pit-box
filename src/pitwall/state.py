@@ -441,6 +441,10 @@ class StateStore:
                     session_mode_override=session_mode_override,
                 )
                 self._packet_times.clear()
+                # The live-delta reference belongs to the previous session's
+                # track/PB; drop it so a new session does not compare against a
+                # stale reference until its own personal best is established.
+                self._delta_ref = []
 
             self._packet_times.append(now)
             cutoff = now - 2.0

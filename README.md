@@ -435,7 +435,7 @@ Strict mode uses DeepSeek's beta endpoint and supports a narrower JSON-schema su
 Completed for 3.5.0 with the full dependency set installed:
 
 ```text
-137 automated tests passed
+144 automated tests passed
 Ruff static checks passed
 Python compileall passed
 FastAPI startup and /api/health passed (version 3.5.0)
@@ -443,7 +443,7 @@ FastAPI startup and /api/health passed (version 3.5.0)
 Dashboard and overlay JavaScript syntax passed with Node.js
 ```
 
-The 3.5 features add `tests/test_features_3_5.py` (36 tests) on top of the
+The 3.5 features add `tests/test_features_3_5.py` (43 tests) on top of the
 existing suite. Each feature is driven through its deterministic layer so the
 numbers are pinned independently of any language model; two representative
 end-to-end paths (quantified coaching and sector persistence) were exercised in

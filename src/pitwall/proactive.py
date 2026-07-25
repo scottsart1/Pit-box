@@ -80,7 +80,10 @@ class ProactiveEngineer:
         self._last_quali_release_lap = 0
         # car_idx -> (gap_s, monotonic timestamp), for rival gap-trend detection.
         self._rival_gap_history: dict[int, tuple[float, float]] = {}
-        self._component_alert_pct = 0.0
+        # Per-component wear band already alerted, so each PU element escalates
+        # independently rather than one shared band hiding the others.
+        self._component_alert_bands: dict[str, int] = {}
+        self._engine_failure_alerted = False
         self._energy_alert_lap = 0
         self._race_start_done = False
         self._cooldowns: dict[str, float] = {}
@@ -244,7 +247,7 @@ class ProactiveEngineer:
             "fuel_warning", "tyre_wear", "damage", "strategy_change", "compound_requirement",
             "quali_clear_air", "blue_flag", "penalty_service", "undercut_threat",
             "safety_car_delta", "sc_restart", "energy_low", "component_wear",
-            "rival_pace",
+            "rival_pace", "engine_failure",
         }
         if event_type in coalesced:
             self.pending = deque((item for item in self.pending if item.get("type") != event_type), maxlen=24)
@@ -278,7 +281,8 @@ class ProactiveEngineer:
         self._last_unserved_penalties = (0, 0)
         self._last_quali_release_lap = 0
         self._rival_gap_history = {}
-        self._component_alert_pct = 0.0
+        self._component_alert_bands = {}
+        self._engine_failure_alerted = False
         self._energy_alert_lap = 0
         self._race_start_done = False
         self._cooldowns.clear()
@@ -302,9 +306,11 @@ class ProactiveEngineer:
             return
         phase = str(state.get("race_control_phase", "green"))
         current_lap = int(state.get("current_lap", 0))
-        if phase == "green" and current_lap <= 1:
+        grid = int(state.get("grid_position", 0) or 0)
+        # Require a real grid slot: at the exact green moment grid_position can
+        # still be 0 (not yet received), which would produce a bogus "P0" call.
+        if phase == "green" and current_lap <= 1 and grid > 0:
             self._race_start_done = True
-            grid = int(state.get("grid_position", 0) or 0)
             # Odd grid slots are the (usually grippier) racing-line side.
             clean_side = grid % 2 == 1
             self._enqueue(
@@ -321,24 +327,38 @@ class ProactiveEngineer:
             )
 
     def _detect_component_wear(self, state: dict[str, Any]) -> None:
-        """Warn as any power-unit component crosses successive wear thresholds."""
+        """Warn as each power-unit component crosses successive wear thresholds,
+        and immediately on a blown or seized engine."""
+        damage = state.get("damage", {}) or {}
+        if (damage.get("engine_blown") or damage.get("engine_seized")) and not self._engine_failure_alerted:
+            self._engine_failure_alerted = True
+            self._enqueue(
+                "engine_failure",
+                {
+                    "blown": bool(damage.get("engine_blown")),
+                    "seized": bool(damage.get("engine_seized")),
+                },
+                critical=True,
+                cooldown_s=0.0,
+                expires_s=60.0,
+            )
         wear = state.get("component_wear", {}) or {}
         if not wear:
             return
-        worst_key = max(wear, key=lambda key: float(wear.get(key, 0.0)))
-        worst = float(wear.get(worst_key, 0.0))
-        # Alert at each new 10-point band above 70% so it is not spammy but
-        # escalates as a component approaches its life limit.
-        band = (int(worst) // 10) * 10
-        if worst >= 70.0 and band > self._component_alert_pct:
-            self._component_alert_pct = band
-            self._enqueue(
-                "component_wear",
-                {"component": worst_key, "wear_pct": round(worst, 1), "all": wear},
-                critical=worst >= 90.0,
-                cooldown_s=120.0,
-                expires_s=120.0,
-            )
+        # Track a per-component band so a second component crossing 70% is not
+        # suppressed by the first (a single shared band hid every later one).
+        for key, raw in wear.items():
+            value = float(raw)
+            band = (int(value) // 10) * 10
+            if value >= 70.0 and band > self._component_alert_bands.get(key, 0):
+                self._component_alert_bands[key] = band
+                self._enqueue(
+                    "component_wear",
+                    {"component": key, "wear_pct": round(value, 1), "all": wear},
+                    critical=value >= 90.0,
+                    cooldown_s=120.0,
+                    expires_s=120.0,
+                )
 
     def _detect_energy(self, state: dict[str, Any]) -> None:
         """Low-battery warning while attacking, at most once per lap."""
@@ -369,16 +389,20 @@ class ProactiveEngineer:
                 continue
             gap = float(gap)
             previous = self._rival_gap_history.get(idx)
-            self._rival_gap_history[idx] = (gap, now)
             if previous is None:
+                self._rival_gap_history[idx] = (gap, now)
                 continue
             prev_gap, prev_t = previous
             elapsed = now - prev_t
+            # Keep the anchor sample until a full comparison window has passed;
+            # overwriting it every poll left elapsed at ~one tick, so the trend
+            # never accumulated and the call never fired.
             if elapsed < 8.0:
                 continue
-            # Closing rate in seconds of gap per real second; only care about a
-            # car behind (negative gap) that is catching (|gap| shrinking).
-            behind = gap < 0
+            self._rival_gap_history[idx] = (gap, now)
+            # gap_to_player_s is negative for a car ahead and positive for a car
+            # behind; a closing car behind has a shrinking positive gap.
+            behind = gap > 0
             closing = abs(gap) < abs(prev_gap) - 0.15
             if behind and closing and abs(gap) <= 3.0:
                 self._enqueue(
@@ -878,6 +902,12 @@ class ProactiveEngineer:
                 f"{str(payload.get('component', 'engine')).upper()} wear at "
                 f"{payload.get('wear_pct')} percent. Manage it to avoid a component "
                 "penalty later in the season."
+            )
+        if kind == "engine_failure":
+            state_word = "seized" if payload.get("seized") else "blown"
+            return (
+                f"Engine {state_word}. Report any power loss immediately; we are "
+                "assessing whether to continue."
             )
         if kind == "rival_pace":
             return (

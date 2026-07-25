@@ -798,15 +798,21 @@ class F1DatagramProtocol(asyncio.DatagramProtocol):
         )
 
     async def handle_PacketLobbyInfoData(self, packet: Any) -> None:
-        """Multiplayer lobby roster: how many players and how many are ready."""
+        """Multiplayer lobby roster: how many players, human, ready, spectating.
+
+        readyStatus is 0 = not ready, 1 = ready, 2 = spectating; only 1 counts
+        as ready.
+        """
         players = list(getattr(packet, "lobby_players", []))[: int(getattr(packet, "num_players", 0))]
-        ready = sum(1 for player in players if int(getattr(player, "ready_status", 0)) == 2)
+        ready = sum(1 for player in players if int(getattr(player, "ready_status", 0)) == 1)
+        spectating = sum(1 for player in players if int(getattr(player, "ready_status", 0)) == 2)
         human = sum(1 for player in players if not bool(getattr(player, "ai_controlled", True)))
         await self.store.update(
             lobby={
                 "num_players": int(getattr(packet, "num_players", 0)),
                 "human_players": human,
                 "ready_players": ready,
+                "spectating_players": spectating,
             }
         )
 

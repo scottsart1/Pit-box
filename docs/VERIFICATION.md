@@ -6,7 +6,7 @@ The full dependency set (`openai`, `f1-packets`, `sounddevice`, Ruff, Node.js)
 was installed, so the whole suite ran with nothing stubbed or deselected.
 
 ```text
-137 automated tests passed
+144 automated tests passed
 Ruff static checks passed
 Python compileall passed
 FastAPI startup and /api/health passed (version 3.5.0)
@@ -17,10 +17,37 @@ Dashboard and overlay JavaScript passed node --check
 
 The tool surface grew from 33 to 42 tools.
 
+## Post-review corrections
+
+An independent review of the 3.5 feature branch found nine defects, all now
+fixed and covered by regression tests:
+
+1. **Rival gap direction reversed.** `gap_to_player_s` is negative for a car
+   ahead and positive for a car behind; the rival-pace and rival-prediction
+   detectors had the sign inverted, so they watched the wrong car.
+2. **Rival-pace anchor reset every tick.** The gap-history sample was
+   overwritten on every poll, so the comparison window never reached 8s and the
+   call could never fire. The anchor is now held until the window elapses.
+3. **Lobby ready count.** `readyStatus` 2 is spectating, not ready; only 1 now
+   counts as ready, and spectators are reported separately.
+4. **Blown/seized engine.** These flags now raise an immediate `engine_failure`
+   call rather than being ignored.
+5. **Cross-component wear suppression.** A single shared alert band hid a second
+   PU component crossing a threshold; bands are now tracked per component.
+6. **Stale live-delta reference.** The reference lap is cleared on a session
+   change so a new session never compares against the old track's best.
+7. **Progress trend truncation.** The query returned the oldest N sessions;
+   it now returns the most recent N, presented oldest-to-newest.
+8. **False P0 race-start.** The start call now requires a real grid slot
+   (grid_position > 0) instead of emitting "P0" before the packet arrives.
+9. **Custom persona ordering.** User persona text can no longer be the final
+   instruction; a safety anchor re-asserting the non-negotiable rules is always
+   appended last.
+
 ## What 3.5 adds and how it was checked
 
 Each feature is driven through its deterministic layer in
-`tests/test_features_3_5.py` (36 tests) so the numbers are pinned independently
+`tests/test_features_3_5.py` (43 tests) so the numbers are pinned independently
 of any language model.
 
 **Analytics (items 12–14).** Sector bests compose the theoretical best from the

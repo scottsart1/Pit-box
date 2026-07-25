@@ -679,20 +679,26 @@ class PitWallDatabase:
         without returning every individual lap.
         """
         with self._connect() as db:
+            # Take the most recent `limit` sessions, then present them oldest to
+            # newest. Ordering ASC before LIMIT would keep the *oldest* sessions
+            # and hide recent progress once history grows past the limit.
             rows = db.execute(
                 """
-                SELECT s.session_uid AS session_uid,
-                       s.session_type AS session_type,
-                       s.mode_profile AS mode_profile,
-                       s.started_at AS started_at,
-                       MIN(l.lap_time_ms) AS best_lap_ms,
-                       COUNT(l.id) AS valid_laps
-                FROM sessions s
-                JOIN laps l ON l.session_uid = s.session_uid
-                WHERE s.track_id=? AND l.valid=1 AND l.lap_time_ms>0
-                GROUP BY s.session_uid
-                ORDER BY s.started_at ASC
-                LIMIT ?
+                SELECT * FROM (
+                    SELECT s.session_uid AS session_uid,
+                           s.session_type AS session_type,
+                           s.mode_profile AS mode_profile,
+                           s.started_at AS started_at,
+                           MIN(l.lap_time_ms) AS best_lap_ms,
+                           COUNT(l.id) AS valid_laps
+                    FROM sessions s
+                    JOIN laps l ON l.session_uid = s.session_uid
+                    WHERE s.track_id=? AND l.valid=1 AND l.lap_time_ms>0
+                    GROUP BY s.session_uid
+                    ORDER BY s.started_at DESC
+                    LIMIT ?
+                )
+                ORDER BY started_at ASC
                 """,
                 (track_id, limit),
             ).fetchall()

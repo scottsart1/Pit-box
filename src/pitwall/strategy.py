@@ -1285,7 +1285,9 @@ class StrategyEngine:
                 if laps_to_stop is not None and current_lap > 0
                 else None
             )
-            behind = gap is not None and float(gap) < 0
+            # gap_to_player_s is positive for a car behind, negative for a car
+            # ahead. A car just behind on dying tyres is the classic undercut.
+            behind = gap is not None and float(gap) > 0
             # A car just behind on tyres near the end of their life is the
             # classic pre-emptive undercut threat.
             undercut_threat = bool(
