@@ -223,7 +223,7 @@ class Settings(BaseSettings):
         normalized = value.strip().lower()
         return normalized if normalized in {"terse", "standard", "chatty"} else "standard"
 
-    @field_validator("model", "fast_model")
+    @field_validator("model")
     @classmethod
     def validate_openai_model(cls, value: str) -> str:
         normalized = value.strip()
@@ -233,6 +233,18 @@ class Settings(BaseSettings):
         # explicitly makes the cost of each route visible in configuration
         # instead of hiding it behind an alias.
         return "gpt-5.6-sol" if normalized == "gpt-5.6" else normalized
+
+    @field_validator("fast_model")
+    @classmethod
+    def validate_fast_model(cls, value: str) -> str:
+        normalized = value.strip()
+        # An unset fast model must not silently fall back to the flagship tier —
+        # that is the exact cost this routing exists to avoid. Upgrades preserve
+        # .env, so an installation that never had this key still gets the cheap
+        # tier rather than paying Sol prices for every gap question.
+        if not normalized or normalized == "gpt-5.6":
+            return "gpt-5.6-luna"
+        return normalized
 
     @field_validator("llm_provider")
     @classmethod

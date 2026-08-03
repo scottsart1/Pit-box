@@ -147,11 +147,15 @@ class RealtimeRadio:
         self._idle_task: asyncio.Task[None] | None = None
         self._output_stream: Any = None
         self._lock = asyncio.Lock()
+        self._send_lock = asyncio.Lock()
         self._last_activity = 0.0
         self._opened_at = 0.0
         self._closing = False
         self._assistant_text: list[str] = []
         self._response_active = False
+        # Tool output was returned during the current response; a reply
+        # must be requested once that response closes.
+        self._tool_results_pending = False
 
     # ------------------------------------------------------------------ state
 
@@ -316,6 +320,7 @@ class RealtimeRadio:
             self._opened_at = time.monotonic()
             self._last_activity = self._opened_at
             self._assistant_text = []
+            self._tool_results_pending = False
             self._receive_task = asyncio.create_task(
                 self._receive_loop(), name="pitwall-realtime-receive"
             )
@@ -332,7 +337,12 @@ class RealtimeRadio:
             return True
 
     async def send_audio(self, block: np.ndarray, source_rate: int) -> None:
-        """Forward one captured microphone block to the open session."""
+        """Forward one captured microphone block to the open session.
+
+        Serialised through ``_send_lock`` so blocks reach the socket in capture
+        order. Without it, concurrent sends from the audio callback could
+        interleave and the model would hear the driver's words out of order.
+        """
         connection = self._connection
         if connection is None or self._closing:
             return
@@ -341,38 +351,50 @@ class RealtimeRadio:
             return
         payload = base64.b64encode(samples.tobytes()).decode("ascii")
         try:
-            await connection.send(
-                {"type": "input_audio_buffer.append", "audio": payload}
-            )
+            async with self._send_lock:
+                if self._connection is None or self._closing:
+                    return
+                await connection.send(
+                    {"type": "input_audio_buffer.append", "audio": payload}
+                )
         except Exception as exc:
             log.warning("Realtime audio send failed: %s", exc)
             await self.close("send failed")
 
     async def close(self, reason: str = "idle") -> None:
+        """Tear a session down.
+
+        The whole teardown holds the lock. Releasing it early let ``open()``
+        establish a replacement session in the gap, after which the trailing
+        ``self._receive_task = None`` cleared the *new* session's reader and idle
+        watchdog: a connected, billing socket with nothing reading it and no
+        timeout to close it.
+        """
         async with self._lock:
             if self._connection is None:
                 return
             self._closing = True
             connection, self._connection = self._connection, None
             manager, self._manager = self._manager, None
+            receive_task, self._receive_task = self._receive_task, None
+            idle_task, self._idle_task = self._idle_task, None
 
-        for task in (self._receive_task, self._idle_task):
-            if task and not task.done() and task is not asyncio.current_task():
-                task.cancel()
-                with contextlib.suppress(asyncio.CancelledError):
-                    await task
-        self._receive_task = None
-        self._idle_task = None
-        self._close_output_stream()
+            for task in (receive_task, idle_task):
+                if task and not task.done() and task is not asyncio.current_task():
+                    task.cancel()
+                    with contextlib.suppress(asyncio.CancelledError):
+                        await task
+            self._close_output_stream()
 
-        with contextlib.suppress(Exception):
-            await connection.close()
-        if manager is not None:
             with contextlib.suppress(Exception):
-                await manager.__aexit__(None, None, None)
+                await connection.close()
+            if manager is not None:
+                with contextlib.suppress(Exception):
+                    await manager.__aexit__(None, None, None)
 
-        self._closing = False
-        self._response_active = False
+            self._closing = False
+            self._response_active = False
+
         await self.store.update(
             radio_indicator="idle",
             engineer_status="standing by",
@@ -392,13 +414,17 @@ class RealtimeRadio:
             while True:
                 await asyncio.sleep(1.0)
                 now = time.monotonic()
+                # The hard cap is checked first and unconditionally. Skipping it
+                # while a response was "active" meant a session wedged mid-reply
+                # — a dropped socket, an error event, a stalled response — was
+                # exempt from the very ceiling that exists for that case.
+                if now - self._opened_at >= settings.realtime_max_session_s:
+                    await self.close("maximum session length")
+                    return
                 if self._response_active:
                     continue
                 if now - self._last_activity >= settings.realtime_idle_timeout_s:
                     await self.close("idle timeout")
-                    return
-                if now - self._opened_at >= settings.realtime_max_session_s:
-                    await self.close("maximum session length")
                     return
         except asyncio.CancelledError:
             raise
@@ -416,6 +442,12 @@ class RealtimeRadio:
             log.warning("Realtime receive loop ended: %s", exc)
             await self.store.update(last_error=f"Realtime radio dropped: {exc}")
             await self.close("receive error")
+            return
+        # A clean server-side close ends the iterator without raising. Without
+        # this the session would still report as open, with no reader attached,
+        # until a later send happened to fail.
+        if self._connection is connection:
+            await self.close("closed by server")
 
     @staticmethod
     def _event_type(event: Any) -> str:
@@ -426,6 +458,10 @@ class RealtimeRadio:
         self._last_activity = time.monotonic()
 
         if kind == "input_audio_buffer.speech_started":
+            # Telemetry has moved since the session opened. Refreshing here, as
+            # the driver starts a new turn, keeps the grounding header current
+            # without spending a turn rediscovering the race state.
+            await self.refresh_situation()
             # The driver has started talking. Drop any engineer audio already
             # queued locally so the interruption is immediate rather than
             # arriving after the buffered sentence finishes.
@@ -466,6 +502,16 @@ class RealtimeRadio:
             self._response_active = False
             await self._record("engineer", "".join(self._assistant_text).strip())
             self._assistant_text = []
+            # Tool results delivered during that response are now answerable.
+            # Requesting the reply here, once, keeps a single response open at a
+            # time however many tools the model called in parallel.
+            if self._tool_results_pending:
+                self._tool_results_pending = False
+                connection = self._connection
+                if connection is not None and not self._closing:
+                    with contextlib.suppress(Exception):
+                        await connection.send({"type": "response.create"})
+                        return
             await self.store.update(
                 radio_indicator="idle", engineer_status="standing by"
             )
@@ -537,7 +583,13 @@ class RealtimeRadio:
                     log.exception("Realtime tool %s failed", name)
                     result = {"error": f"{type(exc).__name__}: {exc}"}
 
-        with contextlib.suppress(Exception):
+        # Return the result now, but do not ask for a reply yet. This event
+        # arrives while the response that requested the tool is still open, and
+        # the API rejects a second concurrent response on the default
+        # conversation — with parallel tool calls that would be one rejected
+        # response.create per call, and the driver's question would go
+        # unanswered. The reply is requested once, on response.done.
+        try:
             await connection.send(
                 {
                     "type": "conversation.item.create",
@@ -548,7 +600,72 @@ class RealtimeRadio:
                     },
                 }
             )
-            await connection.send({"type": "response.create"})
+        except Exception as exc:
+            log.warning("Realtime tool result could not be delivered: %s", exc)
+            return
+        self._tool_results_pending = True
+
+    async def shakedown(self) -> dict[str, Any]:
+        """Verify the live Realtime wire contract without speaking.
+
+        Opens a real session, applies the session configuration, waits for the
+        server to acknowledge it, and closes. No audio is streamed and no
+        response is requested, so this costs a negligible amount and is safe to
+        run between sessions. It exists because everything else about this file
+        can be unit-tested except whether OpenAI accepts the payload.
+        """
+        if self.client is None:
+            return {"ok": False, "reason": "OPENAI_API_KEY is not configured"}
+
+        started = time.monotonic()
+        report: dict[str, Any] = {
+            "ok": False,
+            "model": settings.realtime_model,
+            "events": [],
+        }
+        manager = self.client.realtime.connect(model=settings.realtime_model)
+        connection = None
+        try:
+            connection = await manager.enter()
+            payload = await self._session_payload()
+            report["tool_count"] = len(payload["tools"])
+            await connection.send({"type": "session.update", "session": payload})
+
+            async with asyncio.timeout(20):
+                async for event in connection:
+                    kind = self._event_type(event)
+                    report["events"].append(kind)
+                    if kind == "error":
+                        detail = getattr(event, "error", None)
+                        report["reason"] = (
+                            getattr(detail, "message", None) or str(detail)
+                        )
+                        break
+                    if kind == "session.updated":
+                        session = getattr(event, "session", None)
+                        report["ok"] = True
+                        report["accepted_model"] = getattr(session, "model", None)
+                        report["accepted_voice"] = getattr(
+                            getattr(getattr(session, "audio", None), "output", None),
+                            "voice",
+                            None,
+                        )
+                        tools = getattr(session, "tools", None) or []
+                        report["accepted_tool_count"] = len(tools)
+                        break
+        except TimeoutError:
+            report["reason"] = "no session.updated within 20 s"
+        except Exception as exc:
+            report["reason"] = f"{type(exc).__name__}: {exc}"
+        finally:
+            if connection is not None:
+                with contextlib.suppress(Exception):
+                    await connection.close()
+            with contextlib.suppress(Exception):
+                await manager.__aexit__(None, None, None)
+
+        report["elapsed_s"] = round(time.monotonic() - started, 2)
+        return report
 
     async def refresh_situation(self) -> None:
         """Re-send the situation header on an open session.

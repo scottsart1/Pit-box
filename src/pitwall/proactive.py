@@ -530,7 +530,19 @@ class ProactiveEngineer:
         if not state.get("connected") or state.get("game_paused"):
             self._safe_since = 0.0
             return False
-        if state.get("ptt_pressed") or self.voice.is_busy:
+        # An open speech session makes the controller "busy" for the whole of its
+        # lifetime. Treating that as a blanket block suppressed red flags,
+        # penalties, damage and safety-car-delta warnings for up to the maximum
+        # session length, by which time they had all expired unspoken. A live
+        # conversation can be spoken into — the session itself delivers the line
+        # — so only genuine capture (the driver talking) blocks a critical call.
+        conversation_open = bool(getattr(self.voice, "realtime_active", False))
+        engineer_busy = self.voice.is_busy and not conversation_open
+        if state.get("ptt_pressed") or engineer_busy:
+            self._safe_since = 0.0
+            return False
+        if conversation_open and self._priority_of(event) != CRITICAL:
+            # Non-critical chatter still waits for the driver to finish talking.
             self._safe_since = 0.0
             return False
         now = time.time()
@@ -1069,6 +1081,8 @@ class ProactiveEngineer:
             await self.database.save_proactive_call(state, event, text, delivered)
         if delivered:
             self._last_spoken_at = time.monotonic()
+            # Only a call the driver actually heard becomes conversation history.
+            await self.brain.record_spoken_call(text)
             await self.store.mutate(lambda s: s.proactive.update({
                 "last_spoken_lap": s.current_lap, "last_call": text,
                 "queued": len(self.pending), "delivery_state": "delivered",

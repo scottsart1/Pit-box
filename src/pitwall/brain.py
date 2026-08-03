@@ -116,11 +116,19 @@ def compose_persona(
     the safety-critical instructions.
     """
     parts = [base]
-    rules = [
-        str(item.get("rule", "")).strip()
-        for item in (standing_instructions or [])
-        if str(item.get("rule", "")).strip()
-    ]
+    # Tolerate anything that survived from an older or hand-edited preference
+    # file. A bare list of strings previously raised AttributeError here, which
+    # took down every model call the engineer made.
+    rules: list[str] = []
+    for item in standing_instructions or []:
+        if isinstance(item, dict):
+            rule = str(item.get("rule", "")).strip()
+        elif isinstance(item, str):
+            rule = item.strip()
+        else:
+            continue
+        if rule:
+            rules.append(rule)
     if rules:
         # Standing instructions sit before the safety anchor, so the driver can
         # silence a topic but cannot switch off a safety-critical call.
@@ -400,10 +408,16 @@ class EngineerBrain:
 
     # Phrasings that mean "stop bringing this up", each paired with the subject
     # the driver wants dropped.
+    # Matched with has_phrase, which joins tokens with a separator class. That
+    # makes "don t tell me about" match the apostrophe form "don't tell me
+    # about", while "dont tell me about" is needed separately for the
+    # unapostrophised spelling — one token cannot match the other.
     _SUPPRESSION_TRIGGERS = (
         "shut up about", "stop talking about", "stop telling me about",
-        "don t tell me about", "do not tell me about", "stop mentioning",
-        "no more about", "quit going on about", "stop bringing up",
+        "don t tell me about", "dont tell me about", "do not tell me about",
+        "don t talk about", "dont talk about",
+        "stop mentioning", "no more about", "quit going on about",
+        "stop bringing up", "stop going on about", "enough about",
     )
 
     @classmethod
@@ -413,16 +427,30 @@ class EngineerBrain:
         These were previously acknowledged and immediately forgotten, so the
         recorded sessions show the same request being made twice in a row and
         the engineer answering with the very report it was asked to drop.
+
+        Matching goes through ``has_phrase`` like every other predicate here.
+        A raw substring test could never match the contracted "don't tell me
+        about…", because normalisation keeps the apostrophe — and that is the
+        form drivers actually use.
         """
         text = cls._normalize_text(utterance)
         for trigger in cls._SUPPRESSION_TRIGGERS:
-            marker = f" {trigger} "
-            padded = f" {text} "
-            if marker in padded:
-                subject = padded.split(marker, 1)[1].strip(" .,!?")
-                subject = " ".join(subject.split()[:6])
-                if subject:
-                    return f"Do not raise {subject} unless the driver asks or it is safety-critical."
+            if not has_phrase(text, trigger):
+                continue
+            # Take everything after the trigger's last word as the subject.
+            words = [word for word in re.findall(r"[a-z0-9]+", trigger)]
+            tail = re.split(
+                r"(?<![a-z0-9])" + r"[^a-z0-9]+".join(map(re.escape, words)) + r"(?![a-z0-9])",
+                text,
+                maxsplit=1,
+            )
+            subject = tail[-1].strip(" .,!?'") if len(tail) > 1 else ""
+            subject = " ".join(subject.split()[:6])
+            if subject:
+                return (
+                    f"Do not raise {subject} unless the driver asks or it is "
+                    "safety-critical."
+                )
         return None
 
     @classmethod
@@ -446,6 +474,11 @@ class EngineerBrain:
         # "race updates" must never alter the session classifier.
         declarations = ("this is", "we are in", "we're in", "set session to", "override session to")
         if not any(has_phrase(text, phrase) for phrase in declarations):
+            return None
+        # A denial is not a declaration. "This is not qualifying" previously
+        # locked the session profile *to* qualifying, taking the two-compound
+        # rule and pit-loss model with it until the driver cleared it by hand.
+        if has_negation(text):
             return None
         if has_phrase(text, "time trial"):
             return "time_trial"
@@ -676,8 +709,11 @@ class EngineerBrain:
         if match_drivers(state.get("drivers", []), utterance):
             return not cls._handles_named_rival(text)
 
-        # Someone else's car, even unnamed ("his tyres", "their damage").
-        if has_any_phrase(
+        # Someone else's car, even unnamed. A possessive alone is not enough:
+        # "the leader's battery" and "how's the fuel for the guy ahead" carry no
+        # driver name, and every fast-path branch below reads the player's car,
+        # so they were answered with the driver's own fuel and energy.
+        refers_to_another_car = has_any_phrase(
             text,
             (
                 "his car", "her car", "their car", "his tyres", "his tires",
@@ -685,8 +721,23 @@ class EngineerBrain:
                 "his fuel", "his pace", "the other car", "everyone else",
                 "the field", "who has stopped", "who has pitted", "who retired",
                 "rest of the field", "other drivers", "anyone else",
+                "the leader", "leader s", "the guy ahead", "the guy behind",
+                "the car ahead", "the car in front", "the car behind",
+                "driver ahead", "driver behind", "car ahead has", "car behind has",
             ),
-        ):
+        )
+        # ... but only when the question is about that car's condition or plan.
+        # A plain "gap to the car ahead" is still a correct fast-path answer.
+        asks_about_their_state = has_any_phrase(
+            text,
+            (
+                "tyre", "tyres", "tire", "tires", "wear", "fuel", "battery",
+                "ers", "energy", "damage", "stops", "stopped", "pitted", "pit",
+                "boxed", "compound", "strategy", "temperature", "temps", "age",
+                "how old", "condition", "retired",
+            ),
+        )
+        if refers_to_another_car and asks_about_their_state:
             return True
 
         # Challenging the current pit call is answered deterministically, with
@@ -1356,8 +1407,20 @@ class EngineerBrain:
             # be spoken, and narration must not go looking for new ones.
             tools=[],
         )
-        await self.store.append_radio("engineer", text)
-        await self.database.save_radio_message(
-            await self.store.snapshot_analysis(), "engineer", text, "proactive"
-        )
+        # Deliberately not recorded here. An unsolicited call is only part of the
+        # conversation once it has actually been spoken, and delivery can still
+        # fail or be cancelled after this returns. Recording it eagerly put lines
+        # the driver never heard into the radio log, which is then replayed to
+        # the model as context — so it would believe it had already made a call
+        # it never made. ProactiveEngineer records it after speak_text succeeds.
         return text
+
+    async def record_spoken_call(self, text: str) -> None:
+        """Log an unsolicited call that was actually delivered to the driver."""
+        cleaned = " ".join((text or "").split())
+        if not cleaned:
+            return
+        await self.store.append_radio("engineer", cleaned)
+        await self.database.save_radio_message(
+            await self.store.snapshot_analysis(), "engineer", cleaned, "proactive"
+        )

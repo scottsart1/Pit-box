@@ -118,9 +118,17 @@ async def test_persona_forbids_unsourced_numbers(radio):
 
 
 @pytest.mark.asyncio
-async def test_tool_call_result_is_returned_and_a_reply_requested(radio):
+async def test_tool_result_is_returned_without_opening_a_second_response(radio):
+    """The reply is requested on response.done, not per tool call.
+
+    ``response.function_call_arguments.done`` arrives while the response that
+    asked for the tool is still open, and the API rejects a second concurrent
+    response on the default conversation. Sending response.create here — once
+    per parallel tool call — left the driver's question unanswered.
+    """
     connection = FakeConnection()
     radio._connection = connection
+    radio._response_active = True
 
     await radio._run_tool(
         Event(
@@ -136,10 +144,38 @@ async def test_tool_call_result_is_returned_and_a_reply_requested(radio):
     item = outputs[0]["item"]
     assert item["type"] == "function_call_output"
     assert item["call_id"] == "call_1"
-    payload = json.loads(item["output"])
-    assert "session_type" in payload
-    # The model is prompted to answer once the result is back.
-    assert connection.of_type("response.create")
+    assert "session_type" in json.loads(item["output"])
+    assert not connection.of_type("response.create"), "must not race the open response"
+    assert radio._tool_results_pending is True
+
+
+@pytest.mark.asyncio
+async def test_parallel_tool_calls_produce_exactly_one_reply_request(radio):
+    connection = FakeConnection()
+    radio._connection = connection
+    radio._response_active = True
+
+    for index, tool in enumerate(("get_session_overview", "get_race_flow", "get_gap")):
+        arguments = '{"target": "ahead"}' if tool == "get_gap" else "{}"
+        await radio._run_tool(
+            Event(name=tool, call_id=f"call_{index}", arguments=arguments)
+        )
+    assert len(connection.of_type("conversation.item.create")) == 3
+    assert not connection.of_type("response.create")
+
+    # Closing the response is what asks the model to speak, exactly once.
+    await radio._handle_event(Event(type="response.done"))
+    assert len(connection.of_type("response.create")) == 1
+    assert radio._tool_results_pending is False
+
+
+@pytest.mark.asyncio
+async def test_response_done_without_tool_calls_requests_nothing(radio):
+    connection = FakeConnection()
+    radio._connection = connection
+    radio._response_active = True
+    await radio._handle_event(Event(type="response.done"))
+    assert not connection.of_type("response.create")
 
 
 @pytest.mark.asyncio

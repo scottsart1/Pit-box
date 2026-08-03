@@ -627,14 +627,22 @@ class AnalysisEngine:
             recent = [lap["lap_time_ms"] for lap in valid[-4:]]
             target_ms = int(median(recent)) if recent else player_best
             basis = "sustainable race pace"
-            ahead = next(
-                (
-                    driver
-                    for driver in state.get("drivers", [])
-                    if driver.get("position")
-                    == int(state.get("player_position", 0)) - 1
-                ),
-                None,
+            player_position = int(state.get("player_position", 0) or 0)
+            # There is no car ahead of the leader. Retired and garaged cars
+            # report position 0, so without the guard a race leader would be
+            # given a target taken from a car sitting in the garage.
+            ahead = (
+                next(
+                    (
+                        driver
+                        for driver in state.get("drivers", [])
+                        if int(driver.get("position", 0) or 0)
+                        == player_position - 1
+                    ),
+                    None,
+                )
+                if player_position > 1
+                else None
             )
             if ahead and ahead.get("last_lap_ms") and target_ms:
                 target_ms = min(target_ms, int(ahead["last_lap_ms"]) - 100)

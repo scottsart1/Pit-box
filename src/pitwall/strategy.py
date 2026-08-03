@@ -1655,11 +1655,17 @@ class StrategyEngine:
                 None,
             )
         for item in state.get("drivers", []):
-            if query == "ahead" and item.get("position") == player_position - 1:
+            position = int(item.get("position", 0) or 0)
+            # A classified position is required. Retired and garaged cars
+            # report 0 and are now kept in the snapshot, so an unguarded
+            # "player_position - 1" matches them whenever the player leads.
+            if position <= 0:
+                continue
+            if query == "ahead" and position == player_position - 1:
                 return item
-            if query == "behind" and item.get("position") == player_position + 1:
+            if query == "behind" and position == player_position + 1:
                 return item
-            if query == "leader" and item.get("position") == 1:
+            if query == "leader" and position == 1:
                 return item
             if (
                 query == f"p{item.get('position')}"

@@ -122,9 +122,13 @@ def identity_aliases(driver: dict[str, Any]) -> list[str]:
 
     race_number = int(driver.get("race_number", 0) or 0)
     if race_number > 0:
-        aliases.extend(
-            (f"car {race_number}", f"number {race_number}", f"#{race_number}")
-        )
+        # Only number references that carry a qualifying word. A bare "#14"
+        # cannot be used: phrase matching tokenises on [a-z0-9], which discards
+        # the "#" and leaves the pattern "14" — so every integer in a sentence
+        # ("box on lap 14", "sector 1", "ERS at 43 percent") would name whoever
+        # carries that car number, and the request would then be answered about
+        # their car instead of the driver's own.
+        aliases.extend((f"car {race_number}", f"number {race_number}"))
 
     seen: set[str] = set()
     unique: list[str] = []

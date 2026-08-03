@@ -24,6 +24,7 @@ from .brain import EngineerBrain
 from .config import settings
 from .database import PitWallDatabase
 from .proactive import ProactiveEngineer
+from .realtime import RealtimeRadio
 from .setup_advisor import SetupAdvisor
 from .state import StateStore
 from .strategy import StrategyEngine
@@ -458,6 +459,18 @@ async def realtime_open() -> dict[str, object]:
         snapshot = await store.snapshot_live()
         raise HTTPException(503, str(snapshot.get("last_error") or "Could not open session"))
     return {"open": True, "model": settings.realtime_model}
+
+
+@app.post("/api/realtime/shakedown")
+async def realtime_shakedown() -> dict[str, object]:
+    """Check the live Realtime wire contract. Uses a negligible amount of credit."""
+    radio = voice.realtime if voice is not None else None
+    if radio is None:
+        radio = RealtimeRadio(store, tools)
+    result = await radio.shakedown()
+    if not result.get("ok"):
+        raise HTTPException(503, str(result.get("reason") or "Realtime shakedown failed"))
+    return result
 
 
 @app.post("/api/realtime/close")

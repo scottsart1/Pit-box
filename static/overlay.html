@@ -99,6 +99,10 @@ function connect(){
   ws.onmessage = (ev) => { try { render(JSON.parse(ev.data)); } catch (e) {} };
   ws.onclose = () => setTimeout(connect, 1000);
 }
+// Paint once from the REST snapshot before the first socket frame arrives.
+// The overlay is a second-screen/OBS surface: waiting for a push meant it sat
+// blank on load, and stayed blank indefinitely if the socket was blocked.
+fetch("/api/state").then(r => r.json()).then(render).catch(() => {});
 connect();
 </script>
 </body>

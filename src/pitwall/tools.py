@@ -60,15 +60,21 @@ class TelemetryTools:
             return None
         drivers = list(state.get("drivers", []))
         for item in drivers:
-            if query == "ahead" and item.get("position") == player_position - 1:
+            position = int(item.get("position", 0) or 0)
+            # A classified position is required. Retired and garaged cars
+            # report 0 and are now kept in the snapshot, so an unguarded
+            # "player_position - 1" matches them whenever the player leads.
+            if position <= 0:
+                continue
+            if query == "ahead" and position == player_position - 1:
                 return item
-            if query == "behind" and item.get("position") == player_position + 1:
+            if query == "behind" and position == player_position + 1:
                 return item
-            if query == "leader" and item.get("position") == 1:
+            if query == "leader" and position == 1:
                 return item
             if query in {"teammate", "team mate"} and item.get("is_teammate"):
                 return item
-            if query == f"p{item.get('position')}":
+            if query == f"p{position}":
                 return item
 
         # Name, nickname, full name or car number, matched on whole tokens.
@@ -387,7 +393,9 @@ class TelemetryTools:
             "position": driver.get("position") or None,
             "gap_to_player_s": round(float(gap), 2) if gap is not None else None,
             "relative": (
-                None if gap is None else ("ahead" if float(gap) < 0 else "behind")
+                None
+                if gap is None or driver.get("is_player")
+                else ("ahead" if float(gap) < 0 else "behind")
             ),
             "tyre": driver.get("tyre_compound"),
             "tyre_age_laps": driver.get("tyre_age"),
@@ -536,7 +544,11 @@ class TelemetryTools:
             return display_name(driver)
 
         stopped = [d for d in running if int(d.get("pit_stops", 0) or 0) > 0]
-        yet_to_stop = [d for d in running if int(d.get("pit_stops", 0) or 0) == 0]
+        yet_to_stop = [
+            d
+            for d in running
+            if int(d.get("pit_stops", 0) or 0) == 0 and not d.get("is_player")
+        ]
         in_pit_lane = [
             {
                 "driver": name(d),
@@ -1056,7 +1068,11 @@ class TelemetryTools:
             # rival's battery is measured rather than assumed. It is absent only
             # when that car's telemetry is restricted online.
             "rival_ers_pct": target.get("ers_pct"),
-            "rival_overtake_available": bool(target.get("overtake_available")),
+            # None, not False, when the car withholds telemetry: "unknown" and
+            # "he has no boost" are different calls to make.
+            "rival_overtake_available": (
+                None if target.get("restricted") else bool(target.get("overtake_available"))
+            ),
             "rival_damage": {
                 key: value
                 for key, value in (target.get("damage") or {}).items()
@@ -1087,7 +1103,9 @@ class TelemetryTools:
             "rival_tyre": {"compound": target.get("tyre_compound"), "age": target.get("tyre_age")},
             "ers_pct": state.get("ers_pct"),
             "rival_ers_pct": target.get("ers_pct"),
-            "rival_overtake_available": bool(target.get("overtake_available")),
+            "rival_overtake_available": (
+                None if target.get("restricted") else bool(target.get("overtake_available"))
+            ),
             "rival_telemetry_restricted": bool(target.get("restricted")),
             "recommendation": recommendation,
             "warning": "Avoid weaving or reactive moves; make one clear defensive choice.",
