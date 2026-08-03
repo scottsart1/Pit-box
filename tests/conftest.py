@@ -1,4 +1,13 @@
+import os
+
 import pytest_asyncio
+
+# Never let a developer's real credentials enter the test process. Apart from
+# preventing accidental network calls, this keeps pytest assertion output from
+# disclosing secrets when a configuration test fails. Individual tests that
+# exercise dotenv loading explicitly remove these sentinels with monkeypatch.
+os.environ["OPENAI_API_KEY"] = "test-openai-key"
+os.environ["DEEPSEEK_API_KEY"] = "test-deepseek-key"
 
 from pitwall.analysis import AnalysisEngine
 from pitwall.database import PitWallDatabase

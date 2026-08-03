@@ -21,7 +21,17 @@ def header(packet_id: int, session_uid: int = 123) -> PacketHeader:
     return h
 
 
-def test_openai_key_loads_from_dotenv(tmp_path):
+def test_openai_key_loads_from_dotenv(tmp_path, monkeypatch):
+    # Environment variables intentionally outrank dotenv values. Remove the
+    # test-process sentinels so this test validates the dotenv path itself.
+    for name in (
+        "OPENAI_API_KEY",
+        "PITWALL_OPENAI_API_KEY",
+        "PITWALL_MODEL",
+        "PITWALL_AUDIO_DEVICE",
+    ):
+        monkeypatch.delenv(name, raising=False)
+
     env = tmp_path / ".env"
     env.write_text(
         "OPENAI_API_KEY=test-key\nPITWALL_MODEL=gpt-5.4-mini\nPITWALL_AUDIO_DEVICE=3\n",
@@ -97,6 +107,20 @@ class _FakeAudio:
         pass
 
 
+async def _wait_for_ptt_state(
+    store: StateStore, expected: bool, timeout_s: float = 0.75
+) -> dict:
+    """Wait for an asynchronously scheduled controller transition to settle."""
+    deadline = asyncio.get_running_loop().time() + timeout_s
+    snapshot = await store.snapshot()
+    while bool(snapshot["ptt_pressed"]) is not expected:
+        if asyncio.get_running_loop().time() >= deadline:
+            return snapshot
+        await asyncio.sleep(0.01)
+        snapshot = await store.snapshot()
+    return snapshot
+
+
 @pytest.mark.asyncio
 async def test_fast_ptt_release_does_not_leave_microphone_stuck(monkeypatch, tmp_path):
     monkeypatch.setattr(settings, "native_voice", False)
@@ -109,13 +133,14 @@ async def test_fast_ptt_release_does_not_leave_microphone_stuck(monkeypatch, tmp
     monkeypatch.setattr(settings, "ptt_release_mode", "explicit")
     monkeypatch.setattr(settings, "ptt_release_ignore_ms", 0)
     voice.on_button_status(4)
+    assert (await _wait_for_ptt_state(store, True))["ptt_pressed"] is True
     await asyncio.sleep(0.09)
     voice.on_button_status(4)
     voice.on_button_status(0)
-    await asyncio.sleep(0.04)
 
-    snapshot = await store.snapshot()
+    snapshot = await _wait_for_ptt_state(store, False)
     assert snapshot["ptt_pressed"] is False
+    await voice.shutdown()
 
 
 @pytest.mark.asyncio

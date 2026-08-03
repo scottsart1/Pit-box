@@ -60,9 +60,17 @@ class AudioService:
         }
 
     @staticmethod
-    def _looks_like_prompt_echo(text: str) -> bool:
+    def _looks_like_prompt_echo(text: str, prompt: str | None = None) -> bool:
+        """Detect a transcript that is really the steering prompt read back.
+
+        The literal-prefix checks below are kept for older prompt wordings, but
+        they go stale whenever ``transcription_prompt`` changes: a real session
+        recorded the current prompt as a driver utterance because the guard was
+        still looking for the previous release's opening words. The primary test
+        is therefore derived from the prompt that was actually sent, so the two
+        can never drift apart again.
+        """
         lowered = re.sub(r"\s+", " ", text.strip().lower())
-        hits = sum(term in lowered for term in RACING_VOCAB)
         words = re.findall(r"[a-z]+", lowered)
         wake_noise = {
             "mark",
@@ -80,11 +88,26 @@ class AudioService:
             and set(words).issubset(wake_noise)
             and sum(word in {"mark", "marc"} for word in words) >= 2
         )
+        if repeated_wake_garbage:
+            return True
+
+        # Prompt-derived test. Short radio calls legitimately reuse prompt
+        # keywords ("box box"), so this only applies to long transcripts, and
+        # requires that nearly every word came from the prompt.
+        if prompt and len(words) >= 8:
+            prompt_words = set(re.findall(r"[a-z]+", prompt.lower()))
+            if prompt_words:
+                overlap = sum(word in prompt_words for word in words) / len(words)
+                if overlap >= 0.85:
+                    return True
+
+        hits = sum(term in lowered for term in RACING_VOCAB)
         return (
             lowered.startswith("formula one race radio")
             or lowered.startswith("f1 race radio vocabulary")
+            or lowered.startswith("wake name:")
+            or "accepted openings:" in lowered
             or (hits >= 8 and len(lowered) > 100 and "drivers:" in lowered)
-            or repeated_wake_garbage
         )
 
     @staticmethod
@@ -113,23 +136,40 @@ class AudioService:
 
         return False, "", ""
 
-    async def transcribe(
-        self,
-        path: Path,
+    @staticmethod
+    def transcription_prompt(
         driver_names: list[str] | None = None,
+        wake_phrases: list[str] | None = None,
     ) -> str:
-        if self.client is None:
-            raise RuntimeError("OPENAI_API_KEY is not configured")
+        """Build a short STT steering prompt without leaking prose into output."""
         names = ", ".join(
             name
             for name in (driver_names or [])[:20]
             if name and name != "Unknown"
         )
-        # Keep steering concise. Long prose prompts are more likely to leak into
-        # the transcript when a clip contains only breath or background audio.
-        prompt = "Keywords: " + ", ".join(RACING_VOCAB)
+        parts: list[str] = []
+        if wake_phrases:
+            variants = ", ".join(dict.fromkeys(p.title() for p in wake_phrases))
+            parts.append(
+                "Wake name: Mark. The opening word may sound like Mark or Marc; "
+                f"transcribe it literally. Accepted openings: {variants}"
+            )
+        parts.append("Keywords: " + ", ".join(RACING_VOCAB))
         if names:
-            prompt += f". Drivers: {names}"
+            parts.append(f"Drivers: {names}")
+        return ". ".join(parts)
+
+    async def transcribe(
+        self,
+        path: Path,
+        driver_names: list[str] | None = None,
+        wake_phrases: list[str] | None = None,
+    ) -> str:
+        if self.client is None:
+            raise RuntimeError("OPENAI_API_KEY is not configured")
+        # Keep steering concise. Wake capture gets an explicit name hint because
+        # one-word clips otherwise tend to alternate between "Mark" and "Marc".
+        prompt = self.transcription_prompt(driver_names, wake_phrases)
         with path.open("rb") as audio_file:
             result: Any = await self.client.audio.transcriptions.create(
                 model=settings.stt_model,
@@ -143,7 +183,7 @@ class AudioService:
             if isinstance(result, str)
             else str(getattr(result, "text", result)).strip()
         )
-        if self._looks_like_prompt_echo(text):
+        if self._looks_like_prompt_echo(text, prompt):
             return ""
         return text
 

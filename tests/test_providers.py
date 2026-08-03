@@ -13,6 +13,7 @@ from pitwall.providers import (
     ProviderResult,
     ProviderRouter,
     ProviderTruncationError,
+    _final_answer_only,
     _is_health_failure,
 )
 
@@ -44,8 +45,8 @@ def _settings(**overrides: Any) -> Settings:
     values: dict[str, Any] = {
         "DEEPSEEK_API_KEY": "deepseek-test",
         "OPENAI_API_KEY": "openai-test",
-        "llm_provider": "deepseek",
-        "llm_fallback_provider": "openai",
+        "llm_provider": "openai",
+        "llm_fallback_provider": "none",
         "llm_compare_enabled": True,
     }
     values.update(overrides)
@@ -53,7 +54,7 @@ def _settings(**overrides: Any) -> Settings:
 
 
 @pytest.mark.asyncio
-async def test_deepseek_non_thinking_uses_flash_and_chat_tools() -> None:
+async def test_deepseek_non_thinking_uses_pro_and_chat_tools() -> None:
     message = SimpleNamespace(content="Copy. Gap is 1.2 seconds.", tool_calls=None)
     client = _DeepSeekClient([_choice(message)])
     provider = DeepSeekChatProvider(_settings(), client=client)  # type: ignore[arg-type]
@@ -82,7 +83,7 @@ async def test_deepseek_non_thinking_uses_flash_and_chat_tools() -> None:
     )
 
     assert result.provider == "deepseek"
-    assert result.model == "deepseek-v4-flash"
+    assert result.model == "deepseek-v4-pro"
     assert result.text.startswith("Copy")
     request = client.completions.requests[0]
     assert request["extra_body"]["thinking"]["type"] == "disabled"
@@ -210,7 +211,7 @@ class _FakeProvider:
 
 
 @pytest.mark.asyncio
-async def test_router_falls_back_to_openai_after_deepseek_failure() -> None:
+async def test_router_uses_openai_only_even_if_legacy_deepseek_is_injected() -> None:
     deepseek = _FakeProvider("deepseek", RuntimeError("temporary outage"))
     openai = _FakeProvider("openai", "Fallback answer")
     router = ProviderRouter(
@@ -230,7 +231,7 @@ async def test_router_falls_back_to_openai_after_deepseek_failure() -> None:
 
     assert result.provider == "openai"
     assert result.text == "Fallback answer"
-    assert deepseek.calls == 1
+    assert deepseek.calls == 0
     assert openai.calls == 1
 
 class _ToolUsingProvider:
@@ -462,7 +463,7 @@ def test_primary_none_is_rejected_but_fallback_none_is_allowed() -> None:
         llm_provider="none",
         llm_fallback_provider="none",
     )
-    assert config.llm_provider == "auto"
+    assert config.llm_provider == "openai"
     assert config.llm_fallback_provider == "none"
 
 
@@ -563,7 +564,7 @@ class _SlowProvider:
 
 
 @pytest.mark.asyncio
-async def test_route_deadline_fails_over_quickly() -> None:
+async def test_legacy_deepseek_provider_is_not_used_by_router() -> None:
     openai = _FakeProvider("openai", "fast fallback")
     router = ProviderRouter(
         _settings(llm_normal_deadline_s=0.02),
@@ -583,10 +584,10 @@ async def test_route_deadline_fails_over_quickly() -> None:
 
     assert result.provider == "openai"
     assert elapsed < 0.15
-    assert router.circuits["deepseek"].failures == 1
+    assert router.circuits["deepseek"].failures == 0
 
 
-def test_status_reports_resolved_auto_provider() -> None:
+def test_status_migrates_auto_provider_to_openai() -> None:
     deepseek = _FakeProvider("deepseek", "ok")
     openai = _FakeProvider("openai", "ok")
     router = ProviderRouter(
@@ -594,9 +595,9 @@ def test_status_reports_resolved_auto_provider() -> None:
         providers={"deepseek": deepseek, "openai": openai},  # type: ignore[arg-type]
     )
     status = router.status()
-    assert status["configured_provider"] == "auto"
-    assert status["resolved_provider"] == "deepseek"
-    assert status["selected"] == "deepseek"
+    assert status["configured_provider"] == "openai"
+    assert status["resolved_provider"] == "openai"
+    assert status["selected"] == "openai"
 
 
 @pytest.mark.asyncio
@@ -650,7 +651,8 @@ async def test_live_shakedown_checks_basic_and_tool_continuations() -> None:
     )
     result = await router.shakedown()
     assert result["ready"] is True
-    assert result["providers"]["deepseek"]["stages"]["thinking_tool"]["ok"] is True
+    assert set(result["providers"]) == {"openai"}
+    assert result["providers"]["openai"]["stages"]["thinking_tool"]["ok"] is True
     assert router.status()["last_shakedown"] == result
 
 
@@ -666,3 +668,31 @@ class _TransientRateLimitError(Exception):
 def test_billing_exhaustion_does_not_open_provider_circuit() -> None:
     assert _is_health_failure(_InsufficientQuotaError()) is False
     assert _is_health_failure(_TransientRateLimitError()) is True
+
+
+def test_final_answer_only_removes_exposed_deliberation() -> None:
+    leaked = """The driver asked for tyre temperature. Let me check the context.
+
+I should give a brief answer. Hold on — the fronts are cooler.
+
+Target 208 to 221 F at the fronts. Build the left-front under braking and protect the rears."""
+    assert _final_answer_only(leaked) == (
+        "Target 208 to 221 F at the fronts. "
+        "Build the left-front under braking and protect the rears."
+    )
+
+
+
+def test_final_answer_only_removes_strategy_reconciliation_scratchpad() -> None:
+    leaked = """Key facts: lap 13, RR at 41 percent. The strategy engine ranks lap 21 soft best.
+
+Wait — I need to reconcile the earlier call.
+
+Hold on — the current deterministic strategy is different. Confirm it.
+
+Box lap 21 for softs."""
+    assert _final_answer_only(leaked) == "Box lap 21 for softs."
+
+def test_final_answer_only_keeps_normal_radio_copy() -> None:
+    text = "Box lap 14 for mediums. Protect the rear on exit until then."
+    assert _final_answer_only(text) == text

@@ -1,8 +1,126 @@
-# Pit Wall 3.5.0 — DeepSeek + OpenAI race engineer for PS5 and Windows
+# Pit Wall 3.7.0 — OpenAI race engineer for PS5 and Windows
 
-Pit Wall receives F1 25 / 2026 Season Pack telemetry from a PS5 over UDP, runs deterministic strategy/corner/setup analysis locally, keeps persistent SQLite history, answers spoken questions, makes proactive radio calls, and serves a live dashboard at `http://127.0.0.1:8000`.
+Pit Wall receives **F1 26** telemetry (UDP format **2026**) from a PS5, runs deterministic
+strategy/corner/setup analysis locally, keeps persistent SQLite history, answers spoken questions,
+makes proactive radio calls, and serves a live dashboard at `http://127.0.0.1:8000`.
 
-## What changed in 3.5.0
+> Set **UDP Format: 2026** on the PS5. The parser resolves packet format 2026 only; anything else
+> is reported as `Unsupported F1 packet format/version`.
+
+## What changed in 3.7.0
+
+3.7.0 is a field-awareness and conversation release. The engineer can now see the whole
+grid rather than only your car, holds a real conversation instead of matching keywords, and
+costs a fraction of what it did per race.
+
+### The engineer can see the whole field
+
+Every F1 26 telemetry packet carries all 24 cars. Earlier releases read only `player_car_index`
+from the damage, status, telemetry and motion packets and discarded the rest, so a question about
+a rival was answered with your own car's data. All 24 are now captured:
+
+- **Rival condition** — per-wheel tyre wear, blisters, brake and body damage, power-unit wear,
+  blown/seized engine.
+- **Rival energy and fuel** — battery store, deploy mode, harvest, fuel load and margin.
+  `get_attack_plan` used to state that opponent ERS was not exposed; it is.
+- **Live pit stops** — `pit_lane_timer_active` and `pit_stop_timer_in_ms`, so a rival's stop is
+  called while it happens rather than inferred a lap later.
+- **Retirements** — `result_status` distinguishes retired, disqualified and not classified. A
+  retired car no longer keeps quoting the gap it held when it stopped.
+- **Marshal zones** — up to 21 live flag zones, converted to metres, so a yellow can be located
+  on the lap. Plus DRS and 2026 active-aero zones.
+- **Driver identity** — `driver_id` and `race_number` resolve first names, nicknames and car
+  numbers. "Has Max boxed yet" previously returned "No data available for Max", because the game
+  only sends the surname `VERSTAPPEN`. Team names now resolve too.
+- Previously empty event payloads are decoded: retirements record *who* retired, speed traps
+  record the speed, penalties record the infringement.
+- `PacketTimeTrialData` has a handler for the first time.
+
+New tools: `get_rival_car_state`, `get_field_state`, `get_race_flow`, `get_flag_status`.
+
+### Conversation instead of keyword matching
+
+The deterministic fast path was a keyword cascade over your own car that answered on the first
+match. Recorded sessions show it returning your damage to "does Max have any damage on his car"
+three times in a row, and returning the standing pit call to a question about a hypothetical
+undercut. It now stands aside whenever the request names a rival, corrects or refuses something,
+or asks for reasoning — and hands the model the field-wide tools instead.
+
+- **Negation is understood.** "I'm not going to take another pit stop" no longer locks a pit stop.
+- **History is no longer deleted.** Earlier turns were dropped whenever they looked like strategy
+  requests, so "please answer my question" arrived with no question attached and the engineer
+  replied that it had not come through.
+- **Standing instructions persist.** "Stop telling me about engine damage" is remembered across
+  laps and sessions, and cannot override a safety-critical call.
+
+### Speech-to-speech radio (optional)
+
+`PITWALL_VOICE_REALTIME_ENABLED=true` routes the radio through the Realtime API
+(`gpt-realtime-2.1-mini`). The wake phrase or L3 opens a live session: the engineer can be
+interrupted mid-sentence, answers without the "stand by" acknowledgement that exists only to mask
+chain latency, and calls the same allow-listed telemetry tools. The session closes after a pause
+and has a hard length cap, because it bills for audio while connected. The file-based
+transcribe → reason → speak pipeline remains as the fallback and is still the default.
+
+### Unsolicited calls are spoken, and actually reach you
+
+`EngineerBrain.proactive()` existed but nothing called it: every unsolicited call was a fixed
+template. It is now wired up, with the deterministic event payload as the only source of numbers
+and the template as the fallback on any failure. Delivery was also failing — stored calls show
+only 33% were ever spoken (rival stops 30 of 276, closing rivals 2 of 76, battery warnings 0 of 10),
+because a strict queue made every non-critical call wait behind a routine progress update. Calls
+are now prioritised, and only routine chatter waits the full interval.
+
+### Cost
+
+- `PITWALL_MODEL=gpt-5.6` resolved to the **flagship Sol tier** for every call. Deep strategy work
+  stays on Sol; ordinary radio questions now use Luna, which is 25× cheaper per token and is
+  narrating deterministic tool output either way.
+- The persona and tool schemas are a stable prefix and are now sent with a prompt cache key.
+- Fast and normal routes no longer ship the planning and setup-generation schemas.
+
+### Storage
+
+The database had reached **677 MB for 327 laps**. `StrategyEngine.recompute()` wrote a ~25 KB row
+every time it ran, and the proactive loop calls it on a 0.35 s tick — 2,800 rows in one session,
+515 MB in total. Snapshots are now written only on material change. Controller-button packets were
+also persisted at packet frequency (40,434 rows), which additionally flooded the 200-entry events
+log that "any race updates" reads, so real incidents were pushed out by button noise.
+
+Maintenance runs at startup and at `POST /api/maintenance`. On the recorded database it reclaimed
+**613 MB (677 MB → 63 MB)** with no lap, corner or radio rows lost; each track's reference lap keeps
+its trace, because that is the live-delta and racing-line baseline.
+
+## What changed in 3.6.1
+
+3.6.1 repairs the hands-free wake path after the 3.6.0 architecture release.
+Wake transcription is explicitly steered to the engineer name, both Mark and
+Marc are accepted even with an older preserved `.env`, legacy saved disable
+state is migrated safely, and the microphone trigger adapts to measured room
+noise. The dashboard and `/api/health` now expose live input, noise and trigger
+RMS values plus the last accepted/rejected transcript.
+
+The wider 3.6 architecture continues to parse driver commands before the
+language model, provide explicit session/strategy overrides, and answer
+rival/sector/gap questions from matched telemetry rather than free-form model
+inference.
+
+- Boundary-aware intent routing prevents names such as Verstappen from matching
+  ERS keywords.
+- Recognised Practice, Qualifying and Time Trial packets are no longer relabelled
+  as a Race by duration heuristics; a manual session override is available before
+  live telemetry is complete.
+- Driver tyre/stop choices can be locked, challenged with evidence, or returned
+  to automatic ranking.
+- Personal tyre regression uses track/air temperature, fuel, session profile and
+  setup, while older laps inherit their stored session profile.
+- Named-rival sector comparison and rolling gap trends answer where time is lost
+  and whether the player is actually closing.
+- Setup preferences are persistent and alter the generated baseline.
+- PTT uses normal button-up, a 200 ms capture tail and a 2.2 second silence
+  fallback so natural pauses do not cut off the statement.
+
+## What changed in 3.5.1
 
 3.5 is a capability release. It adds nine engineer tools, six proactive radio
 calls, a real-time delta, an overlay/second-screen surface, data export and
@@ -135,87 +253,30 @@ truncated display label.
 - Safety-car delta calls require a real Lap Data sample, preventing a configured
   positive threshold from treating the default zero value as a breach.
 
-## Provider-neutral engineer retained from 3.3.1
+## OpenAI-only engineer runtime
 
-Version 3.3.1 hardened the provider-neutral engineer for race-day failover:
-
-```text
-Routine and normal reasoning  -> DeepSeek V4 Flash
-Strategy / setup / what-if     -> DeepSeek V4 Pro, thinking enabled
-Provider failure               -> OpenAI fallback
-Speech-to-text and TTS         -> OpenAI audio models
-```
-
-The existing `L3 -> F1 UDP Action 1` binding, hands-free “Mark” trigger, dashboard, strategy engine, SQLite data, and audio pipeline are unchanged.
-
-### Race-radio provider deadlines and zero SDK retries
-
-Each provider now gets one bounded wall-clock attempt before the router moves to the fallback:
+The live race-radio path registers only the OpenAI Responses provider:
 
 ```text
-normal call  -> 12 seconds
-strategy call -> 25 seconds
-SDK retries  -> 0
+Exact telemetry / commands      -> deterministic local handlers
+Normal interpretation           -> OpenAI, low reasoning
+Strategy / setup / what-if      -> OpenAI, high reasoning
+Speech-to-text and TTS          -> OpenAI audio models
 ```
 
-This prevents a first provider outage from creating multiple hidden SDK retries and a long radio vacuum. The route deadline covers the complete provider/tool loop, not only one HTTP request.
+Legacy DeepSeek fields are accepted only so older `.env` files and offline
+diagnostic tests do not break; they cannot reactivate DeepSeek in production.
+Every model call has a bounded deadline and tool-round limit, while common live
+questions bypass the model entirely.
 
-### Truncation recovery without poisoning provider health
+### Provider diagnostics
 
-If a model exhausts its output budget, Pit Wall retries that same provider once with a larger budget. Only after the enlarged retry fails may the fallback provider answer. Token truncation does not increment the circuit breaker because it is not a provider outage.
-
-### Safer provider configuration and diagnostics
-
-- `none` is valid only for the fallback provider; an invalid primary resolves to `auto`.
-- A/B comparison is disabled by default and has a 30-second cooldown when enabled.
-- `/api/health` and `/api/llm/providers` report configured, resolved, active, and fallback providers separately.
-- `POST /api/llm/shakedown` performs an explicit live text, non-thinking tool, and thinking-tool continuation check for every configured provider.
-- The dashboard includes a **Test providers** button and displays the latest shakedown result.
-- DeepSeek thinking requests omit `tool_choice`, while still preserving required `reasoning_content` across tool turns.
-- Circuit breakers count only provider-health failures such as timeout, connection, rate-limit, server, or malformed-response failures. Authentication, bad-request, and token-budget errors remain visible without marking the provider temporarily unhealthy.
-
-## Provider-neutral foundation retained
-
-### DeepSeek provider
-
-Pit Wall now uses DeepSeek's OpenAI-compatible Chat Completions endpoint for the engineer brain. It supports:
-
-- `deepseek-v4-flash` for normal radio calls.
-- `deepseek-v4-pro` for deep strategy, setup, SC/VSC/red-flag and what-if questions.
-- Thinking disabled for routine calls to reduce latency.
-- Thinking enabled with `high` or `max` effort for deep calls.
-- Parallel execution of independent telemetry tools.
-- Preservation of DeepSeek `reasoning_content` across thinking-mode tool rounds, as required by DeepSeek's API.
-- Local JSON-schema validation before any model-generated tool arguments are executed.
-- A hard tool-round limit.
-
-The older `deepseek-chat` and `deepseek-reasoner` names are not used.
-
-### Provider failover and circuit breaker
-
-A transient DeepSeek failure can fall back to OpenAI without losing the radio call. Matching tool calls are memoized for the request, so a fallback provider sees the same tool result and does not repeat potentially expensive or stateful analysis.
-
-After repeated provider failures, Pit Wall temporarily opens a short circuit breaker instead of adding the same failed API wait to every radio call. Provider health is visible at:
-
-```text
-http://127.0.0.1:8000/api/llm/providers
-```
-
-The dashboard footer shows the provider and model that answered the latest model-backed call.
-
-### Safe A/B comparison
-
-When both API keys are configured, an optional endpoint compares OpenAI and DeepSeek on one frozen prompt:
-
-```powershell
-Invoke-RestMethod `
-  -Uri "http://127.0.0.1:8000/api/llm/compare" `
-  -Method Post `
-  -ContentType "application/json" `
-  -Body '{"text":"Compare medium-hard and medium-soft for this race."}'
-```
-
-Both providers share memoized telemetry-tool results. Setup-generation tools are blocked during comparison because they persist recommendations. The comparison does not speak either answer or append it to the radio log. It does consume both providers' API tokens.
+- `/api/health` reports `engineer_runtime: openai-only` and the configured model.
+- `/api/llm/providers` shows the OpenAI circuit state and the model that answered
+  the latest model-backed call.
+- `POST /api/llm/shakedown` verifies text and tool-continuation contracts.
+- Circuit breakers count provider-health failures; authentication and bad
+  requests remain visible instead of silently switching providers.
 
 ### Existing 3.2 latency and voice improvements remain
 
@@ -230,68 +291,26 @@ Both providers share memoized telemetry-tool results. Setup-generation tools are
 
 ## Recommended `.env`
 
-Copy `.env.example` to `.env`, then set both keys:
+Copy `.env.example` to `.env`, then set the OpenAI key:
 
 ```env
-# Primary reasoning provider
-PITWALL_LLM_PROVIDER=deepseek
-PITWALL_LLM_FALLBACK_PROVIDER=openai
-DEEPSEEK_API_KEY=your_deepseek_api_key
-PITWALL_DEEPSEEK_BASE_URL=https://api.deepseek.com
-PITWALL_DEEPSEEK_FAST_MODEL=deepseek-v4-flash
-PITWALL_DEEPSEEK_DEEP_MODEL=deepseek-v4-pro
-PITWALL_DEEPSEEK_THINKING_EFFORT=high
-PITWALL_DEEPSEEK_TIMEOUT_S=30
-PITWALL_DEEPSEEK_MAX_TOOL_ROUNDS=4
-PITWALL_DEEPSEEK_STRICT_TOOLS=false
-PITWALL_LLM_FAILURE_COOLDOWN_S=20
-PITWALL_LLM_NORMAL_DEADLINE_S=12
-PITWALL_LLM_DEEP_DEADLINE_S=25
-PITWALL_LLM_SHAKEDOWN_TIMEOUT_S=20
-PITWALL_LLM_COMPARE_ENABLED=false
-PITWALL_LLM_COMPARE_COOLDOWN_S=30
-PITWALL_DEEPSEEK_DEEP_MAX_TOKENS=2200
-PITWALL_DEEPSEEK_DEEP_RETRY_MAX_TOKENS=6000
-
-# OpenAI is retained for voice and LLM fallback
+PITWALL_LLM_PROVIDER=openai
+PITWALL_LLM_FALLBACK_PROVIDER=none
 OPENAI_API_KEY=your_openai_api_key
-PITWALL_MODEL=gpt-5.6-terra
+PITWALL_MODEL=gpt-5.6-sol
+PITWALL_FAST_MODEL=gpt-5.6-luna
 PITWALL_REASONING_EFFORT=low
 PITWALL_DEEP_REASONING_EFFORT=high
 PITWALL_OPENAI_TIMEOUT_S=30
-PITWALL_OPENAI_DEEP_MAX_OUTPUT_TOKENS=2200
-PITWALL_OPENAI_DEEP_RETRY_MAX_OUTPUT_TOKENS=6000
 PITWALL_STT_MODEL=gpt-4o-mini-transcribe
 PITWALL_TTS_MODEL=gpt-4o-mini-tts
 PITWALL_VOICE=coral
 ```
 
-Keep the rest of your existing UDP, wake, proactive and audio settings.
-
-### Other provider modes
-
-DeepSeek only for the brain, no model fallback:
-
-```env
-PITWALL_LLM_PROVIDER=deepseek
-PITWALL_LLM_FALLBACK_PROVIDER=none
-```
-
-OpenAI brain only:
-
-```env
-PITWALL_LLM_PROVIDER=openai
-PITWALL_LLM_FALLBACK_PROVIDER=none
-```
-
-Automatically prefer DeepSeek when configured, otherwise OpenAI:
-
-```env
-PITWALL_LLM_PROVIDER=auto
-PITWALL_LLM_FALLBACK_PROVIDER=auto
-```
-
-OpenAI is still required for the current cloud STT/TTS path when native voice is enabled.
+The engineer runtime is OpenAI-only. Legacy DeepSeek variables may remain in an
+older `.env`, but they are ignored. Common live questions such as gaps, rival
+laps, tyre temperatures, damage and strategy status use deterministic telemetry
+answers before any model call.
 
 ## Install or upgrade on Windows
 
@@ -299,7 +318,7 @@ Use 64-bit Python 3.11 or 3.12.
 
 1. Stop every existing Pit Wall process.
 2. Extract this ZIP into a fresh writable folder.
-3. Copy only your existing `.env` into the new folder, then add the DeepSeek settings above.
+3. Copy only your existing `.env` into the new folder. `update_windows.ps1` migrates its engineer settings to OpenAI while preserving keys and unrelated preferences.
 4. Do not copy or delete `%USERPROFILE%\PitWallData`; it contains your database and saved PTT/wake configuration.
 5. Open PowerShell in the new folder:
 
@@ -316,6 +335,27 @@ Set-ExecutionPolicy -Scope Process Bypass
 
 Your existing L3/UDP Action 1 binding is reused automatically.
 
+## Driver controls
+
+The Live dashboard now exposes **Session mode** and **Strategy override** controls.
+The Setup Lab stores a persistent five-axis driver profile for rear stability,
+traction, rotation, tyre life and straight-line speed. The same controls are
+available by radio:
+
+```text
+This is the race.
+Start on mediums, box lap 12 for hards, one stop.
+I am taking hards next lap.
+Clear strategy override.
+Prioritise rear stability and traction.
+Clear session override.
+```
+
+A locked strategy remains a hard planning constraint unless it becomes illegal,
+unsafe, impossible with the available tyre sets, or weather forces a crossover.
+When challenged, the engineer reports the projected wear, evidence source and
+confidence instead of simply insisting that the current call is correct.
+
 ## Health check
 
 Open:
@@ -329,14 +369,14 @@ Expected provider fields:
 ```json
 {
   "openai_key_configured": true,
-  "deepseek_key_configured": true,
+  "engineer_runtime": "openai-only",
+  "model": "gpt-5.6-sol",
   "llm": {
-    "selected": "deepseek",
-    "configured_provider": "deepseek",
-    "resolved_provider": "deepseek",
-    "fallback": "openai",
+    "selected": "openai",
+    "configured_provider": "openai",
+    "resolved_provider": "openai",
+    "fallback": "none",
     "providers": {
-      "deepseek": {"configured": true},
       "openai": {"configured": true}
     }
   }
@@ -365,10 +405,10 @@ Mark, compare the top two strategies and tell me what changes the call.
 Expected routing:
 
 ```text
-Simple telemetry question       -> deterministic fast path, no LLM
-Normal interpretation           -> DeepSeek V4 Flash
-Strategy / setup / what-if      -> DeepSeek V4 Pro with thinking
-DeepSeek API failure            -> OpenAI fallback
+Simple telemetry question       -> deterministic local handler
+Normal interpretation           -> OpenAI, low reasoning
+Strategy / setup / what-if      -> OpenAI, high reasoning
+OpenAI unavailable              -> explicit radio error; no silent model switch
 ```
 
 ## Tool safety
@@ -383,7 +423,6 @@ Before execution, Pit Wall:
 4. Converts tool exceptions into bounded error results rather than crashing the radio pipeline.
 5. Limits the number of tool rounds.
 
-DeepSeek strict tool mode exists behind a beta endpoint. It is disabled by default because local validation already protects execution and the non-beta endpoint is the safer race-day default.
 
 ## Data and privacy
 
@@ -393,67 +432,48 @@ Runtime data remains under:
 %USERPROFILE%\PitWallData
 ```
 
-Pit Wall sends compact situation summaries, recent radio text and selected tool results to the chosen reasoning provider. It does not upload the SQLite database, raw 60 Hz trace files, Windows username, or full microphone recordings to the reasoning model. Audio clips are sent to OpenAI transcription when cloud voice is enabled.
-
-Using DeepSeek's hosted API means the compact prompt is processed under DeepSeek's service and privacy terms. Choose `PITWALL_LLM_PROVIDER=openai` when you do not want race context sent to DeepSeek.
+Pit Wall sends compact situation summaries and selected tool results to OpenAI
+only for questions that require model judgement. Exact live telemetry questions
+and unsolicited proactive calls are handled locally and deterministically. It
+does not upload the SQLite database, raw 60 Hz trace files, Windows username, or
+full microphone recordings to the reasoning model. Audio clips are sent to
+OpenAI transcription when cloud voice is enabled.
 
 Never commit or share `.env`.
 
 ## Troubleshooting
 
-### DeepSeek fails but radio still answers
+### Engineer model fails
 
-Check `/api/llm/providers`. If `active_provider` is `openai`, failover worked. Normal calls fail over after 12 seconds and deep calls after 25 seconds by default; the SDK itself does not retry. The DeepSeek error remains visible under its provider status.
+Check `/api/llm/providers` and `/api/health`. Verify `OPENAI_API_KEY`, API billing,
+network access and `PITWALL_MODEL=gpt-5.6-sol`, then restart Pit Wall.
 
-Common causes:
+### Strategy call changes unexpectedly
 
-- Missing or invalid `DEEPSEEK_API_KEY`.
-- No DeepSeek API credit.
-- Temporary service or network failure.
-- An unavailable model name.
+Version 3.6.1 holds the current radio strategy through small simulation changes.
+A new call requires a material projected gain, urgent tyre wear, a completed pit
+stop/compound change, a weather crossover, race-control change, or the old call
+becoming infeasible. The dashboard exposes the `strategy.stability` reason.
 
-### Both providers fail
+### Answers are too long
 
-The dashboard turns red and `/api/health` reports the provider errors. Verify both keys and billing, then restart Pit Wall.
-
-### Deep questions are slow
-
-Keep Flash for normal calls and Pro only for deep calls. `PITWALL_DEEPSEEK_THINKING_EFFORT=max` can improve difficult planning but may increase latency; `high` is the recommended race-day setting.
-
-### Strict tool mode fails
-
-Set:
-
-```env
-PITWALL_DEEPSEEK_STRICT_TOOLS=false
-```
-
-Strict mode uses DeepSeek's beta endpoint and supports a narrower JSON-schema subset.
+Say “keep your answers short.” The terse preference persists across laps and
+sessions. Set `PITWALL_RADIO_VERBOSITY=terse` in `.env` to make it the default.
 
 ## Verification
 
-Completed for 3.5.0 with the full dependency set installed:
+Run the full dependency-backed suite after installation:
 
-```text
-144 automated tests passed
-Ruff static checks passed
-Python compileall passed
-FastAPI startup and /api/health passed (version 3.5.0)
-/overlay, /api/export/laps.csv, /api/export/session.json and /api/debrief served
-Dashboard and overlay JavaScript syntax passed with Node.js
+```powershell
+.\.venv\Scripts\python.exe -m compileall -q .\src
+.\.venv\Scripts\python.exe -m pytest -q
 ```
 
-The 3.5 features add `tests/test_features_3_5.py` (43 tests) on top of the
-existing suite. Each feature is driven through its deterministic layer so the
-numbers are pinned independently of any language model; two representative
-end-to-end paths (quantified coaching and sector persistence) were exercised in
-earlier releases and remain covered. Live PS5 telemetry, microphone, speakers
-and provider credentials remain hardware/account boundaries checked with the
-dashboard shakedown and a live session.
+The 3.5.1 regression coverage includes reasoning-leak filtering, persistent
+short-answer and temperature preferences, evidence-based cars-ahead trends,
+driver lap-history responses without strategy contamination, directionally
+correct differential/brake-bias advice, and strategy-call stability.
 
-The one deselected test exercises the real OpenAI SDK object's serialization.
-`install_windows.ps1` installs that SDK and runs the complete suite on Windows.
-Live PS5 telemetry, microphone, speakers and provider credentials remain hardware
-or account boundaries and must be checked with the dashboard shakedown.
-
-See `docs/VERIFICATION.md` and `docs/CLAUDE_REVIEW_3.4.1.md`.
+Live PS5 telemetry, microphone, speakers and provider credentials remain
+hardware/account boundaries checked with the dashboard shakedown and a live
+session.

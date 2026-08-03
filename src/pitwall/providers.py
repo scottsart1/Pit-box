@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import time
 from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable, Protocol
@@ -36,6 +37,72 @@ class ProviderDeadlineError(ProviderError):
 
 class ProviderRateLimitError(ProviderError):
     """Raised when an opt-in diagnostic is invoked too frequently."""
+
+
+_DELIBERATION_MARKERS = re.compile(
+    r"(?:^|\b)(?:let me(?: check| think| give| reconcile| inspect| review| answer)|i (?:need|should|will) "
+    r"(?:check|reconcile|give|answer|use|inspect)|wait\s*(?:[—:-]|$)|hold on|"
+    r"the (?:driver|user) asked|the question is|key facts\s*:|critical concern\s*:|"
+    r"the current call\s*:|i have the tyre|i have the tire|i should give a brief|"
+    r"the strategy engine ranks|the current deterministic strategy|deterministic primary|"
+    r"however,? the earlier recent calls|i note|confirm it)",
+    re.IGNORECASE,
+)
+
+
+def _contains_deliberation(text: str) -> bool:
+    return bool(_DELIBERATION_MARKERS.search(text.strip()))
+
+
+def _final_answer_only(text: str) -> str:
+    """Remove accidentally exposed scratchpad prose from a provider's final content.
+
+    A provider can occasionally imitate deliberation inside its final text. This guard
+    keeps only the trailing radio answer and never exposes scratchpad-like prose to
+    history or TTS.
+    """
+    cleaned = text.replace("\r\n", "\n").replace("\r", "\n").strip()
+    cleaned = re.sub(r"^```(?:text|markdown)?\s*|\s*```$", "", cleaned, flags=re.I)
+    if not cleaned:
+        return ""
+
+    paragraphs = [
+        " ".join(line.strip() for line in block.splitlines() if line.strip())
+        for block in re.split(r"\n\s*\n", cleaned)
+        if block.strip()
+    ]
+    leaked = [
+        index
+        for index, block in enumerate(paragraphs)
+        if _contains_deliberation(block)
+    ]
+    if leaked:
+        trailing = [
+            block
+            for block in paragraphs[leaked[-1] + 1 :]
+            if not _contains_deliberation(block)
+        ]
+        if trailing:
+            cleaned = " ".join(trailing)
+        else:
+            sentences = re.split(
+                r"(?<=[.!?])\s+(?=[A-Z0-9])", " ".join(paragraphs)
+            )
+            cleaned = " ".join(
+                sentence
+                for sentence in sentences
+                if not _contains_deliberation(sentence)
+            )
+    else:
+        cleaned = " ".join(paragraphs)
+
+    cleaned = re.sub(r"^(?:final answer|engineer|radio)\s*:\s*", "", cleaned, flags=re.I)
+    cleaned = " ".join(cleaned.split()).strip()
+    if _contains_deliberation(cleaned):
+        sentences = re.split(r"(?<=[.!?])\s+(?=[A-Z0-9])", cleaned)
+        safe = [sentence for sentence in sentences if not _contains_deliberation(sentence)]
+        cleaned = " ".join(safe).strip()
+    return cleaned
 
 
 @dataclass(slots=True)
@@ -81,6 +148,12 @@ def _usage_dict(usage: Any) -> dict[str, int]:
         value = getattr(usage, source, None)
         if value is not None:
             result[target] = int(value)
+    # Cached prefix tokens bill at a fraction of the normal input rate, so this
+    # is the number that shows whether prefix caching is actually working.
+    details = getattr(usage, "input_tokens_details", None)
+    cached = getattr(details, "cached_tokens", None) if details is not None else None
+    if cached is not None:
+        result["cached_input_tokens"] = int(cached)
     return result
 
 
@@ -201,6 +274,18 @@ class OpenAIResponsesProvider:
     def available(self) -> bool:
         return self.client is not None
 
+    def model_for(self, route: str) -> str:
+        """Pick the model tier for a request route.
+
+        Strategy, undercut evaluation and what-ifs justify the flagship tier.
+        Reading back a gap, a tyre temperature or a lap time does not: it is
+        narration of deterministic tool output, and the cheapest tier in the
+        same family does it just as well for a fraction of the price.
+        """
+        if not self.config.tier_routing_enabled:
+            return self.config.model
+        return self.config.model if route == "deep" else self.config.fast_model
+
     @staticmethod
     def _safe_output_item(item: Any) -> dict[str, Any] | None:
         item_type = getattr(item, "type", None)
@@ -226,10 +311,10 @@ class OpenAIResponsesProvider:
         execute_tool: ToolExecutor,
         max_rounds: int,
     ) -> ProviderResult:
-        del route
         if self.client is None:
             raise ProviderConfigurationError("OpenAI API key is not configured.")
 
+        model = self.model_for(route)
         started = time.perf_counter()
         input_items: list[dict[str, Any]] = [{"role": "user", "content": prompt}]
         schema_by_name = {tool["name"]: tool for tool in tools}
@@ -249,14 +334,22 @@ class OpenAIResponsesProvider:
             response: Any | None = None
             for attempt, token_budget in enumerate((base_budget, retry_budget)):
                 request: dict[str, Any] = {
-                    "model": self.config.model,
+                    "model": model,
                     "instructions": instructions,
                     "input": input_items,
                     "tools": tools,
                     "max_output_tokens": token_budget,
                     "parallel_tool_calls": True,
+                    "text": {"verbosity": "low"},
+                    # The persona and the tool schemas are identical on every
+                    # call and sit at the front of the request, so they are a
+                    # cacheable prefix. A stable key keeps successive radio
+                    # calls on the same cache, which is the difference between
+                    # paying full input price for that prefix every lap and
+                    # paying it once.
+                    "prompt_cache_key": f"pitwall-{route}-{self.config.engineer_name}",
                 }
-                if self.config.model.startswith("gpt-5"):
+                if model.startswith("gpt-5"):
                     request["reasoning"] = {"effort": effort}
 
                 response = await self.client.responses.create(**request)
@@ -276,13 +369,13 @@ class OpenAIResponsesProvider:
                 if getattr(item, "type", None) == "function_call"
             ]
             if not calls:
-                text = (response.output_text or "").strip()
+                text = _final_answer_only(response.output_text or "")
                 if not text:
                     raise ProviderResponseError("OpenAI returned no final text.")
                 return ProviderResult(
                     text=text,
                     provider=self.name,
-                    model=self.config.model,
+                    model=model,
                     latency_ms=(time.perf_counter() - started) * 1000.0,
                     tool_rounds=round_index,
                     usage=total_usage,
@@ -471,7 +564,7 @@ class DeepSeekChatProvider:
             assert response is not None and choice is not None and message is not None
             calls = list(getattr(message, "tool_calls", None) or [])
             if not calls:
-                text = (getattr(message, "content", None) or "").strip()
+                text = _final_answer_only(getattr(message, "content", None) or "")
                 if not text:
                     reason = getattr(choice, "finish_reason", "unknown")
                     raise ProviderResponseError(
@@ -538,9 +631,11 @@ class ProviderRouter:
         providers: dict[str, EngineerProvider] | None = None,
     ) -> None:
         self.config = config
+        # Production race radio is intentionally OpenAI-only. The DeepSeek
+        # implementation remains in this module solely for backward-compatible
+        # tests and offline migration diagnostics; it is never registered here.
         self.providers: dict[str, EngineerProvider] = providers or {
             "openai": OpenAIResponsesProvider(config),
-            "deepseek": DeepSeekChatProvider(config),
         }
         self.circuits = {name: _CircuitState() for name in self.providers}
         self.last_result: ProviderResult | None = None
@@ -548,25 +643,12 @@ class ProviderRouter:
         self._last_compare_at = 0.0
 
     def _resolved_primary(self, explicit: str | None = None) -> str:
-        primary = (explicit or self.config.llm_provider).strip().lower()
-        if primary not in {"openai", "deepseek", "auto"}:
-            primary = "auto"
-        if primary == "auto":
-            deepseek = self.providers.get("deepseek")
-            primary = "deepseek" if deepseek is not None and deepseek.available else "openai"
-        return primary
+        del explicit
+        return "openai"
 
     def _preferred_order(self, explicit: str | None = None) -> list[str]:
-        primary = self._resolved_primary(explicit)
-        order = [primary]
-        fallback = self.config.llm_fallback_provider.strip().lower()
-        if fallback not in {"none", "auto", primary}:
-            order.append(fallback)
-        if fallback == "auto":
-            for name in ("openai", "deepseek"):
-                if name not in order:
-                    order.append(name)
-        return [name for name in order if name in self.providers]
+        del explicit
+        return ["openai"] if "openai" in self.providers else []
 
     def _deadline_for(self, route: str) -> float:
         return (
@@ -740,9 +822,7 @@ class ProviderRouter:
 
     async def shakedown(self, provider: str | None = None) -> dict[str, Any]:
         """Run a small live wire-contract check without touching race state."""
-        names = self._preferred_order(provider) if provider else [
-            name for name in ("deepseek", "openai") if name in self.providers
-        ]
+        names = self._preferred_order(provider)
         diagnostic_tool = {
             "type": "function",
             "name": "diagnostic_echo",

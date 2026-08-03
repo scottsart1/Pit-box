@@ -88,3 +88,55 @@ async def test_wake_toggle_persists_across_controller_restart(
     assert state["wake_enabled"] is False
     assert state["wake_status"] == "disabled"
     await second.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_legacy_saved_false_cannot_silently_disable_new_wake_build(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    import json
+
+    monkeypatch.setattr(settings, "native_voice", True)
+    monkeypatch.setattr(settings, "data_dir", tmp_path)
+    monkeypatch.setattr(settings, "wake_enabled", True)
+    (tmp_path / "ptt.json").write_text(
+        json.dumps({"mask": 8, "wake_enabled": False}),
+        encoding="utf-8",
+    )
+
+    controller = NativeVoiceController(StateStore(), _Brain(), _Audio())  # type: ignore[arg-type]
+
+    async def no_stream() -> None:
+        return None
+
+    monkeypatch.setattr(controller, "_ensure_input_stream", no_stream)
+    await controller.initialize()
+    state = await controller.store.snapshot_live()
+    assert controller.mask == 8
+    assert settings.wake_enabled is True
+    assert state["wake_enabled"] is True
+    assert state["wake_config_source"] == "legacy saved setting ignored"
+    assert "using .env" in state["wake_last_reason"]
+    await controller.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_wake_threshold_starts_sensitive_and_adapts_to_noise(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    monkeypatch.setattr(settings, "native_voice", False)
+    monkeypatch.setattr(settings, "data_dir", tmp_path)
+    monkeypatch.setattr(settings, "wake_min_speech_rms", 75.0)
+    monkeypatch.setattr(settings, "wake_speech_rms", 180.0)
+    monkeypatch.setattr(settings, "wake_noise_multiplier", 1.45)
+    monkeypatch.setattr(settings, "wake_noise_margin_rms", 18.0)
+
+    controller = NativeVoiceController(StateStore(), _Brain(), _Audio())  # type: ignore[arg-type]
+    assert controller._effective_wake_threshold() == 75.0
+    controller._wake_noise_rms = 60.0
+    assert controller._effective_wake_threshold() == pytest.approx(105.0)
+    controller._wake_noise_rms = 150.0
+    assert controller._effective_wake_threshold() == 180.0
+    await controller.shutdown()

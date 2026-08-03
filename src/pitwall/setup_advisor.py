@@ -103,6 +103,35 @@ class SetupAdvisor:
             f"Complete {profile.title()} foundation for {track_name(selected_track_id)} ({track_archetype(selected_track_id).replace('_', ' ')} circuit)."
         ]
         signals = self._handling_signals(state)
+        preferences = dict(state.get("driver_preferences", {}) or {})
+
+        # Apply explicit driver preferences as a bounded prior. Live handling and
+        # stored performance evidence below can still correct this direction.
+        rear_stability = max(0, min(3, int(preferences.get("rear_stability", 0) or 0)))
+        traction = max(0, min(3, int(preferences.get("traction", 0) or 0)))
+        rotation = max(0, min(3, int(preferences.get("rotation", 0) or 0)))
+        tyre_life = max(0, min(3, int(preferences.get("tyre_life", 0) or 0)))
+        straight_line = max(0, min(3, int(preferences.get("straight_line", 0) or 0)))
+        if rear_stability:
+            recommendation["rear_wing"] = self._clamp("rear_wing", float(recommendation["rear_wing"]) + rear_stability)
+            recommendation["on_throttle"] = self._clamp("on_throttle", float(recommendation["on_throttle"]) - 2 * rear_stability)
+            rationale.append(f"Driver preference: rear stability level {rear_stability}.")
+        if traction:
+            recommendation["on_throttle"] = self._clamp("on_throttle", float(recommendation["on_throttle"]) - 2 * traction)
+            recommendation["rear_anti_roll_bar"] = self._clamp("rear_anti_roll_bar", float(recommendation["rear_anti_roll_bar"]) - traction)
+            rationale.append(f"Driver preference: traction level {traction}.")
+        if rotation:
+            recommendation["front_wing"] = self._clamp("front_wing", float(recommendation["front_wing"]) + rotation)
+            recommendation["off_throttle"] = self._clamp("off_throttle", float(recommendation["off_throttle"]) - 2 * rotation)
+            rationale.append(f"Driver preference: rotation level {rotation}.")
+        if tyre_life:
+            recommendation["front_anti_roll_bar"] = self._clamp("front_anti_roll_bar", float(recommendation["front_anti_roll_bar"]) - max(1, tyre_life - 1))
+            recommendation["rear_anti_roll_bar"] = self._clamp("rear_anti_roll_bar", float(recommendation["rear_anti_roll_bar"]) - max(1, tyre_life - 1))
+            rationale.append(f"Driver preference: tyre-life protection level {tyre_life}.")
+        if straight_line:
+            recommendation["front_wing"] = self._clamp("front_wing", float(recommendation["front_wing"]) - straight_line)
+            recommendation["rear_wing"] = self._clamp("rear_wing", float(recommendation["rear_wing"]) - straight_line)
+            rationale.append(f"Driver preference: straight-line speed level {straight_line}.")
 
         # Profile intent is applied even when refining a live setup.
         if current:
@@ -193,6 +222,7 @@ class SetupAdvisor:
             "recommended": recommendation,
             "changes": changes,
             "rationale": rationale,
+            "driver_preferences": preferences,
             "setup_effects": effects,
             "pit_adjustment": pit_adjustment,
             "learning_samples": samples,

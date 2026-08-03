@@ -8,3 +8,9 @@ dist/
 build/
 *.egg-info/
 PitWallData/
+
+# Editor/OS noise
+.vscode/
+.idea/
+Thumbs.db
+desktop.ini

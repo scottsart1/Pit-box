@@ -1,4 +1,4 @@
-# Pit Wall 3.5.0 verification
+# Pit Wall 3.5.1 verification
 
 ## Completed in this environment
 
@@ -9,7 +9,7 @@ was installed, so the whole suite ran with nothing stubbed or deselected.
 144 automated tests passed
 Ruff static checks passed
 Python compileall passed
-FastAPI startup and /api/health passed (version 3.5.0)
+FastAPI startup and /api/health passed (version 3.5.1)
 /overlay, /api/export/laps.csv, /api/export/session.json served (200)
 /api/debrief returns 404 with no active session (correct)
 Dashboard and overlay JavaScript passed node --check

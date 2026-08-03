@@ -16,6 +16,7 @@ import numpy as np
 from .audio import AudioService
 from .brain import EngineerBrain
 from .config import settings
+from .realtime import RealtimeRadio
 from .state import StateStore
 
 log = logging.getLogger(__name__)
@@ -59,6 +60,8 @@ class NativeVoiceController:
         )
         self._ack_prepare_task: asyncio.Task[None] | None = None
         self._persisted_wake_enabled: bool | None = None
+        self._wake_config_source = ".env/default"
+        self._legacy_wake_setting_ignored = False
         self._interaction_source = ""
         self._interaction_finalized_at = 0.0
 
@@ -68,6 +71,7 @@ class NativeVoiceController:
         self._process_task: asyncio.Task[None] | None = None
         self._speech_task: asyncio.Task[bool] | None = None
         self._recording_guard_task: asyncio.Task[None] | None = None
+        self._release_candidate_task: asyncio.Task[None] | None = None
 
         self._mask_event_count = 0
         self._first_mask_event_at = 0.0
@@ -75,6 +79,9 @@ class NativeVoiceController:
         self._speech_detected = False
         self._last_voice_at = 0.0
         self._last_audio_rms = 0.0
+        self._wake_noise_rms = 0.0
+        self._wake_effective_threshold = float(settings.wake_min_speech_rms)
+        self._last_wake_diag_at = 0.0
         self._release_in_progress = False
 
         block_s = max(0.01, settings.wake_block_ms / 1000.0)
@@ -92,7 +99,32 @@ class NativeVoiceController:
         self._wake_cooldown_until = 0.0
         self._tts_playing = False
         self._shutdown = False
+        # Speech-to-speech radio. When enabled, the wake phrase opens a Realtime
+        # session and the microphone is routed straight to it; the file-based
+        # transcribe/reason/synthesise chain stays available as the fallback.
+        self.realtime: RealtimeRadio | None = None
+        if settings.voice_realtime_enabled:
+            self.realtime = RealtimeRadio(
+                store,
+                brain.tools,
+                on_transcript=self._persist_realtime_transcript,
+                situation_header=self._realtime_header,
+            )
         self._load_config()
+
+    async def _realtime_header(self) -> str:
+        """Live situation summary handed to the speech session."""
+        return await self.brain.situation_header()
+
+    async def _persist_realtime_transcript(self, role: str, text: str) -> None:
+        state = await self.store.snapshot_analysis()
+        await self.brain.database.save_radio_message(
+            state, role, text, "user" if role == "driver" else "response:realtime"
+        )
+
+    @property
+    def realtime_active(self) -> bool:
+        return bool(self.realtime is not None and self.realtime.is_open)
 
     @property
     def is_busy(self) -> bool:
@@ -101,6 +133,9 @@ class NativeVoiceController:
             or self._signal_pressed
             or self._wake_speaking
             or self._wake_armed_until > time.monotonic()
+            # An open speech session means a conversation is in progress; an
+            # unsolicited call must not be spoken over the top of it.
+            or self.realtime_active
             or (self._speech_task and not self._speech_task.done())
             or (self._wake_process_task and not self._wake_process_task.done())
         )
@@ -110,8 +145,16 @@ class NativeVoiceController:
             if self.config_path.exists():
                 payload = json.loads(self.config_path.read_text(encoding="utf-8"))
                 self.mask = int(payload.get("mask", self.mask))
-                if "wake_enabled" in payload:
+                version = int(payload.get("version", 1) or 1)
+                if version >= 2 and "wake_enabled" in payload:
                     self._persisted_wake_enabled = bool(payload["wake_enabled"])
+                    self._wake_config_source = "saved dashboard setting"
+                elif "wake_enabled" in payload:
+                    # 3.6.0 wrote this flag without a schema version. A stale
+                    # false value could silently defeat a new .env/build, so the
+                    # one-time migration keeps the L3 mask but trusts .env.
+                    self._legacy_wake_setting_ignored = True
+                    self._wake_config_source = "legacy saved setting ignored"
         except Exception:
             log.exception("Could not load PTT/voice configuration")
 
@@ -120,6 +163,7 @@ class NativeVoiceController:
         self.config_path.write_text(
             json.dumps(
                 {
+                    "version": 2,
                     "mask": int(self.mask),
                     "wake_enabled": bool(settings.wake_enabled),
                 },
@@ -197,7 +241,15 @@ class NativeVoiceController:
             ),
             wake_phrase=settings.wake_phrase,
             wake_armed=False,
-            wake_last_reason="",
+            wake_last_reason=(
+                "legacy saved wake setting ignored; using .env"
+                if self._legacy_wake_setting_ignored
+                else ""
+            ),
+            wake_config_source=self._wake_config_source,
+            wake_input_rms=0.0,
+            wake_noise_rms=0.0,
+            wake_threshold_rms=float(settings.wake_min_speech_rms),
         )
         if settings.native_voice:
             await self._ensure_input_stream()
@@ -214,6 +266,8 @@ class NativeVoiceController:
 
     async def shutdown(self) -> None:
         self._shutdown = True
+        if self.realtime is not None:
+            await self.realtime.close("shutdown")
         self._cancel_recording_guard()
         for task in (
             self._process_task,
@@ -221,11 +275,13 @@ class NativeVoiceController:
             self._wake_process_task,
             self._wake_arm_task,
             self._ack_prepare_task,
+            self._release_candidate_task,
         ):
             if task and not task.done():
                 task.cancel()
                 with contextlib.suppress(asyncio.CancelledError):
                     await task
+        self._release_candidate_task = None
         self.audio.stop_playback()
         if self.stream is not None:
             try:
@@ -238,6 +294,7 @@ class NativeVoiceController:
 
     async def configure_wake(self, enabled: bool) -> dict[str, Any]:
         settings.wake_enabled = bool(enabled)
+        self._wake_config_source = "saved dashboard setting"
         self._save_config()
         self._clear_wake_capture()
         await self._disarm_wake("disabled" if not enabled else "ready")
@@ -245,6 +302,7 @@ class NativeVoiceController:
             await self._ensure_input_stream()
         await self.store.update(
             wake_enabled=bool(enabled and settings.native_voice),
+            wake_config_source=self._wake_config_source,
             wake_status=(
                 f'ready — say "{settings.wake_phrase.title()}"'
                 if enabled and settings.native_voice
@@ -297,6 +355,11 @@ class NativeVoiceController:
             return
 
         mask_present = bool(int(status) & self.mask)
+        if int(status) != 0:
+            # A subsequent controller packet invalidates a tentative zero-status
+            # release. This debounces transient UDP/button gaps without requiring
+            # a repeated held-button heartbeat.
+            self._cancel_release_candidate()
         if mask_present:
             self._last_mask_event_at = now
             self._mask_event_count += 1
@@ -312,24 +375,57 @@ class NativeVoiceController:
             return
 
         mode = settings.ptt_release_mode
-        established_hold = (
-            self._mask_event_count >= 2
-            and self._last_mask_event_at - self._first_mask_event_at >= 0.08
-        )
         elapsed_ms = (now - self.pressed_at) * 1000.0
         if (
             self._signal_pressed
             and int(status) == 0
-            and established_hold
+            and self._mask_event_count >= 1
             and elapsed_ms >= settings.ptt_release_ignore_ms
             and mode in {"explicit", "explicit_or_silence"}
         ):
-            self.loop.create_task(
-                self._transition(False, now, "explicit_release")
-            )
+            if not self._release_candidate_task or self._release_candidate_task.done():
+                self._release_candidate_task = self.loop.create_task(
+                    self._confirm_explicit_release(now),
+                    name="pitwall-ptt-release-confirm",
+                )
+
+    async def _confirm_explicit_release(self, candidate_at: float) -> None:
+        """Confirm button-up after a short quiet debounce window.
+
+        Some controller/UDP streams emit a transient all-zero BUTN packet while
+        L3 remains held. Waiting briefly and requiring zero to remain the latest
+        status prevents those gaps from clipping the driver's sentence.
+        """
+        try:
+            await asyncio.sleep(max(0.0, settings.ptt_release_ignore_ms / 1000.0))
+            if (
+                self._signal_pressed
+                and self.last_status == 0
+                and candidate_at >= self._last_mask_event_at
+                and settings.ptt_release_mode in {"explicit", "explicit_or_silence"}
+            ):
+                await self._transition(False, time.monotonic(), "explicit_release")
+        except asyncio.CancelledError:
+            raise
+        finally:
+            if self._release_candidate_task is asyncio.current_task():
+                self._release_candidate_task = None
+
+    def _cancel_release_candidate(self) -> None:
+        task = self._release_candidate_task
+        if task and not task.done() and task is not asyncio.current_task():
+            task.cancel()
+        self._release_candidate_task = None
 
     async def _transition(self, pressed: bool, now: float, reason: str) -> None:
         async with self._transition_lock:
+            if pressed and self.realtime_active:
+                # The session already has the microphone. Pressing L3 during a
+                # live conversation must not start a second, parallel capture.
+                self.pressed_at = now
+                self._signal_pressed = False
+                await self.store.update(ptt_pressed=False, ptt_release_reason="realtime_open")
+                return
             if pressed:
                 self.pressed_at = now
                 self._speech_detected = False
@@ -348,6 +444,10 @@ class NativeVoiceController:
                 self._start_recording_guard()
                 return
 
+            if reason == "explicit_release" and settings.ptt_release_tail_s > 0:
+                # Keep capturing a short tail after button-up so the final phoneme
+                # is not clipped by controller/network timing.
+                await asyncio.sleep(settings.ptt_release_tail_s)
             await self._finish_recording(reason)
 
     async def _finish_recording(self, reason: str) -> None:
@@ -356,6 +456,7 @@ class NativeVoiceController:
         self._release_in_progress = True
         try:
             self._signal_pressed = False
+            self._cancel_release_candidate()
             self._cancel_recording_guard()
             held_ms = max(
                 0.0,
@@ -412,7 +513,13 @@ class NativeVoiceController:
                 if (
                     mode in {"silence", "explicit_or_silence"}
                     and self._speech_detected
-                    and elapsed >= 0.70
+                    # Minimum clip length before silence may end the recording.
+                    # This used to be a hard-coded 1.0 s that silently overrode a
+                    # shorter configured ptt_silence_release_s, so a quick call
+                    # could not be released by silence at all no matter how the
+                    # release threshold was tuned. With the default 2.2 s
+                    # threshold the floor never binds either way.
+                    and elapsed >= settings.ptt_min_speech_clip_s
                     and now - self._last_voice_at
                     >= settings.ptt_silence_release_s
                 ):
@@ -475,6 +582,45 @@ class NativeVoiceController:
             return 0.0
         return float(np.sqrt(np.mean(block.astype(np.float64) ** 2)))
 
+    def _update_wake_noise(self, rms: float) -> None:
+        """Track background level only while idle and below the configured cap."""
+        if rms <= 0 or rms >= max(
+            settings.wake_min_speech_rms,
+            self._wake_effective_threshold * 0.90,
+        ):
+            return
+        if self._wake_noise_rms <= 0:
+            self._wake_noise_rms = rms
+        else:
+            self._wake_noise_rms = (0.97 * self._wake_noise_rms) + (0.03 * rms)
+
+    def _effective_wake_threshold(self) -> float:
+        if self._wake_noise_rms <= 0:
+            return float(settings.wake_min_speech_rms)
+        adaptive = (
+            self._wake_noise_rms * settings.wake_noise_multiplier
+            + settings.wake_noise_margin_rms
+        )
+        return float(
+            min(
+                settings.wake_speech_rms,
+                max(settings.wake_min_speech_rms, adaptive),
+            )
+        )
+
+    def _publish_wake_diagnostics(self, now: float) -> None:
+        if now - self._last_wake_diag_at < 0.50:
+            return
+        self._last_wake_diag_at = now
+        values = {
+            "wake_input_rms": round(self._last_audio_rms, 1),
+            "wake_noise_rms": round(self._wake_noise_rms, 1),
+            "wake_threshold_rms": round(self._wake_effective_threshold, 1),
+        }
+        self.loop.call_soon_threadsafe(
+            lambda: self.loop.create_task(self.store.update(**values))
+        )
+
     def _wake_blocked(self, now: float) -> bool:
         return bool(
             not settings.wake_enabled
@@ -487,10 +633,24 @@ class NativeVoiceController:
         )
 
     def _consume_audio_block(self, block: np.ndarray) -> None:
-        """Route one microphone block to PTT or hands-free wake capture."""
+        """Route one microphone block to PTT, wake capture, or a live session."""
         now = time.monotonic()
         rms = self._rms(block)
         self._last_audio_rms = rms
+
+        # While a speech-to-speech session is open the microphone belongs to it:
+        # the model does its own turn detection, so no local wake gating applies
+        # and the driver can interrupt the engineer mid-sentence.
+        if self.realtime_active:
+            self._publish_wake_diagnostics(now)
+            realtime = self.realtime
+            if realtime is not None:
+                self.loop.call_soon_threadsafe(
+                    lambda: self.loop.create_task(
+                        realtime.send_audio(block, settings.audio_sample_rate)
+                    )
+                )
+            return
 
         if self._signal_pressed:
             self.frames.append(block)
@@ -503,7 +663,11 @@ class NativeVoiceController:
             self._clear_wake_capture()
             return
 
-        threshold = max(settings.audio_min_rms, settings.wake_speech_rms)
+        if not self._wake_speaking:
+            self._update_wake_noise(rms)
+        threshold = self._effective_wake_threshold()
+        self._wake_effective_threshold = threshold
+        self._publish_wake_diagnostics(now)
         if not self._wake_speaking:
             self._wake_preroll.append(block)
             if rms >= threshold:
@@ -599,8 +763,16 @@ class NativeVoiceController:
             if duration < settings.wake_min_utterance_s:
                 await self._reject_wake("clip too short", "")
                 return
-            if self._rms(data) < settings.audio_min_rms:
-                await self._reject_wake("clip too quiet", "")
+            clip_rms = self._rms(data)
+            clip_floor = max(
+                settings.wake_clip_min_rms,
+                min(self._wake_effective_threshold * 0.55, settings.audio_min_rms),
+            )
+            if clip_rms < clip_floor:
+                await self._reject_wake(
+                    f"clip too quiet ({clip_rms:.0f} RMS; need {clip_floor:.0f})",
+                    "",
+                )
                 return
 
             source = settings.data_dir / "latest_wake.wav"
@@ -611,7 +783,11 @@ class NativeVoiceController:
             )
             snapshot = await self.store.snapshot_live()
             names = [driver["name"] for driver in snapshot["drivers"]]
-            text = await self.audio.transcribe(source, names)
+            text = await self.audio.transcribe(
+                source,
+                names,
+                wake_phrases=settings.wake_phrases,
+            )
             await self._mark_latency("transcript_ms")
             await self.store.update(radio_last_transcript=text)
             if not text:
@@ -632,14 +808,20 @@ class NativeVoiceController:
                 return
 
             if matched and not command:
+                if await self._start_realtime(data, "wake phrase"):
+                    return
                 await self._arm_wake(phrase)
                 return
 
             if matched:
+                if await self._start_realtime(data, f"accepted via {phrase}"):
+                    return
                 await self._accept_wake(command, phrase)
                 return
 
             if armed:
+                if await self._start_realtime(data, "armed follow-up"):
+                    return
                 await self._accept_wake(text, "armed follow-up")
                 return
 
@@ -665,6 +847,33 @@ class NativeVoiceController:
                 await self.store.update(
                     wake_status=f'ready — say "{settings.wake_phrase.title()}"'
                 )
+
+    async def _start_realtime(self, data: np.ndarray | None, reason: str) -> bool:
+        """Hand the conversation to a speech-to-speech session.
+
+        The clip that triggered the wake phrase is replayed into the session so
+        the driver's first question is not lost between the two pipelines: they
+        say "Mark, what's the gap to Norris" once, not twice.
+        """
+        realtime = self.realtime
+        if realtime is None:
+            return False
+        self.audio.stop_playback()
+        if not await realtime.open():
+            # Fall back to the file-based chain rather than dropping the call.
+            return False
+        snapshot = await self.store.snapshot_live()
+        await self.store.update(
+            wake_armed=False,
+            wake_trigger_count=int(snapshot.get("wake_trigger_count", 0)) + 1,
+            wake_status="live radio open",
+            wake_last_reason=reason,
+            radio_source="realtime",
+            last_error="",
+        )
+        if data is not None and getattr(data, "size", 0):
+            await realtime.send_audio(data, settings.audio_sample_rate)
+        return True
 
     async def _arm_wake(self, phrase: str) -> None:
         self._wake_armed_until = time.monotonic() + settings.wake_arm_timeout_s
@@ -834,6 +1043,10 @@ class NativeVoiceController:
                 last_error="Radio clip was silent or too quiet.",
             )
             return
+        # L3 opens a speech session just as the wake phrase does, so both radio
+        # routes reach the same engineer.
+        if await self._start_realtime(data, "ptt"):
+            return
         self._process_task = self.loop.create_task(self._process(data))
 
     @staticmethod
@@ -905,6 +1118,12 @@ class NativeVoiceController:
     async def speak_text(self, text: str) -> bool:
         if not text.strip() or self._signal_pressed:
             return False
+
+        # With a conversation already open, route the call through that session
+        # so the engineer never speaks on two audio paths at once.
+        if self.realtime_active and self.realtime is not None:
+            if await self.realtime.say(text):
+                return True
 
         async def first_audio() -> None:
             await self.store.update(

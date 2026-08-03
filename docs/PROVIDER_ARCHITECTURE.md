@@ -26,7 +26,7 @@ EngineerBrain
 
 ```text
 fast    -> deterministic local answer when possible
-normal  -> DeepSeek V4 Flash, thinking disabled; 12 s provider deadline
+normal  -> DeepSeek V4 Pro, thinking disabled; 12 s provider deadline
 deep    -> DeepSeek V4 Pro, thinking enabled; 25 s provider deadline
 ```
 

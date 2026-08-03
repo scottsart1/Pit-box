@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import tempfile
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -30,6 +31,8 @@ from .tools import TelemetryTools
 from .udp import F1DatagramProtocol, TRACKS, classify_session
 from .voice import NativeVoiceController
 
+log = logging.getLogger(__name__)
+
 store = StateStore()
 database = PitWallDatabase(settings.data_dir / "pitwall.sqlite3")
 strategy = StrategyEngine(store, database)
@@ -43,6 +46,7 @@ proactive: ProactiveEngineer | None = None
 udp_transport: asyncio.DatagramTransport | None = None
 watchdog_task: asyncio.Task[None] | None = None
 event_persistence_task: asyncio.Task[None] | None = None
+maintenance_task: asyncio.Task[None] | None = None
 
 
 async def _connection_watchdog() -> None:
@@ -86,21 +90,45 @@ async def _persist_finished_session() -> None:
     await database.upsert_session(await store.snapshot_live())
 
 
+async def _startup_maintenance() -> None:
+    """Reclaim database space in the background, never blocking the session.
+
+    A large historic database can take a while to VACUUM, so this runs as a
+    task rather than inside lifespan startup. Failure is non-fatal.
+    """
+    try:
+        report = await database.maintain(
+            keep_trace_sessions=settings.db_keep_trace_sessions
+        )
+        freed = int(report.get("size_before_bytes", 0)) - int(
+            report.get("size_after_bytes", 0)
+        )
+        log.info("Database maintenance reclaimed %.1f MB: %s", freed / 1e6, report)
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        log.warning("Database maintenance skipped: %s", exc)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global voice, proactive, udp_transport, watchdog_task, event_persistence_task
+    global maintenance_task
     settings.data_dir.mkdir(parents=True, exist_ok=True)
     await database.initialize()
+    if settings.db_maintenance_on_start:
+        maintenance_task = asyncio.create_task(
+            _startup_maintenance(), name="pitwall-db-maintenance"
+        )
+    saved_preferences = await database.load_preference("driver_preferences", None)
+    if isinstance(saved_preferences, dict):
+        await store.update(driver_preferences=saved_preferences)
+    saved_instructions = await database.load_preference("standing_instructions", None)
+    if isinstance(saved_instructions, list):
+        await store.update(standing_instructions=saved_instructions)
     router_status = brain.router.status()
     initial_provider = str(router_status["resolved_provider"])
-    await store.update(
-        llm_provider=initial_provider,
-        llm_model=(
-            settings.deepseek_fast_model
-            if initial_provider == "deepseek"
-            else settings.model
-        ),
-    )
+    await store.update(llm_provider=initial_provider, llm_model=settings.model)
     await analysis.start()
     voice = NativeVoiceController(store, brain, audio)
     await voice.initialize()
@@ -138,6 +166,12 @@ async def lifespan(app: FastAPI):
             await event_persistence_task
         except asyncio.CancelledError:
             pass
+    if maintenance_task:
+        maintenance_task.cancel()
+        try:
+            await maintenance_task
+        except asyncio.CancelledError:
+            pass
     if proactive:
         await proactive.stop()
     if voice:
@@ -147,7 +181,7 @@ async def lifespan(app: FastAPI):
         udp_transport.close()
 
 
-app = FastAPI(title="Pit Wall", version="3.5.0", lifespan=lifespan)
+app = FastAPI(title="Pit Wall", version="3.7.0", lifespan=lifespan)
 
 
 class AskRequest(BaseModel):
@@ -170,6 +204,27 @@ class ProactiveRequest(BaseModel):
 
 class SessionModeRequest(BaseModel):
     mode: str = "auto"
+
+
+class StrategyOverrideRequest(BaseModel):
+    enabled: bool = True
+    locked: bool = True
+    start_compound: str | None = None
+    next_box_lap: int | None = None
+    next_compound: str | None = None
+    preferred_stops: int | None = None
+    priority: str = "balanced"
+    note: str = "dashboard override"
+
+
+class DriverPreferencesRequest(BaseModel):
+    strategy_priority: str | None = None
+    setup_bias: str | None = None
+    rear_stability: int | None = None
+    rotation: int | None = None
+    traction: int | None = None
+    tyre_life: int | None = None
+    straight_line: int | None = None
 
 
 class WakeRequest(BaseModel):
@@ -199,15 +254,28 @@ async def health() -> dict[str, object]:
         "telemetry_connected": snapshot["connected"],
         "telemetry_stale": snapshot["telemetry_stale"],
         "openai_key_configured": bool(settings.api_key),
-        "deepseek_key_configured": bool(settings.deepseek_key),
+        "engineer_runtime": "openai-only",
         "model": settings.model,
         "llm": brain.router.status(),
         "stt_model": settings.stt_model,
         "tts_model": settings.tts_model,
+        "voice_pipeline": (
+            "realtime" if settings.voice_realtime_enabled else "transcribe-reason-speak"
+        ),
+        "realtime_model": (
+            settings.realtime_model if settings.voice_realtime_enabled else None
+        ),
+        "realtime_session_open": bool(voice is not None and voice.realtime_active),
         "ptt_status": snapshot["ptt_status"],
         "wake_enabled": snapshot["wake_enabled"],
         "wake_status": snapshot["wake_status"],
         "wake_phrase": snapshot["wake_phrase"],
+        "wake_config_source": snapshot["wake_config_source"],
+        "wake_input_rms": snapshot["wake_input_rms"],
+        "wake_noise_rms": snapshot["wake_noise_rms"],
+        "wake_threshold_rms": snapshot["wake_threshold_rms"],
+        "wake_last_transcript": snapshot["wake_last_transcript"],
+        "wake_last_reason": snapshot["wake_last_reason"],
         "radio_indicator": snapshot["radio_indicator"],
         "radio_latency": snapshot["radio_latency"],
         "proactive": snapshot["proactive"],
@@ -230,6 +298,20 @@ async def history(
     session_uid = int(snapshot.get("session_uid", 0)) if scope == "current_session" else None
     track_id = int(snapshot.get("track_id", -1)) if scope in {"current_session", "current_track"} else None
     return await database.history_query(track_id=track_id, session_uid=session_uid, limit=limit)
+
+
+@app.post("/api/maintenance")
+async def run_maintenance(
+    keep_trace_sessions: int = Query(default=-1, ge=-1, le=200),
+    vacuum: bool = Query(default=True),
+) -> dict[str, object]:
+    """Reclaim database space on demand. Safe to run between sessions."""
+    keep = (
+        settings.db_keep_trace_sessions
+        if keep_trace_sessions < 0
+        else keep_trace_sessions
+    )
+    return await database.maintain(keep_trace_sessions=keep, vacuum=vacuum)
 
 
 @app.get("/api/racing-line")
@@ -364,6 +446,28 @@ async def wake_config(request: WakeRequest) -> dict[str, object]:
     return await voice.configure_wake(request.enabled)
 
 
+@app.post("/api/realtime/open")
+async def realtime_open() -> dict[str, object]:
+    """Open a speech-to-speech session without waiting for the wake phrase."""
+    if voice is None or voice.realtime is None:
+        raise HTTPException(
+            409, "Realtime radio is disabled. Set PITWALL_VOICE_REALTIME_ENABLED=true."
+        )
+    opened = await voice.realtime.open()
+    if not opened:
+        snapshot = await store.snapshot_live()
+        raise HTTPException(503, str(snapshot.get("last_error") or "Could not open session"))
+    return {"open": True, "model": settings.realtime_model}
+
+
+@app.post("/api/realtime/close")
+async def realtime_close() -> dict[str, object]:
+    if voice is None or voice.realtime is None:
+        raise HTTPException(409, "Realtime radio is disabled.")
+    await voice.realtime.close("closed from dashboard")
+    return {"open": False}
+
+
 @app.post("/api/setup/recommend")
 async def setup_recommendation(request: SetupRequest) -> dict[str, object]:
     result = await setup_advisor.generate(request.profile, request.track_id)
@@ -421,6 +525,68 @@ async def session_mode(request: SessionModeRequest) -> dict[str, object]:
         "source": source,
         "reason": reason,
     }
+
+
+@app.get("/api/strategy/override")
+async def get_strategy_override() -> dict[str, object]:
+    return dict((await store.snapshot_analysis()).get("strategy_override", {}))
+
+
+@app.post("/api/strategy/override")
+async def set_strategy_override(request: StrategyOverrideRequest) -> dict[str, object]:
+    snapshot = await store.snapshot_analysis()
+    override = dict(snapshot.get("strategy_override", {}))
+    payload = request.model_dump()
+    for compound_key in ("start_compound", "next_compound"):
+        value = payload.get(compound_key)
+        if value is not None:
+            value = str(value).upper()
+            if value not in {"SOFT", "MEDIUM", "HARD", "INTER", "WET"}:
+                raise HTTPException(400, f"Invalid compound: {value}")
+            payload[compound_key] = value
+    if payload.get("preferred_stops") not in {None, 0, 1, 2, 3}:
+        raise HTTPException(400, "preferred_stops must be 0 to 3")
+    if payload.get("next_box_lap") is not None and int(payload["next_box_lap"]) < 1:
+        raise HTTPException(400, "next_box_lap must be positive")
+    override.update(payload)
+    override["source"] = "dashboard"
+    import time as _time
+    override["updated_at"] = _time.time()
+    await store.update(strategy_override=override)
+    plan = await strategy.recompute()
+    return {"override": override, "strategy": plan}
+
+
+@app.delete("/api/strategy/override")
+async def clear_strategy_override() -> dict[str, object]:
+    snapshot = await store.snapshot_analysis()
+    override = dict(snapshot.get("strategy_override", {}))
+    override.update({
+        "enabled": False, "locked": False, "start_compound": None,
+        "next_box_lap": None, "next_compound": None, "preferred_stops": None,
+        "note": "cleared from dashboard", "source": "dashboard",
+    })
+    await store.update(strategy_override=override)
+    return {"override": override, "strategy": await strategy.recompute()}
+
+
+@app.get("/api/preferences")
+async def get_driver_preferences() -> dict[str, object]:
+    return dict((await store.snapshot_analysis()).get("driver_preferences", {}))
+
+
+@app.post("/api/preferences")
+async def set_driver_preferences(request: DriverPreferencesRequest) -> dict[str, object]:
+    snapshot = await store.snapshot_analysis()
+    preferences = dict(snapshot.get("driver_preferences", {}))
+    payload = request.model_dump(exclude_none=True)
+    for key in ("rear_stability", "rotation", "traction", "tyre_life", "straight_line"):
+        if key in payload:
+            payload[key] = max(0, min(3, int(payload[key])))
+    preferences.update(payload)
+    await store.update(driver_preferences=preferences)
+    await database.save_preference("driver_preferences", preferences)
+    return preferences
 
 
 @app.post("/api/strategy/recompute")

@@ -92,6 +92,10 @@ class PitWallDatabase:
                     wear_start_json TEXT,
                     wear_end_json TEXT,
                     temps_end_json TEXT,
+                    track_temp_c REAL,
+                    air_temp_c REAL,
+                    weather TEXT,
+                    mode_profile TEXT,
                     fuel_start_kg REAL,
                     fuel_end_kg REAL,
                     position INTEGER,
@@ -176,6 +180,11 @@ class PitWallDatabase:
                     created_at REAL NOT NULL
                 );
 
+                CREATE TABLE IF NOT EXISTS user_preferences (
+                    key TEXT PRIMARY KEY,
+                    value_json TEXT NOT NULL,
+                    updated_at REAL NOT NULL
+                );
 
                 CREATE TABLE IF NOT EXISTS line_metrics (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -242,6 +251,114 @@ class PitWallDatabase:
                 );
                 """
             )
+            existing = {row[1] for row in db.execute("PRAGMA table_info(laps)").fetchall()}
+            migrations = {
+                "track_temp_c": "REAL",
+                "air_temp_c": "REAL",
+                "weather": "TEXT",
+                "mode_profile": "TEXT",
+            }
+            for column, column_type in migrations.items():
+                if column not in existing:
+                    db.execute(f"ALTER TABLE laps ADD COLUMN {column} {column_type}")
+
+    async def maintain(
+        self,
+        *,
+        keep_trace_sessions: int = 12,
+        vacuum: bool = True,
+    ) -> dict[str, Any]:
+        """Reclaim space and repair rows written by earlier builds.
+
+        Safe to run at startup. Traces are the reference data for the live delta
+        and racing-line comparison, so the fastest valid lap per track always
+        keeps its trace regardless of age.
+        """
+        async with self._lock:
+            return await asyncio.to_thread(
+                self._maintain_sync, int(keep_trace_sessions), bool(vacuum)
+            )
+
+    def _maintain_sync(self, keep_trace_sessions: int, vacuum: bool) -> dict[str, Any]:
+        report: dict[str, Any] = {}
+        with self._connect() as db:
+            before = int(db.execute("PRAGMA page_count").fetchone()[0]) * int(
+                db.execute("PRAGMA page_size").fetchone()[0]
+            )
+            report["size_before_bytes"] = before
+
+            # Controller-button events were recorded at packet frequency and
+            # carry no race narrative.
+            report["button_events_removed"] = db.execute(
+                "DELETE FROM session_events WHERE event_type='BUTN'"
+            ).rowcount
+
+            # Collapse the strategy snapshots that predate per-change gating:
+            # keep the newest row per (session, lap, race-control phase).
+            report["strategy_snapshots_removed"] = db.execute(
+                """
+                DELETE FROM strategy_snapshots WHERE id NOT IN (
+                    SELECT MAX(id) FROM strategy_snapshots
+                    GROUP BY session_uid, lap_num, race_control_phase
+                )
+                """
+            ).rowcount
+
+            # Repeated chequered-flag packets appended one event each.
+            report["duplicate_chequered_removed"] = db.execute(
+                """
+                DELETE FROM session_events WHERE event_type='CHQF' AND id NOT IN (
+                    SELECT MIN(id) FROM session_events
+                    WHERE event_type='CHQF' GROUP BY session_uid
+                )
+                """
+            ).rowcount
+
+            # A session cannot finish before it started.
+            report["session_times_repaired"] = db.execute(
+                "UPDATE sessions SET ended_at=NULL WHERE ended_at IS NOT NULL AND ended_at < started_at"
+            ).rowcount
+
+            # Drop 60 Hz traces outside the recent window, preserving each
+            # track's reference lap.
+            recent = [
+                row[0]
+                for row in db.execute(
+                    "SELECT session_uid FROM sessions ORDER BY started_at DESC LIMIT ?",
+                    (max(1, keep_trace_sessions),),
+                ).fetchall()
+            ]
+            placeholders = ",".join("?" for _ in recent) or "NULL"
+            report["traces_cleared"] = db.execute(
+                f"""
+                UPDATE laps SET trace_json='[]'
+                WHERE trace_json NOT IN ('[]', '')
+                  AND session_uid NOT IN ({placeholders})
+                  AND id NOT IN (
+                      SELECT id FROM laps l WHERE valid=1 AND lap_time_ms>0
+                        AND lap_time_ms=(
+                            SELECT MIN(lap_time_ms) FROM laps
+                            WHERE track_id=l.track_id AND valid=1 AND lap_time_ms>0
+                        )
+                  )
+                """,
+                recent,
+            ).rowcount
+
+        if vacuum:
+            # VACUUM cannot run inside the implicit transaction the context
+            # manager opens, so it needs its own connection.
+            connection = sqlite3.connect(self.path, timeout=120, isolation_level=None)
+            try:
+                connection.execute("VACUUM")
+            finally:
+                connection.close()
+
+        with self._connect() as db:
+            report["size_after_bytes"] = int(
+                db.execute("PRAGMA page_count").fetchone()[0]
+            ) * int(db.execute("PRAGMA page_size").fetchone()[0])
+        return report
 
     async def upsert_session(self, state: dict[str, Any]) -> None:
         async with self._lock:
@@ -256,7 +373,11 @@ class PitWallDatabase:
         # later upsert happens to run without classification data.
         classification = state.get("final_classification") or {}
         position = int(classification.get("position", 0) or 0)
-        finished_at = time.time() if position > 0 else None
+        # One clock reading for both columns. Reading time.time() separately for
+        # ended_at and started_at made a session that was first written after the
+        # chequered flag finish microseconds *before* it started.
+        now = time.time()
+        finished_at = now if position > 0 else None
         result_position = position if position > 0 else None
         with self._connect() as db:
             db.execute(
@@ -284,7 +405,7 @@ class PitWallDatabase:
                     state.get("track_name", "—"),
                     state.get("session_type", "Unknown"),
                     state.get("mode_profile", "idle"),
-                    time.time(),
+                    now,
                     finished_at,
                     result_position,
                     int(state.get("total_laps", 0)),
@@ -312,10 +433,11 @@ class PitWallDatabase:
                     session_uid, track_id, track_name, session_type, lap_num,
                     lap_time_ms, valid, compound, tyre_age_start, tyre_age_end,
                     wear_start_json, wear_end_json, temps_end_json,
+                    track_temp_c, air_temp_c, weather, mode_profile,
                     fuel_start_kg, fuel_end_kg, position,
                     s1_ms, s2_ms, s3_ms, pit_status, pit_lane_time_ms,
                     setup_json, trace_json, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(session_uid, lap_num) DO UPDATE SET
                     lap_time_ms=excluded.lap_time_ms,
                     valid=excluded.valid,
@@ -325,6 +447,10 @@ class PitWallDatabase:
                     wear_start_json=excluded.wear_start_json,
                     wear_end_json=excluded.wear_end_json,
                     temps_end_json=excluded.temps_end_json,
+                    track_temp_c=excluded.track_temp_c,
+                    air_temp_c=excluded.air_temp_c,
+                    weather=excluded.weather,
+                    mode_profile=excluded.mode_profile,
                     fuel_start_kg=excluded.fuel_start_kg,
                     fuel_end_kg=excluded.fuel_end_kg,
                     position=excluded.position,
@@ -350,6 +476,10 @@ class PitWallDatabase:
                     json.dumps(lap.get("wear_start", [])),
                     json.dumps(lap.get("wear_end", [])),
                     json.dumps(lap.get("temps_end", [])),
+                    float(lap.get("track_temp_c", 0.0)),
+                    float(lap.get("air_temp_c", 0.0)),
+                    str(lap.get("weather", "Unknown")),
+                    str(lap.get("mode_profile", "")),
                     float(lap.get("fuel_start_kg", 0.0)),
                     float(lap.get("fuel_end_kg", 0.0)),
                     int(lap.get("position", 0)),
@@ -925,138 +1055,251 @@ class PitWallDatabase:
                 (_session_uid_to_sqlite(session_uid), track_id, category, text, time.time()),
             )
 
+    async def save_preference(self, key: str, value: Any) -> None:
+        async with self._lock:
+            await asyncio.to_thread(self._save_preference_sync, str(key), value)
+
+    def _save_preference_sync(self, key: str, value: Any) -> None:
+        with self._connect() as db:
+            db.execute(
+                """
+                INSERT INTO user_preferences(key, value_json, updated_at)
+                VALUES (?, ?, ?)
+                ON CONFLICT(key) DO UPDATE SET
+                    value_json=excluded.value_json,
+                    updated_at=excluded.updated_at
+                """,
+                (key, json.dumps(value), time.time()),
+            )
+
+    async def load_preference(self, key: str, default: Any = None) -> Any:
+        async with self._lock:
+            return await asyncio.to_thread(self._load_preference_sync, str(key), default)
+
+    def _load_preference_sync(self, key: str, default: Any = None) -> Any:
+        with self._connect() as db:
+            row = db.execute(
+                "SELECT value_json FROM user_preferences WHERE key=?", (key,)
+            ).fetchone()
+        if row is None:
+            return default
+        try:
+            return json.loads(row["value_json"])
+        except (json.JSONDecodeError, TypeError):
+            return default
+
     async def tyre_history_model(
         self,
         track_id: int,
         limit: int = 300,
+        context: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        """Return personal tyre wear/pace evidence from prior valid laps.
+        """Return condition-aware personal tyre evidence from prior valid laps.
 
-        This deliberately returns compact aggregates rather than traces so it
-        is cheap enough to load whenever strategy is recomputed.
+        The regression is intentionally small and transparent: ridge regression
+        uses tyre age, fuel, temperatures, session profile and setup values. It
+        complements deterministic safety limits rather than replacing them.
         """
         async with self._lock:
             return await asyncio.to_thread(
                 self._tyre_history_model_sync,
                 int(track_id),
                 max(20, min(1000, int(limit))),
+                dict(context or {}),
             )
 
+    @staticmethod
+    def _ridge_fit_predict(
+        rows: list[list[float]], target: list[float], query: list[float]
+    ) -> tuple[float | None, list[float] | None, float | None]:
+        if len(rows) < 6:
+            return None, None, None
+        try:
+            import numpy as np
+
+            x = np.asarray(rows, dtype=float)
+            y = np.asarray(target, dtype=float)
+            q = np.asarray(query, dtype=float)
+            means = x.mean(axis=0)
+            scales = x.std(axis=0)
+            scales[scales < 1e-6] = 1.0
+            z = (x - means) / scales
+            zq = (q - means) / scales
+            design = np.column_stack([np.ones(len(z)), z])
+            ridge = np.eye(design.shape[1]) * 0.35
+            ridge[0, 0] = 0.0
+            weights = np.linalg.solve(design.T @ design + ridge, design.T @ y)
+            # One Huber-style robust refit limits outlier laps and traffic noise.
+            residual = y - design @ weights
+            scale = max(1e-6, float(np.median(np.abs(residual))) * 1.4826)
+            robust = np.minimum(1.0, (1.5 * scale) / np.maximum(np.abs(residual), 1e-9))
+            wd = design * robust[:, None]
+            weights = np.linalg.solve(design.T @ wd + ridge, design.T @ (robust * y))
+            prediction = float(np.r_[1.0, zq] @ weights)
+            raw_coefficients = (weights[1:] / scales).tolist()
+            fitted = design @ weights
+            rmse = float(np.sqrt(np.mean((y - fitted) ** 2)))
+            return prediction, raw_coefficients, rmse
+        except Exception:
+            return None, None, None
+
     def _tyre_history_model_sync(
-        self,
-        track_id: int,
-        limit: int,
+        self, track_id: int, limit: int, context: dict[str, Any]
     ) -> dict[str, Any]:
         from statistics import median
-
-        def robust_slope(points: list[tuple[float, float]]) -> float | None:
-            if len(points) < 3:
-                return None
-            slopes: list[float] = []
-            for index, (x1, y1) in enumerate(points):
-                for x2, y2 in points[index + 1 :]:
-                    if x2 != x1:
-                        slopes.append((y2 - y1) / (x2 - x1))
-            return float(median(slopes)) if slopes else None
 
         with self._connect() as db:
             rows = db.execute(
                 """
-                SELECT compound, tyre_age_start, tyre_age_end,
-                       wear_start_json, wear_end_json,
-                       lap_time_ms, fuel_start_kg, fuel_end_kg
-                FROM laps
-                WHERE track_id=? AND valid=1 AND lap_time_ms>0
-                  AND pit_status=0
-                ORDER BY created_at DESC
+                SELECT l.compound, l.tyre_age_start, l.tyre_age_end,
+                       l.wear_start_json, l.wear_end_json, l.lap_time_ms,
+                       l.fuel_start_kg, l.fuel_end_kg, l.track_temp_c, l.air_temp_c,
+                       COALESCE(NULLIF(l.mode_profile, ''), s.mode_profile, '') AS mode_profile,
+                       l.setup_json
+                FROM laps AS l
+                LEFT JOIN sessions AS s ON s.session_uid=l.session_uid
+                WHERE l.track_id=? AND l.valid=1 AND l.lap_time_ms>0 AND l.pit_status=0
+                ORDER BY l.created_at DESC
                 LIMIT ?
                 """,
                 (track_id, limit),
             ).fetchall()
 
         grouped: dict[str, list[dict[str, Any]]] = {}
-        for row in rows:
-            item = dict(row)
+        for raw in rows:
+            item = dict(raw)
             compound = str(item.get("compound") or "UNKNOWN").upper()
             if compound not in {"SOFT", "MEDIUM", "HARD", "INTER", "WET"}:
                 continue
             try:
-                start = json.loads(item.get("wear_start_json") or "[]")
-                end = json.loads(item.get("wear_end_json") or "[]")
-            except json.JSONDecodeError:
-                start, end = [], []
-            item["wear_start"] = start
-            item["wear_end"] = end
+                item["wear_start"] = json.loads(item.get("wear_start_json") or "[]")
+                item["wear_end"] = json.loads(item.get("wear_end_json") or "[]")
+                item["setup"] = json.loads(item.get("setup_json") or "{}")
+            except (json.JSONDecodeError, TypeError):
+                item["wear_start"], item["wear_end"], item["setup"] = [], [], {}
             grouped.setdefault(compound, []).append(item)
 
-        result: dict[str, Any] = {"track_id": track_id, "compounds": {}}
+        tyre = context.get("tyre", {})
+        setup_context = context.get("car_setup", {}) or {}
+        current_mode = str(context.get("mode_profile", "race"))
+        current_query_base = [
+            float(tyre.get("age_laps", 1) or 1),
+            float(context.get("fuel_kg", 0.0) or 0.0),
+            float(context.get("track_temp_c", 0.0) or 0.0),
+            float(context.get("air_temp_c", 0.0) or 0.0),
+            1.0 if current_mode == "race" else 0.0,
+            1.0 if current_mode == "qualifying" else 0.0,
+            1.0 if current_mode == "practice" else 0.0,
+            float(setup_context.get("front_wing", 0.0) or 0.0),
+            float(setup_context.get("rear_wing", 0.0) or 0.0),
+            float(setup_context.get("on_throttle", 0.0) or 0.0),
+        ]
+        result: dict[str, Any] = {
+            "track_id": track_id, "compounds": {},
+            "model": "personal_condition_ridge_v1",
+        }
         for compound, laps in grouped.items():
             wear_rates: list[float] = []
             max_wear_rates: list[float] = []
             wheel_wear_rates: list[list[float]] = [[], [], [], []]
-            pace_points: list[tuple[float, float]] = []
-            max_fuel = max(
-                (
-                    (
-                        float(lap.get("fuel_start_kg") or 0)
-                        + float(lap.get("fuel_end_kg") or 0)
-                    )
-                    / 2
-                    for lap in laps
-                ),
-                default=0.0,
-            )
+            features: list[list[float]] = []
+            wear_targets: list[float] = []
+            pace_targets: list[float] = []
             for lap in laps:
-                start = lap.get("wear_start") or []
-                end = lap.get("wear_end") or []
-                age_delta = max(
-                    1,
-                    int(lap.get("tyre_age_end") or 0)
-                    - int(lap.get("tyre_age_start") or 0),
-                )
-                if len(start) == 4 and len(end) == 4:
-                    deltas = [
-                        max(0.0, float(b) - float(a)) / age_delta
-                        for a, b in zip(start, end)
-                    ]
-                    wear_rates.append(sum(deltas) / 4)
+                age_delta = max(1, int(lap.get("tyre_age_end") or 0) - int(lap.get("tyre_age_start") or 0))
+                start_wear, end_wear = lap.get("wear_start") or [], lap.get("wear_end") or []
+                deltas: list[float] = []
+                if len(start_wear) == 4 and len(end_wear) == 4:
+                    deltas = [max(0.0, float(b) - float(a)) / age_delta for a, b in zip(start_wear, end_wear)]
+                    wear_rates.append(sum(deltas) / 4.0)
                     max_wear_rates.append(max(deltas))
-                    for wheel_index, delta in enumerate(deltas):
-                        wheel_wear_rates[wheel_index].append(delta)
-                age = float(lap.get("tyre_age_end") or 0)
-                lap_s = float(lap.get("lap_time_ms") or 0) / 1000.0
-                fuel_avg = (
-                    float(lap.get("fuel_start_kg") or 0)
-                    + float(lap.get("fuel_end_kg") or 0)
-                ) / 2
-                # Normalize later, lighter-fuel laps back toward the heaviest
-                # fuel state so fuel burn does not masquerade as low tyre deg.
-                normalized_lap_s = lap_s + max(0.0, max_fuel - fuel_avg) * 0.030
-                if age > 0 and normalized_lap_s > 0:
-                    pace_points.append((age, normalized_lap_s))
+                    for index, delta in enumerate(deltas):
+                        wheel_wear_rates[index].append(delta)
+                mode = str(lap.get("mode_profile") or "")
+                setup = lap.get("setup") or {}
+                fuel = (float(lap.get("fuel_start_kg") or 0.0) + float(lap.get("fuel_end_kg") or 0.0)) / 2.0
+                feature = [
+                    (float(lap.get("tyre_age_start") or 0) + float(lap.get("tyre_age_end") or 0)) / 2.0,
+                    fuel, float(lap.get("track_temp_c") or 0.0), float(lap.get("air_temp_c") or 0.0),
+                    1.0 if mode == "race" else 0.0, 1.0 if mode == "qualifying" else 0.0,
+                    1.0 if mode == "practice" else 0.0, float(setup.get("front_wing", 0.0) or 0.0),
+                    float(setup.get("rear_wing", 0.0) or 0.0), float(setup.get("on_throttle", 0.0) or 0.0),
+                ]
+                if deltas:
+                    features.append(feature)
+                    wear_targets.append(max(deltas))
+                    pace_targets.append(float(lap.get("lap_time_ms") or 0) / 1000.0)
 
-            slope = robust_slope(pace_points)
+            query = list(current_query_base)
+            # Missing pre-migration context values use the compound sample median.
+            for index in (1, 2, 3, 7, 8, 9):
+                if query[index] == 0.0 and features:
+                    query[index] = float(median([row[index] for row in features]))
+            wear_prediction, wear_coeffs, wear_rmse = self._ridge_fit_predict(features, wear_targets, query)
+            _pace_prediction, pace_coeffs, pace_rmse = self._ridge_fit_predict(features, pace_targets, query)
+            deg_slope = pace_coeffs[0] if pace_coeffs else None
             result["compounds"][compound] = {
                 "sample_size": len(laps),
                 "wear_sample_size": len(wear_rates),
-                "wear_per_lap_pct": round(float(median(wear_rates)), 3)
-                if wear_rates
-                else None,
-                "max_wear_per_lap_pct": round(float(median(max_wear_rates)), 3)
-                if max_wear_rates
-                else None,
-                "wheel_wear_per_lap_pct": [
-                    round(float(median(values)), 3) if values else None
-                    for values in wheel_wear_rates
-                ],
-                "slope_s_per_lap": (
-                    round(max(-0.1, min(1.5, float(slope))), 4)
-                    if slope is not None
-                    else None
-                ),
-                "source": "personal_track_history",
+                "wear_per_lap_pct": round(float(median(wear_rates)), 3) if wear_rates else None,
+                "max_wear_per_lap_pct": round(float(median(max_wear_rates)), 3) if max_wear_rates else None,
+                "wheel_wear_per_lap_pct": [round(float(median(values)), 3) if values else None for values in wheel_wear_rates],
+                "condition_adjusted_wear_per_lap_pct": round(max(0.0, float(wear_prediction)), 3) if wear_prediction is not None else None,
+                "condition_adjusted_deg_s_per_lap": round(max(-0.1, min(1.5, float(deg_slope))), 4) if deg_slope is not None else None,
+                "slope_s_per_lap": round(max(-0.1, min(1.5, float(deg_slope))), 4) if deg_slope is not None else None,
+                "regression_rmse_wear": round(float(wear_rmse), 3) if wear_rmse is not None else None,
+                "regression_rmse_pace_s": round(float(pace_rmse), 3) if pace_rmse is not None else None,
+                "source": "condition_adjusted_personal_regression" if wear_prediction is not None else "personal_track_history",
             }
         return result
+
+    async def compound_run_summary(
+        self, track_id: int, compound: str, mode_profile: str | None = None
+    ) -> dict[str, Any]:
+        async with self._lock:
+            return await asyncio.to_thread(
+                self._compound_run_summary_sync, int(track_id), compound.upper(), mode_profile
+            )
+
+    def _compound_run_summary_sync(
+        self, track_id: int, compound: str, mode_profile: str | None
+    ) -> dict[str, Any]:
+        from statistics import median
+        query = """
+            SELECT l.lap_time_ms, l.wear_start_json, l.wear_end_json,
+                   COALESCE(NULLIF(l.mode_profile, ''), s.mode_profile, '') AS mode_profile
+            FROM laps AS l
+            LEFT JOIN sessions AS s ON s.session_uid=l.session_uid
+            WHERE l.track_id=? AND l.compound=? AND l.valid=1 AND l.lap_time_ms>0
+        """
+        params: list[Any] = [track_id, compound]
+        if mode_profile:
+            query += " AND COALESCE(NULLIF(l.mode_profile, ''), s.mode_profile, '')=?"
+            params.append(mode_profile)
+        query += " ORDER BY created_at DESC LIMIT 100"
+        with self._connect() as db:
+            rows = db.execute(query, tuple(params)).fetchall()
+        times: list[int] = []
+        wears: list[float] = []
+        for row in rows:
+            times.append(int(row["lap_time_ms"]))
+            try:
+                start, end = json.loads(row["wear_start_json"] or "[]"), json.loads(row["wear_end_json"] or "[]")
+                if len(start) == 4 and len(end) == 4:
+                    wears.append(max(max(0.0, float(b) - float(a)) for a, b in zip(start, end)))
+            except (json.JSONDecodeError, TypeError):
+                pass
+        if not times:
+            return {"available": False, "laps": 0}
+        seconds = int(median(times))
+        minutes, rem = divmod(seconds, 60_000)
+        sec, millis = divmod(rem, 1000)
+        return {
+            "available": True, "laps": len(times), "compound": compound,
+            "median_lap": f"{minutes}:{sec:02d}.{millis:03d}",
+            "max_wear_per_lap_pct": round(float(median(wears)), 3) if wears else 0.0,
+            "confidence": "high" if len(times) >= 12 else "medium" if len(times) >= 5 else "low",
+        }
 
     async def save_line_metrics(
         self,
@@ -1161,6 +1404,23 @@ class PitWallDatabase:
                 strategy,
             )
 
+    @staticmethod
+    def _storable_plans(strategy: dict[str, Any]) -> list[dict[str, Any]]:
+        """Trim the ranked plan list before persisting it.
+
+        A full ranked list with every plan's per-lap ``stint_models`` is roughly
+        20 KB per snapshot. Only the top alternatives are ever re-read (to explain
+        why the chosen call beat the next one), and the per-lap simulation can be
+        regenerated, so it is not stored.
+        """
+        plans = strategy.get("plans", []) or []
+        trimmed: list[dict[str, Any]] = []
+        for plan in plans[:3]:
+            if not isinstance(plan, dict):
+                continue
+            trimmed.append({key: value for key, value in plan.items() if key != "stint_models"})
+        return trimmed
+
     def _save_strategy_snapshot_sync(
         self,
         state: dict[str, Any],
@@ -1180,7 +1440,7 @@ class PitWallDatabase:
                     int(state.get("current_lap", 0)),
                     str(state.get("race_control_phase", "green")),
                     json.dumps(strategy.get("recommended", {})),
-                    json.dumps(strategy.get("plans", [])),
+                    json.dumps(self._storable_plans(strategy)),
                     json.dumps(
                         {
                             "confidence": strategy.get("confidence"),

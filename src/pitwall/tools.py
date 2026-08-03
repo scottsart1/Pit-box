@@ -6,6 +6,7 @@ from typing import Any
 from .analysis import AnalysisEngine, fmt_ms
 from .config import settings
 from .database import PitWallDatabase
+from .identity import display_name, match_drivers
 from .setup_advisor import SetupAdvisor
 from .state import StateStore
 from .strategy import StrategyEngine
@@ -28,28 +29,58 @@ class TelemetryTools:
 
     @staticmethod
     def _resolve_driver(state: dict[str, Any], driver: str) -> dict[str, Any] | None:
+        """Resolve a spoken driver reference to a car.
+
+        Accepts the player, a relative position ("ahead", "behind", "leader"),
+        the teammate, a grid slot ("p3"), a car number, and any name the driver
+        might use — first name, surname, full name or nickname — through the
+        participant identity table. The previous substring match on the packet
+        surname meant "Max" and "car 1" never resolved at all.
+        """
         query = driver.strip().lower()
         player_position = int(state.get("player_position", 0))
         if query in {"me", "myself", "player", "my car", "i", "mine"}:
             player_index = int(state.get("player_car_index", 0))
-            return next(
+            drivers = list(state.get("drivers", []))
+            matched = next(
                 (
                     item
-                    for item in state.get("drivers", [])
+                    for item in drivers
                     if item.get("car_idx") == player_index
                 ),
                 None,
             )
-        for item in state.get("drivers", []):
+            if matched is not None:
+                return matched
+            # Some replay/test feeds omit car_idx but preserve F1 packet order.
+            # Falling back to the indexed row is safer than reporting that the
+            # player's own timing data is unavailable.
+            if 0 <= player_index < len(drivers):
+                return drivers[player_index]
+            return None
+        drivers = list(state.get("drivers", []))
+        for item in drivers:
             if query == "ahead" and item.get("position") == player_position - 1:
                 return item
             if query == "behind" and item.get("position") == player_position + 1:
                 return item
             if query == "leader" and item.get("position") == 1:
                 return item
+            if query in {"teammate", "team mate"} and item.get("is_teammate"):
+                return item
             if query == f"p{item.get('position')}":
                 return item
-            if query and query in item.get("name", "").lower():
+
+        # Name, nickname, full name or car number, matched on whole tokens.
+        matches = match_drivers(drivers, query)
+        if matches:
+            return matches[0]
+
+        # Last resort: the original loose surname containment, so an unusual
+        # online display name still resolves.
+        for item in drivers:
+            name = str(item.get("name", "")).lower()
+            if query and name and query in name:
                 return item
         return None
 
@@ -242,6 +273,393 @@ class TelemetryTools:
             "tyre_age": match.get("tyre_age"),
         }
 
+
+    @staticmethod
+    def _gap_trend(driver: dict[str, Any]) -> dict[str, Any]:
+        history = list(driver.get("gap_history", []) or [])
+        if len(history) < 2:
+            return {"trend": "unknown", "gap_change_s": None, "window_s": None}
+        latest = history[-1]
+        latest_time = float(latest.get("session_time_s", 0.0))
+        anchor = None
+        for sample in reversed(history[:-1]):
+            if latest_time - float(sample.get("session_time_s", latest_time)) >= 8.0:
+                anchor = sample
+                break
+        if anchor is None:
+            anchor = history[0]
+        window = latest_time - float(anchor.get("session_time_s", latest_time))
+        if window < 3.0:
+            return {"trend": "unknown", "gap_change_s": None, "window_s": None}
+        current_gap = abs(float(latest.get("gap_s", 0.0)))
+        prior_gap = abs(float(anchor.get("gap_s", 0.0)))
+        change = round(current_gap - prior_gap, 2)
+        if change <= -0.15:
+            trend = "closing"
+        elif change >= 0.15:
+            trend = "falling_back"
+        else:
+            trend = "steady"
+        return {
+            "trend": trend,
+            "gap_change_s": change,
+            "window_s": round(window, 1),
+        }
+
+    async def get_cars_ahead_progress(self, top_n: int = 4) -> dict[str, Any]:
+        """Return current gaps and measured gap trend for the nearest cars ahead.
+
+        Closing status comes from live gap samples, never from a sign-ambiguous
+        comparison of one latest lap. Latest-lap pace is included as supporting
+        evidence only.
+        """
+        state = await self.store.snapshot_analysis()
+        player_index = int(state.get("player_car_index", -1))
+        player = next(
+            (
+                item
+                for item in state.get("drivers", [])
+                if int(item.get("car_idx", -2)) == player_index
+            ),
+            None,
+        )
+        player_last_ms = int((player or {}).get("last_lap_ms", state.get("last_lap_ms", 0)) or 0)
+        ahead = sorted(
+            (
+                driver
+                for driver in state.get("drivers", [])
+                if driver.get("gap_to_player_s") is not None
+                and float(driver.get("gap_to_player_s", 0.0)) < 0
+            ),
+            key=lambda driver: abs(float(driver.get("gap_to_player_s", 0.0))),
+        )[: max(1, min(12, int(top_n)))]
+        cars: list[dict[str, Any]] = []
+        for driver in ahead:
+            rival_last_ms = int(driver.get("last_lap_ms", 0) or 0)
+            pace_delta_s = (
+                round((player_last_ms - rival_last_ms) / 1000.0, 3)
+                if player_last_ms > 0 and rival_last_ms > 0
+                else None
+            )
+            cars.append(
+                {
+                    "position": int(driver.get("position", 0)),
+                    "driver": driver.get("name", "Unknown"),
+                    "gap_s": round(abs(float(driver.get("gap_to_player_s", 0.0))), 2),
+                    "last_lap": fmt_ms(rival_last_ms),
+                    "player_last_lap": fmt_ms(player_last_ms),
+                    "pace_delta_s": pace_delta_s,
+                    "tyre": driver.get("tyre_compound"),
+                    "tyre_age": driver.get("tyre_age"),
+                    **self._gap_trend(driver),
+                }
+            )
+        return {
+            "available": bool(cars) and bool(state.get("connected")),
+            "telemetry_stale": bool(state.get("telemetry_stale")),
+            "cars": cars,
+            "interpretation": (
+                "pace_delta_s is player lap minus rival lap: positive means the player was slower."
+            ),
+        }
+
+    @staticmethod
+    def _wheel_map(values: Any) -> dict[str, float] | None:
+        """Label a four-wheel array, or None when the car reports nothing."""
+        items = [float(value) for value in (values or [])]
+        if len(items) != 4 or not any(items):
+            return None
+        return dict(zip(("FL", "FR", "RL", "RR"), (round(v, 1) for v in items)))
+
+    def _car_summary(self, driver: dict[str, Any], detail: bool = False) -> dict[str, Any]:
+        """One car's public state, omitting anything the game withholds.
+
+        Restricted cars (online telemetry privacy) report structural zeros. They
+        are reported as absent fields rather than as real zeros, so the engineer
+        says "not available" instead of "no wear".
+        """
+        restricted = bool(driver.get("restricted"))
+        gap = driver.get("gap_to_player_s")
+        summary: dict[str, Any] = {
+            "car_idx": driver.get("car_idx"),
+            "driver": display_name(driver),
+            "team": driver.get("team") or None,
+            "position": driver.get("position") or None,
+            "gap_to_player_s": round(float(gap), 2) if gap is not None else None,
+            "relative": (
+                None if gap is None else ("ahead" if float(gap) < 0 else "behind")
+            ),
+            "tyre": driver.get("tyre_compound"),
+            "tyre_age_laps": driver.get("tyre_age"),
+            "pit_stops": driver.get("pit_stops"),
+            "last_lap": fmt_ms(int(driver.get("last_lap_ms", 0) or 0)),
+            "best_lap": fmt_ms(int(driver.get("best_lap_ms", 0) or 0)),
+            "status": driver.get("status"),
+            "is_teammate": bool(driver.get("is_teammate")),
+            "telemetry_restricted": restricted,
+        }
+        result_label = str(driver.get("result_label") or "")
+        if result_label and result_label not in {"active", "invalid"}:
+            summary["result"] = result_label
+        if driver.get("pit_lane_timer_active"):
+            summary["in_pit_lane"] = True
+            summary["pit_lane_time_s"] = round(
+                int(driver.get("pit_lane_time_ms", 0) or 0) / 1000.0, 1
+            )
+            stationary = int(driver.get("pit_stop_timer_ms", 0) or 0)
+            if stationary:
+                summary["stationary_time_s"] = round(stationary / 1000.0, 1)
+        if restricted:
+            return summary
+
+        wear = self._wheel_map(driver.get("tyre_wear"))
+        if wear is not None:
+            summary["tyre_wear_pct"] = wear
+            summary["max_tyre_wear_pct"] = max(wear.values())
+        if driver.get("ers_pct") is not None:
+            summary["ers_pct"] = driver.get("ers_pct")
+        if driver.get("fuel_remaining_laps") is not None:
+            summary["fuel_laps_delta"] = driver.get("fuel_remaining_laps")
+        damage = driver.get("damage") or {}
+        significant = {
+            key: value
+            for key, value in damage.items()
+            if isinstance(value, int) and value > 0
+        }
+        faults = [key for key in ("drs_fault", "ers_fault") if damage.get(key)]
+        if significant or faults:
+            summary["damage"] = {**significant, **{key: True for key in faults}}
+        if not detail:
+            return summary
+
+        summary["grid_position"] = driver.get("grid_position") or None
+        summary["speed_kph"] = driver.get("speed_kph") or None
+        summary["drs_open"] = bool(driver.get("drs_open"))
+        summary["overtake_active"] = bool(driver.get("overtake_active"))
+        summary["overtake_available"] = bool(driver.get("overtake_available"))
+        summary["tyre_inner_temps_c"] = self._wheel_map(
+            driver.get("tyre_inner_temps_c")
+        )
+        summary["blisters_pct"] = self._wheel_map(driver.get("blisters"))
+        summary["component_wear_pct"] = {
+            key: round(float(value), 1)
+            for key, value in (driver.get("component_wear") or {}).items()
+            if float(value) > 0
+        } or None
+        summary["stints"] = driver.get("tyre_stints", [])
+        summary["penalties_s"] = driver.get("penalties_s") or None
+        speed_trap = float(driver.get("speed_trap_kph", 0.0) or 0.0)
+        summary["speed_trap_kph"] = round(speed_trap, 1) if speed_trap else None
+        return summary
+
+    async def get_rival_car_state(self, driver: str) -> dict[str, Any]:
+        """Everything the game publishes about one other car.
+
+        Every telemetry packet carries all 24 cars, so a rival's tyres, wear,
+        energy, damage and pit state are answerable directly rather than being
+        inferred from lap times.
+        """
+        state = await self.store.snapshot_analysis()
+        match = self._resolve_driver(state, driver)
+        if not match:
+            return {
+                "available": False,
+                "reason": f"No car in this session matches '{driver}'.",
+            }
+        summary = self._car_summary(match, detail=True)
+        summary["available"] = True
+        if match.get("restricted"):
+            summary["note"] = (
+                "This car's telemetry is restricted by its owner's privacy "
+                "setting, so condition and energy are unavailable."
+            )
+        return summary
+
+    async def get_field_state(
+        self,
+        top_n: int = 24,
+        around_player: bool = False,
+    ) -> dict[str, Any]:
+        """Compact one-line state for the whole field, ordered by position.
+
+        Retired and garaged cars are included, listed after the running order,
+        because "who is left in this race" is part of the picture.
+        """
+        state = await self.store.snapshot_analysis()
+        drivers = list(state.get("drivers", []))
+        running = sorted(
+            (d for d in drivers if int(d.get("position", 0) or 0) > 0),
+            key=lambda item: int(item["position"]),
+        )
+        if around_player:
+            position = int(state.get("player_position", 0) or 0)
+            radius = max(2, int(top_n) // 2)
+            running = [
+                d
+                for d in running
+                if abs(int(d.get("position", 0)) - position) <= radius
+            ]
+        out_of_race = [
+            self._car_summary(d)
+            for d in drivers
+            if int(d.get("position", 0) or 0) <= 0
+            and not d.get("is_player")
+            and str(d.get("result_label") or "") not in {"", "active", "invalid"}
+        ]
+        return {
+            "session_type": state.get("session_type"),
+            "lap": state.get("current_lap"),
+            "total_laps": state.get("total_laps"),
+            "race_control_phase": state.get("race_control_phase"),
+            "player_position": state.get("player_position"),
+            "cars": [self._car_summary(d) for d in running[: max(1, int(top_n))]],
+            "out_of_race": out_of_race,
+        }
+
+    async def get_race_flow(self) -> dict[str, Any]:
+        """How the race is developing, beyond the player's own position.
+
+        Answers "what is going on out there": who has stopped and who has not,
+        which cars are in the pit lane right now, who has gained or lost places,
+        who has retired, and which cars behind are within undercut range.
+        """
+        state = await self.store.snapshot_analysis()
+        mode = str(state.get("mode_profile", "idle"))
+        drivers = [d for d in state.get("drivers", []) if d.get("active")]
+        player_position = int(state.get("player_position", 0) or 0)
+        running = sorted(
+            (d for d in drivers if int(d.get("position", 0) or 0) > 0),
+            key=lambda item: int(item["position"]),
+        )
+
+        def name(driver: dict[str, Any]) -> str:
+            return display_name(driver)
+
+        stopped = [d for d in running if int(d.get("pit_stops", 0) or 0) > 0]
+        yet_to_stop = [d for d in running if int(d.get("pit_stops", 0) or 0) == 0]
+        in_pit_lane = [
+            {
+                "driver": name(d),
+                "position": d.get("position"),
+                "stationary_time_s": round(
+                    int(d.get("pit_stop_timer_ms", 0) or 0) / 1000.0, 1
+                ),
+            }
+            for d in running
+            if d.get("pit_lane_timer_active")
+        ]
+        retired = [
+            {"driver": name(d), "result": d.get("result_label")}
+            for d in drivers
+            if str(d.get("result_label") or "") in {
+                "retired", "did not finish", "disqualified", "not classified"
+            }
+        ]
+
+        # Position change since the grid, from the packet's own grid position.
+        movers: list[dict[str, Any]] = []
+        for driver in running:
+            grid = int(driver.get("grid_position", 0) or 0)
+            position = int(driver.get("position", 0) or 0)
+            if grid > 0 and position > 0 and grid != position:
+                movers.append(
+                    {
+                        "driver": name(driver),
+                        "grid": grid,
+                        "position": position,
+                        "places_gained": grid - position,
+                    }
+                )
+        movers.sort(key=lambda item: abs(int(item["places_gained"])), reverse=True)
+
+        # Cars close enough behind that a stop by them threatens track position.
+        # Both the timing gap and the classified position must agree that the
+        # car is behind: a lapped car can show a positive gap while running in
+        # front, and would otherwise be reported as an undercut threat.
+        undercut_range: list[dict[str, Any]] = []
+        for driver in running:
+            gap = driver.get("gap_to_player_s")
+            position = int(driver.get("position", 0) or 0)
+            if gap is None or driver.get("is_player"):
+                continue
+            if driver.get("pit_lane_timer_active"):
+                continue
+            if player_position <= 0 or position <= player_position:
+                continue
+            if 0 < float(gap) <= 25.0:
+                undercut_range.append(
+                    {
+                        "driver": name(driver),
+                        "position": position,
+                        "gap_behind_s": round(float(gap), 2),
+                        "tyre": driver.get("tyre_compound"),
+                        "tyre_age_laps": driver.get("tyre_age"),
+                        "pit_stops": driver.get("pit_stops"),
+                    }
+                )
+        undercut_range.sort(key=lambda item: float(item["gap_behind_s"]))
+
+        leader = running[0] if running else None
+        return {
+            "available": bool(running),
+            "mode_profile": mode,
+            "lap": state.get("current_lap"),
+            "total_laps": state.get("total_laps"),
+            "race_control_phase": state.get("race_control_phase"),
+            "safety_car": state.get("safety_car"),
+            "player_position": player_position,
+            "leader": name(leader) if leader else None,
+            "cars_running": len(running),
+            "cars_stopped": len(stopped),
+            "cars_yet_to_stop": [
+                {
+                    "driver": name(d),
+                    "position": d.get("position"),
+                    "tyre": d.get("tyre_compound"),
+                    "tyre_age_laps": d.get("tyre_age"),
+                }
+                for d in yet_to_stop
+            ],
+            "in_pit_lane_now": in_pit_lane,
+            "retired": retired,
+            "biggest_movers": movers[:5],
+            "cars_within_undercut_range": undercut_range[:5],
+            "note": (
+                "Stop counts and tyre ages come from the timing feed. "
+                "Use predict_rival_strategy for estimated future stop laps."
+            ),
+        }
+
+    async def get_flag_status(self) -> dict[str, Any]:
+        """Marshal-zone flags around the lap, relative to the player.
+
+        The session packet publishes up to 21 zones with a live flag each. This
+        is the only field-wide source of *where* a yellow is, which the previous
+        release never read.
+        """
+        state = await self.store.snapshot_analysis()
+        zones = list(state.get("marshal_zones", []) or [])
+        track_length = float(state.get("track_length_m", 0) or 0)
+        lap_distance = float(state.get("lap_distance_m", 0) or 0)
+        active = [zone for zone in zones if zone.get("flag") not in {"none", "green", "unknown"}]
+        for zone in active:
+            start = float(zone.get("start_m", 0.0))
+            ahead = start - lap_distance
+            if ahead < 0 and track_length:
+                ahead += track_length
+            zone["distance_ahead_m"] = round(ahead, 1)
+        active.sort(key=lambda zone: float(zone.get("distance_ahead_m", 0.0)))
+        return {
+            "available": bool(zones),
+            "car_flag": state.get("fia_flag"),
+            "race_control_phase": state.get("race_control_phase"),
+            "zone_count": len(zones),
+            "active_zones": active,
+            "next_incident_zone": active[0] if active else None,
+            "drs_zones": state.get("drs_zones", []),
+            "active_aero_zones": state.get("active_aero_zones", []),
+        }
+
     async def get_driver_lap_history(
         self,
         driver: str,
@@ -273,6 +691,52 @@ class TelemetryTools:
                 float(state.get("last_packet_at", 0))
                 - float(match.get("history_updated_at", 0)),
             ),
+        }
+
+    async def get_rival_sector_comparison(self, driver: str) -> dict[str, Any]:
+        """Compare the latest matched valid player/rival sectors.
+
+        Deltas are player minus rival, so a positive value is time lost by the
+        player. Matching by lap sequence avoids mixing an in-lap with a flying lap.
+        """
+        state = await self.store.snapshot_analysis()
+        rival = self._resolve_driver(state, driver)
+        player = self._resolve_driver(state, "me")
+        if not rival or not player:
+            return {"available": False, "reason": "Driver timing data is unavailable."}
+        player_laps = [
+            lap for lap in player.get("lap_history", [])
+            if int(lap.get("lap_ms", 0)) > 0 and all(int(lap.get(key, 0)) > 0 for key in ("s1_ms", "s2_ms", "s3_ms"))
+        ]
+        rival_laps = [
+            lap for lap in rival.get("lap_history", [])
+            if int(lap.get("lap_ms", 0)) > 0 and all(int(lap.get(key, 0)) > 0 for key in ("s1_ms", "s2_ms", "s3_ms"))
+        ]
+        if not player_laps or not rival_laps:
+            return {"available": False, "reason": f"No complete matched sectors are available for {rival.get('name', driver)} yet."}
+        # Prefer the same lap number. Fall back to the latest complete lap from each
+        # car because packet history can be restricted for remote cars.
+        rival_by_lap = {int(lap.get("lap_num", -1)): lap for lap in rival_laps}
+        pair = next(
+            ((lap, rival_by_lap[int(lap.get("lap_num", -1))]) for lap in reversed(player_laps) if int(lap.get("lap_num", -1)) in rival_by_lap),
+            None,
+        )
+        if pair is None:
+            pair = (player_laps[-1], rival_laps[-1])
+        player_lap, rival_lap = pair
+        deltas = {
+            "s1": round((int(player_lap["s1_ms"]) - int(rival_lap["s1_ms"])) / 1000.0, 3),
+            "s2": round((int(player_lap["s2_ms"]) - int(rival_lap["s2_ms"])) / 1000.0, 3),
+            "s3": round((int(player_lap["s3_ms"]) - int(rival_lap["s3_ms"])) / 1000.0, 3),
+        }
+        return {
+            "available": True,
+            "driver": rival.get("name", driver),
+            "player_lap": fmt_ms(int(player_lap.get("lap_ms", 0))),
+            "rival_lap": fmt_ms(int(rival_lap.get("lap_ms", 0))),
+            "sector_deltas_s": deltas,
+            "total_delta_s": round(sum(deltas.values()), 3),
+            "interpretation": "Positive sector delta means the player was slower.",
         }
 
     async def get_rival_pace_analysis(self, driver: str) -> dict[str, Any]:
@@ -360,10 +824,19 @@ class TelemetryTools:
         state = await self.store.snapshot_analysis()
         tyre = state["tyre"]
         wear = tyre.get("wear", [0, 0, 0, 0])
-        temps = tyre.get("inner_temps_c", [0, 0, 0, 0])
+        temps = [float(value) for value in tyre.get("inner_temps_c", [0, 0, 0, 0])]
         average_wear = sum(wear) / len(wear) if wear else 0
         front_temp = sum(temps[:2]) / 2 if len(temps) >= 4 else 0
         rear_temp = sum(temps[2:]) / 2 if len(temps) >= 4 else 0
+        temperature_unit = str(state.get("temperature_unit", "c")).lower()
+        if temperature_unit == "f":
+            spoken_temps = [round(value * 9.0 / 5.0 + 32.0, 1) for value in temps]
+            spoken_delta = round((front_temp - rear_temp) * 9.0 / 5.0, 1)
+            spoken_label = "F"
+        else:
+            spoken_temps = [round(value, 1) for value in temps]
+            spoken_delta = round(front_temp - rear_temp, 1)
+            spoken_label = "C"
         deg = state.get("analysis", {}).get("deg_model", {})
         return {
             "compound": tyre["compound"],
@@ -372,6 +845,9 @@ class TelemetryTools:
             "max_wear_pct": round(max(wear or [0]), 1),
             "wheel_order": ["FL", "FR", "RL", "RR"],
             "wear": wear if detail else None,
+            "temperature_unit": spoken_label,
+            "inner_temps": spoken_temps if detail else None,
+            "front_to_rear_temp_delta": spoken_delta,
             "inner_temps_c": temps if detail else None,
             "front_to_rear_temp_delta_c": round(front_temp - rear_temp, 1),
             "blisters": tyre.get("blisters", []),
@@ -576,7 +1052,17 @@ class TelemetryTools:
             "preparation": preparation,
             "driving_opportunity": opportunity,
             "attack_window": "next lap" if gap <= 1.0 and state.get("ers_pct", 0) >= 30 else "build the gap/energy first",
-            "note": "Opponent ERS is not assumed when telemetry does not expose it.",
+            # The car-status packet publishes every car's energy store, so the
+            # rival's battery is measured rather than assumed. It is absent only
+            # when that car's telemetry is restricted online.
+            "rival_ers_pct": target.get("ers_pct"),
+            "rival_overtake_available": bool(target.get("overtake_available")),
+            "rival_damage": {
+                key: value
+                for key, value in (target.get("damage") or {}).items()
+                if value
+            } or None,
+            "rival_telemetry_restricted": bool(target.get("restricted")),
         }
 
     async def get_defence_plan(self, driver: str = "behind") -> dict[str, Any]:
@@ -600,6 +1086,9 @@ class TelemetryTools:
             "gap_s": round(gap, 2),
             "rival_tyre": {"compound": target.get("tyre_compound"), "age": target.get("tyre_age")},
             "ers_pct": state.get("ers_pct"),
+            "rival_ers_pct": target.get("ers_pct"),
+            "rival_overtake_available": bool(target.get("overtake_available")),
+            "rival_telemetry_restricted": bool(target.get("restricted")),
             "recommendation": recommendation,
             "warning": "Avoid weaving or reactive moves; make one clear defensive choice.",
         }
@@ -780,6 +1269,40 @@ class TelemetryTools:
             recommendation = await self.setup_advisor.generate("hybrid")
         return recommendation.get("pit_adjustment", recommendation)
 
+    # Tools that only a planning question needs. Sending the full catalogue on
+    # every request bloats the cacheable prefix and widens the model's choice
+    # for questions that could never need these, so they are offered only on the
+    # deep route.
+    DEEP_ONLY_TOOLS = frozenset(
+        {
+            "what_if",
+            "get_championship_scenario",
+            "get_setup_learning",
+            "get_setup_correlation",
+            "generate_setup",
+            "get_front_wing_adjustment",
+            "get_progress_trend",
+            "get_stored_history",
+            "get_practice_focus",
+            "get_racing_line_analysis",
+        }
+    )
+
+    def schemas_for_route(self, route: str) -> list[dict[str, Any]]:
+        """Tool schemas appropriate to a request route.
+
+        The deep route sees everything. Fast and normal routes drop the
+        planning, setup-generation and long-history tools, which no live
+        "what's my fuel" or "where is the car ahead" question can need.
+        """
+        if route == "deep":
+            return self.schemas()
+        return [
+            schema
+            for schema in self.schemas()
+            if schema["name"] not in self.DEEP_ONLY_TOOLS
+        ]
+
     def schemas(self) -> list[dict[str, Any]]:
         definitions = [
             (
@@ -824,12 +1347,61 @@ class TelemetryTools:
                 {"target": {"type": "string"}},
             ),
             (
+                "get_cars_ahead_progress",
+                "Get nearest cars ahead with measured live gap trend and latest-lap pace evidence.",
+                {"top_n": {"type": "integer", "minimum": 1, "maximum": 12}},
+            ),
+            (
+                "get_rival_car_state",
+                (
+                    "Get another car's full published state: tyre compound and "
+                    "age, per-wheel wear and temperatures, energy, fuel, damage, "
+                    "penalties, stints and live pit-lane status. Use this for any "
+                    "question about a specific rival rather than the player."
+                ),
+                {"driver": {"type": "string"}},
+            ),
+            (
+                "get_field_state",
+                (
+                    "Get a compact one-line state for every car in the field, in "
+                    "running order, including retired and garaged cars."
+                ),
+                {
+                    "top_n": {"type": "integer", "minimum": 1, "maximum": 24},
+                    "around_player": {"type": "boolean"},
+                },
+            ),
+            (
+                "get_race_flow",
+                (
+                    "Get how the race is developing across the field: who has "
+                    "stopped and who has not, who is in the pit lane now, who has "
+                    "gained or lost places, who has retired, and which cars behind "
+                    "are within undercut range."
+                ),
+                {},
+            ),
+            (
+                "get_flag_status",
+                (
+                    "Get live marshal-zone flags around the lap with the distance "
+                    "to the next incident zone, plus DRS and active-aero zones."
+                ),
+                {},
+            ),
+            (
                 "get_driver_lap_history",
                 "Get exact recent lap and sector history for a driver or the player.",
                 {
                     "driver": {"type": "string"},
                     "n_laps": {"type": "integer", "minimum": 1, "maximum": 20},
                 },
+            ),
+            (
+                "get_rival_sector_comparison",
+                "Compare the player's latest matched sector times with a named driver; positive delta means player time lost.",
+                {"driver": {"type": "string"}},
             ),
             (
                 "get_rival_pace_analysis",

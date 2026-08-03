@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
+import logging
 import time
 from collections import deque
 from typing import Any
@@ -12,6 +14,8 @@ from .setup_advisor import SetupAdvisor
 from .state import StateStore
 from .strategy import StrategyEngine
 from .voice import NativeVoiceController
+
+log = logging.getLogger(__name__)
 
 # Reliability damage matters as much as aero damage, but gearbox, engine and
 # DRS/ERS faults were previously invisible to the radio: they are captured in
@@ -28,6 +32,38 @@ DAMAGE_KEYS = (
     "engine",
 )
 DAMAGE_FAULT_KEYS = ("drs_fault", "ers_fault")
+# Delivery priority. Recorded sessions showed only a third of queued calls ever
+# reaching the driver: the queue was strictly first-in-first-out and every
+# non-critical call had to wait out the same interval, so a rival stopping or a
+# battery warning expired behind a routine progress update. Lower is spoken
+# first, and only ``ROUTINE`` waits for the full spacing interval.
+CRITICAL, IMPORTANT, ROUTINE = 0, 1, 2
+EVENT_PRIORITY = {
+    "race_control": CRITICAL,
+    "safety_car_delta": CRITICAL,
+    "penalty": CRITICAL,
+    "penalty_service": CRITICAL,
+    "damage": CRITICAL,
+    "engine_failure": CRITICAL,
+    "blue_flag": CRITICAL,
+    "race_start": CRITICAL,
+    "sc_restart": CRITICAL,
+    "weather_crossover": CRITICAL,
+    "compound_requirement": IMPORTANT,
+    "undercut_threat": IMPORTANT,
+    "rival_pitted": IMPORTANT,
+    "rival_pace": IMPORTANT,
+    "strategy_change": IMPORTANT,
+    "tyre_wear": IMPORTANT,
+    "fuel_warning": IMPORTANT,
+    "energy_low": IMPORTANT,
+    "lap_deleted": IMPORTANT,
+    "component_wear": IMPORTANT,
+    "quali_clear_air": IMPORTANT,
+    "warning": IMPORTANT,
+    "progress_update": ROUTINE,
+    "corner_coaching": ROUTINE,
+}
 # Phases in which a safety-car delta time is being enforced.
 NEUTRALISED_PHASES = frozenset(
     {
@@ -112,6 +148,40 @@ class ProactiveEngineer:
         return {"enabled": bool(enabled), "cadence_laps": cadence}
 
     @staticmethod
+    def _neighbour_gaps(state: dict[str, Any]) -> dict[str, Any]:
+        """Gap and name for the car directly ahead and directly behind.
+
+        Progress payloads previously read ``gap_ahead_s``/``gap_behind_s`` from
+        the session state; no such fields exist, so every progress call carried
+        two nulls. The values are derived from the standings instead, where
+        ``gap_to_player_s`` is negative ahead and positive behind.
+        """
+        result: dict[str, Any] = {"ahead": None, "behind": None}
+        position = int(state.get("player_position", 0) or 0)
+        if position <= 0:
+            return result
+        for driver in state.get("drivers", []):
+            gap = driver.get("gap_to_player_s")
+            if gap is None:
+                continue
+            slot = int(driver.get("position", 0) or 0)
+            if slot == position - 1:
+                result["ahead"] = {
+                    "driver": driver.get("name"),
+                    "gap_s": round(abs(float(gap)), 2),
+                    "tyre": driver.get("tyre_compound"),
+                    "tyre_age": driver.get("tyre_age"),
+                }
+            elif slot == position + 1:
+                result["behind"] = {
+                    "driver": driver.get("name"),
+                    "gap_s": round(abs(float(gap)), 2),
+                    "tyre": driver.get("tyre_compound"),
+                    "tyre_age": driver.get("tyre_age"),
+                }
+        return result
+
+    @staticmethod
     def _qualifying_payload(state: dict[str, Any]) -> dict[str, Any]:
         drivers = sorted(
             (
@@ -189,11 +259,7 @@ class ProactiveEngineer:
                 "lap": analyzed_lap,
                 "progress": state.get("analysis", {}).get("progress", {}),
                 "mode_profile": state.get("mode_profile"),
-                "strategy": (
-                    {}
-                    if state.get("mode_profile") == "qualifying"
-                    else state.get("strategy", {}).get("recommended", {})
-                ),
+                "strategy": self._urgent_strategy(state),
                 "target": state.get("analysis", {}).get("target", {}),
                 "racing_line": state.get("analysis", {}).get("racing_line", {}),
                 "qualifying": (
@@ -204,10 +270,7 @@ class ProactiveEngineer:
                 "gaps": (
                     {}
                     if state.get("mode_profile") == "qualifying"
-                    else {
-                        "ahead": state.get("gap_ahead_s"),
-                        "behind": state.get("gap_behind_s"),
-                    }
+                    else self._neighbour_gaps(state)
                 ),
                 "manual_test": True,
             },
@@ -247,14 +310,19 @@ class ProactiveEngineer:
             "fuel_warning", "tyre_wear", "damage", "strategy_change", "compound_requirement",
             "quali_clear_air", "blue_flag", "penalty_service", "undercut_threat",
             "safety_car_delta", "sc_restart", "energy_low", "component_wear",
-            "rival_pace", "engine_failure",
+            # A rival stop that has been superseded by a later one is no longer
+            # news. Leaving these uncoalesced filled the queue with stale stops
+            # that then aged out unspoken.
+            "rival_pace", "engine_failure", "rival_pitted",
         }
         if event_type in coalesced:
             self.pending = deque((item for item in self.pending if item.get("type") != event_type), maxlen=24)
         now = time.time()
+        priority = CRITICAL if critical else EVENT_PRIORITY.get(event_type, ROUTINE)
         event = {
             "type": event_type,
             "critical": critical,
+            "priority": priority,
             "payload": payload,
             "queued_at": now,
             "deliver_by": now + (8.0 if critical else settings.proactive_delivery_deadline_s),
@@ -373,7 +441,7 @@ class ProactiveEngineer:
                 "energy_low",
                 {"ers_pct": round(ers, 1), "regulations_2026": state.get("regulations_2026")},
                 cooldown_s=25.0,
-                expires_s=15.0,
+                expires_s=30.0,
             )
 
     def _detect_rival_pace(self, state: dict[str, Any]) -> None:
@@ -413,7 +481,7 @@ class ProactiveEngineer:
                         "closing": True,
                     },
                     cooldown_s=30.0,
-                    expires_s=20.0,
+                    expires_s=35.0,
                 )
 
     @staticmethod
@@ -485,6 +553,22 @@ class ProactiveEngineer:
             self._safe_since = time.monotonic()
         return time.monotonic() - self._safe_since >= settings.proactive_safe_hold_s
 
+    @staticmethod
+    def _urgent_strategy(state: dict[str, Any]) -> dict[str, Any]:
+        if state.get("mode_profile") == "qualifying":
+            return {}
+        recommended = state.get("strategy", {}).get("recommended", {}) or {}
+        box_lap = recommended.get("box_lap")
+        current_lap = int(state.get("current_lap", 0))
+        wear = max([float(v) for v in state.get("tyre", {}).get("wear", [0]) or [0]])
+        neutralised = str(state.get("race_control_phase", "green")) != "green"
+        urgent = (
+            neutralised
+            or wear >= 82.0
+            or (box_lap is not None and int(box_lap) <= current_lap + 1)
+        )
+        return recommended if urgent else {}
+
     async def _refresh_strategy_if_needed(self, state: dict[str, Any]) -> dict[str, Any]:
         if state.get("mode_profile") == "qualifying":
             return state
@@ -524,11 +608,7 @@ class ProactiveEngineer:
                     "lap": analyzed_lap,
                     "mode_profile": mode,
                     "progress": state.get("analysis", {}).get("progress", {}),
-                    "strategy": (
-                        {}
-                        if mode == "qualifying"
-                        else state.get("strategy", {}).get("recommended", {})
-                    ),
+                    "strategy": self._urgent_strategy(state),
                     "target": state.get("analysis", {}).get("target", {}),
                     "racing_line": state.get("analysis", {}).get("racing_line", {}),
                     "qualifying": (
@@ -537,12 +617,7 @@ class ProactiveEngineer:
                         else {}
                     ),
                     "gaps": (
-                        {}
-                        if mode == "qualifying"
-                        else {
-                            "ahead": state.get("gap_ahead_s"),
-                            "behind": state.get("gap_behind_s"),
-                        }
+                        {} if mode == "qualifying" else self._neighbour_gaps(state)
                     ),
                 },
                 cooldown_s=0.0,
@@ -590,7 +665,7 @@ class ProactiveEngineer:
             self._enqueue("fuel_warning", state.get("analysis", {}).get("fuel_model", {}), cooldown_s=90.0)
         wear = max(state.get("tyre", {}).get("wear", [0]) or [0])
         if wear >= 65:
-            self._enqueue("tyre_wear", {"wear_fl_fr_rl_rr": state.get("tyre", {}).get("wear"), "strategy": state.get("strategy", {}).get("recommended", {})}, critical=wear >= 82, cooldown_s=60.0)
+            self._enqueue("tyre_wear", {"wear_fl_fr_rl_rr": state.get("tyre", {}).get("wear"), "strategy": self._urgent_strategy(state)}, critical=wear >= 82, cooldown_s=60.0)
 
         penalties, warnings = int(state.get("penalties_s", 0)), int(state.get("corner_cutting_warnings", 0))
         if penalties > self._last_penalties:
@@ -749,7 +824,8 @@ class ProactiveEngineer:
         if recommended and strategy_signature != self._last_strategy_signature:
             old = self._last_strategy_signature
             self._last_strategy_signature = strategy_signature
-            if old:
+            stability = state.get("strategy", {}).get("stability", {})
+            if old and not stability.get("held") and self._urgent_strategy(state):
                 self._enqueue("strategy_change", recommended, cooldown_s=15.0)
 
         current_stops = {int(d.get("car_idx", -1)): int(d.get("pit_stops", 0)) for d in state.get("drivers", [])}
@@ -801,16 +877,11 @@ class ProactiveEngineer:
                     f"{quali.get('target') or 'building'}. {opportunity}."
                 )
             strategy = payload.get("strategy", {})
-            action = strategy.get("instruction") or "hold the current plan"
-            pace = (
-                target.get("target")
-                or target.get("target_lap")
-                or "target unavailable"
-            )
-            return (
-                f"Lap {payload.get('lap')} update: target {pace}; "
-                f"{action} {opportunity}."
-            )
+            pace = target.get("target") or target.get("target_lap") or "target unavailable"
+            action = strategy.get("instruction")
+            if action:
+                return f"Lap {payload.get('lap')}: target {pace}. {action}"
+            return f"Lap {payload.get('lap')}: target {pace}. {opportunity}."
         if kind == "race_control":
             return f"Race control: {payload.get('to', 'change')}. {payload.get('strategy', {}).get('instruction', 'Stand by for the revised plan.')}"
         if kind == "strategy_change":
@@ -917,23 +988,80 @@ class ProactiveEngineer:
             )
         return "Engineer update available on the dashboard."
 
-    async def _deliver(self, state: dict[str, Any]) -> None:
-        while self.pending and not self._event_still_relevant(self.pending[0], state):
-            discarded = self.pending.popleft()
-            await self.database.save_proactive_call(state, discarded, "expired or superseded", False)
+    @staticmethod
+    def _priority_of(event: dict[str, Any]) -> int:
+        if event.get("critical"):
+            return CRITICAL
+        return int(event.get("priority", EVENT_PRIORITY.get(event.get("type"), ROUTINE)))
+
+    async def _narrate(self, event: dict[str, Any], state: dict[str, Any]) -> str:
+        """Turn a deterministic event payload into spoken radio.
+
+        The deterministic template is both the safety net and the ground truth:
+        every number the engineer speaks is already in the payload, so narration
+        changes the wording, never the facts. Falling back to the template on any
+        model failure means an unsolicited call is never lost to a timeout.
+        """
+        fallback = self._fallback_text(event, state)
+        if not settings.proactive_narration_enabled:
+            return fallback
+        try:
+            spoken = await asyncio.wait_for(
+                self.brain.proactive(event),
+                timeout=settings.proactive_narration_timeout_s,
+            )
+        except Exception as exc:
+            log.debug("Proactive narration fell back to the template: %s", exc)
+            return fallback
+        spoken = " ".join((spoken or "").split())
+        return spoken or fallback
+
+    def _select(self, state: dict[str, Any]) -> dict[str, Any] | None:
+        """Drop irrelevant calls, then pick the most important speakable one.
+
+        Strict first-in-first-out meant a routine progress update at the head of
+        the queue could hold up a safety-car delta warning behind it until both
+        expired.
+        """
+        kept: list[dict[str, Any]] = []
+        for event in list(self.pending):
+            if self._event_still_relevant(event, state):
+                kept.append(event)
+        self.pending = deque(kept, maxlen=24)
         if not self.pending:
+            return None
+        return min(
+            self.pending,
+            key=lambda event: (self._priority_of(event), float(event.get("queued_at", 0.0))),
+        )
+
+    async def _deliver(self, state: dict[str, Any]) -> None:
+        for event in list(self.pending):
+            if not self._event_still_relevant(event, state):
+                await self.database.save_proactive_call(
+                    state, event, "expired or superseded", False
+                )
+
+        event = self._select(state)
+        if event is None:
             return
-        event = self.pending[0]
         if not self._safe_to_speak(state, event):
             return
-        if not event.get("critical") and time.monotonic() - self._last_spoken_at < settings.proactive_min_interval_s:
-            return
-        event = self.pending.popleft()
+        # Only routine chatter waits out the full spacing interval; an important
+        # call gets a much shorter one so it is still current when spoken.
+        if self._priority_of(event) != CRITICAL:
+            interval = (
+                settings.proactive_min_interval_s
+                if self._priority_of(event) == ROUTINE
+                else settings.proactive_important_interval_s
+            )
+            if time.monotonic() - self._last_spoken_at < interval:
+                return
+
+        with contextlib.suppress(ValueError):
+            self.pending.remove(event)
         await self.store.mutate(lambda s: s.proactive.update({"queued": len(self.pending), "delivery_state": "generating"}))
-        try:
-            text = await asyncio.wait_for(self.brain.proactive(event), timeout=max(8.0, settings.openai_timeout_s))
-        except Exception:
-            text = self._fallback_text(event, state)
+        text = await self._narrate(event, state)
         delivered = False
         try:
             delivered = await self.voice.speak_text(text)

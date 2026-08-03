@@ -30,6 +30,16 @@ class TyreState:
 
 @dataclass(slots=True)
 class DriverState:
+    """Per-car state for the whole field.
+
+    Every F1 26 telemetry packet carries all 24 cars. Earlier releases read only
+    ``player_car_index`` from the damage, status, telemetry and motion packets,
+    so questions about a rival's tyres, fuel, energy or damage could not be
+    answered even though the data had already arrived. Fields sourced from a
+    rival's car are ``None``/empty when that car's telemetry is ``restricted``
+    (online privacy setting), never silently zero.
+    """
+
     car_idx: int
     name: str = "Unknown"
     # ``team`` stays empty until a verified team-id name table exists for the
@@ -37,22 +47,74 @@ class DriverState:
     # is what teammate detection uses.
     team: str = ""
     team_id: int = -1
+    driver_id: int = -1
+    race_number: int = 0
+    ai_controlled: bool = True
     is_teammate: bool = False
+    is_player: bool = False
     active: bool = False
     position: int = 0
+    grid_position: int = 0
     current_lap: int = 0
     gap_to_player_s: float | None = None
     delta_to_front_s: float | None = None
+    delta_to_leader_s: float | None = None
     last_lap_ms: int = 0
     best_lap_ms: int = 0
     tyre_compound: str = "UNKNOWN"
+    tyre_actual_compound: int = 0
     tyre_age: int = 0
     pit_stops: int = 0
     restricted: bool = False
     status: str = ""
+    result_status: int = 0
+    result_label: str = ""
+    # Live pit-lane state. ``pit_stop_timer_ms`` is the stationary time of a stop
+    # in progress, which is what makes a rival's stop observable as it happens.
+    pit_status: int = 0
+    pit_lane_timer_active: bool = False
+    pit_lane_time_ms: int = 0
+    pit_stop_timer_ms: int = 0
+    # Condition, from the per-car damage packet.
+    tyre_wear: list[float] = field(default_factory=lambda: [0.0] * 4)
+    tyre_damage: list[int] = field(default_factory=lambda: [0] * 4)
+    blisters: list[int] = field(default_factory=lambda: [0] * 4)
+    damage: dict[str, Any] = field(default_factory=dict)
+    component_wear: dict[str, float] = field(default_factory=dict)
+    # Energy and fuel, from the per-car status packet.
+    fuel_kg: float | None = None
+    fuel_remaining_laps: float | None = None
+    ers_pct: float | None = None
+    ers_mode: int = 0
+    ers_deployed_lap_j: float = 0.0
+    ers_harvested_lap_j: float = 0.0
+    drs_allowed: bool = False
+    fia_flag: str = "none"
+    front_brake_bias: int = 0
+    fuel_mix: int = 0
+    # Live telemetry, from the per-car telemetry packets.
+    speed_kph: int = 0
+    drs_open: bool = False
+    tyre_inner_temps_c: list[float] = field(default_factory=lambda: [0.0] * 4)
+    tyre_surface_temps_c: list[float] = field(default_factory=lambda: [0.0] * 4)
+    overtake_active: bool = False
+    overtake_available: bool = False
+    # Track position, from the motion packet. Used for real traffic and rejoin
+    # estimates rather than timing-gap approximations.
+    world_x: float = 0.0
+    world_z: float = 0.0
+    lap_distance_m: float = 0.0
+    total_distance_m: float = 0.0
+    speed_trap_kph: float = 0.0
+    speed_trap_lap: int = 0
+    penalties_s: int = 0
+    warnings: int = 0
     lap_history: list[dict[str, Any]] = field(default_factory=list)
     tyre_stints: list[dict[str, Any]] = field(default_factory=list)
     position_history: list[dict[str, int]] = field(default_factory=list)
+    # Lightweight live gap samples used for evidence-based closing/falling-back
+    # answers. This is independent of restricted session-history packets.
+    gap_history: list[dict[str, float | int]] = field(default_factory=list)
     history_updated_at: float = 0.0
 
 
@@ -101,6 +163,9 @@ class SessionState:
     component_wear: dict[str, float] = field(default_factory=dict)
     # Multiplayer lobby roster, when a lobby-info packet is received.
     lobby: dict[str, int] = field(default_factory=dict)
+    # Time Trial personal best, session best and rival, with the assists each
+    # was set with. Previously the packet had no handler at all.
+    time_trial: dict[str, Any] = field(default_factory=dict)
     game_paused: bool = False
     active_cars: int = 0
     player_car_index: int = 0
@@ -126,6 +191,30 @@ class SessionState:
     rain_next_60_pct: int = 0
     track_temp_c: int = 0
     air_temp_c: int = 0
+    # Marshal-zone flags around the lap, each with a start fraction (0..1) and a
+    # flag colour. This is the only field-wide source of *where* a yellow is.
+    marshal_zones: list[dict[str, Any]] = field(default_factory=list)
+    drs_zones: list[dict[str, float]] = field(default_factory=list)
+    active_aero_zones: list[dict[str, Any]] = field(default_factory=list)
+    active_aero_track_status: int = 0
+    pit_speed_limit_kph: int = 0
+    # Session rules and assists that change how the strategy model should behave:
+    # parc fermé restricts setup changes, damage rate scales the wear model, and
+    # equal performance removes car-pace differences between rivals.
+    ai_difficulty: int = 0
+    equal_car_performance: bool = False
+    parc_ferme_rules: bool = False
+    car_damage_rate: int = 0
+    tyre_temperature_sim: int = 0
+    pit_lane_tyre_sim: bool = False
+    forecast_accuracy: int = 0
+    game_mode: int = 0
+    rule_set: int = 0
+    formula: int = 0
+    time_of_day_min: int = 0
+    network_game: bool = False
+    weekend_link_identifier: int = 0
+    session_link_identifier: int = 0
     safety_car: str = "none"
     safety_car_periods: int = 0
     virtual_safety_car_periods: int = 0
@@ -183,7 +272,53 @@ class SessionState:
     wake_rejected_count: int = 0
     wake_last_transcript: str = ""
     wake_last_reason: str = ""
+    wake_config_source: str = "default"
+    wake_input_rms: float = 0.0
+    wake_noise_rms: float = 0.0
+    wake_threshold_rms: float = 0.0
     engineer_status: str = "standing by"
+    # Spoken tyre-temperature unit selected by the driver. Telemetry itself
+    # remains Celsius.
+    temperature_unit: str = "c"
+    # Driver-selected spoken length persists across sessions, just like units.
+    radio_verbosity: str = "standard"
+    # Standing instructions the driver has given the engineer ("stop telling me
+    # about engine damage", "don't call gaps in quali"). These were previously
+    # answered once and forgotten, so the driver had to repeat them.
+    standing_instructions: list[dict[str, Any]] = field(default_factory=list)
+    # Signature of the last strategy call actually spoken to the driver.
+    strategy_spoken_signature: str = ""
+    # Driver-owned plan constraints. When enabled, strategy ranks legal plans
+    # inside these constraints instead of silently replacing the driver's call.
+    strategy_override: dict[str, Any] = field(
+        default_factory=lambda: {
+            "enabled": False,
+            "locked": False,
+            "start_compound": None,
+            "next_box_lap": None,
+            "next_compound": None,
+            "preferred_stops": None,
+            "priority": "balanced",
+            "source": "",
+            "note": "",
+            "updated_at": 0.0,
+        }
+    )
+    # Persistent driver preferences used by setup and strategy priors. These are
+    # deliberately compact and bounded; telemetry evidence still wins on safety.
+    driver_preferences: dict[str, Any] = field(
+        default_factory=lambda: {
+            "strategy_priority": "balanced",
+            "setup_bias": "neutral",
+            "rear_stability": 0,
+            "rotation": 0,
+            "traction": 0,
+            "tyre_life": 0,
+            "straight_line": 0,
+        }
+    )
+    # Grid frozen at the most recent red flag, used for restart briefings.
+    restart_grid: list[dict[str, Any]] = field(default_factory=list)
     llm_provider: str = ""
     llm_model: str = ""
     llm_last_latency_ms: float = 0.0
@@ -322,13 +457,21 @@ class StateStore:
             if name == "drivers":
                 drivers: list[dict[str, Any]] = []
                 for driver in value:
-                    if not driver.active or driver.position <= 0:
+                    is_player = int(driver.car_idx) == int(self.state.player_car_index)
+                    # Keep every participating car, not only those holding a
+                    # timing position. A retired or garaged car reports position
+                    # 0, so the previous filter deleted exactly the cars the
+                    # engineer needs in order to explain the race: retirements,
+                    # cars yet to leave the garage, and the field before the
+                    # first Lap Data packet arrives.
+                    if not is_player and not driver.active:
                         continue
                     serialized = asdict(driver)
                     if profile == "live":
                         serialized.pop("lap_history", None)
                         serialized.pop("tyre_stints", None)
                         serialized.pop("position_history", None)
+                        serialized.pop("gap_history", None)
                     drivers.append(serialized)
                 data[name] = drivers
             elif name == "traces":
@@ -382,6 +525,28 @@ class StateStore:
         async with self._lock:
             return self._serialize_locked("live")
 
+    async def peek(self, *names: str) -> dict[str, Any]:
+        """Read a few scalar fields without serialising the whole session.
+
+        Several UDP handlers only need one or two values (the player index, the
+        active-car count, the session UID) but were taking a full ``snapshot_live``
+        — a deep copy of every driver, trace point and log entry — to get them,
+        on packets that arrive at up to 60 Hz.
+
+        Containers are copied so a caller cannot mutate live state by accident;
+        scalars are returned directly, which is the common case.
+        """
+        async with self._lock:
+            result: dict[str, Any] = {}
+            for name in names:
+                value = getattr(self.state, name, None)
+                result[name] = (
+                    copy.deepcopy(value)
+                    if isinstance(value, (dict, list, set))
+                    else value
+                )
+            return result
+
     async def update(self, **values: Any) -> None:
         async with self._lock:
             for key, value in values.items():
@@ -404,7 +569,10 @@ class StateStore:
             ):
                 ptt_mask = self.state.ptt_mask
                 ptt_status = self.state.ptt_status
-                session_mode_override = self.state.session_mode_override
+                # Manual session labels and strategy locks are session-scoped.
+                # A pre-session override survives the first UID because this reset
+                # only runs when replacing one non-zero UID with another.
+                driver_preferences = copy.deepcopy(self.state.driver_preferences)
                 cadence = int(self.state.proactive.get("cadence_laps", 2))
                 proactive = {
                     "enabled": bool(self.state.proactive.get("enabled", True)),
@@ -432,13 +600,21 @@ class StateStore:
                     wake_rejected_count=self.state.wake_rejected_count,
                     wake_last_transcript=self.state.wake_last_transcript,
                     wake_last_reason=self.state.wake_last_reason,
+                    wake_config_source=self.state.wake_config_source,
+                    wake_input_rms=self.state.wake_input_rms,
+                    wake_noise_rms=self.state.wake_noise_rms,
+                    wake_threshold_rms=self.state.wake_threshold_rms,
                     llm_provider=self.state.llm_provider,
                     llm_model=self.state.llm_model,
                     llm_last_latency_ms=self.state.llm_last_latency_ms,
                     llm_last_tool_rounds=self.state.llm_last_tool_rounds,
                     llm_last_error=self.state.llm_last_error,
+                    temperature_unit=self.state.temperature_unit,
+                    radio_verbosity=self.state.radio_verbosity,
+                    strategy_spoken_signature="",
                     proactive=proactive,
-                    session_mode_override=session_mode_override,
+                    session_mode_override="auto",
+                    driver_preferences=driver_preferences,
                 )
                 self._packet_times.clear()
                 # The live-delta reference belongs to the previous session's
@@ -612,6 +788,9 @@ class StateStore:
                     "wear_start": start.get("wear", list(state.tyre.wear)),
                     "wear_end": list(state.tyre.wear),
                     "temps_end": list(state.tyre.inner_temps_c),
+                    "track_temp_c": int(state.track_temp_c),
+                    "air_temp_c": int(state.air_temp_c),
+                    "weather": state.weather,
                     "fuel_start_kg": float(start.get("fuel_kg", state.fuel_kg)),
                     "fuel_end_kg": state.fuel_kg,
                     "position": position,

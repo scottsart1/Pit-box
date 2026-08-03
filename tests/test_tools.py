@@ -119,3 +119,22 @@ async def test_qualifying_targets_rank_best_laps_not_race_gaps(stack):
     assert result["player_best"] == "1:29.700"
     assert result["target"] == "1:28.400"
     assert "gap" not in result["field"][0]
+
+
+@pytest.mark.asyncio
+async def test_tyre_condition_honors_fahrenheit_preference(stack) -> None:
+    store, _, _, _, _, tools = stack
+    await store.update(
+        tyre={
+            "compound": "HARD",
+            "age_laps": 8,
+            "wear": [10.0, 12.0, 20.0, 25.0],
+            "inner_temps_c": [92.0, 100.0, 107.0, 111.0],
+            "blisters": [0, 0, 0, 0],
+        },
+        temperature_unit="f",
+    )
+    result = await tools.get_tyre_condition(detail=True)
+    assert result["temperature_unit"] == "F"
+    assert result["inner_temps"] == [197.6, 212.0, 224.6, 231.8]
+    assert result["inner_temps_c"] == [92.0, 100.0, 107.0, 111.0]

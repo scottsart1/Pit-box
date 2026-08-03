@@ -1,0 +1,7 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(ls -la \"C:/Users/Sarth/PitWallData\" 2>/dev/null || echo \"NO DATA DIR\")"
+    ]
+  }
+}

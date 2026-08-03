@@ -140,6 +140,11 @@ class StrategyEngine:
     def __init__(self, store: StateStore, database: PitWallDatabase) -> None:
         self.store = store
         self.database = database
+        # Signature of the last snapshot actually written to SQLite. recompute()
+        # runs on the 0.35 s proactive tick, so persisting every result wrote a
+        # ~25 KB row several times a second (2 800 rows in one session, 515 MB
+        # across the database). Only materially different plans are recorded.
+        self._last_snapshot_key: tuple[Any, ...] | None = None
 
     @staticmethod
     def _valid_laps(state: dict[str, Any]) -> list[dict[str, Any]]:
@@ -260,8 +265,8 @@ class StrategyEngine:
                 compound: {
                     "compound": compound,
                     "wear_pct": 0.0,
-                    "usable_life_laps": 0,
-                    "life_span_laps": 0,
+                    "usable_life_laps": TYPICAL_STINT_LAPS.get(compound, 0),
+                    "life_span_laps": TYPICAL_STINT_LAPS.get(compound, 0) + 3,
                     "lap_delta_ms": 0,
                     "source": "fallback",
                 }
@@ -347,6 +352,13 @@ class StrategyEngine:
         if live:
             return float(median(live)), "live_lap_wear", len(live)
         model = historical.get("compounds", {}).get(compound, {})
+        adjusted = model.get("condition_adjusted_wear_per_lap_pct")
+        if adjusted is not None and int(model.get("wear_sample_size", 0)) >= 6:
+            return (
+                float(adjusted),
+                "condition_adjusted_personal_regression",
+                int(model.get("wear_sample_size", 0)),
+            )
         value = model.get("max_wear_per_lap_pct")
         if value is not None and int(model.get("wear_sample_size", 0)) >= 2:
             return (
@@ -378,8 +390,11 @@ class StrategyEngine:
         if value is not None and sample >= 3 and -0.1 <= float(value) <= 1.5:
             return max(0.0, float(value)), "live_fuel_corrected_fit", sample
         prior = historical.get("compounds", {}).get(compound, {})
-        value = prior.get("slope_s_per_lap")
+        adjusted = prior.get("condition_adjusted_deg_s_per_lap")
         sample = int(prior.get("sample_size", 0))
+        if adjusted is not None and sample >= 6 and -0.1 <= float(adjusted) <= 1.5:
+            return max(0.0, float(adjusted)), "condition_adjusted_personal_regression", sample
+        value = prior.get("slope_s_per_lap")
         if value is not None and sample >= 3 and -0.1 <= float(value) <= 1.5:
             return max(0.0, float(value)), "personal_track_history", sample
         severity = TRACK_TYRE_SEVERITY.get(int(state.get("track_id", -1)), 1.0)
@@ -730,14 +745,144 @@ class StrategyEngine:
             "evidence_samples": evidence,
         }
 
+    @staticmethod
+    def _radio_signature(plan: dict[str, Any]) -> tuple[int | None, str | None, int]:
+        box_lap = plan.get("box_lap")
+        if box_lap is None:
+            boxes = plan.get("box_laps", []) or []
+            box_lap = boxes[0] if boxes else None
+        fit = plan.get("fit_compound")
+        if not fit:
+            compounds = plan.get("compounds", []) or []
+            fit = compounds[1] if len(compounds) > 1 else None
+        return (
+            int(box_lap) if box_lap is not None else None,
+            str(fit).upper() if fit else None,
+            int(plan.get("stops_remaining", 0) or 0),
+        )
+
+    def _stabilize_radio_plan(
+        self,
+        state: dict[str, Any],
+        previous_strategy: dict[str, Any],
+        candidate: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Keep the spoken pit call stable unless a material trigger changes it."""
+        new_rec = candidate.get("recommended", {})
+        old_rec = previous_strategy.get("recommended", {})
+        current_lap = int(state.get("current_lap", 0))
+        current_compound = str(state.get("tyre", {}).get("compound", "UNKNOWN")).upper()
+        phase = str(candidate.get("neutralisation", {}).get("phase", "green"))
+        if not new_rec:
+            return candidate
+        new_rec = dict(new_rec)
+        new_rec.setdefault("committed_at_lap", current_lap)
+        new_rec["source_compound"] = current_compound
+        new_rec["neutralisation_phase"] = phase
+        candidate["recommended"] = new_rec
+        candidate["stability"] = {"held": False, "reason": "initial or material recommendation"}
+        new_override = new_rec.get("driver_override", {})
+        old_override = old_rec.get("driver_override", {}) if old_rec else {}
+        if new_override.get("active") and new_override != old_override:
+            candidate["stability"] = {"held": False, "reason": "driver strategy override changed"}
+            return candidate
+        if not old_rec or self._radio_signature(old_rec) == self._radio_signature(new_rec):
+            if old_rec:
+                new_rec["committed_at_lap"] = int(old_rec.get("committed_at_lap", current_lap))
+            return candidate
+
+        old_box, _, _ = self._radio_signature(old_rec)
+        old_phase = str(old_rec.get("neutralisation_phase", previous_strategy.get("neutralisation", {}).get("phase", "green")))
+        old_source = str(old_rec.get("source_compound", current_compound)).upper()
+        max_wear = max([float(v) for v in state.get("tyre", {}).get("wear", [0]) or [0]])
+        weather_now = bool(new_rec.get("weather_crossover")) and int(
+            new_rec.get("weather_crossover", {}).get("time_offset_min", 99)
+        ) <= 1
+        material_trigger = (
+            current_compound != old_source
+            or phase != old_phase
+            or weather_now
+            or max_wear >= 82.0
+            or (old_box is not None and current_lap > old_box)
+        )
+        if material_trigger:
+            candidate["stability"] = {"held": False, "reason": "material race-state change"}
+            return candidate
+
+        old_sig = self._radio_signature(old_rec)
+        old_ranked = next(
+            (plan for plan in candidate.get("plans", []) if self._radio_signature(plan) == old_sig),
+            None,
+        )
+        if old_ranked is None:
+            candidate["stability"] = {"held": False, "reason": "previous plan no longer feasible or ranked"}
+            return candidate
+
+        committed_at = int(old_rec.get("committed_at_lap", current_lap))
+        held_laps = max(0, current_lap - committed_at)
+        improvement = float(old_ranked.get("risk_adjusted_time_s", 1e9)) - float(
+            new_rec.get("risk_adjusted_time_s", 1e9)
+        )
+        if held_laps >= settings.strategy_min_hold_laps and improvement >= settings.strategy_change_min_gain_s:
+            candidate["stability"] = {
+                "held": False,
+                "reason": "new plan materially faster",
+                "gain_s": round(improvement, 2),
+            }
+            return candidate
+
+        held = dict(old_rec)
+        for key in (
+            "projected_finish_wear_pct", "projected_finish_wear_fl_fr_rl_rr_pct",
+            "risk_adjusted_time_s", "projected_time_s", "monte_carlo",
+            "projected_rejoin_position", "stint_models", "feasible", "legal",
+        ):
+            if key in old_ranked:
+                held[key] = old_ranked[key]
+        held["committed_at_lap"] = committed_at
+        held["source_compound"] = current_compound
+        held["neutralisation_phase"] = phase
+        candidate["raw_recommended"] = new_rec
+        candidate["recommended"] = held
+        candidate["stability"] = {
+            "held": True,
+            "reason": "prevented non-material strategy flap",
+            "candidate_gain_s": round(improvement, 2),
+            "held_laps": held_laps,
+            "required_gain_s": settings.strategy_change_min_gain_s,
+        }
+        return candidate
+
+    def _snapshot_key(self, state: dict[str, Any], plan: dict[str, Any]) -> tuple[Any, ...]:
+        """Identity of a strategy snapshot for persistence de-duplication.
+
+        Two snapshots that would answer every later question identically share a
+        key: same session, lap, race-control phase, spoken call, confidence and
+        outstanding-compound status. Monte Carlo jitter between ticks does not.
+        """
+        recommended = plan.get("recommended", {}) or {}
+        return (
+            int(state.get("session_uid", 0) or 0),
+            int(state.get("current_lap", 0) or 0),
+            str(state.get("race_control_phase", "green")),
+            self._radio_signature(recommended),
+            str(plan.get("confidence") or ""),
+            bool((plan.get("compound_rule") or {}).get("change_outstanding")),
+        )
+
     async def recompute(self) -> dict[str, Any]:
         state = await self.store.snapshot_analysis()
+        previous_strategy = dict(state.get("strategy", {}) or {})
         historical = await self.database.tyre_history_model(
-            int(state.get("track_id", -1))
+            int(state.get("track_id", -1)), context=state
         )
         plan = self.compute(state, historical)
+        plan = self._stabilize_radio_plan(state, previous_strategy, plan)
         await self.store.update(strategy=plan)
-        await self.database.save_strategy_snapshot(state, plan)
+        key = self._snapshot_key(state, plan)
+        if key != self._last_snapshot_key:
+            self._last_snapshot_key = key
+            await self.database.save_strategy_snapshot(state, plan)
         return plan
 
     def compute(
@@ -1125,9 +1270,62 @@ class StrategyEngine:
             weather_plan is not None
             and int(weather_plan.get("weather_crossover", {}).get("time_offset_min", 99)) <= 1
         )
-        best = weather_plan if force_weather else ranked[0]
-        second = ranked[1] if len(ranked) > 1 else best
+        automatic_best = ranked[0]
+        driver_override = dict(state.get("strategy_override", {}) or {})
+        override_match: dict[str, Any] | None = None
+        override_warning = ""
+        if driver_override.get("enabled") and driver_override.get("locked") and not force_weather:
+            requested_lap = driver_override.get("next_box_lap")
+            requested_compound = str(driver_override.get("next_compound") or "").upper()
+            requested_stops = driver_override.get("preferred_stops")
+            candidates = list(shortlisted)
+            if requested_compound:
+                candidates = [
+                    plan for plan in candidates
+                    if len(plan.get("compounds", [])) > 1
+                    and str(plan.get("compounds", [None, None])[1]).upper() == requested_compound
+                ]
+            if requested_stops is not None:
+                candidates = [plan for plan in candidates if int(plan.get("stops_remaining", -1)) == int(requested_stops)]
+            exact = candidates
+            if requested_lap is not None:
+                exact = [
+                    plan for plan in candidates
+                    if plan.get("box_laps") and int(plan.get("box_laps", [0])[0]) == max(current_lap, int(requested_lap))
+                ]
+            safe_exact = [plan for plan in exact if plan.get("legal") and plan.get("feasible")]
+            if safe_exact:
+                override_match = min(safe_exact, key=lambda plan: float(plan.get("risk_adjusted_time_s", 1e9)))
+            elif exact:
+                legal_exact = [plan for plan in exact if plan.get("legal")]
+                override_match = min(legal_exact or exact, key=lambda plan: float(plan.get("risk_adjusted_time_s", 1e9)))
+                override_warning = "Driver plan is outside the operational wear margin."
+            elif candidates:
+                override_match = min(
+                    candidates,
+                    key=lambda plan: (
+                        abs(int((plan.get("box_laps") or [current_lap])[0]) - int(requested_lap or current_lap)),
+                        float(plan.get("risk_adjusted_time_s", 1e9)),
+                    ),
+                )
+                override_warning = "Exact requested lap was unavailable; nearest legal matching plan selected."
+            else:
+                override_warning = "No legal plan matches the driver override."
+
+        best = weather_plan if force_weather else (override_match or automatic_best)
+        second = next((plan for plan in ranked if plan is not best), best)
         best = dict(best)
+        if driver_override.get("enabled"):
+            best["driver_override"] = {
+                "active": True,
+                "honored": bool(override_match is not None),
+                "requested": driver_override,
+                "warning": override_warning,
+                "delta_vs_automatic_s": round(
+                    float(best.get("risk_adjusted_time_s", 0.0))
+                    - float(automatic_best.get("risk_adjusted_time_s", 0.0)), 2
+                ),
+            }
         best["delta_to_next_s"] = round(
             float(second["risk_adjusted_time_s"]) - float(best["risk_adjusted_time_s"]),
             2,
@@ -1376,7 +1574,7 @@ class StrategyEngine:
             }
         gap = abs(float(target["gap_to_player_s"]))
         historical = await self.database.tyre_history_model(
-            int(state.get("track_id", -1))
+            int(state.get("track_id", -1)), context=state
         )
         own_deg, _, _ = self._deg_for(state, str(state["tyre"]["compound"]), historical)
         rival_age = int(target.get("tyre_age", 0))
@@ -1417,7 +1615,7 @@ class StrategyEngine:
                 "reason": "Target driver or gap is unavailable.",
             }
         historical = await self.database.tyre_history_model(
-            int(state.get("track_id", -1))
+            int(state.get("track_id", -1)), context=state
         )
         current_wear = max(state["tyre"]["wear"] or [0])
         current_deg, _, _ = self._deg_for(
@@ -1473,7 +1671,7 @@ class StrategyEngine:
     async def what_if(self, scenario: str) -> dict[str, Any]:
         state = await self.store.snapshot_analysis()
         historical = await self.database.tyre_history_model(
-            int(state.get("track_id", -1))
+            int(state.get("track_id", -1)), context=state
         )
         base = self.compute(state, historical)
         text = scenario.lower()

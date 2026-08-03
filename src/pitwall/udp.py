@@ -8,6 +8,7 @@ from typing import Any, Iterable
 
 from f1.packets import SESSIONS, TRACKS as F1_TRACKS, resolve
 
+from .identity import team_name
 from .state import StateStore
 
 log = logging.getLogger(__name__)
@@ -83,6 +84,25 @@ VISUAL_COMPOUNDS = {
 }
 STATUS = {0: "garage", 1: "flying", 2: "in lap", 3: "out lap", 4: "on track"}
 FIA_FLAGS = {-1: "invalid", 0: "none", 1: "green", 2: "blue", 3: "yellow", 4: "red"}
+# LapData.result_status. Distinguishing "retired" from "not classified" matters
+# for race flow: a retirement permanently removes a rival from the strategy
+# picture, while an inactive car may still rejoin.
+RESULT_STATUS = {
+    0: "invalid",
+    1: "inactive",
+    2: "active",
+    3: "finished",
+    4: "did not finish",
+    5: "disqualified",
+    6: "not classified",
+    7: "retired",
+}
+RETIRED_RESULT_STATUS = frozenset({4, 5, 6, 7})
+# Event codes that carry no race-narrative value but arrive at controller or
+# packet frequency. BUTN is consumed directly by the PTT callback; recording it
+# flooded both the in-memory events log (starving "any race updates" of real
+# incidents) and the session_events table (40 000+ rows).
+UNLOGGED_EVENTS = frozenset({"BUTN"})
 
 
 def normalize_wheels(values: Iterable[Any]) -> list[Any]:
@@ -174,13 +194,10 @@ def classify_session(
         int(total_laps) >= max(3, int(current_lap)) and longest_clock >= 3_600
     )
 
-    # A shootout/qualifying session is timed and should not present a coherent
-    # multi-lap race distance plus a race-length clock. In that conflict, the
-    # race evidence is more useful than the enum for strategy and fuel logic.
-    if (
-        raw_mode in {"qualifying", "practice", "time_trial", "idle"}
-        and race_distance_is_coherent
-    ):
+    # Only infer a race when the packet type is unknown/idle. Recognised practice,
+    # qualifying and time-trial enums are authoritative even when the game exposes
+    # a long clock or a lap count that superficially resembles a race.
+    if raw_mode == "idle" and race_distance_is_coherent:
         return (
             "Race",
             "race",
@@ -252,6 +269,11 @@ class F1DatagramProtocol(asyncio.DatagramProtocol):
         self.consumer_task: asyncio.Task[None] | None = None
         self._stats_counter = 0
         self._unhandled_packets: set[str] = set()
+        # Session UIDs whose chequered flag has already been recorded. The game
+        # repeats the final-classification packet for as long as the results
+        # screen is shown, which previously re-appended CHQF and re-wrote the
+        # session row on every repeat.
+        self._classified_sessions: set[int] = set()
 
     def connection_made(self, transport: asyncio.BaseTransport) -> None:
         self.transport = transport  # type: ignore[assignment]
@@ -350,7 +372,51 @@ class F1DatagramProtocol(asyncio.DatagramProtocol):
             ]
             return int(candidates[-1]["rain_pct"]) if candidates else 0
 
-        snapshot = await self.store.snapshot_live()
+        track_length = max(1, int(packet.track_length))
+        # Marshal zones are the only field-wide report of which part of the lap
+        # is under a yellow. zone_start is a fraction of the lap, converted here
+        # to metres so it can be compared with lap_distance directly.
+        marshal_zones = [
+            {
+                "index": index,
+                "start_fraction": round(float(zone.zone_start), 4),
+                "start_m": round(float(zone.zone_start) * track_length, 1),
+                "flag": FIA_FLAGS.get(int(zone.zone_flag), "unknown"),
+            }
+            for index, zone in enumerate(
+                list(packet.marshal_zones)[: int(packet.num_marshal_zones)]
+            )
+        ]
+        drs_zones = [
+            {
+                "start_m": round(float(zone.zone_start) * track_length, 1),
+                "end_m": round(float(zone.zone_end) * track_length, 1),
+            }
+            for zone in list(packet.drs_zones)[: int(getattr(packet, "num_drs_zones", 0))]
+        ]
+        active_aero_zones = [
+            {
+                "kind": kind,
+                "start_m": round(float(zone.zone_start) * track_length, 1),
+                "end_m": round(float(zone.zone_end) * track_length, 1),
+            }
+            for kind, attribute, count_attribute in (
+                ("full", "active_aero_zones_full", "num_active_aero_zones_full"),
+                (
+                    "partial",
+                    "active_aero_zones_partial",
+                    "num_active_aero_zones_partial",
+                ),
+            )
+            for zone in list(getattr(packet, attribute, []))[
+                : int(getattr(packet, count_attribute, 0))
+            ]
+        ]
+
+        snapshot = await self.store.peek(
+            "current_lap", "session_mode_override", "strategy",
+            "red_flag_active", "race_control_phase",
+        )
         raw_session_type_id = int(packet.session_type)
         session_length_id = int(getattr(packet, "session_length", 0))
         num_sessions_in_weekend = int(getattr(packet, "num_sessions_in_weekend", 0))
@@ -437,6 +503,33 @@ class F1DatagramProtocol(asyncio.DatagramProtocol):
             game_paused=bool(packet.game_paused),
             sector2_start_m=float(packet.sector2_lap_distance_start),
             sector3_start_m=float(packet.sector3_lap_distance_start),
+            marshal_zones=marshal_zones,
+            drs_zones=drs_zones,
+            active_aero_zones=active_aero_zones,
+            active_aero_track_status=int(
+                getattr(packet, "active_aero_track_status", 0)
+            ),
+            pit_speed_limit_kph=int(getattr(packet, "pit_speed_limit", 0)),
+            ai_difficulty=int(getattr(packet, "ai_difficulty", 0)),
+            equal_car_performance=bool(
+                getattr(packet, "equal_car_performance", 0)
+            ),
+            parc_ferme_rules=bool(getattr(packet, "parc_ferme_rules", 0)),
+            car_damage_rate=int(getattr(packet, "car_damage_rate", 0)),
+            tyre_temperature_sim=int(getattr(packet, "tyre_temperature", 0)),
+            pit_lane_tyre_sim=bool(getattr(packet, "pit_lane_tyre_sim", 0)),
+            forecast_accuracy=int(getattr(packet, "forecast_accuracy", 0)),
+            game_mode=int(getattr(packet, "game_mode", 0)),
+            rule_set=int(getattr(packet, "rule_set", 0)),
+            formula=int(getattr(packet, "formula", 0)),
+            time_of_day_min=int(getattr(packet, "time_of_day", 0)),
+            network_game=bool(getattr(packet, "network_game", 0)),
+            weekend_link_identifier=int(
+                getattr(packet, "weekend_link_identifier", 0)
+            ),
+            session_link_identifier=int(
+                getattr(packet, "session_link_identifier", 0)
+            ),
             strategy=strategy,
         )
 
@@ -455,6 +548,12 @@ class F1DatagramProtocol(asyncio.DatagramProtocol):
                 driver.name = _name(participant.name)
                 driver.car_idx = index
                 driver.team_id = int(getattr(participant, "team_id", -1))
+                # A verified team-id table now exists for this title, so the
+                # readable team name is no longer left blank.
+                driver.team = team_name(driver.team_id)
+                driver.driver_id = int(getattr(participant, "driver_id", -1))
+                driver.race_number = int(getattr(participant, "race_number", 0))
+                driver.ai_controlled = bool(getattr(participant, "ai_controlled", 1))
                 driver.restricted = (
                     int(participant.your_telemetry) == 0
                     and index != state.player_car_index
@@ -470,6 +569,7 @@ class F1DatagramProtocol(asyncio.DatagramProtocol):
                 else None
             )
             for index, driver in enumerate(state.drivers):
+                driver.is_player = index == player_index
                 driver.is_teammate = bool(
                     player is not None
                     and driver.active
@@ -485,6 +585,7 @@ class F1DatagramProtocol(asyncio.DatagramProtocol):
         if player_index is None:
             return
         player = packet.lap_data[player_index]
+        session_time_s = float(getattr(packet.header, "session_time", 0.0) or 0.0)
         await self.store.transition_lap(
             new_lap=int(player.current_lap_num),
             last_lap_ms=int(player.last_lap_time_in_ms),
@@ -534,6 +635,8 @@ class F1DatagramProtocol(asyncio.DatagramProtocol):
             state.pit_status = int(player.pit_status)
             state.pit_lane_time_ms = int(player.pit_lane_time_in_lane_in_ms)
             for index, lap in enumerate(packet.lap_data):
+                if index >= len(state.drivers):
+                    break
                 driver = state.drivers[index]
                 if not driver.active:
                     continue
@@ -549,24 +652,93 @@ class F1DatagramProtocol(asyncio.DatagramProtocol):
                 driver.last_lap_ms = int(lap.last_lap_time_in_ms)
                 driver.pit_stops = int(lap.num_pit_stops)
                 driver.status = STATUS.get(int(lap.driver_status), "")
+                driver.grid_position = int(getattr(lap, "grid_position", 0))
+                # A stop in progress is observable through the pit timers, so a
+                # rival's stop can be called as it happens rather than inferred
+                # a lap later from the stop counter.
+                driver.pit_status = int(lap.pit_status)
+                driver.pit_lane_timer_active = bool(lap.pit_lane_timer_active)
+                driver.pit_lane_time_ms = int(lap.pit_lane_time_in_lane_in_ms)
+                driver.pit_stop_timer_ms = int(lap.pit_stop_timer_in_ms)
+                result_status = int(getattr(lap, "result_status", 0))
+                driver.result_status = result_status
+                driver.result_label = RESULT_STATUS.get(result_status, "unknown")
+                driver.speed_trap_kph = float(
+                    getattr(lap, "speed_trap_fastest_speed", 0.0)
+                )
+                driver.speed_trap_lap = int(getattr(lap, "speed_trap_fastest_lap", 0))
+                driver.lap_distance_m = max(0.0, float(lap.lap_distance))
+                driver.total_distance_m = float(lap.total_distance)
+                driver.penalties_s = int(lap.penalties)
+                driver.warnings = int(lap.total_warnings)
+                driver.delta_to_leader_s = (
+                    _ms(
+                        int(lap.delta_to_race_leader_minutes_part),
+                        int(lap.delta_to_race_leader_ms_part),
+                    )
+                    / 1000.0
+                )
                 if index == player_index:
                     driver.gap_to_player_s = 0.0
+                elif result_status in RETIRED_RESULT_STATUS:
+                    # A retired car must not keep reporting the gap it held when
+                    # it stopped; that gap would otherwise be quoted for the rest
+                    # of the race as if the car were still circulating.
+                    driver.gap_to_player_s = None
                 elif driver.position > 0:
-                    leader_delta = (
-                        _ms(
-                            int(lap.delta_to_race_leader_minutes_part),
-                            int(lap.delta_to_race_leader_ms_part),
-                        )
-                        / 1000.0
-                    )
                     driver.gap_to_player_s = round(
-                        leader_delta - player_delta_to_leader, 3
+                        float(driver.delta_to_leader_s or 0.0)
+                        - player_delta_to_leader,
+                        3,
                     )
+                if index != player_index and driver.gap_to_player_s is not None:
+                    history = driver.gap_history
+                    last = history[-1] if history else None
+                    should_sample = (
+                        last is None
+                        or int(last.get("lap", -1)) != driver.current_lap
+                        or session_time_s - float(last.get("session_time_s", 0.0)) >= 2.0
+                    )
+                    if should_sample:
+                        history.append(
+                            {
+                                "session_time_s": round(session_time_s, 3),
+                                "lap": driver.current_lap,
+                                "gap_s": float(driver.gap_to_player_s),
+                            }
+                        )
+                        del history[:-90]
 
         await self.store.mutate(apply)
 
     async def handle_PacketCarTelemetryData(self, packet: Any) -> None:
         player_index = _packet_player_index(packet, packet.car_telemetry_data)
+
+        # Field-wide speed, DRS and tyre temperatures. These make "is he
+        # struggling for temperature" and "is his DRS open" answerable.
+        field_samples = [
+            (
+                int(entry.speed),
+                bool(entry.drs),
+                [float(v) for v in normalize_wheels(entry.tyres_inner_temperature)],
+                [float(v) for v in normalize_wheels(entry.tyres_surface_temperature)],
+            )
+            for entry in packet.car_telemetry_data
+        ]
+
+        def apply_field(state):  # type: ignore[no-untyped-def]
+            for index, (speed, drs, inner, surface) in enumerate(field_samples):
+                if index >= len(state.drivers):
+                    break
+                driver = state.drivers[index]
+                if not driver.active or driver.restricted:
+                    continue
+                driver.speed_kph = speed
+                driver.drs_open = drs
+                driver.tyre_inner_temps_c = inner
+                driver.tyre_surface_temps_c = surface
+
+        await self.store.mutate(apply_field)
         if player_index is None:
             return
         telemetry = packet.car_telemetry_data[player_index]
@@ -592,6 +764,25 @@ class F1DatagramProtocol(asyncio.DatagramProtocol):
 
     async def handle_PacketCarTelemetry2Data(self, packet: Any) -> None:
         player_index = _packet_player_index(packet, packet.car_telemetry2_data)
+
+        # 2026 Manual Override state for every car, so a rival's boost can be
+        # seen rather than guessed.
+        overrides = [
+            (bool(entry.overtake_active), bool(entry.overtake_available))
+            for entry in packet.car_telemetry2_data
+        ]
+
+        def apply_field(state):  # type: ignore[no-untyped-def]
+            for index, (active, available) in enumerate(overrides):
+                if index >= len(state.drivers):
+                    break
+                driver = state.drivers[index]
+                if not driver.active or driver.restricted:
+                    continue
+                driver.overtake_active = active
+                driver.overtake_available = available
+
+        await self.store.mutate(apply_field)
         if player_index is None:
             return
         telemetry = packet.car_telemetry2_data[player_index]
@@ -636,44 +827,62 @@ class F1DatagramProtocol(asyncio.DatagramProtocol):
             state.tyre.actual_compound = int(car.actual_tyre_compound)
             state.tyre.age_laps = int(car.tyres_age_laps)
             for index, status in enumerate(packet.car_status_data):
+                if index >= len(state.drivers):
+                    break
                 driver = state.drivers[index]
                 if not driver.active:
                     continue
                 driver.tyre_compound = VISUAL_COMPOUNDS.get(
                     int(status.visual_tyre_compound), "UNKNOWN"
                 )
+                driver.tyre_actual_compound = int(status.actual_tyre_compound)
                 driver.tyre_age = int(status.tyres_age_laps)
+                driver.fia_flag = FIA_FLAGS.get(
+                    int(status.vehicle_fia_flags), "unknown"
+                )
+                if driver.restricted:
+                    continue
+                # Rival energy and fuel are in the packet. The attack/defence
+                # tools previously assumed they were not exposed.
+                driver.fuel_kg = round(float(status.fuel_in_tank), 2)
+                driver.fuel_remaining_laps = round(
+                    float(status.fuel_remaining_laps), 2
+                )
+                driver.ers_pct = round(
+                    float(status.ers_store_energy) / 4_000_000 * 100, 1
+                )
+                driver.ers_mode = int(status.ers_deploy_mode)
+                driver.ers_deployed_lap_j = float(status.ers_deployed_this_lap)
+                driver.ers_harvested_lap_j = float(
+                    status.ers_harvested_this_lap_mguk
+                ) + float(status.ers_harvested_this_lap_mguh)
+                driver.drs_allowed = bool(status.drs_allowed)
+                driver.front_brake_bias = int(status.front_brake_bias)
+                driver.fuel_mix = int(status.fuel_mix)
 
         await self.store.mutate(apply)
 
-    async def handle_PacketCarDamageData(self, packet: Any) -> None:
-        player_index = _packet_player_index(packet, packet.car_damage_data)
-        if player_index is None:
-            return
-        damage = packet.car_damage_data[player_index]
-        wear = [float(value) for value in normalize_wheels(damage.tyres_wear)]
-        tyre_damage = [int(value) for value in normalize_wheels(damage.tyres_damage)]
+    @staticmethod
+    def _damage_fields(damage: Any) -> dict[str, Any]:
+        """Decode one car's damage entry into Pit Wall's wheel order and keys."""
         blisters = [int(value) for value in normalize_wheels(damage.tyre_blisters)]
-
-        # Power-unit component wear (percent used) is distinct from crash damage
-        # and accumulates across a season toward grid-penalty thresholds.
-        component_wear = {
-            "ice": float(getattr(damage, "engine_ice_wear", 0.0)),
-            "mguk": float(getattr(damage, "engine_mguk_wear", 0.0)),
-            "mguh": float(getattr(damage, "engine_mguh_wear", 0.0)),
-            "es": float(getattr(damage, "engine_es_wear", 0.0)),
-            "ce": float(getattr(damage, "engine_ce_wear", 0.0)),
-            "tc": float(getattr(damage, "engine_tc_wear", 0.0)),
-        }
-        engine_blown = bool(getattr(damage, "engine_blown", False))
-        engine_seized = bool(getattr(damage, "engine_seized", False))
-
-        def apply(state):  # type: ignore[no-untyped-def]
-            state.tyre.wear = wear
-            state.tyre.damage = tyre_damage
-            state.tyre.blisters = blisters
-            state.component_wear = component_wear
-            state.damage = {
+        return {
+            "wear": [float(value) for value in normalize_wheels(damage.tyres_wear)],
+            "tyre_damage": [
+                int(value) for value in normalize_wheels(damage.tyres_damage)
+            ],
+            "blisters": blisters,
+            # Power-unit component wear (percent used) is distinct from crash
+            # damage and accumulates across a season toward grid penalties.
+            "component_wear": {
+                "ice": float(getattr(damage, "engine_ice_wear", 0.0)),
+                "mguk": float(getattr(damage, "engine_mguk_wear", 0.0)),
+                "mguh": float(getattr(damage, "engine_mguh_wear", 0.0)),
+                "es": float(getattr(damage, "engine_es_wear", 0.0)),
+                "ce": float(getattr(damage, "engine_ce_wear", 0.0)),
+                "tc": float(getattr(damage, "engine_tc_wear", 0.0)),
+            },
+            "damage": {
                 "front_left_wing": int(damage.front_left_wing_damage),
                 "front_right_wing": int(damage.front_right_wing_damage),
                 "rear_wing": int(damage.rear_wing_damage),
@@ -684,15 +893,76 @@ class F1DatagramProtocol(asyncio.DatagramProtocol):
                 "engine": int(damage.engine_damage),
                 "drs_fault": bool(damage.drs_fault),
                 "ers_fault": bool(damage.ers_fault),
-                "engine_blown": engine_blown,
-                "engine_seized": engine_seized,
+                "engine_blown": bool(getattr(damage, "engine_blown", False)),
+                "engine_seized": bool(getattr(damage, "engine_seized", False)),
                 "blisters": blisters,
-            }
+            },
+        }
+
+    async def handle_PacketCarDamageData(self, packet: Any) -> None:
+        """Damage, tyre wear and power-unit wear for every car in the field.
+
+        The packet has always carried all 24 entries; reading only the player's
+        made "does the car ahead have damage" and "how worn are his tyres"
+        unanswerable.
+        """
+        player_index = _packet_player_index(packet, packet.car_damage_data)
+        decoded = [
+            self._damage_fields(entry) for entry in packet.car_damage_data
+        ]
+
+        def apply(state):  # type: ignore[no-untyped-def]
+            for index, fields_ in enumerate(decoded):
+                if index >= len(state.drivers):
+                    break
+                driver = state.drivers[index]
+                if not driver.active:
+                    continue
+                # A restricted car reports zeros rather than real values; keep
+                # the defaults so tools report "unavailable" instead of "no wear".
+                if driver.restricted:
+                    continue
+                driver.tyre_wear = fields_["wear"]
+                driver.tyre_damage = fields_["tyre_damage"]
+                driver.blisters = fields_["blisters"]
+                driver.component_wear = fields_["component_wear"]
+                driver.damage = fields_["damage"]
+            if player_index is None:
+                return
+            player_fields = decoded[player_index]
+            state.tyre.wear = player_fields["wear"]
+            state.tyre.damage = player_fields["tyre_damage"]
+            state.tyre.blisters = player_fields["blisters"]
+            state.component_wear = player_fields["component_wear"]
+            state.damage = player_fields["damage"]
 
         await self.store.mutate(apply)
 
     async def handle_PacketMotionData(self, packet: Any) -> None:
         player_index = _packet_player_index(packet, packet.car_motion_data)
+
+        # World position for every car. Timing gaps say how far apart two cars
+        # are in time; positions say where they actually are, which is what a
+        # rejoin-into-traffic estimate needs.
+        positions = [
+            (
+                float(getattr(entry, "world_position_x", 0.0)),
+                float(getattr(entry, "world_position_z", 0.0)),
+            )
+            for entry in packet.car_motion_data
+        ]
+
+        def apply_field(state):  # type: ignore[no-untyped-def]
+            for index, (x, z) in enumerate(positions):
+                if index >= len(state.drivers):
+                    break
+                driver = state.drivers[index]
+                if not driver.active:
+                    continue
+                driver.world_x = x
+                driver.world_z = z
+
+        await self.store.mutate(apply_field)
         if player_index is None:
             return
         motion = packet.car_motion_data[player_index]
@@ -776,7 +1046,7 @@ class F1DatagramProtocol(asyncio.DatagramProtocol):
             driver.best_lap_ms = min(valid) if valid else 0
 
         await self.store.mutate(apply)
-        snapshot = await self.store.snapshot_live()
+        snapshot = await self.store.peek("session_uid")
         packet_player_index = int(getattr(packet.header, "player_car_index", 255))
         if index == packet_player_index and 0 <= packet_player_index < 24:
             await self.store.update(player_car_index=packet_player_index)
@@ -817,8 +1087,8 @@ class F1DatagramProtocol(asyncio.DatagramProtocol):
         )
 
     async def handle_PacketTyreSetsData(self, packet: Any) -> None:
-        snapshot = await self.store.snapshot_live()
-        if int(packet.car_idx) != int(snapshot.get("player_car_index", 0)):
+        snapshot = await self.store.peek("player_car_index")
+        if int(packet.car_idx) != int(snapshot.get("player_car_index", 0) or 0):
             return
         sets = []
         for index, tyre in enumerate(packet.tyre_set_data):
@@ -842,12 +1112,48 @@ class F1DatagramProtocol(asyncio.DatagramProtocol):
             fitted_tyre_set_idx=int(packet.fitted_idx),
         )
 
+    async def handle_PacketTimeTrialData(self, packet: Any) -> None:
+        """Time Trial personal best, session best and rival splits.
+
+        This packet had no handler, so Time Trial sessions had no reference to
+        compare against beyond Pit Wall's own stored history.
+        """
+
+        def decode(data: Any) -> dict[str, Any] | None:
+            lap_ms = int(getattr(data, "lap_time_in_ms", 0) or 0)
+            if lap_ms <= 0:
+                return None
+            return {
+                "car_idx": int(data.car_idx),
+                "team_id": int(data.team_id),
+                "lap_ms": lap_ms,
+                "s1_ms": int(data.sector1_time_in_ms),
+                "s2_ms": int(data.sector2_time_in_ms),
+                "s3_ms": int(data.sector3_time_in_ms),
+                "valid": bool(data.valid),
+                "assists": {
+                    "traction_control": int(data.traction_control),
+                    "gearbox": int(data.gearbox_assist),
+                    "anti_lock_brakes": bool(data.anti_lock_brakes),
+                    "equal_car_performance": bool(data.equal_car_performance),
+                    "custom_setup": bool(data.custom_setup),
+                },
+            }
+
+        await self.store.update(
+            time_trial={
+                "session_best": decode(packet.player_session_best_data_set),
+                "personal_best": decode(packet.personal_best_data_set),
+                "rival": decode(packet.rival_data_set),
+            }
+        )
+
     async def handle_PacketLapPositionsData(self, packet: Any) -> None:
         num_laps = int(packet.num_laps)
         lap_start = int(packet.lap_start)
         values = list(packet.position_for_vehicle_idx)
-        snapshot = await self.store.snapshot_live()
-        active_cars = int(snapshot.get("active_cars", 0)) or 24
+        snapshot = await self.store.peek("active_cars")
+        active_cars = int(snapshot.get("active_cars", 0) or 0) or 24
 
         def apply(state):  # type: ignore[no-untyped-def]
             for vehicle_index in range(min(active_cars, 24)):
@@ -871,6 +1177,9 @@ class F1DatagramProtocol(asyncio.DatagramProtocol):
         if player_index is None:
             return
         result = packet.classification_data[player_index]
+        session_uid = int(getattr(packet.header, "session_uid", 0))
+        already_recorded = session_uid in self._classified_sessions
+        self._classified_sessions.add(session_uid)
         await self.store.update(
             final_classification={
                 "position": int(result.position),
@@ -883,6 +1192,8 @@ class F1DatagramProtocol(asyncio.DatagramProtocol):
                 "penalties_s": int(result.penalties_time),
             }
         )
+        if already_recorded:
+            return
         await self.store.append_event("CHQF", {"position": int(result.position)})
         if self.on_final_classification:
             await self.on_final_classification()
@@ -900,6 +1211,9 @@ class F1DatagramProtocol(asyncio.DatagramProtocol):
             payload = {
                 "vehicle_idx": int(detail.vehicle_idx),
                 "type": int(detail.penalty_type),
+                "infringement": int(getattr(detail, "infringement_type", 0)),
+                "other_vehicle_idx": int(getattr(detail, "other_vehicle_idx", 255)),
+                "places_gained": int(getattr(detail, "places_gained", 0)),
                 "time": int(detail.time),
                 "lap": int(detail.lap_num),
             }
@@ -950,6 +1264,19 @@ class F1DatagramProtocol(asyncio.DatagramProtocol):
                 state.race_control_phase = "red_flag"
                 state.race_control_changed_at = time.time()
                 state.safety_car = "none"
+                state.restart_grid = [
+                    {
+                        "car_idx": int(driver.get("car_idx", -1)),
+                        "position": int(driver.get("position", 0)),
+                        "name": driver.get("name", "Unknown"),
+                        "tyre_compound": driver.get("tyre_compound", "UNKNOWN"),
+                        "tyre_age": int(driver.get("tyre_age", 0)),
+                    }
+                    for driver in sorted(
+                        (item for item in state.drivers if int(item.get("position", 0)) > 0),
+                        key=lambda item: int(item.get("position", 0)),
+                    )
+                ]
 
             await self.store.mutate(apply_red_flag)
         elif code in {"SSTA", "LGOT"}:
@@ -974,6 +1301,57 @@ class F1DatagramProtocol(asyncio.DatagramProtocol):
                 "overtaking": int(detail.overtaking_vehicle_idx),
                 "overtaken": int(detail.being_overtaken_vehicle_idx),
             }
+        # The following carried an empty payload, so the events log recorded
+        # only that "something happened": a retirement never said who retired,
+        # and 4 800 speed-trap events stored no speed.
+        elif code == "FTLP":
+            detail = packet.event_details.fastest_lap
+            payload = {
+                "vehicle_idx": int(detail.vehicle_idx),
+                "lap_time_s": round(float(detail.lap_time), 3),
+            }
+        elif code == "RTMT":
+            detail = packet.event_details.retirement
+            payload = {
+                "vehicle_idx": int(detail.vehicle_idx),
+                "reason": int(getattr(detail, "reason", 0)),
+            }
+        elif code == "RCWN":
+            payload = {"vehicle_idx": int(packet.event_details.race_winner.vehicle_idx)}
+        elif code == "TMPT":
+            payload = {
+                "vehicle_idx": int(packet.event_details.team_mate_in_pits.vehicle_idx)
+            }
+        elif code == "SPTP":
+            detail = packet.event_details.speed_trap
+            payload = {
+                "vehicle_idx": int(detail.vehicle_idx),
+                "speed_kph": round(float(detail.speed), 1),
+                "overall_fastest": bool(detail.is_overall_fastest_in_session),
+                "driver_fastest": bool(detail.is_driver_fastest_in_session),
+                "session_fastest_vehicle_idx": int(
+                    detail.fastest_vehicle_idx_in_session
+                ),
+                "session_fastest_speed_kph": round(
+                    float(detail.fastest_speed_in_session), 1
+                ),
+            }
+        elif code == "STLG":
+            payload = {"num_lights": int(packet.event_details.start_lights.num_lights)}
+        elif code == "DTSV":
+            payload = {
+                "vehicle_idx": int(
+                    packet.event_details.drive_through_penalty_served.vehicle_idx
+                )
+            }
+        elif code == "SGSV":
+            detail = packet.event_details.stop_go_penalty_served
+            payload = {
+                "vehicle_idx": int(detail.vehicle_idx),
+                "stop_time_s": round(float(getattr(detail, "stop_time", 0.0)), 2),
+            }
+        elif code == "DRSD":
+            payload = {"reason": int(packet.event_details.drs_disabled.reason)}
         elif code == "FLBK":
             detail = packet.event_details.flashback
             payload = {
@@ -991,4 +1369,5 @@ class F1DatagramProtocol(asyncio.DatagramProtocol):
                 "severity": int(getattr(detail, "severity", 0)),
                 "involves_player": player_index in {v1, v2},
             }
-        await self.store.append_event(code, payload)
+        if code not in UNLOGGED_EVENTS:
+            await self.store.append_event(code, payload)
