@@ -70,6 +70,14 @@ name or distance. Do not claim a named real-world corner unless the tool provide
 For setup advice, state that only the front wing is normally adjustable during a pit stop.
 Full Race, Quali, and Hybrid setup recommendations are for the garage or a future session.
 
+Damage: the only pit-stop repair this telemetry exposes is the front wing. There is no
+"inspection" stop and no gearbox, engine, floor, diffuser or sidepod repair to call for. Never tell
+the driver to box to inspect or fix those — a stop costs the pit-lane time and fixes none of them.
+Report reliability damage once, as a fact and its consequence (expected pace loss, what to manage,
+whether it threatens finishing), then leave it alone. Repeating an unactionable damage report is
+worse than silence. Only recommend a stop for damage when the front wing is the problem, or when
+the tyre stop it is being combined with is already justified on its own.
+
 Normally answer in one or two short radio sentences. A deeper requested explanation may use
 three concise sentences. Every sentence must contain driver-useful information. Do not mention being an AI.
 """.strip()
@@ -408,16 +416,35 @@ class EngineerBrain:
 
     # Phrasings that mean "stop bringing this up", each paired with the subject
     # the driver wants dropped.
-    # Matched with has_phrase, which joins tokens with a separator class. That
-    # makes "don t tell me about" match the apostrophe form "don't tell me
-    # about", while "dont tell me about" is needed separately for the
-    # unapostrophised spelling — one token cannot match the other.
-    _SUPPRESSION_TRIGGERS = (
-        "shut up about", "stop talking about", "stop telling me about",
-        "don t tell me about", "dont tell me about", "do not tell me about",
-        "don t talk about", "dont talk about",
-        "stop mentioning", "no more about", "quit going on about",
-        "stop bringing up", "stop going on about", "enough about",
+    # A driver telling the engineer to drop a subject does not use a fixed form.
+    # Recorded sessions contain "do not tell me *anything* about engine damage",
+    # "shut *the fuck* up about engine and gear damage" and "stop *annoying me*
+    # about my gearbox" — all of which a fixed phrase list missed, so the
+    # engineer kept reporting the very thing it had been told to drop. The cue
+    # is matched with a small amount of filler tolerated between its words.
+    _SUPPRESSION_CUE = re.compile(
+        r"(?:"
+        r"shut\s+(?:\w+\s+){0,3}?up"
+        r"|(?:stop|quit|cease)\s+(?:\w+\s+){0,3}?"
+        r"(?:telling|talking|mentioning|annoying|bugging|bothering|nagging|going|bringing|reminding|updating|warning)"
+        # normalize_text lowercases and strips accents but keeps punctuation, so
+        # the contraction arrives as "don't". Matching on a separator class
+        # covers "do not", "don't", "don t" and "dont" with one branch.
+        r"|(?:do[^a-z0-9]+not|don[^a-z0-9]*t)\s+(?:\w+\s+){0,3}?"
+        r"(?:tell|telling|talk|mention|remind|want|need|give|say)"
+        r"|no\s+(?:more|further)"
+        r"|enough"
+        r"|stop\s+it\s+with"
+        r")",
+        re.IGNORECASE,
+    )
+    # The subject follows a preposition; leading determiners are dropped so the
+    # stored rule reads as a topic rather than a fragment of the sentence.
+    _SUPPRESSION_SUBJECT = re.compile(
+        r"\b(?:about|regarding|concerning|on\s+the\s+subject\s+of|with)\s+"
+        r"(?:my\s+|the\s+|any\s+|all\s+|these\s+|those\s+|further\s+|more\s+)*"
+        r"(?P<subject>[a-z0-9][a-z0-9\s]*)",
+        re.IGNORECASE,
     )
 
     @classmethod
@@ -434,24 +461,42 @@ class EngineerBrain:
         form drivers actually use.
         """
         text = cls._normalize_text(utterance)
-        for trigger in cls._SUPPRESSION_TRIGGERS:
-            if not has_phrase(text, trigger):
-                continue
-            # Take everything after the trigger's last word as the subject.
-            words = [word for word in re.findall(r"[a-z0-9]+", trigger)]
-            tail = re.split(
-                r"(?<![a-z0-9])" + r"[^a-z0-9]+".join(map(re.escape, words)) + r"(?![a-z0-9])",
-                text,
-                maxsplit=1,
+        cue = cls._SUPPRESSION_CUE.search(text)
+        if not cue:
+            return None
+        # The subject must come after the cue: "stop telling me about X", never
+        # a stray "about" earlier in the sentence.
+        match = cls._SUPPRESSION_SUBJECT.search(text, cue.end())
+        subject = match.group("subject").strip() if match else ""
+        if not subject:
+            return None
+        subject = " ".join(subject.split()[:6])
+        return (
+            f"Do not raise {subject} unless the driver asks or it is safety-critical."
+        )
+
+    @staticmethod
+    def suppressed_subjects(standing_instructions: list[Any] | None) -> list[str]:
+        """Subjects the driver has asked the engineer to stop raising.
+
+        Returned as plain topic text so non-model code — in particular the
+        unsolicited-radio queue — can honour the instruction too. Persona text
+        alone only ever influenced wording, which is why the gearbox calls kept
+        arriving after the engineer had agreed to stop making them.
+        """
+        subjects: list[str] = []
+        for item in standing_instructions or []:
+            rule = (
+                item.get("rule", "")
+                if isinstance(item, dict)
+                else item
+                if isinstance(item, str)
+                else ""
             )
-            subject = tail[-1].strip(" .,!?'") if len(tail) > 1 else ""
-            subject = " ".join(subject.split()[:6])
-            if subject:
-                return (
-                    f"Do not raise {subject} unless the driver asks or it is "
-                    "safety-critical."
-                )
-        return None
+            match = re.match(r"do not raise (.+?) unless", str(rule), re.IGNORECASE)
+            if match:
+                subjects.append(match.group(1).strip().lower())
+        return subjects
 
     @classmethod
     def _requests_short_answers(cls, utterance: str) -> bool:

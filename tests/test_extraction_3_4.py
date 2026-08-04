@@ -554,4 +554,8 @@ def test_damage_fallback_distinguishes_power_unit_from_aero() -> None:
     assert "DRS" in text({"drs_fault": True})
     assert "Engine" in text({"engine": 40})
     assert "Gearbox" in text({"gearbox": 40})
-    assert "Aero" in text({"front_left_wing": 40})
+    # Front-wing damage now names the one repair a pit stop can make,
+    # rather than the generic "Aero damage detected".
+    wing = text({"front_left_wing": 40})
+    assert "Front-wing" in wing and "stop" in wing
+    assert "Aero" in text({"sidepod": 40})

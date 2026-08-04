@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import re
 import time
 from collections import deque
 from typing import Any
@@ -37,6 +38,50 @@ DAMAGE_FAULT_KEYS = ("drs_fault", "ers_fault")
 # non-critical call had to wait out the same interval, so a rival stopping or a
 # battery warning expired behind a routine progress update. Lower is spoken
 # first, and only ``ROUTINE`` waits for the full spacing interval.
+# Topics a driver can silence, and the unsolicited call types each covers.
+# A standing instruction previously only reached the persona, so it changed the
+# wording of a call but never stopped it being made: the recorded session shows
+# the engineer agreeing to drop gearbox reminders and then issuing five more.
+SUPPRESSIBLE_SUBJECTS: dict[str, frozenset[str]] = {
+    "damage": frozenset({"damage", "component_wear"}),
+    "gearbox": frozenset({"damage", "component_wear"}),
+    "gear": frozenset({"damage", "component_wear"}),
+    "engine": frozenset({"damage", "component_wear"}),
+    "power unit": frozenset({"damage", "component_wear"}),
+    "floor": frozenset({"damage"}),
+    "wing": frozenset({"damage"}),
+    "reliability": frozenset({"damage", "component_wear"}),
+    "fuel": frozenset({"fuel_warning"}),
+    "tyre": frozenset({"tyre_wear"}),
+    "tire": frozenset({"tyre_wear"}),
+    "wear": frozenset({"tyre_wear", "component_wear"}),
+    "battery": frozenset({"energy_low"}),
+    "ers": frozenset({"energy_low"}),
+    "energy": frozenset({"energy_low"}),
+    "strategy": frozenset({"strategy_change", "compound_requirement"}),
+    "pit": frozenset({"strategy_change", "compound_requirement"}),
+    "corner": frozenset({"corner_coaching"}),
+    "coaching": frozenset({"corner_coaching"}),
+    "line": frozenset({"corner_coaching"}),
+    "driving": frozenset({"corner_coaching"}),
+    "weather": frozenset({"weather_crossover"}),
+    "rain": frozenset({"weather_crossover"}),
+    "rival": frozenset({"rival_pace", "rival_pitted", "undercut_threat"}),
+    "rivals": frozenset({"rival_pace", "rival_pitted", "undercut_threat"}),
+    "gap": frozenset({"rival_pace"}),
+    "update": frozenset({"progress_update"}),
+    "updates": frozenset({"progress_update"}),
+    "progress": frozenset({"progress_update"}),
+}
+# Calls that concern safety, legality or the car being about to stop. A driver
+# may silence a topic; they may not silence a penalty or a red flag.
+NEVER_SUPPRESSED = frozenset(
+    {
+        "race_control", "safety_car_delta", "penalty", "penalty_service",
+        "blue_flag", "engine_failure", "sc_restart", "race_start", "lap_deleted",
+    }
+)
+
 CRITICAL, IMPORTANT, ROUTINE = 0, 1, 2
 EVENT_PRIORITY = {
     "race_control": CRITICAL,
@@ -106,6 +151,10 @@ class ProactiveEngineer:
         self._last_penalties = 0
         self._last_warnings = 0
         self._last_damage_signature = ""
+        # Damage is reported once per 20% band and once per new fault,
+        # rather than on every change to any component.
+        self._reported_damage_band = 0
+        self._reported_damage_faults: set[str] = set()
         self._last_strategy_signature = ""
         self._last_strategy_inputs_signature = ""
         self._last_corner_signature = ""
@@ -124,6 +173,8 @@ class ProactiveEngineer:
         self._race_start_done = False
         self._cooldowns: dict[str, float] = {}
         self._safe_since = 0.0
+        # Refreshed each detection pass so _enqueue can honour them.
+        self._standing_instructions: list[Any] = []
 
     async def start(self) -> None:
         if self._task is None or self._task.done():
@@ -304,6 +355,8 @@ class ProactiveEngineer:
         now_mono = time.monotonic()
         if now_mono - self._cooldowns.get(event_type, -1e9) < cooldown_s:
             return
+        if self.is_suppressed(event_type, self._standing_instructions):
+            return
         self._cooldowns[event_type] = now_mono
         coalesced = {
             "progress_update", "corner_coaching", "race_control", "weather_crossover",
@@ -342,6 +395,8 @@ class ProactiveEngineer:
         self._last_weather_alert = False
         self._last_penalties = self._last_warnings = 0
         self._last_damage_signature = self._last_strategy_signature = ""
+        self._reported_damage_band = 0
+        self._reported_damage_faults = set()
         self._last_strategy_inputs_signature = self._last_corner_signature = ""
         self._last_pit_stops = {}
         self._last_lap_invalid = False
@@ -601,6 +656,7 @@ class ProactiveEngineer:
         if not state.get("connected") or state.get("game_paused"):
             return
         state = await self._refresh_strategy_if_needed(state)
+        self._standing_instructions = state.get("standing_instructions", [])
         proactive = state.get("proactive", {})
         analyzed_lap = int(state.get("analysis", {}).get("last_lap_analyzed", 0))
         if analyzed_lap > 0 and analyzed_lap != self._last_learning_lap:
@@ -687,15 +743,26 @@ class ProactiveEngineer:
         self._last_penalties, self._last_warnings = penalties, warnings
 
         damage = state.get("damage", {})
-        signature = self._damage_signature(damage)
-        if signature != self._last_damage_signature:
-            self._last_damage_signature = signature
-            maximum = max([int(damage.get(key, 0)) for key in DAMAGE_KEYS] or [0])
-            # A DRS or ERS fault has no percentage but is immediately
-            # race-affecting, so it is called regardless of damage level.
-            fault = any(bool(damage.get(key)) for key in DAMAGE_FAULT_KEYS)
-            if maximum > 10 or fault:
-                self._enqueue("damage", damage, critical=True, cooldown_s=0.0)
+        maximum = max([int(damage.get(key, 0)) for key in DAMAGE_KEYS] or [0])
+        # A DRS or ERS fault has no percentage but is immediately race-affecting,
+        # so it is called regardless of damage level.
+        faults = tuple(key for key in DAMAGE_FAULT_KEYS if damage.get(key))
+        # Escalate by 20% band, not on every change. The signature covered every
+        # component, so a single percent of floor wear re-fired a *critical*
+        # damage call that bypassed the spacing interval — the recorded session
+        # has six "box for gearbox inspection" calls in fifteen laps, all
+        # reporting the same unactionable damage.
+        band = (maximum // 20) * 20
+        new_fault = any(fault not in self._reported_damage_faults for fault in faults)
+        if (band > self._reported_damage_band and maximum > 10) or new_fault:
+            self._reported_damage_band = max(band, self._reported_damage_band)
+            self._reported_damage_faults.update(faults)
+            self._enqueue(
+                "damage",
+                {**damage, "max_damage_pct": maximum, "repairable": ["front wing"]},
+                critical=maximum >= 40 or bool(new_fault),
+                cooldown_s=90.0,
+            )
 
         invalid = bool(state.get("current_lap_invalid"))
         if (
@@ -940,10 +1007,25 @@ class ProactiveEngineer:
                 return "ERS fault reported. Expect reduced deployment; we are reassessing the plan."
             if payload.get("drs_fault"):
                 return "DRS fault reported. Do not rely on the overtaking aid this lap."
-            for key, label in (("engine", "Engine"), ("gearbox", "Gearbox")):
+            # Only the front wing can be changed at a stop, so reliability damage
+            # is reported as something to manage, never as a reason to box.
+            for key, label, advice in (
+                ("engine", "Engine", "Short-shift where you can; it cannot be repaired at a stop."),
+                ("gearbox", "Gearbox", "Shift smoothly; it cannot be repaired at a stop."),
+                ("floor", "Floor", "Expect reduced downforce; it cannot be repaired at a stop."),
+            ):
                 if int(payload.get(key, 0) or 0) > 10:
-                    return f"{label} damage detected. Short-shift where you can and report any change in feel."
-            return "Aero damage detected. Report the balance change and we will assess a wing adjustment."
+                    return f"{label} damage {int(payload.get(key, 0))} percent. {advice}"
+            wing = max(
+                int(payload.get("front_left_wing", 0) or 0),
+                int(payload.get("front_right_wing", 0) or 0),
+            )
+            if wing > 10:
+                return (
+                    f"Front-wing damage {wing} percent. That is the one thing we can "
+                    "change at a stop; say the word if the balance is costing you."
+                )
+            return "Aero damage detected. Report the balance change and we will assess it."
         if kind == "compound_requirement":
             return "You still owe a second dry compound. We must fit a different compound before the finish."
         if kind == "weather_crossover":
@@ -1001,6 +1083,33 @@ class ProactiveEngineer:
         return "Engineer update available on the dashboard."
 
     @staticmethod
+    def is_suppressed(event_type: str, standing_instructions: list[Any] | None) -> bool:
+        """Whether the driver has asked for this kind of call to stop.
+
+        Safety and legality calls are never suppressed, however the instruction
+        was worded — the driver can silence gearbox reminders, not a red flag.
+        """
+        if event_type in NEVER_SUPPRESSED:
+            return False
+        subjects = EngineerBrain.suppressed_subjects(standing_instructions)
+        if not subjects:
+            return False
+        for subject in subjects:
+            words = set(re.findall(r"[a-z]+", subject))
+            # Drivers say "tyres", "updates", "rivals"; the topic table is
+            # singular. Compare both forms rather than requiring an exact word.
+            words |= {word.rstrip("s") for word in words if word.endswith("s")}
+            for keyword, covered in SUPPRESSIBLE_SUBJECTS.items():
+                if event_type not in covered:
+                    continue
+                if " " in keyword:
+                    if keyword in subject:
+                        return True
+                elif keyword in words or keyword.rstrip("s") in words:
+                    return True
+        return False
+
+    @staticmethod
     def _priority_of(event: dict[str, Any]) -> int:
         if event.get("critical"):
             return CRITICAL
@@ -1035,10 +1144,16 @@ class ProactiveEngineer:
         the queue could hold up a safety-car delta warning behind it until both
         expired.
         """
+        standing = state.get("standing_instructions", [])
         kept: list[dict[str, Any]] = []
         for event in list(self.pending):
-            if self._event_still_relevant(event, state):
-                kept.append(event)
+            if not self._event_still_relevant(event, state):
+                continue
+            # The driver asked for this subject to be dropped. Honour it here so
+            # the call is never spoken, rather than only rewording it.
+            if self.is_suppressed(str(event.get("type", "")), standing):
+                continue
+            kept.append(event)
         self.pending = deque(kept, maxlen=24)
         if not self.pending:
             return None
