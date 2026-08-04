@@ -771,6 +771,115 @@ class TelemetryTools:
             ),
         }
 
+    async def get_position_target(self, target_position: int = 10) -> dict[str, Any]:
+        """What it would actually take to reach a given position.
+
+        Answers "what lap time do I need for points" with the arithmetic a
+        driver cannot do at speed: who is in the way, the total time to be
+        recovered, the laps left to do it in, and therefore the per-lap gain
+        required — plus whether that is realistic against their current pace.
+        """
+        state = await self.store.snapshot_analysis()
+        player = self._resolve_driver(state, "me")
+        position = int(state.get("player_position", 0) or 0)
+        total_laps = int(state.get("total_laps", 0) or 0)
+        current_lap = int(state.get("current_lap", 0) or 0)
+        laps_remaining = max(0, total_laps - current_lap)
+        target = max(1, int(target_position))
+
+        if position <= 0:
+            return {"available": False, "reason": "No classified position yet."}
+        if position <= target:
+            return {
+                "available": True,
+                "already_there": True,
+                "position": position,
+                "target_position": target,
+                "laps_remaining": laps_remaining,
+                "message": (
+                    f"Already inside the target at P{position}; the job is holding it."
+                ),
+            }
+
+        running = sorted(
+            (
+                d
+                for d in state.get("drivers", [])
+                if int(d.get("position", 0) or 0) > 0 and not d.get("is_player")
+            ),
+            key=lambda item: int(item["position"]),
+        )
+        blocking = [
+            d
+            for d in running
+            if target <= int(d.get("position", 0) or 0) < position
+        ]
+        # Gaps are relative to the player and negative for cars ahead.
+        gaps = [
+            abs(float(d["gap_to_player_s"]))
+            for d in blocking
+            if d.get("gap_to_player_s") is not None
+        ]
+        time_to_find = max(gaps) if gaps else None
+
+        own_laps = self._valid_laps(player or {}, 5)
+        own_median_ms = median(int(l["lap_ms"]) for l in own_laps) if own_laps else 0
+        required_s_per_lap = (
+            round(time_to_find / laps_remaining, 3)
+            if time_to_find is not None and laps_remaining > 0
+            else None
+        )
+        # A per-lap gain beyond roughly a second is not a driving problem; it
+        # needs a stop, a safety car or someone else's mistake.
+        feasible = (
+            None
+            if required_s_per_lap is None
+            else "yes"
+            if required_s_per_lap <= 0.3
+            else "marginal"
+            if required_s_per_lap <= 0.8
+            else "not on pace alone"
+        )
+        target_lap_ms = (
+            int(own_median_ms - required_s_per_lap * 1000)
+            if own_median_ms and required_s_per_lap is not None
+            else 0
+        )
+
+        return {
+            "available": True,
+            "already_there": False,
+            "position": position,
+            "target_position": target,
+            "positions_needed": position - target,
+            "laps_remaining": laps_remaining,
+            "cars_in_the_way": [
+                {
+                    "driver": display_name(d),
+                    "position": d.get("position"),
+                    "gap_s": (
+                        None
+                        if d.get("gap_to_player_s") is None
+                        else round(abs(float(d["gap_to_player_s"])), 2)
+                    ),
+                    "tyre": d.get("tyre_compound"),
+                    "tyre_age_laps": d.get("tyre_age"),
+                    "pit_stops": d.get("pit_stops"),
+                }
+                for d in blocking
+            ],
+            "time_to_find_s": None if time_to_find is None else round(time_to_find, 2),
+            "required_gain_s_per_lap": required_s_per_lap,
+            "your_median_lap": fmt_ms(int(own_median_ms)) if own_median_ms else None,
+            "required_lap_time": fmt_ms(target_lap_ms) if target_lap_ms > 0 else None,
+            "feasible_on_pace": feasible,
+            "note": (
+                "Assumes the cars ahead hold their current pace and make no further "
+                "stops. A stop by any of them, or a safety car, changes this "
+                "completely — check predict_rival_strategy before committing."
+            ),
+        }
+
     async def get_rival_car_state(self, driver: str) -> dict[str, Any]:
         """Everything the game publishes about one other car.
 
@@ -1690,6 +1799,18 @@ class TelemetryTools:
                     "or 'am I catching X' question instead of reading out lap times."
                 ),
                 {"driver": {"type": "string"}},
+            ),
+            (
+                "get_position_target",
+                (
+                    "What it would take to reach a given finishing position: who is "
+                    "in the way, the total time to recover, the laps left, the "
+                    "per-lap gain required, the lap time that implies, and whether "
+                    "it is realistic on pace alone. Use for 'what lap time do I need "
+                    "for points' or 'can I still reach Pn'. Defaults to P10, the "
+                    "lowest points-paying position."
+                ),
+                {"target_position": {"type": "integer", "minimum": 1, "maximum": 24}},
             ),
             (
                 "get_race_picture",

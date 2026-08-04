@@ -54,6 +54,7 @@ RADIO_TOOLS = (
     "get_race_flow",
     "get_race_picture",
     "get_pace_verdict",
+    "get_position_target",
     "get_rival_car_state",
     "get_flag_status",
     "get_gap",

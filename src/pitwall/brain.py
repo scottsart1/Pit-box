@@ -752,6 +752,40 @@ class EngineerBrain:
         )
         return sector_loss or lap_history
 
+    @staticmethod
+    def _has_specific_deterministic_answer(text: str) -> bool:
+        """Advisory-sounding questions the fast path answers precisely.
+
+        Each of these maps to a branch that gives a concrete, checked answer:
+        the ranked pit plan, the correction that no overtaking-aid tyre
+        temperature target exists, and the differential/brake-bias change for a
+        loose rear. Handing them to a model would replace a specific answer with
+        a general one.
+        """
+        asks_for_the_pit_call = has_any_phrase(
+            text,
+            (
+                "should i pit", "should i box", "should we pit", "should we box",
+                "when should i box", "when should i pit", "when do i box",
+                "pit now", "box now", "stay out",
+            ),
+        )
+        asks_aid_temperature = (
+            has_any_phrase(text, ("drs", "manual override", "overtake"))
+            and has_any_phrase(text, ("temperature", "temp", "tyre", "tire"))
+            and has_any_phrase(text, ("target", "optimize", "optimise", "best"))
+        )
+        asks_rear_balance = has_any_phrase(
+            text, ("differential", "diff setting", "brake bias")
+        ) and has_any_phrase(
+            text,
+            (
+                "rear sliding", "rear slide", "rear standing", "oversteer",
+                "wheelspin", "traction",
+            ),
+        )
+        return asks_for_the_pit_call or asks_aid_temperature or asks_rear_balance
+
     @classmethod
     def _defers_to_model(cls, state: dict[str, Any], utterance: str) -> bool:
         """Whether the deterministic path must stand aside for this request.
@@ -825,6 +859,32 @@ class EngineerBrain:
         ):
             return True
 
+        # Anything that asks what to *do* is advice, not a lookup. The fast path
+        # below matches single keywords anywhere in the sentence, so "what should
+        # be my target lap time to reach a points-paying position" hit the bare
+        # "position" branch and came back as "Timing currently reports P14" —
+        # four times in a row, to four different questions.
+        # ...unless the fast path has a specific, better answer for that exact
+        # question. These are advisory in form but deterministic in substance:
+        # the ranked pit plan, a factual correction, and a concrete setting
+        # change. Deferring them would trade a precise answer for a vaguer one.
+        if cls._has_specific_deterministic_answer(text):
+            return False
+        if has_any_phrase(
+            text,
+            (
+                "what should", "should i", "should we", "what can i", "what can we",
+                "how do i", "how can i", "how should i", "how do we", "how can we",
+                "what do i need", "what do we need", "is there anything",
+                "anything i can", "anything we can", "anything else i",
+                "any advice", "advise", "recommend", "recommendation",
+                "suggest", "any tips", "help me", "what would you do",
+                "in order to", "so that i", "so i can", "if i want",
+                "how to", "best way", "what next", "improve",
+            ),
+        ):
+            return True
+
         # A hypothetical or comparative strategy question ("how slow would a
         # one-stop to hards on lap 13 be", "is there any way we could undercut
         # him") is a simulation request, not a request for the standing call.
@@ -843,6 +903,7 @@ class EngineerBrain:
         # A plain strategy request stays on the deterministic ranked plan.
         if cls._is_strategy_request(utterance):
             return False
+
 
         # A comparison or an open "how is it going" needs analysis, not a
         # lookup. These used to be answered with a lap time or a list of gaps,
@@ -1242,7 +1303,18 @@ class EngineerBrain:
                 return f"{result['driver']} behind, {float(result['gap_s']):.1f} seconds. Last lap {result.get('last_lap') or 'unavailable'}."
             return "No reliable gap to the car behind right now."
 
-        if has_phrase(text, "position"):
+        # Each of these requires the question to be *about* the subject. A bare
+        # keyword match anywhere in the sentence turned every question that
+        # happened to contain "position", "fuel" or "damage" into a readout of
+        # that one value, whatever was actually asked.
+        if has_any_phrase(
+            text,
+            (
+                "what position", "which position", "my position", "current position",
+                "what place", "where am i running", "where do i sit", "position now",
+                "am i in", "what p am i",
+            ),
+        ):
             return f"Timing currently reports P{int(state.get('player_position', 0))}."
 
         if has_any_phrase(text, ("what tyres", "what tires", "tyre condition", "tire condition")):
@@ -1255,7 +1327,11 @@ class EngineerBrain:
             temp_text = f" Front cores {temps[0]:.0f}/{temps[1]:.0f} {temperature_label}." if len(temps) >= 2 else ""
             return f"{tyre.get('compound', 'Unknown').title()}s, {int(tyre.get('age_laps', 0))} laps old. Limiting tyre is {labels[limiting]} at {wear[limiting]:.0f} percent.{temp_text}"
 
-        if has_phrase(text, "fuel"):
+        if has_phrase(text, "fuel") and has_any_phrase(
+            text,
+            ("how much", "how is", "how s", "what is", "what s", "status",
+             "left", "remaining", "delta", "margin", "ok", "okay", "fine", "level"),
+        ):
             delta = float(state.get("fuel_laps_delta", 0.0))
             direction = "plus" if delta >= 0 else "minus"
             return f"Fuel is {direction} {abs(delta):.1f} laps."
@@ -1282,16 +1358,30 @@ class EngineerBrain:
             value = target.get("target") or target.get("target_lap")
             return f"Target lap is {value}." if value else "Target lap is still building."
 
-        if has_any_phrase(text, ("weather", "rain")):
+        if has_any_phrase(text, ("weather", "rain")) and has_any_phrase(
+            text,
+            ("what is", "what s", "how is", "how s", "forecast", "any", "chance",
+             "risk", "coming", "expected", "update", "look"),
+        ):
             return f"{state.get('weather', 'Unknown')}; rain risk {int(state.get('rain_next_15_pct', 0))} percent in 15 minutes."
 
-        if has_phrase(text, "damage"):
+        if has_phrase(text, "damage") and has_any_phrase(
+            text,
+            ("what is", "what s", "how is", "how s", "how much", "any", "status",
+             "report", "check", "assess", "level", "bad"),
+        ):
             damage = state.get("damage", {})
             wing = max(int(damage.get("front_left_wing", 0)), int(damage.get("front_right_wing", 0)))
             floor = int(damage.get("floor", 0))
             return f"Front-wing damage {wing} percent; floor damage {floor} percent."
 
-        if has_any_phrase(text, ("warning", "penalty")):
+        if has_any_phrase(
+            text, ("warning", "warnings", "penalty", "penalties")
+        ) and has_any_phrase(
+            text,
+            ("how many", "what is", "what s", "any", "status", "do i have",
+             "count", "report", "check"),
+        ):
             warnings = int(state.get("corner_cutting_warnings", 0))
             penalties = int(state.get("penalties_s", 0))
             return f"Track-limit warnings {warnings}; time penalties {penalties} seconds."
