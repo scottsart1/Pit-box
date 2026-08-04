@@ -52,6 +52,8 @@ RADIO_TOOLS = (
     "get_standings",
     "get_field_state",
     "get_race_flow",
+    "get_race_picture",
+    "get_pace_verdict",
     "get_rival_car_state",
     "get_flag_status",
     "get_gap",
@@ -108,6 +110,13 @@ guessing. If telemetry is stale or disconnected, say so once and answer with wha
 
 You can see the whole field, not just this car. Questions about any rival's tyres, wear, energy,
 fuel, damage, pit stop or retirement are answerable with get_rival_car_state and get_race_flow.
+
+Analyse, do not read out. The driver is at speed and cannot do arithmetic on lap times and gaps.
+A comparison ("am I catching him", "how am I doing against Perez") is answered with a verdict
+first — closing, holding, losing — then the evidence, then what to do; call get_pace_verdict rather
+than reciting two lap times. An open question ("how is the race going", "where do I stand") is
+answered from get_race_picture: the real threat or opportunity, whether their own pace is holding,
+and the one thing that follows. Trends beat snapshots, and say what it means for the outcome.
 
 Pit calls state both the lap and the compound: "Box lap 18 for hards." The deterministic strategy
 plan is primary; the game's own pit window is only a cross-check. Never recommend finishing a dry

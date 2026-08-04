@@ -3,7 +3,7 @@ from __future__ import annotations
 from statistics import median
 from typing import Any
 
-from .analysis import AnalysisEngine, fmt_ms
+from .analysis import AnalysisEngine, fmt_ms, theil_sen
 from .config import settings
 from .database import PitWallDatabase
 from .identity import display_name, match_drivers
@@ -459,6 +459,317 @@ class TelemetryTools:
         speed_trap = float(driver.get("speed_trap_kph", 0.0) or 0.0)
         summary["speed_trap_kph"] = round(speed_trap, 1) if speed_trap else None
         return summary
+
+    # ---------------------------------------------------------------- analysis
+    #
+    # The tools above report state. These interpret it. A driver mid-corner
+    # cannot do arithmetic on three lap times and a gap history, so answering
+    # "how am I doing against Perez" with a list of numbers puts the work back
+    # on the person least able to do it. Each of these returns a conclusion and
+    # the evidence for it, computed deterministically so the spoken numbers stay
+    # grounded.
+
+    @staticmethod
+    def _valid_laps(driver: dict[str, Any], count: int = 5) -> list[dict[str, Any]]:
+        laps = [
+            lap
+            for lap in (driver.get("lap_history") or [])
+            if int(lap.get("lap_ms", 0) or 0) > 0 and int(lap.get("valid_flags", 0)) & 1
+        ]
+        return laps[-max(1, count):]
+
+    @staticmethod
+    def _pace_trend_s_per_lap(laps: list[dict[str, Any]]) -> float | None:
+        """Robust seconds-per-lap trend. Positive means getting slower."""
+        points = [
+            (float(lap.get("lap_num", index)), float(lap["lap_ms"]) / 1000.0)
+            for index, lap in enumerate(laps)
+            if int(lap.get("lap_ms", 0) or 0) > 0
+        ]
+        fit = theil_sen(points)
+        return round(fit[0], 3) if fit else None
+
+    @staticmethod
+    def _closing_rate_s_per_lap(driver: dict[str, Any]) -> tuple[float | None, float | None]:
+        """Gap change per lap, and laps until contact at that rate.
+
+        Negative rate means the gap is shrinking. ``None`` when the samples do
+        not span enough time to say anything honest.
+        """
+        history = [
+            sample
+            for sample in (driver.get("gap_history") or [])
+            if sample.get("gap_s") is not None
+        ]
+        if len(history) < 2:
+            return None, None
+        first, last = history[0], history[-1]
+        laps = float(last.get("lap", 0)) - float(first.get("lap", 0))
+        if laps < 1.0:
+            # Fall back to elapsed time when the samples sit inside one lap.
+            seconds = float(last.get("session_time_s", 0)) - float(
+                first.get("session_time_s", 0)
+            )
+            if seconds < 20.0:
+                return None, None
+            laps = seconds / 90.0
+        change = abs(float(last["gap_s"])) - abs(float(first["gap_s"]))
+        rate = round(change / laps, 3)
+        gap = abs(float(last["gap_s"]))
+        laps_to_contact = (
+            round(gap / abs(rate), 1) if rate < -0.05 and gap > 0 else None
+        )
+        return rate, laps_to_contact
+
+    async def get_pace_verdict(self, driver: str = "ahead") -> dict[str, Any]:
+        """Judge the player's pace against one rival, and say where it is going.
+
+        Answers "am I actually catching him, and why" rather than reporting two
+        lap times and leaving the comparison to the driver. Sector attribution
+        names where the time moves; tyre and stop context says whether the
+        difference is the car or the rubber.
+        """
+        state = await self.store.snapshot_analysis()
+        rival = self._resolve_driver(state, driver)
+        player = self._resolve_driver(state, "me")
+        if not rival or not player:
+            return {"available": False, "reason": f"No car matches '{driver}'."}
+        if rival.get("car_idx") == player.get("car_idx"):
+            return {"available": False, "reason": "That is your own car."}
+
+        player_laps = self._valid_laps(player)
+        rival_laps = self._valid_laps(rival)
+        player_median = (
+            median(int(lap["lap_ms"]) for lap in player_laps) if player_laps else 0
+        )
+        rival_median = (
+            median(int(lap["lap_ms"]) for lap in rival_laps) if rival_laps else 0
+        )
+        pace_delta_s = (
+            round((player_median - rival_median) / 1000.0, 3)
+            if player_median and rival_median
+            else None
+        )
+
+        # Where the time actually goes, from the most recent lap both completed.
+        sector_deltas: dict[str, float] = {}
+        comparison = await self.get_rival_sector_comparison(
+            str(rival.get("name") or driver)
+        )
+        if comparison.get("available"):
+            sector_deltas = comparison.get("sector_deltas_s", {})
+        dominant = (
+            max(sector_deltas.items(), key=lambda item: abs(float(item[1])))
+            if sector_deltas
+            else None
+        )
+
+        gap = rival.get("gap_to_player_s")
+        rate, laps_to_contact = self._closing_rate_s_per_lap(rival)
+        ahead = gap is not None and float(gap) < 0
+
+        if rate is None:
+            verdict = "not enough gap history to call the trend"
+        elif rate <= -0.05:
+            verdict = "closing" if ahead else "being caught"
+        elif rate >= 0.05:
+            verdict = "dropping back" if ahead else "pulling away"
+        else:
+            verdict = "holding station"
+
+        # The measured gap trend and raw lap-time pace can disagree — a stop, a
+        # slow lap in traffic or a safety car all break the link between them.
+        # Saying so is better than asserting a confident call built on two
+        # signals that contradict each other.
+        conflict = None
+        if rate is not None and pace_delta_s is not None:
+            closing = rate <= -0.05
+            quicker = pace_delta_s < -0.05
+            if closing and not quicker and abs(pace_delta_s) > 0.15:
+                conflict = (
+                    "the gap is shrinking while raw lap times say he is quicker; "
+                    "likely traffic, a stop or an out-lap rather than pace"
+                )
+            elif not closing and quicker and abs(pace_delta_s) > 0.15:
+                conflict = (
+                    "your lap times are quicker but the gap is not coming down; "
+                    "check for traffic or a slow sector"
+                )
+
+        # Tyre offset explains a large part of most pace differences.
+        own_age = int((state.get("tyre") or {}).get("age_laps", 0) or 0)
+        rival_age = int(rival.get("tyre_age", 0) or 0)
+        own_compound = str((state.get("tyre") or {}).get("compound", "UNKNOWN"))
+        rival_compound = str(rival.get("tyre_compound", "UNKNOWN"))
+        tyre_note = None
+        if rival_compound not in {"UNKNOWN", ""} and own_compound not in {"UNKNOWN", ""}:
+            offset = rival_age - own_age
+            if own_compound != rival_compound:
+                tyre_note = (
+                    f"different compound: you {own_compound.lower()} {own_age} laps, "
+                    f"him {rival_compound.lower()} {rival_age} laps"
+                )
+            elif abs(offset) >= 3:
+                fresher = "his" if offset < 0 else "yours"
+                tyre_note = f"{fresher} are {abs(offset)} laps fresher on the same compound"
+
+        return {
+            "available": True,
+            "driver": display_name(rival),
+            "position": rival.get("position"),
+            "relative": None if gap is None else ("ahead" if ahead else "behind"),
+            "gap_s": None if gap is None else round(abs(float(gap)), 2),
+            "verdict": verdict,
+            "gap_change_s_per_lap": rate,
+            "laps_to_contact": laps_to_contact,
+            "pace_delta_s_per_lap": pace_delta_s,
+            "pace_interpretation": (
+                None
+                if pace_delta_s is None
+                else (
+                    f"you are {abs(pace_delta_s):.2f}s per lap "
+                    + ("slower" if pace_delta_s > 0 else "faster")
+                )
+            ),
+            "your_median_lap": fmt_ms(int(player_median)) if player_median else None,
+            "his_median_lap": fmt_ms(int(rival_median)) if rival_median else None,
+            "your_trend_s_per_lap": self._pace_trend_s_per_lap(player_laps),
+            "his_trend_s_per_lap": self._pace_trend_s_per_lap(rival_laps),
+            "sector_deltas_s": sector_deltas or None,
+            "losing_most_in": (
+                dominant[0].upper() if dominant and float(dominant[1]) > 0 else None
+            ),
+            "gaining_most_in": (
+                dominant[0].upper() if dominant and float(dominant[1]) < 0 else None
+            ),
+            "signal_conflict": conflict,
+            "tyre_context": tyre_note,
+            "his_stops": rival.get("pit_stops"),
+            "telemetry_restricted": bool(rival.get("restricted")),
+            "interpretation": (
+                "Positive sector or pace delta means the player is slower. "
+                "gap_change_s_per_lap is negative when the gap is shrinking."
+            ),
+        }
+
+    async def get_race_picture(self) -> dict[str, Any]:
+        """One call that says where the race actually stands and what to do.
+
+        Built for a driver who cannot read a dashboard: the single real threat,
+        the single real opportunity, whether their own pace is holding, and the
+        one thing that follows from it. Everything is derived from the same
+        deterministic state the other tools report.
+        """
+        state = await self.store.snapshot_analysis()
+        player = self._resolve_driver(state, "me")
+        position = int(state.get("player_position", 0) or 0)
+        running = sorted(
+            (
+                d
+                for d in state.get("drivers", [])
+                if int(d.get("position", 0) or 0) > 0 and not d.get("is_player")
+            ),
+            key=lambda item: int(item["position"]),
+        )
+
+        own_laps = self._valid_laps(player or {}, 6)
+        own_trend = self._pace_trend_s_per_lap(own_laps)
+        own_median = median(int(l["lap_ms"]) for l in own_laps) if own_laps else 0
+
+        threats: list[dict[str, Any]] = []
+        opportunities: list[dict[str, Any]] = []
+        for rival in running:
+            gap = rival.get("gap_to_player_s")
+            if gap is None or rival.get("pit_lane_timer_active"):
+                continue
+            rate, laps_to_contact = self._closing_rate_s_per_lap(rival)
+            entry = {
+                "driver": display_name(rival),
+                "position": rival.get("position"),
+                "gap_s": round(abs(float(gap)), 2),
+                "gap_change_s_per_lap": rate,
+                "laps_to_contact": laps_to_contact,
+                "tyre": rival.get("tyre_compound"),
+                "tyre_age_laps": rival.get("tyre_age"),
+                "pit_stops": rival.get("pit_stops"),
+            }
+            behind = int(rival.get("position", 0) or 0) > position > 0
+            if behind and rate is not None and rate <= -0.05:
+                threats.append(entry)
+            elif not behind and rate is not None and rate <= -0.05:
+                opportunities.append(entry)
+
+        threats.sort(key=lambda e: (e["laps_to_contact"] or 1e9, e["gap_s"]))
+        opportunities.sort(key=lambda e: (e["laps_to_contact"] or 1e9, e["gap_s"]))
+
+        tyre = state.get("tyre", {}) or {}
+        wear = [float(v) for v in (tyre.get("wear") or [0, 0, 0, 0])]
+        deg = (state.get("analysis", {}) or {}).get("deg_model", {}) or {}
+        recommended = (state.get("strategy", {}) or {}).get("recommended", {}) or {}
+
+        # The single most useful thing to say, chosen deterministically.
+        if threats and (threats[0]["laps_to_contact"] or 99) <= 5:
+            headline = (
+                f"{threats[0]['driver']} is the live threat: {threats[0]['gap_s']}s "
+                f"and closing, roughly {threats[0]['laps_to_contact']} laps to contact."
+            )
+        elif opportunities and (opportunities[0]["laps_to_contact"] or 99) <= 5:
+            headline = (
+                f"{opportunities[0]['driver']} is catchable: {opportunities[0]['gap_s']}s "
+                f"and shrinking, roughly {opportunities[0]['laps_to_contact']} laps."
+            )
+        elif own_trend is not None and own_trend > 0.15:
+            headline = (
+                f"Your pace is dropping {own_trend:.2f}s per lap; tyre is the limit, "
+                "not track position."
+            )
+        elif recommended.get("instruction"):
+            headline = str(recommended["instruction"])
+        else:
+            headline = "Race is stable; no threat or opportunity inside five laps."
+
+        return {
+            "available": bool(state.get("connected")),
+            "lap": state.get("current_lap"),
+            "total_laps": state.get("total_laps"),
+            "position": position,
+            "race_control_phase": state.get("race_control_phase"),
+            "headline": headline,
+            "your_pace": {
+                "median_lap": fmt_ms(int(own_median)) if own_median else None,
+                "trend_s_per_lap": own_trend,
+                "trend_meaning": (
+                    None
+                    if own_trend is None
+                    else "degrading"
+                    if own_trend > 0.08
+                    else "improving"
+                    if own_trend < -0.08
+                    else "steady"
+                ),
+                "target_lap": (state.get("analysis", {}) or {}).get("target", {}).get("target"),
+            },
+            "your_tyre": {
+                "compound": tyre.get("compound"),
+                "age_laps": tyre.get("age_laps"),
+                "max_wear_pct": round(max(wear), 1) if wear else None,
+                "deg_s_per_lap": deg.get("current_slope_s_per_lap"),
+                "projected_cliff_lap": deg.get("projected_cliff_lap"),
+            },
+            "threat": threats[0] if threats else None,
+            "opportunity": opportunities[0] if opportunities else None,
+            "other_threats": threats[1:3],
+            "strategy": {
+                "instruction": recommended.get("instruction"),
+                "box_lap": recommended.get("box_lap"),
+                "fit_compound": recommended.get("fit_compound"),
+                "confidence": (state.get("strategy", {}) or {}).get("confidence"),
+            },
+            "note": (
+                "threat and opportunity are only listed when the gap is measurably "
+                "shrinking; laps_to_contact assumes the current rate holds."
+            ),
+        }
 
     async def get_rival_car_state(self, driver: str) -> dict[str, Any]:
         """Everything the game publishes about one other car.
@@ -1368,6 +1679,28 @@ class TelemetryTools:
                 "get_cars_ahead_progress",
                 "Get nearest cars ahead with measured live gap trend and latest-lap pace evidence.",
                 {"top_n": {"type": "integer", "minimum": 1, "maximum": 12}},
+            ),
+            (
+                "get_pace_verdict",
+                (
+                    "Judge the player's pace against one rival and say where the "
+                    "time is going: closing or not, closing rate, laps to contact, "
+                    "sector attribution, pace trend both ways and the tyre offset "
+                    "that explains it. Use this for any 'how am I doing against X' "
+                    "or 'am I catching X' question instead of reading out lap times."
+                ),
+                {"driver": {"type": "string"}},
+            ),
+            (
+                "get_race_picture",
+                (
+                    "One call for where the race stands: the single real threat and "
+                    "the single real opportunity with laps to contact, whether the "
+                    "player's own pace is holding or degrading, tyre life, and the "
+                    "strategy consequence. Use this for open questions such as "
+                    "'how is the race going', 'where do I stand' or 'any updates'."
+                ),
+                {},
             ),
             (
                 "get_rival_car_state",

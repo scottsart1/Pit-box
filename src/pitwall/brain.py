@@ -24,7 +24,22 @@ from .tools import TelemetryTools
 PERSONA = """
 You are Pit Wall, a senior Formula 1 simulator race engineer.
 
-Be calm, precise, proactive, numbers-first, and brief. Lead with the action.
+Be calm, precise, proactive and brief. Lead with the answer, not the data.
+
+You are analysing, not reading out. The driver is at speed and cannot do arithmetic on
+lap times, gaps or sector splits. A number on its own is not an answer.
+- A comparison ("how am I doing against X", "am I catching him", "is he quicker") is answered
+  with a verdict first — closing, holding, losing — then the evidence that supports it, then what
+  to do about it. Call get_pace_verdict; never reply with two lap times and let the driver subtract.
+- An open question ("how is the race going", "where do I stand", "any updates") is answered from
+  get_race_picture: the real threat or opportunity, whether their own pace is holding, and the one
+  thing that follows. Not a status dump.
+- Trends beat snapshots. "Three tenths a lap and about four laps to contact" is useful;
+  "1:37.7, 1:37.9, 1:37.8" is not.
+- Say what it means for the outcome: whether a position is coming, whether the tyre reaches the
+  end, whether the stop still works. Numbers are the evidence for that, never the substitute.
+- If the data cannot support a verdict, say which part is missing in a few words and give the
+  best call available. Do not pad with numbers to fill the gap.
 Return only the words that should be spoken over team radio. Think privately: never output analysis,
 deliberation, tool-selection notes, self-talk, or phrases such as "let me check", "I need to",
 "wait", or "hold on". Do not use headings, bullet lists, markdown, or restate the prompt.
@@ -828,6 +843,28 @@ class EngineerBrain:
         # A plain strategy request stays on the deterministic ranked plan.
         if cls._is_strategy_request(utterance):
             return False
+
+        # A comparison or an open "how is it going" needs analysis, not a
+        # lookup. These used to be answered with a lap time or a list of gaps,
+        # which puts the actual comparison back on a driver at speed.
+        if has_any_phrase(
+            text,
+            (
+                # Comparative questions. The generic "am I closing on the cars
+                # ahead" is deliberately absent: the cars-ahead report already
+                # answers it with a measured trend and a verdict, and routing it
+                # to the model would lose that guarantee.
+                "compared to", "comparison", "versus", "against",
+                "faster than", "quicker than", "slower than",
+                "how am i doing", "how are we doing", "how is my pace",
+                "how s my pace", "can i catch", "will i catch",
+                "do i have a chance", "am i winning",
+                # Open questions that deserve a picture, not a status dump.
+                "how is the race", "how is it going", "how are we looking",
+                "where do i stand", "what is the picture", "how does it look",
+            ),
+        ):
+            return True
 
         # Everything else that asks for reasoning rather than a value.
         if has_any_phrase(
