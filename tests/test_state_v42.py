@@ -138,3 +138,30 @@ def test_trace_thinning_stays_dense_enough_for_segment_analysis() -> None:
     gaps = [traces[i + 1]["d"] - traces[i]["d"] for i in range(len(traces) - 1)]
     assert max(gaps) < 5.0, "trace spacing exceeded the alignment bridge threshold"
     assert settings.trace_min_distance_m <= 1.0
+
+
+@pytest.mark.asyncio
+async def test_full_snapshot_bounds_the_trace_payload() -> None:
+    """Tool snapshots must stay bounded however dense the trace becomes.
+
+    snapshot() serves tool calls, and the engineer must never be handed
+    thousands of raw samples to reason over. Copying the whole list also made
+    every tool call scale with trace density: 30,000 points cost 1.7 s before
+    this bound, against 63 ms after it.
+    """
+    store = StateStore()
+    for index in range(30_000):
+        store.state.traces.append(
+            {"t": index / 60.0, "d": index * 0.5, "speed": 250, "throttle": 1.0,
+             "brake": 0.0, "steer": 0.0, "gear": 7, "lat_g": 0.0, "long_g": 0.0}
+        )
+
+    full = await store.snapshot()
+    live = await store.snapshot_live()
+    analysis = await store.snapshot_analysis()
+
+    assert len(full["traces"]) <= 1_300, "tool payload must not carry raw samples"
+    assert len(live["traces"]) <= 1_300
+    assert analysis["traces"] == []
+    # The most recent sample must survive downsampling; it is the current state.
+    assert full["traces"][-1]["d"] == store.state.traces[-1]["d"]

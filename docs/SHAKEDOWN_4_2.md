@@ -146,5 +146,8 @@ Verified by hand during implementation, on this machine, against the real
   link-local Bluetooth adapter (-636.5);
 - a real recorded lap comparison returned +0.182 s where the raw lap times
   differ by 0.183 s;
+- a tool-call snapshot carrying 30,000 trace points went from 1,761 ms to
+  63 ms once the trace payload was bounded, and no longer scales with trace
+  density;
 - no horizontal page overflow at 1920x1200, 1366x768 or 390x844, and all
   touch targets meet 44 px.

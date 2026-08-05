@@ -617,15 +617,17 @@ class StateStore:
             elif name == "traces":
                 if profile == "analysis":
                     data[name] = []
-                elif profile == "live":
-                    # Keep the dashboard responsive on long circuits. The graph
-                    # does not need every sampled point once the trace is dense.
+                else:
+                    # Keep the dashboard responsive on long circuits, and keep
+                    # the tool payload bounded: no caller needs every sampled
+                    # point, and the engineer must never be handed thousands of
+                    # raw samples to reason over. Copying the whole list here
+                    # cost 150 ms per tool call before this bound, growing with
+                    # trace density and with any lap that never resets.
                     step = max(1, len(value) // 1200)
                     data[name] = copy.deepcopy(value[::step])
                     if value and data[name] and data[name][-1] != value[-1]:
                         data[name].append(copy.deepcopy(value[-1]))
-                else:
-                    data[name] = copy.deepcopy(value)
             elif name == "completed_laps" and profile == "live":
                 # The live dashboard consumes derived analysis/strategy, not the
                 # full in-memory lap-summary history. Keep this payload bounded.

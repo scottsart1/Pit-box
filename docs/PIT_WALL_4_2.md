@@ -523,10 +523,15 @@ will not interpolate across a wide gap, so thinning can make a corner report
 | `1.5` (pre-4.2 behavior) | 2,340 | 1.99 m |
 | `0.5` (current default) | 4,680 | 0.99 m |
 
-The live dashboard projects any trace down to about 1,200 points before it is
-serialized, so density changes do not measurably affect the live view. Set
-`PITWALL_TRACE_MIN_DISTANCE_M=0.25` for more detail, or `1.5` to reproduce the
-older, smaller traces.
+Every serialized snapshot projects the trace down to about 1,200 points, so
+density affects what is stored and analysed rather than what is sent to the
+dashboard or to an engineer tool call. Density can therefore be raised without
+a per-request cost: measured on this machine, a tool-call snapshot holding
+30,000 trace points took 1,761 ms when it copied the whole list and 63 ms once
+bounded.
+
+Set `PITWALL_TRACE_MIN_DISTANCE_M=0.25` for more detail, or `1.5` to reproduce
+the older, smaller traces.
 
 ### Sessions recorded before 4.2
 
