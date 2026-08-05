@@ -2,10 +2,14 @@ from __future__ import annotations
 
 import asyncio
 import json
+import shutil
 import sqlite3
 import time
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+
+from .migrations import LATEST_SCHEMA_VERSION, MIGRATIONS
 
 _SQLITE_INT64_MIN = -(1 << 63)
 _SQLITE_INT64_MAX = (1 << 63) - 1
@@ -47,6 +51,8 @@ class PitWallDatabase:
     def __init__(self, path: Path) -> None:
         self.path = path
         self._lock = asyncio.Lock()
+        self.last_backup_path: Path | None = None
+        self.schema_version = 0
 
     async def initialize(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -59,7 +65,149 @@ class PitWallDatabase:
         connection.execute("PRAGMA foreign_keys=ON")
         return connection
 
+    @staticmethod
+    def _schema_versions_table_sql() -> str:
+        return """
+            CREATE TABLE IF NOT EXISTS schema_versions (
+                version INTEGER PRIMARY KEY,
+                applied_at TEXT NOT NULL,
+                app_version TEXT NOT NULL,
+                checksum TEXT NOT NULL
+            )
+        """
+
+    def _current_schema_version_sync(self) -> int:
+        if not self.path.exists() or self.path.stat().st_size == 0:
+            return 0
+        connection = sqlite3.connect(self.path, timeout=10)
+        try:
+            exists = connection.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='schema_versions'"
+            ).fetchone()
+            if not exists:
+                return 0
+            row = connection.execute(
+                "SELECT COALESCE(MAX(version), 0) FROM schema_versions"
+            ).fetchone()
+            return int(row[0] if row else 0)
+        finally:
+            connection.close()
+
+    def _integrity_check_sync(self, *, quick: bool = True) -> list[str]:
+        if not self.path.exists() or self.path.stat().st_size == 0:
+            return ["ok"]
+        connection = sqlite3.connect(self.path, timeout=30)
+        try:
+            pragma = "quick_check" if quick else "integrity_check"
+            return [str(row[0]) for row in connection.execute(f"PRAGMA {pragma}")]
+        finally:
+            connection.close()
+
+    def _check_migration_space_sync(self) -> None:
+        size = self.path.stat().st_size if self.path.exists() else 0
+        free = shutil.disk_usage(self.path.parent).free
+        # SQLite backup plus migration/WAL headroom.  The fixed floor avoids a
+        # misleading successful preflight on a nearly full drive and remains
+        # small enough for normal temporary test volumes.
+        required = max(size * 2 + 8 * 1024 * 1024, 16 * 1024 * 1024)
+        if free < required:
+            raise RuntimeError(
+                "Not enough free disk space to back up and migrate Pit Wall "
+                f"(need {required} bytes, have {free} bytes)"
+            )
+
+    def _backup_sync(self) -> Path:
+        backups = self.path.parent / "backups"
+        backups.mkdir(parents=True, exist_ok=True)
+        stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S.%fZ")
+        destination = backups / f"{self.path.stem}-pre-v42-{stamp}.sqlite3"
+        source_db = sqlite3.connect(self.path, timeout=30)
+        backup_db = sqlite3.connect(destination, timeout=30)
+        try:
+            source_db.backup(backup_db)
+            backup_db.commit()
+            check = [str(row[0]) for row in backup_db.execute("PRAGMA quick_check")]
+            if check != ["ok"]:
+                raise RuntimeError(f"SQLite backup integrity check failed: {check}")
+        finally:
+            backup_db.close()
+            source_db.close()
+        return destination
+
+    def _apply_versioned_migrations_sync(self) -> None:
+        with self._connect() as db:
+            db.execute(self._schema_versions_table_sql())
+            applied = {
+                int(row["version"]): str(row["checksum"])
+                for row in db.execute(
+                    "SELECT version, checksum FROM schema_versions"
+                ).fetchall()
+            }
+            for migration in MIGRATIONS:
+                prior_checksum = applied.get(migration.version)
+                if prior_checksum is not None:
+                    if prior_checksum != migration.checksum:
+                        raise RuntimeError(
+                            "Applied migration checksum does not match this build: "
+                            f"{migration.version}"
+                        )
+                    continue
+                try:
+                    db.execute("BEGIN IMMEDIATE")
+                    for statement in migration.statements:
+                        db.execute(statement)
+                    db.execute(
+                        """
+                        INSERT INTO schema_versions(version, applied_at, app_version, checksum)
+                        VALUES (?, ?, ?, ?)
+                        """,
+                        (
+                            migration.version,
+                            datetime.now(UTC).isoformat(),
+                            migration.app_version,
+                            migration.checksum,
+                        ),
+                    )
+                    db.execute(f"PRAGMA user_version={migration.version}")
+                    db.commit()
+                except Exception:
+                    db.rollback()
+                    raise
+            row = db.execute(
+                "SELECT COALESCE(MAX(version), 0) AS version FROM schema_versions"
+            ).fetchone()
+            self.schema_version = int(row["version"] if row else 0)
+
+    async def create_backup(self) -> Path:
+        """Create and verify an online SQLite backup under ``data/backups``."""
+        async with self._lock:
+            path = await asyncio.to_thread(self._backup_sync)
+            self.last_backup_path = path
+            return path
+
+    async def integrity_report(self, *, deep: bool = False) -> dict[str, Any]:
+        checks = await asyncio.to_thread(self._integrity_check_sync, quick=not deep)
+        return {
+            "ok": checks == ["ok"],
+            "checks": checks,
+            "schema_version": self.schema_version,
+            "latest_schema_version": LATEST_SCHEMA_VERSION,
+            "last_backup": str(self.last_backup_path) if self.last_backup_path else None,
+        }
+
     def _initialize_sync(self) -> None:
+        existing_database = self.path.exists() and self.path.stat().st_size > 0
+        pending_migration = self._current_schema_version_sync() < LATEST_SCHEMA_VERSION
+        if existing_database and pending_migration:
+            checks = self._integrity_check_sync(quick=True)
+            if checks != ["ok"]:
+                deep_checks = self._integrity_check_sync(quick=False)
+                raise RuntimeError(
+                    "Pit Wall database failed its pre-migration integrity check: "
+                    f"{deep_checks}"
+                )
+            self._check_migration_space_sync()
+            self.last_backup_path = self._backup_sync()
         with self._connect() as db:
             db.executescript(
                 """
@@ -290,6 +438,13 @@ class PitWallDatabase:
                     db.execute(
                         f"ALTER TABLE proactive_calls ADD COLUMN {column} {column_type}"
                     )
+        self._apply_versioned_migrations_sync()
+        post_checks = self._integrity_check_sync(quick=True)
+        if post_checks != ["ok"]:
+            raise RuntimeError(
+                "Pit Wall database failed its post-migration integrity check; "
+                f"backup retained at {self.last_backup_path}: {post_checks}"
+            )
 
     async def maintain(
         self,
