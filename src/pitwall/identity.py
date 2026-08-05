@@ -15,8 +15,10 @@ resolver reports the ambiguity rather than guessing.
 from __future__ import annotations
 
 from collections.abc import Iterable
+from dataclasses import asdict, dataclass, replace
 from typing import Any
 
+from .catalog import session_car_id, session_id
 from .intent import has_phrase, normalize_text
 
 # driver_id -> full name, from the UDP specification driver appendix.
@@ -167,3 +169,248 @@ def match_drivers(drivers: Iterable[dict[str, Any]], utterance: str) -> list[dic
             scored.append((best, driver))
     scored.sort(key=lambda item: item[0], reverse=True)
     return [driver for _, driver in scored]
+
+
+@dataclass(frozen=True, slots=True)
+class SessionKey:
+    game_session_uid: str
+    restart_epoch: int
+
+    @property
+    def id(self) -> str:
+        return session_id(self.game_session_uid, self.restart_epoch)
+
+
+@dataclass(frozen=True, slots=True)
+class SessionCarIdentity:
+    id: str
+    session_id: str
+    car_index: int
+    identity_revision: int
+    driver_id: int | None = None
+    network_id: str | None = None
+    name: str | None = None
+    race_number: int | None = None
+    team_id: int | None = None
+    nationality_id: int | None = None
+    is_ai: bool | None = None
+    is_player: bool = False
+    first_frame: int = 0
+    last_frame: int = 0
+    change_reason: str = "first_observation"
+    confidence: float = 0.5
+
+    @property
+    def anonymized_name(self) -> str:
+        return f"Driver {self.car_index + 1:02d}"
+
+    def public_name(self, *, anonymize: bool = False) -> str:
+        if anonymize:
+            return self.anonymized_name
+        return self.name or driver_full_name(self.driver_id or -1, self.anonymized_name)
+
+    def as_record(self, *, anonymize: bool = False) -> dict[str, Any]:
+        record = asdict(self)
+        record["display_name"] = self.public_name(anonymize=anonymize)
+        record["anonymized_name"] = self.anonymized_name
+        if anonymize:
+            record["name"] = None
+            record["network_id"] = None
+        return record
+
+
+class SessionIdentityRegistry:
+    """Revisioned identity for historical cars, separate from radio matching.
+
+    Packet array indices remain useful live locators, but a conflicting known
+    identity creates a new revision so old samples are never retroactively
+    relabelled. Missing fields may enrich the current revision without creating
+    false churn as participant packets fill in over time.
+    """
+
+    _IDENTITY_FIELDS = (
+        "driver_id",
+        "network_id",
+        "name",
+        "race_number",
+        "team_id",
+        "is_ai",
+    )
+
+    def __init__(self) -> None:
+        self.session: SessionKey | None = None
+        self._last_epoch_by_uid: dict[str, int] = {}
+        self._current: dict[int, SessionCarIdentity] = {}
+        self._history: list[SessionCarIdentity] = []
+
+    def begin_session(
+        self,
+        game_session_uid: int | str,
+        *,
+        restart_evidence: bool = False,
+    ) -> SessionKey:
+        uid = str(game_session_uid)
+        if self.session is not None and self.session.game_session_uid == uid:
+            if not restart_evidence:
+                return self.session
+            epoch = self.session.restart_epoch + 1
+        elif restart_evidence or uid in self._last_epoch_by_uid:
+            epoch = self._last_epoch_by_uid.get(uid, -1) + 1
+        else:
+            epoch = 0
+        self.session = SessionKey(uid, epoch)
+        self._last_epoch_by_uid[uid] = epoch
+        self._current = {}
+        return self.session
+
+    @staticmethod
+    def _clean_optional_int(value: Any) -> int | None:
+        if value is None or value == "":
+            return None
+        number = int(value)
+        return None if number in {-1, 255} else number
+
+    @staticmethod
+    def _clean_optional_text(value: Any) -> str | None:
+        text = str(value or "").strip()
+        return None if not text or text.lower() == "unknown" else text
+
+    def _from_observation(
+        self,
+        car_index: int,
+        frame_identifier: int,
+        values: dict[str, Any],
+        *,
+        revision: int,
+        reason: str,
+    ) -> SessionCarIdentity:
+        if self.session is None:
+            raise RuntimeError("begin_session must be called before observing cars")
+        name = self._clean_optional_text(values.get("name"))
+        driver_id = self._clean_optional_int(values.get("driver_id"))
+        known_fields = sum(
+            value is not None
+            for value in (
+                name,
+                driver_id,
+                self._clean_optional_text(values.get("network_id")),
+                self._clean_optional_int(values.get("race_number")),
+                self._clean_optional_int(values.get("team_id")),
+            )
+        )
+        return SessionCarIdentity(
+            id=session_car_id(self.session.id, car_index, revision),
+            session_id=self.session.id,
+            car_index=car_index,
+            identity_revision=revision,
+            driver_id=driver_id,
+            network_id=self._clean_optional_text(values.get("network_id")),
+            name=name or driver_full_name(driver_id or -1, "") or None,
+            race_number=self._clean_optional_int(values.get("race_number")),
+            team_id=self._clean_optional_int(values.get("team_id")),
+            nationality_id=self._clean_optional_int(values.get("nationality_id")),
+            is_ai=(
+                bool(values.get("is_ai", values.get("ai_controlled")))
+                if "is_ai" in values or "ai_controlled" in values
+                else None
+            ),
+            is_player=bool(values.get("is_player", False)),
+            first_frame=int(frame_identifier),
+            last_frame=int(frame_identifier),
+            change_reason=reason,
+            confidence=min(0.99, 0.45 + known_fields * 0.1),
+        )
+
+    @staticmethod
+    def _known_conflicts(
+        current: SessionCarIdentity,
+        incoming: SessionCarIdentity,
+    ) -> list[str]:
+        conflicts: list[str] = []
+        for field_name in SessionIdentityRegistry._IDENTITY_FIELDS:
+            old = getattr(current, field_name)
+            new = getattr(incoming, field_name)
+            if old is None or new is None:
+                continue
+            if field_name == "name":
+                differs = normalize_text(str(old)) != normalize_text(str(new))
+            else:
+                differs = old != new
+            if differs:
+                conflicts.append(field_name)
+        return conflicts
+
+    @staticmethod
+    def _merge(
+        current: SessionCarIdentity,
+        incoming: SessionCarIdentity,
+    ) -> SessionCarIdentity:
+        updates: dict[str, Any] = {
+            "last_frame": max(current.last_frame, incoming.last_frame),
+            "is_player": current.is_player or incoming.is_player,
+            "confidence": max(current.confidence, incoming.confidence),
+        }
+        for field_name in (
+            "driver_id",
+            "network_id",
+            "name",
+            "race_number",
+            "team_id",
+            "nationality_id",
+            "is_ai",
+        ):
+            if getattr(current, field_name) is None:
+                updates[field_name] = getattr(incoming, field_name)
+        return replace(current, **updates)
+
+    def observe(
+        self,
+        car_index: int,
+        frame_identifier: int,
+        values: dict[str, Any],
+    ) -> SessionCarIdentity:
+        index = int(car_index)
+        if not 0 <= index < 24:
+            raise ValueError("car_index must be between 0 and 23")
+        current = self._current.get(index)
+        revision = current.identity_revision if current else 0
+        incoming = self._from_observation(
+            index,
+            frame_identifier,
+            values,
+            revision=revision,
+            reason="first_observation" if current is None else "enrichment",
+        )
+        if current is None:
+            self._current[index] = incoming
+            self._history.append(incoming)
+            return incoming
+        conflicts = self._known_conflicts(current, incoming)
+        if conflicts:
+            revised = self._from_observation(
+                index,
+                frame_identifier,
+                values,
+                revision=current.identity_revision + 1,
+                reason="changed:" + ",".join(conflicts),
+            )
+            self._current[index] = revised
+            self._history.append(revised)
+            return revised
+        merged = self._merge(current, incoming)
+        self._current[index] = merged
+        # Replace the last stored form of this revision so first/last-frame and
+        # enrichment metadata stay current without rewriting older revisions.
+        for position in range(len(self._history) - 1, -1, -1):
+            if self._history[position].id == merged.id:
+                self._history[position] = merged
+                break
+        return merged
+
+    def current(self, car_index: int) -> SessionCarIdentity | None:
+        return self._current.get(int(car_index))
+
+    def revisions(self, car_index: int | None = None) -> tuple[SessionCarIdentity, ...]:
+        if car_index is None:
+            return tuple(self._history)
+        return tuple(item for item in self._history if item.car_index == int(car_index))

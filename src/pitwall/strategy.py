@@ -586,7 +586,9 @@ class StrategyEngine:
 
     @staticmethod
     def _weather_crossover(
-        state: dict[str, Any], base_lap_s: float
+        state: dict[str, Any],
+        base_lap_s: float,
+        effective_pit_loss_s: float = 0.0,
     ) -> dict[str, Any] | None:
         current_lap = int(state.get("current_lap", 0))
         total_laps = int(state.get("total_laps", 0))
@@ -595,6 +597,33 @@ class StrategyEngine:
         current_compound = str(state.get("tyre", {}).get("compound", "UNKNOWN"))
         if current_rain and current_compound not in WET_COMPOUNDS:
             compound = "WET" if weather in {"Heavy rain", "Storm"} else "INTER"
+            # A tyre change has to earn back the pit lane. A tyre fitted at the
+            # end of the current lap only benefits the laps run after it, so
+            # calling a stop into the flag costs the pit loss to gain nothing.
+            # The per-lap gain is the pace penalty currently being paid for
+            # running the wrong compound, taken from the same COMPOUND_DELTA
+            # table the stint simulation uses rather than a separate figure.
+            remaining = max(0, total_laps - current_lap + (1 if current_lap > 0 else 0))
+            benefiting_laps = max(0, remaining - 1)
+            per_lap_gain_s = COMPOUND_DELTA.get(compound, 7.0)
+            payback_s = benefiting_laps * per_lap_gain_s
+            if effective_pit_loss_s > 0.0 and payback_s <= effective_pit_loss_s:
+                return {
+                    "box_lap": None,
+                    "compound": compound,
+                    "rain_pct": 100 if weather == "Storm" else 80
+                    if weather == "Heavy rain" else 60,
+                    "time_offset_min": 0,
+                    "worth_stopping": False,
+                    "benefiting_laps": benefiting_laps,
+                    "payback_s": round(payback_s, 1),
+                    "pit_loss_s": round(effective_pit_loss_s, 1),
+                    "reason": (
+                        f"{weather} is on track, but with {benefiting_laps} lap(s) "
+                        f"left to gain on the change the stop cannot repay its "
+                        f"{effective_pit_loss_s:.0f}s pit loss. Stay out and manage it."
+                    ),
+                }
             return {
                 "box_lap": current_lap,
                 "compound": compound,
@@ -604,6 +633,9 @@ class StrategyEngine:
                 if weather == "Heavy rain"
                 else 60,
                 "time_offset_min": 0,
+                "worth_stopping": True,
+                "benefiting_laps": benefiting_laps,
+                "payback_s": round(payback_s, 1),
                 "reason": f"{weather} is already on track.",
             }
         for sample in sorted(
@@ -1126,12 +1158,26 @@ class StrategyEngine:
         if peak_wear > operational_limit:
             feasible = False
             conservative += 12.0 + (peak_wear - operational_limit) * 1.75
+        # Wear is a percentage of a consumed tyre: 100 is fully worn and there
+        # is no such state as 102% worn. The projection is accumulated
+        # unclamped above because the penalty terms need the overshoot
+        # magnitude to price how badly a stint is over-extended, but the
+        # reported figures are what the dashboard, the OBS overlay and the
+        # spoken radio call render. Publishing the raw accumulator put
+        # "projects 102%" in the engineer's mouth.
+        finish_wear = max(wear)
         return {
             "expected_time_s": expected,
             "conservative_time_s": conservative,
-            "projected_finish_wear_pct": max(wear),
-            "projected_finish_wear_fl_fr_rl_rr": [round(value, 1) for value in wear],
-            "projected_max_wear_pct": peak_wear,
+            "projected_finish_wear_pct": min(100.0, finish_wear),
+            "projected_finish_wear_fl_fr_rl_rr": [
+                round(min(100.0, value), 1) for value in wear
+            ],
+            "projected_max_wear_pct": min(100.0, peak_wear),
+            # How far past a fully worn tyre the stint would run. Zero on any
+            # feasible stint; positive values quantify the over-extension that
+            # `feasible=False` reports qualitatively.
+            "projected_wear_overshoot_pct": round(max(0.0, peak_wear - 100.0), 1),
             "feasible": feasible,
             "wear_per_lap_pct": max(wheel_rates),
             "wheel_wear_per_lap_pct": [round(value, 3) for value in wheel_rates],
@@ -1421,7 +1467,9 @@ class StrategyEngine:
         effective_pit_loss = float(neutralisation["effective_pit_loss_s"])
         available_sets = self._available_sets(state)
         compounds = list(available_sets)
-        weather_crossover = self._weather_crossover(state, base_lap_s)
+        weather_crossover = self._weather_crossover(
+            state, base_lap_s, effective_pit_loss
+        )
         style_factor, style_evidence = self._driver_wear_factor(state, historical)
         feedback_adjustment = self._driver_feedback_adjustment(
             state, current_compound
@@ -1758,7 +1806,12 @@ class StrategyEngine:
                                     )
 
         weather_plan: dict[str, Any] | None = None
-        if weather_crossover is not None:
+        # A crossover that cannot repay its pit loss still describes the
+        # conditions, but it is not a stop: it must not become a plan.
+        if (
+            weather_crossover is not None
+            and weather_crossover.get("box_lap") is not None
+        ):
             box_lap = int(weather_crossover["box_lap"])
             fit = str(weather_crossover["compound"])
             first_laps = max(1, box_lap - current_lap + 1)
@@ -1851,6 +1904,14 @@ class StrategyEngine:
         deterministic = sorted(
             feasible or plans,
             key=lambda plan: (
+                # Legality outranks pace. Skipping a mandatory compound change
+                # always projects a better finish because it skips a pit stop,
+                # so ranking on position alone selected a plan that finishes
+                # the race and is then disqualified. The filter above drops
+                # illegal plans, but the stay-out anchor is re-added below and
+                # the whole list is used when nothing is both feasible and
+                # legal, so the ordering has to enforce this too.
+                not plan.get("legal", True),
                 not plan.get("feasible", False),
                 int(
                     plan.get(
@@ -1914,6 +1975,9 @@ class StrategyEngine:
             # tail cannot make a projected P18 beat a projected P10. Appetite
             # selects the gamble only among plans with the same central finish.
             return (
+                # A disqualified car scores nothing, so an illegal plan can
+                # never outrank a legal one whatever the appetite says.
+                not plan.get("legal", True),
                 not plan.get("feasible", False),
                 int(
                     plan.get(
@@ -2020,6 +2084,35 @@ class StrategyEngine:
             fit = None
             instruction = "Stay out to the finish."
             tyre_reason = f"Current {current_compound.lower()}s project to {best['projected_finish_wear_pct']:.0f}% at the finish."
+        # Any recommendation that cannot satisfy the mandatory compound change
+        # ends the race in disqualification. That applies whether the plan
+        # stays out or stops: a stop that refits the same dry compound serves
+        # nothing, so "Box lap 18 for HARD." sounded like a normal call while
+        # still heading for a DQ. The warning therefore wraps both branches.
+        if not best.get("legal", True):
+            rule_state = self._compound_rule(state)
+            eligible = [
+                compound
+                for compound in rule_state.get("eligible_next_compounds", [])
+                if compound in available_sets
+            ]
+            if eligible:
+                instruction = (
+                    "Warning: the mandatory dry-compound change is still "
+                    f"outstanding. Box for {eligible[0]} before the flag or "
+                    "the result is a disqualification."
+                )
+            else:
+                instruction = (
+                    "Warning: the mandatory dry-compound change cannot be "
+                    "served - no eligible dry set is available. The race "
+                    "finishes under threat of disqualification."
+                )
+            tyre_reason = (
+                f"{rule_state.get('dry_count', 0)} of "
+                f"{rule_state.get('required_dry_count', 2)} dry compounds used. "
+                + tyre_reason
+            )
 
         evidence_samples = max(
             int(style_evidence.get("sample_size", 0)),
@@ -2113,6 +2206,14 @@ class StrategyEngine:
             "laps_remaining": remaining,
             "pit_loss_s": round(effective_pit_loss, 1),
             "neutralisation": neutralisation,
+            # Surfaced even when no stop is called. A driver on slicks in the
+            # rain must still learn the conditions were seen and why staying
+            # out is the call, rather than hearing nothing about the weather.
+            **(
+                {"weather_crossover": weather_crossover}
+                if weather_crossover is not None
+                else {}
+            ),
             "compound_rule": self._compound_rule(state, best.get("compounds", [])[1:]),
             "game_window": {
                 "ideal_lap": game_ideal,

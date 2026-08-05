@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+import sqlite3
 from statistics import median
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from .analysis import AnalysisEngine, fmt_ms, theil_sen
 from .config import settings
@@ -10,6 +11,12 @@ from .identity import display_name, match_drivers
 from .setup_advisor import SetupAdvisor
 from .state import StateStore
 from .strategy import StrategyEngine
+
+if TYPE_CHECKING:
+    from .catalog import SessionCatalog
+    from .comparison_service import ComparisonService
+    from .field_service import FieldAnalysisService
+    from .network_service import NetworkService
 
 
 class TelemetryTools:
@@ -20,12 +27,48 @@ class TelemetryTools:
         analysis: AnalysisEngine,
         strategy: StrategyEngine,
         setup_advisor: SetupAdvisor,
+        *,
+        network_service: NetworkService | None = None,
+        session_catalog: SessionCatalog | None = None,
+        comparison_service: ComparisonService | None = None,
+        field_analysis_service: FieldAnalysisService | None = None,
     ) -> None:
         self.store = store
         self.database = database
         self.analysis = analysis
         self.strategy = strategy
         self.setup_advisor = setup_advisor
+        self.network_service = network_service
+        self.session_catalog = session_catalog
+        self.comparison_service = comparison_service
+        self.field_analysis_service = field_analysis_service
+
+    @staticmethod
+    def _service_unavailable(name: str) -> dict[str, Any]:
+        return {
+            "available": False,
+            "reason": f"The {name} service is not configured in this process.",
+        }
+
+    @staticmethod
+    def _bounded_identifier(value: str, name: str) -> str:
+        normalized = str(value).strip()
+        if not normalized:
+            raise ValueError(f"{name} cannot be blank")
+        if len(normalized) > 160:
+            raise ValueError(f"{name} must be at most 160 characters")
+        return normalized
+
+    @staticmethod
+    def _bounded_count(value: int, name: str, *, maximum: int) -> int:
+        count = int(value)
+        if not 1 <= count <= maximum:
+            raise ValueError(f"{name} must be between 1 and {maximum}")
+        return count
+
+    @staticmethod
+    def _enum_value(value: Any) -> Any:
+        return getattr(value, "value", value)
 
     @staticmethod
     def _resolve_driver(state: dict[str, Any], driver: str) -> dict[str, Any] | None:
@@ -1709,6 +1752,648 @@ class TelemetryTools:
             recommendation = await self.setup_advisor.generate("hybrid")
         return recommendation.get("pit_adjustment", recommendation)
 
+    # ----------------------------------------------------------- 4.2 queries
+
+    @staticmethod
+    def _query_failed(feature: str, exc: Exception) -> dict[str, Any]:
+        message = " ".join(str(exc).split())[:240] or "query failed"
+        return {
+            "available": False,
+            "reason": f"{feature} query failed: {message}",
+            "error_type": type(exc).__name__,
+        }
+
+    @staticmethod
+    def _compact_finding(finding: dict[str, Any]) -> dict[str, Any]:
+        """Bound one deterministic finding before it enters a model prompt."""
+
+        return {
+            key: finding.get(key)
+            for key in (
+                "finding_id",
+                "type",
+                "rank",
+                "segment_id",
+                "segment_label",
+                "phase",
+                "measured_loss_s",
+                "attributed_low_s",
+                "attributed_high_s",
+                "confidence",
+                "repeatability",
+                "opportunity_score",
+                "action",
+                "drill",
+                "positive",
+                "algorithm_version",
+            )
+        } | {
+            "facts": [
+                {
+                    key: fact.get(key)
+                    for key in (
+                        "key",
+                        "candidate",
+                        "reference",
+                        "delta",
+                        "unit",
+                        "confidence",
+                        "availability",
+                    )
+                }
+                for fact in list(finding.get("facts") or [])[:6]
+                if isinstance(fact, dict)
+            ],
+            "evidence": list(finding.get("evidence") or [])[:8],
+        }
+
+    async def get_connection_health(self) -> dict[str, Any]:
+        """Return a compact, measured Connection Center health snapshot."""
+
+        service = self.network_service
+        if service is None:
+            return self._service_unavailable("network diagnostics")
+        try:
+            snapshot = await service.snapshot()
+        except (RuntimeError, ValueError, OSError, KeyError, sqlite3.Error) as exc:
+            return self._query_failed("Connection health", exc)
+
+        listener = snapshot.listener
+        recommendation = snapshot.recommendation
+        recommended = recommendation.recommended
+        packet_rows = sorted(
+            snapshot.packet_health.packets,
+            key=lambda item: (
+                int(item.key.packet_id),
+                str(item.key.source_ip),
+                int(item.key.source_port),
+            ),
+        )[:16]
+        queues = {
+            str(name): {
+                "depth": int(item.depth),
+                "capacity": int(item.capacity),
+                "high_water": int(item.high_water),
+                "drops": int(item.drops),
+                "last_drain_age_ms": item.last_drain_age_ms,
+            }
+            for name, item in list(snapshot.queues.items())[:8]
+        }
+        forwarders = []
+        for managed in snapshot.forwarders[:16]:
+            target, counters = managed.target, managed.counters
+            forwarders.append(
+                {
+                    "id": target.id,
+                    "label": target.label,
+                    "enabled": bool(target.enabled),
+                    "destination": f"{target.host}:{target.port}",
+                    "sent_packets": int(counters.sent_packets),
+                    "sent_bytes": int(counters.sent_bytes),
+                    "queue_drops": int(counters.queue_drops),
+                    "socket_errors": int(counters.socket_errors),
+                    "last_error": counters.last_error,
+                }
+            )
+        return {
+            "available": True,
+            "listener": {
+                "state": self._enum_value(listener.state),
+                "bind_host": listener.bind_host,
+                "port": int(listener.port),
+                "last_valid_packet_age_ms": listener.last_valid_packet_age_ms,
+                "error": listener.error,
+            },
+            "receiving": self._enum_value(listener.state) == "receiving",
+            "recommendation": {
+                "console_destination_ipv4": (
+                    recommended.address if recommended is not None else None
+                ),
+                "adapter_id": (
+                    recommended.adapter_id if recommended is not None else None
+                ),
+                "confidence": recommendation.confidence,
+                "warnings": list(recommendation.warnings)[:6],
+            },
+            "source": dict(snapshot.source) if snapshot.source else None,
+            "game": dict(snapshot.game) if snapshot.game else None,
+            "packets": [
+                {
+                    "packet_id": int(item.key.packet_id),
+                    "source_ip": item.key.source_ip,
+                    "status": item.status,
+                    "observed_hz_10s": round(float(item.observed_hz_10s), 2),
+                    "expected_hz": item.expected_hz,
+                    "last_age_ms": (
+                        round(float(item.last_age_ms), 1)
+                        if item.last_age_ms is not None
+                        else None
+                    ),
+                    "received": int(item.received),
+                    "valid_parsed": int(item.valid_parsed),
+                    "parse_errors": int(item.parse_errors),
+                    "provisional_gaps": int(item.provisional_gaps),
+                    "confirmed_lost": int(item.confirmed_lost),
+                    "duplicates": int(item.duplicates),
+                    "out_of_order": int(item.out_of_order),
+                    "jitter_ms": (
+                        round(float(item.jitter_ms), 2)
+                        if item.jitter_ms is not None
+                        else None
+                    ),
+                }
+                for item in packet_rows
+            ],
+            "invalid_datagrams": sum(
+                int(item.received) for item in snapshot.packet_health.invalid
+            ),
+            "queues": queues,
+            "forwarders": forwarders,
+            "warnings": list(snapshot.warnings)[:10],
+            "truncated": (
+                len(snapshot.packet_health.packets) > len(packet_rows)
+                or len(snapshot.forwarders) > len(forwarders)
+            ),
+        }
+
+    async def list_saved_sessions(self, limit: int = 10) -> dict[str, Any]:
+        """List a bounded page of locally saved sessions, newest first."""
+
+        service = self.session_catalog
+        if service is None:
+            return self._service_unavailable("saved-session catalog")
+        count = self._bounded_count(limit, "limit", maximum=20)
+        try:
+            page = await service.list_sessions(limit=count)
+        except (RuntimeError, ValueError, OSError, KeyError, sqlite3.Error) as exc:
+            return self._query_failed("Saved sessions", exc)
+        items = []
+        for item in list(page.get("items") or [])[:count]:
+            items.append(
+                {
+                    key: item.get(key)
+                    for key in (
+                        "id",
+                        "display_name",
+                        "track_id",
+                        "session_type",
+                        "mode_profile",
+                        "started_at",
+                        "ended_at",
+                        "status",
+                        "capture_mode",
+                        "starred",
+                        "quality_score",
+                        "drivers_observed",
+                        "lap_count",
+                        "size_bytes",
+                    )
+                }
+            )
+        return {
+            "available": bool(items),
+            "items": items,
+            "has_more": bool(page.get("has_more")),
+            "next_cursor_available": bool(page.get("next_cursor")),
+        }
+
+    async def get_session_summary(self, session_id: str) -> dict[str, Any]:
+        """Get bounded metadata and persisted field context for one session."""
+
+        catalog = self.session_catalog
+        if catalog is None:
+            return self._service_unavailable("saved-session catalog")
+        key = self._bounded_identifier(session_id, "session_id")
+        try:
+            session = await catalog.get_session(key)
+            if session is None:
+                return {
+                    "available": False,
+                    "reason": f"Saved session {key!r} was not found.",
+                }
+            field = (
+                await self.field_analysis_service.summary(key)
+                if self.field_analysis_service is not None
+                else None
+            )
+        except (RuntimeError, ValueError, OSError, KeyError, sqlite3.Error) as exc:
+            return self._query_failed("Session summary", exc)
+
+        participants = [
+            {
+                name: item.get(name)
+                for name in (
+                    "id",
+                    "car_index",
+                    "identity_revision",
+                    "display_name",
+                    "race_number",
+                    "team_id",
+                    "is_ai",
+                    "is_player",
+                    "identity_confidence",
+                )
+            }
+            for item in list(session.get("participants") or [])[:24]
+        ]
+        derived = session.get("derived") or {}
+        result: dict[str, Any] = {
+            "available": True,
+            "session": {
+                name: session.get(name)
+                for name in (
+                    "id",
+                    "display_name",
+                    "track_id",
+                    "track_layout_signature",
+                    "session_type",
+                    "mode_profile",
+                    "started_at",
+                    "ended_at",
+                    "status",
+                    "packet_format",
+                    "capture_mode",
+                    "quality_score",
+                    "starred",
+                    "tags",
+                )
+            },
+            "participants": participants,
+            "participant_count": len(session.get("participants") or []),
+            "comparison_count": int(derived.get("comparisons", 0) or 0),
+            "recent_jobs": [
+                {
+                    name: job.get(name)
+                    for name in ("id", "kind", "state", "progress", "created_at")
+                }
+                for job in list(derived.get("jobs") or [])[:5]
+            ],
+        }
+        if field is not None:
+            result["field"] = {
+                "cars_observed": field.get("cars_observed"),
+                "lap_rows": field.get("lap_rows"),
+                "classification_availability": field.get(
+                    "classification_availability"
+                ),
+                "classification_reason": field.get("classification_reason"),
+                "classification": [
+                    {
+                        "car_id": row.get("car_id"),
+                        "display_name": row.get("display_name"),
+                        "position": row.get("position"),
+                        "best_lap_ms": row.get("best_lap_ms"),
+                        "median_clean_pace_ms": row.get(
+                            "median_clean_pace_ms"
+                        ),
+                        "laps_recorded": row.get("laps_recorded"),
+                        "compound": row.get("compound"),
+                        "status": row.get("status"),
+                    }
+                    for row in list(field.get("classification") or [])[:24]
+                ],
+                "warnings": list(field.get("warnings") or [])[:8],
+                "truncated": bool(field.get("truncated")),
+            }
+        return result
+
+    async def list_reference_laps(
+        self, candidate_lap_id: str, limit: int = 10
+    ) -> dict[str, Any]:
+        """List ranked, compatibility-aware references without trace samples."""
+
+        service = self.comparison_service
+        if service is None:
+            return self._service_unavailable("lap comparison")
+        lap_key = self._bounded_identifier(candidate_lap_id, "candidate_lap_id")
+        count = self._bounded_count(limit, "limit", maximum=20)
+        try:
+            result = await service.list_references(lap_key)
+        except (RuntimeError, ValueError, OSError, KeyError, sqlite3.Error) as exc:
+            return self._query_failed("Reference laps", exc)
+        references = []
+        for item in list(result.get("items") or [])[:count]:
+            compatibility = item.get("compatibility") or {}
+            references.append(
+                {
+                    name: item.get(name)
+                    for name in (
+                        "lap_id",
+                        "lap_number",
+                        "lap_time_ms",
+                        "driver",
+                        "session_id",
+                        "is_player",
+                        "suggested",
+                    )
+                }
+                | {
+                    "compatibility": {
+                        "class": compatibility.get("class"),
+                        "compatibility_weight": compatibility.get(
+                            "compatibility_weight"
+                        ),
+                        "allows_coaching": compatibility.get("allows_coaching"),
+                        "caveats": list(compatibility.get("caveats") or [])[:6],
+                        "issues": list(compatibility.get("issues") or [])[:6],
+                    },
+                    "reasons": list(item.get("reasons") or [])[:6],
+                }
+            )
+        return {
+            "available": bool(references),
+            "candidate_lap_id": lap_key,
+            "references": references,
+            "truncated": len(result.get("items") or []) > len(references),
+        }
+
+    async def compare_laps(
+        self,
+        candidate_lap_id: str,
+        reference_kind: str = "lap",
+        reference_lap_id: str | None = None,
+        allow_caveated_reference: bool = False,
+    ) -> dict[str, Any]:
+        """Create/reuse a deterministic comparison and return its compact result."""
+
+        service = self.comparison_service
+        if service is None:
+            return self._service_unavailable("lap comparison")
+        candidate = self._bounded_identifier(candidate_lap_id, "candidate_lap_id")
+        kind = self._bounded_identifier(reference_kind, "reference_kind")
+        allowed_kinds = {
+            "lap",
+            "field_driver",
+            "saved_benchmark",
+            "session_pb",
+            "all_time_pb",
+            "recent_representative",
+        }
+        if kind not in allowed_kinds:
+            raise ValueError(f"reference_kind must be one of {sorted(allowed_kinds)}")
+        reference = (
+            self._bounded_identifier(reference_lap_id, "reference_lap_id")
+            if reference_lap_id is not None and str(reference_lap_id).strip()
+            else None
+        )
+        try:
+            result = await service.create_comparison(
+                candidate,
+                reference_kind=kind,
+                reference_lap_id=reference,
+                allow_caveated_reference=bool(allow_caveated_reference),
+            )
+        except (RuntimeError, ValueError, OSError, KeyError, sqlite3.Error) as exc:
+            return self._query_failed("Lap comparison", exc)
+        compatibility = result.get("compatibility") or {}
+        return {
+            "available": True,
+            "comparison_id": result.get("comparison_id"),
+            "candidate": result.get("candidate"),
+            "reference": result.get("reference"),
+            "compatibility": {
+                "class": compatibility.get("class"),
+                "compatibility_weight": compatibility.get(
+                    "compatibility_weight"
+                ),
+                "allows_coaching": compatibility.get("allows_coaching"),
+                "caveats": list(compatibility.get("caveats") or [])[:6],
+            },
+            "algorithm_bundle": result.get("algorithm_bundle"),
+            "coverage_ratio": result.get("coverage_ratio"),
+            "quality_score": result.get("quality_score"),
+            "lap_delta_s": result.get("lap_delta_s"),
+            "sign_convention": result.get("sign_convention"),
+            "segments": [
+                {
+                    name: item.get(name)
+                    for name in (
+                        "segment_id",
+                        "label",
+                        "ordinal",
+                        "start_m",
+                        "end_m",
+                        "delta_s",
+                        "coverage",
+                        "model_source",
+                    )
+                }
+                for item in list(result.get("segments") or [])[:15]
+            ],
+            "findings": [
+                self._compact_finding(item)
+                for item in list(result.get("findings") or [])[:3]
+                if isinstance(item, dict)
+            ],
+        }
+
+    async def get_lap_findings(
+        self, comparison_id: str, limit: int = 3
+    ) -> dict[str, Any]:
+        """Get ranked deterministic findings for a persisted comparison."""
+
+        service = self.comparison_service
+        if service is None:
+            return self._service_unavailable("lap comparison")
+        key = self._bounded_identifier(comparison_id, "comparison_id")
+        count = self._bounded_count(limit, "limit", maximum=10)
+        try:
+            result = await service.get_findings(key)
+        except (RuntimeError, ValueError, OSError, KeyError, sqlite3.Error) as exc:
+            return self._query_failed("Lap findings", exc)
+        findings = [
+            self._compact_finding(item)
+            for item in list(result.get("findings") or [])[:count]
+            if isinstance(item, dict)
+        ]
+        return {
+            "available": bool(findings),
+            "comparison_id": key,
+            "findings": findings,
+            "units": {
+                "measured_loss_s": "s",
+                "attributed_low_s": "s",
+                "attributed_high_s": "s",
+                "confidence": "ratio",
+                "repeatability": "ratio",
+            },
+            "truncated": len(result.get("findings") or []) > len(findings),
+        }
+
+    async def get_driver_strengths(
+        self, session_id: str, car_id: str
+    ) -> dict[str, Any]:
+        """Return service-ranked strong and weak segments for one saved driver."""
+
+        service = self.field_analysis_service
+        if service is None:
+            return self._service_unavailable("full-field analysis")
+        session_key = self._bounded_identifier(session_id, "session_id")
+        car_key = self._bounded_identifier(car_id, "car_id")
+        try:
+            result = await service.driver(session_key, car_key)
+        except (RuntimeError, ValueError, OSError, KeyError, sqlite3.Error) as exc:
+            return self._query_failed("Driver strengths", exc)
+
+        def compact_group(name: str) -> dict[str, Any]:
+            group = result.get(name) or {}
+            return {
+                "availability": group.get("availability"),
+                "reason": group.get("reason"),
+                "n": group.get("n"),
+                "items": [
+                    {
+                        key: item.get(key)
+                        for key in (
+                            "segment_id",
+                            "label",
+                            "median_time_s",
+                            "delta_to_field_median_s",
+                            "performance_percentile",
+                            "rank",
+                            "sample_n",
+                            "field_n",
+                        )
+                    }
+                    for item in list(group.get("items") or [])[:3]
+                ],
+            }
+
+        strengths = compact_group("strengths")
+        weaknesses = compact_group("weaknesses")
+        return {
+            "available": (
+                strengths.get("availability") == "derived"
+                or weaknesses.get("availability") == "derived"
+            ),
+            "session_id": session_key,
+            "driver": result.get("driver"),
+            "summary": result.get("summary"),
+            "strengths": strengths,
+            "weaknesses": weaknesses,
+            "units": {
+                "median_time_s": "s",
+                "delta_to_field_median_s": "s",
+                "performance_percentile": "ratio",
+            },
+            "truncated": bool(result.get("truncated")),
+        }
+
+    async def get_field_corner_rankings(
+        self,
+        session_id: str,
+        segment_id: str = "all",
+        top_n: int = 10,
+    ) -> dict[str, Any]:
+        """Return service-computed field ranks for one or all review segments."""
+
+        service = self.field_analysis_service
+        if service is None:
+            return self._service_unavailable("full-field analysis")
+        session_key = self._bounded_identifier(session_id, "session_id")
+        segment_key = self._bounded_identifier(segment_id, "segment_id")
+        count = self._bounded_count(top_n, "top_n", maximum=24)
+        try:
+            result = await service.corners(session_key)
+        except (RuntimeError, ValueError, OSError, KeyError, sqlite3.Error) as exc:
+            return self._query_failed("Field corner rankings", exc)
+
+        segments = list(result.get("segments") or [])
+        selected = [
+            index
+            for index, segment in enumerate(segments)
+            if segment_key == "all" or segment.get("segment_id") == segment_key
+        ]
+        if not selected:
+            return {
+                "available": False,
+                "reason": f"Segment {segment_key!r} is not available.",
+                "available_segments": [
+                    item.get("segment_id") for item in segments[:20]
+                ],
+            }
+        # An all-segment answer returns only each segment winner. A focused
+        # answer may return the requested number of ranked drivers.
+        selected_count = len(selected)
+        selected = selected[:15]
+        per_segment_limit = 1 if segment_key == "all" else count
+        drivers = list(result.get("drivers") or [])
+        groups = []
+        for column in selected:
+            entries = []
+            for row, driver in enumerate(drivers):
+                valid = bool(result["valid_mask"][row][column])
+                rank = result["rank"][row][column]
+                if not valid or rank is None:
+                    continue
+                entries.append(
+                    {
+                        "car_id": driver.get("car_id"),
+                        "display_name": driver.get("display_name"),
+                        "rank": rank,
+                        "median_time_s": result["median_time_s"][row][column],
+                        "delta_to_field_median_s": result[
+                            "delta_to_field_median_s"
+                        ][row][column],
+                        "performance_percentile": result[
+                            "performance_percentile"
+                        ][row][column],
+                        "sample_n": result["sample_count"][row][column],
+                    }
+                )
+            entries.sort(key=lambda item: float(item["rank"]))
+            groups.append(
+                {
+                    "segment": segments[column],
+                    "field_n": result["n_by_segment"][column],
+                    "field_median_s": result["field_median_s"][column],
+                    "rankings": entries[:per_segment_limit],
+                }
+            )
+        return {
+            "available": result.get("availability") == "derived" and bool(groups),
+            "reason": result.get("reason"),
+            "session_id": session_key,
+            "segments": groups,
+            "units": {
+                "median_time_s": "s",
+                "delta_to_field_median_s": "s",
+                "performance_percentile": "ratio",
+            },
+            "source_rows": result.get("source_rows"),
+            "truncated": bool(result.get("truncated")) or selected_count > 15,
+        }
+
+    async def get_data_quality(self, session_id: str) -> dict[str, Any]:
+        """Return persisted coverage and provenance warnings for one session."""
+
+        service = self.session_catalog
+        if service is None:
+            return self._service_unavailable("saved-session catalog")
+        key = self._bounded_identifier(session_id, "session_id")
+        try:
+            report = await service.get_quality(key)
+        except (RuntimeError, ValueError, OSError, KeyError, sqlite3.Error) as exc:
+            return self._query_failed("Data quality", exc)
+        if report is None:
+            return {
+                "available": False,
+                "reason": f"Saved session {key!r} was not found.",
+            }
+        return {
+            "available": True,
+            "session_id": key,
+            "status": report.get("status"),
+            "quality_score": report.get("quality_score"),
+            "quality_unit": "ratio",
+            "participants_observed": report.get("participants_observed"),
+            "laps": report.get("laps"),
+            "trace_manifests": report.get("trace_manifests"),
+            "raw_captures": report.get("raw_captures"),
+            "packet_health_available": report.get("packet_health_available"),
+            "warnings": list(report.get("warnings") or [])[:10],
+        }
+
     # Tools that only a planning question needs. Sending the full catalogue on
     # every request bloats the cacheable prefix and widens the model's choice
     # for questions that could never need these, so they are offered only on the
@@ -1725,6 +2410,14 @@ class TelemetryTools:
             "get_stored_history",
             "get_practice_focus",
             "get_racing_line_analysis",
+            "list_saved_sessions",
+            "get_session_summary",
+            "list_reference_laps",
+            "compare_laps",
+            "get_lap_findings",
+            "get_driver_strengths",
+            "get_field_corner_rankings",
+            "get_data_quality",
         }
     )
 
@@ -1749,6 +2442,146 @@ class TelemetryTools:
                 "get_session_overview",
                 "Get session, track, lap, weather, race-control and telemetry health.",
                 {},
+            ),
+            (
+                "get_connection_health",
+                (
+                    "Get measured UDP listener, packet loss/rate/freshness, "
+                    "forwarding, queue and recommended PS5 destination health."
+                ),
+                {},
+            ),
+            (
+                "list_saved_sessions",
+                "List a bounded newest-first page of locally saved sessions.",
+                {"limit": {"type": "integer", "minimum": 1, "maximum": 20}},
+            ),
+            (
+                "get_session_summary",
+                (
+                    "Get compact metadata, participant coverage and field context "
+                    "for one saved session id."
+                ),
+                {
+                    "session_id": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 160,
+                    }
+                },
+            ),
+            (
+                "list_reference_laps",
+                (
+                    "List deterministic compatibility-ranked reference laps for "
+                    "a candidate lap without returning raw traces."
+                ),
+                {
+                    "candidate_lap_id": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 160,
+                    },
+                    "limit": {"type": "integer", "minimum": 1, "maximum": 20},
+                },
+            ),
+            (
+                "compare_laps",
+                (
+                    "Create or reuse a deterministic distance-aligned lap "
+                    "comparison and return measured segment deltas and findings."
+                ),
+                {
+                    "candidate_lap_id": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 160,
+                    },
+                    "reference_kind": {
+                        "type": "string",
+                        "enum": [
+                            "lap",
+                            "field_driver",
+                            "saved_benchmark",
+                            "session_pb",
+                            "all_time_pb",
+                            "recent_representative",
+                        ],
+                    },
+                    "reference_lap_id": {
+                        "type": ["string", "null"],
+                        "maxLength": 160,
+                    },
+                    "allow_caveated_reference": {"type": "boolean"},
+                },
+            ),
+            (
+                "get_lap_findings",
+                (
+                    "Get ranked deterministic coaching findings, evidence, units "
+                    "and confidence for one persisted comparison."
+                ),
+                {
+                    "comparison_id": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 160,
+                    },
+                    "limit": {"type": "integer", "minimum": 1, "maximum": 10},
+                },
+            ),
+            (
+                "get_driver_strengths",
+                (
+                    "Get a saved driver's strongest and weakest adequately "
+                    "observed segments against the field benchmark."
+                ),
+                {
+                    "session_id": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 160,
+                    },
+                    "car_id": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 160,
+                    },
+                },
+            ),
+            (
+                "get_field_corner_rankings",
+                (
+                    "Get deterministic full-field ranks and sample sizes for one "
+                    "review segment, or each segment winner when segment_id is all."
+                ),
+                {
+                    "session_id": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 160,
+                    },
+                    "segment_id": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 160,
+                    },
+                    "top_n": {"type": "integer", "minimum": 1, "maximum": 24},
+                },
+            ),
+            (
+                "get_data_quality",
+                (
+                    "Get persisted session coverage, trace/capture state and "
+                    "explicit data-quality warnings."
+                ),
+                {
+                    "session_id": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 160,
+                    }
+                },
             ),
             (
                 "get_standings",

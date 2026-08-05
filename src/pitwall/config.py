@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+import ipaddress
 from pathlib import Path
 
-from pydantic import Field, SecretStr, field_validator
+from pydantic import AliasChoices, Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -83,11 +84,36 @@ class Settings(BaseSettings):
     realtime_max_output_tokens: int = 700
     realtime_speed: float = 1.05
 
-    udp_host: str = "0.0.0.0"
+    # ``PITWALL_UDP_BIND_HOST`` is the unambiguous 4.2 name.  Keep accepting
+    # PITWALL_UDP_HOST so an upgrade never strands a working console setup.
+    udp_host: str = Field(
+        default="0.0.0.0",
+        validation_alias=AliasChoices("PITWALL_UDP_BIND_HOST", "PITWALL_UDP_HOST"),
+    )
     udp_port: int = 20777
     disconnect_after_s: float = 3.0
     web_host: str = "127.0.0.1"
     web_port: int = 8000
+    web_lan_access: bool = False
+    web_access_token: SecretStr | None = None
+
+    # Capture, trace, analysis and live-delivery budgets.  Environment values
+    # are installation defaults; mutable network/retention profiles are stored
+    # separately and never rewrite .env.
+    capture_mode: str = "balanced"  # minimal | balanced | full_fidelity
+    raw_capture: str = "rolling"  # off | rolling | full
+    field_trace_hz: int = 20
+    capture_max_gb: float = 20.0
+    capture_min_free_gb: float = 2.0
+    retention_days: int = 90
+    trace_chunk_seconds: float = 30.0
+    analysis_workers: int = 2
+    live_ws_max_hz: int = 10
+    forward_queue_size: int = 4096
+    capture_queue_size: int = 8192
+    trace_ingest_queue_size: int = 512
+    packet_reorder_window: int = 8
+    packet_loss_confirm_ms: int = 500
     native_voice: bool = True
     audio_sample_rate: int = 16000
     audio_device: str | int | None = None
@@ -198,6 +224,68 @@ class Settings(BaseSettings):
     map_distance_bin_m: float = 6.0
     map_deviation_threshold_m: float = 1.25
 
+    # Player lap-trace density. These once existed only to keep a dashboard
+    # graph cheap, and 1.5 m / 20 Hz / 6000 points was generous for that.
+    # Segment analysis reads the same trace and will not interpolate across a
+    # gap wider than its bridge threshold, so a sample skipped here can make a
+    # corner's metrics unavailable instead of merely coarser. The defaults are
+    # therefore set for analysis, and one lap at 0.5 m still costs only a few
+    # thousand points. Raise trace_min_distance_m to trade detail for size.
+    trace_min_distance_m: float = 0.5
+    trace_min_interval_s: float = 0.02
+    trace_max_points: int = 30_000
+    analysis_distance_step_m: float = 0.5
+    trace_cache_max_mb: int = 128
+
+    @property
+    def udp_bind_host(self) -> str:
+        """Explicit 4.2 name while retaining ``udp_host`` compatibility."""
+        return self.udp_host
+
+    @property
+    def capture_dir(self) -> Path:
+        return self.data_dir / "captures"
+
+    @property
+    def trace_dir(self) -> Path:
+        return self.data_dir / "traces"
+
+    @model_validator(mode="after")
+    def validate_web_access(self) -> Settings:
+        host = self.web_host.casefold()
+        try:
+            loopback = ipaddress.ip_address(host).is_loopback
+        except ValueError:
+            loopback = host == "localhost"
+        if not loopback and not self.web_lan_access:
+            raise ValueError(
+                "non-loopback PITWALL_WEB_HOST requires PITWALL_WEB_LAN_ACCESS=true"
+            )
+        if self.web_lan_access:
+            token = (
+                self.web_access_token.get_secret_value()
+                if self.web_access_token is not None
+                else ""
+            )
+            if len(token) < 16:
+                raise ValueError(
+                    "PITWALL_WEB_LAN_ACCESS requires PITWALL_WEB_ACCESS_TOKEN "
+                    "with at least 16 characters"
+                )
+        return self
+
+    @field_validator("trace_min_distance_m")
+    @classmethod
+    def validate_trace_spacing(cls, value: float) -> float:
+        # Below a few centimetres the samples are duplicates of each other at
+        # any realistic speed; above five metres a corner stops resolving.
+        return max(0.05, min(5.0, float(value)))
+
+    @field_validator("trace_max_points")
+    @classmethod
+    def validate_trace_points(cls, value: int) -> int:
+        return max(2_000, min(200_000, int(value)))
+
     @field_validator("audio_device", mode="before")
     @classmethod
     def parse_audio_device(cls, value: object) -> object:
@@ -217,11 +305,99 @@ class Settings(BaseSettings):
     def validate_cadence(cls, value: int) -> int:
         return max(1, min(10, value))
 
+    @field_validator("udp_port", "web_port")
+    @classmethod
+    def validate_port(cls, value: int) -> int:
+        port = int(value)
+        if not 1 <= port <= 65_535:
+            raise ValueError("port must be between 1 and 65535")
+        return port
+
+    @field_validator("udp_host", "web_host")
+    @classmethod
+    def validate_bind_host(cls, value: str) -> str:
+        host = value.strip()
+        if not host:
+            raise ValueError("bind host cannot be blank")
+        return host
+
+    @field_validator("capture_mode")
+    @classmethod
+    def validate_capture_mode(cls, value: str) -> str:
+        normalized = value.strip().lower().replace("-", "_")
+        if normalized not in {"minimal", "balanced", "full_fidelity"}:
+            raise ValueError("capture mode must be minimal, balanced, or full_fidelity")
+        return normalized
+
+    @field_validator("raw_capture")
+    @classmethod
+    def validate_raw_capture(cls, value: str) -> str:
+        normalized = value.strip().lower()
+        if normalized not in {"off", "rolling", "full"}:
+            raise ValueError("raw capture must be off, rolling, or full")
+        return normalized
+
+    @field_validator("field_trace_hz")
+    @classmethod
+    def validate_field_trace_hz(cls, value: int) -> int:
+        if not 1 <= int(value) <= 120:
+            raise ValueError("field trace rate must be between 1 and 120 Hz")
+        return int(value)
+
+    @field_validator("analysis_workers")
+    @classmethod
+    def validate_analysis_workers(cls, value: int) -> int:
+        if not 1 <= int(value) <= 16:
+            raise ValueError("analysis workers must be between 1 and 16")
+        return int(value)
+
+    @field_validator("live_ws_max_hz")
+    @classmethod
+    def validate_live_ws_max_hz(cls, value: int) -> int:
+        if not 1 <= int(value) <= 30:
+            raise ValueError("live WebSocket rate must be between 1 and 30 Hz")
+        return int(value)
+
+    @field_validator(
+        "forward_queue_size",
+        "capture_queue_size",
+        "trace_ingest_queue_size",
+        "trace_cache_max_mb",
+        "packet_reorder_window",
+        "packet_loss_confirm_ms",
+    )
+    @classmethod
+    def validate_positive_integer_budget(cls, value: int) -> int:
+        if int(value) <= 0:
+            raise ValueError("queue, cache, and packet-health budgets must be positive")
+        return int(value)
+
+    @field_validator(
+        "capture_max_gb",
+        "capture_min_free_gb",
+        "trace_chunk_seconds",
+        "analysis_distance_step_m",
+    )
+    @classmethod
+    def validate_positive_float_budget(cls, value: float) -> float:
+        if float(value) <= 0:
+            raise ValueError("capture and analysis budgets must be positive")
+        return float(value)
+
+    @field_validator("retention_days")
+    @classmethod
+    def validate_retention_days(cls, value: int) -> int:
+        if int(value) < 0:
+            raise ValueError("retention days cannot be negative")
+        return int(value)
+
     @field_validator("radio_verbosity")
     @classmethod
     def validate_verbosity(cls, value: str) -> str:
         normalized = value.strip().lower()
-        return normalized if normalized in {"terse", "standard", "chatty"} else "standard"
+        return (
+            normalized if normalized in {"terse", "standard", "chatty"} else "standard"
+        )
 
     @field_validator("model")
     @classmethod
@@ -249,10 +425,9 @@ class Settings(BaseSettings):
     @field_validator("llm_provider")
     @classmethod
     def validate_primary_provider(cls, value: str) -> str:
-        normalized = value.strip().lower()
         # Legacy DeepSeek/auto settings are intentionally migrated to OpenAI so
         # an old .env cannot silently reactivate the unreliable provider path.
-        return "openai" if normalized in {"openai", "deepseek", "auto"} else "openai"
+        return "openai"
 
     @field_validator("llm_fallback_provider")
     @classmethod

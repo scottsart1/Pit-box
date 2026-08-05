@@ -4,6 +4,7 @@ import asyncio
 import logging
 import tempfile
 from contextlib import asynccontextmanager
+from dataclasses import asdict
 from pathlib import Path
 
 from fastapi import (
@@ -21,51 +22,156 @@ from fastapi.responses import (
     JSONResponse,
     PlainTextResponse,
 )
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from .analysis import AnalysisEngine
+from .analysis_jobs import AnalysisJobService
+from .api.analysis import create_analysis_router
+from .api.field import create_field_router
+from .api.live import create_live_router
+from .api.network import create_network_router
+from .api.sessions import create_sessions_router
+from .api.storage import create_storage_router
+from .api.track_models import create_track_models_router
 from .audio import AudioService
 from .brain import EngineerBrain
 from .briefing import BriefingEngine
+from .capture_lifecycle import SessionCaptureCoordinator
+from .capture_service import CaptureService
+from .catalog import session_id
+from .comparison_service import ComparisonService
 from .config import settings
 from .database import PitWallDatabase
+from .field_service import FieldAnalysisService
+from .forwarding import DatagramForwarder
+from .full_field_archive import FullFieldArchiveService
+from .network_profiles import NetworkProfileRepository
+from .network_service import ListenerBindError, NetworkService
+from .networking import PacketHealthTracker
 from .proactive import ProactiveEngineer
 from .realtime import RealtimeRadio
+from .session_assembler import SessionAssembler
 from .setup_advisor import SetupAdvisor
 from .state import StateStore
+from .storage_service import RetentionPolicy, StorageService
 from .strategy import StrategyEngine
 from .tools import TelemetryTools
+from .trace_archive import TraceArchiveService
+from .trace_store import RecoveryReport, TraceStore
+from .track_model_service import TrackModelService
 from .udp import TRACKS, F1DatagramProtocol, classify_session
 from .voice import NativeVoiceController
+from .web_security import LanAccessMiddleware
 
 log = logging.getLogger(__name__)
 
 store = StateStore()
 database = PitWallDatabase(settings.data_dir / "pitwall.sqlite3")
+network_profiles = NetworkProfileRepository(database.path)
+trace_store = TraceStore(
+    settings.trace_dir,
+    cache_max_bytes=settings.trace_cache_max_mb * 1024 * 1024,
+)
+trace_archive = TraceArchiveService(database, trace_store)
+comparison_service = ComparisonService(database.path, trace_store)
+field_service = FieldAnalysisService(database.path, trace_store=trace_store)
+track_model_service = TrackModelService(database.path, trace_store, settings.data_dir)
+analysis_jobs = AnalysisJobService(
+    database.path,
+    comparison_service,
+    track_model_builder=track_model_service,
+    worker_count=settings.analysis_workers,
+)
+capture_service = CaptureService(
+    settings.capture_dir,
+    queue_size=settings.capture_queue_size,
+    max_file_bytes=round(settings.capture_max_gb * 1024**3),
+    minimum_free_bytes=round(settings.capture_min_free_gb * 1024**3),
+)
+capture_coordinator = SessionCaptureCoordinator(
+    capture_service,
+    database.catalog,
+    settings.capture_dir,
+)
+storage_service = StorageService(
+    database.path,
+    settings.data_dir,
+    policy=RetentionPolicy(
+        max_bytes=round(settings.capture_max_gb * 1024**3),
+        max_age_days=settings.retention_days,
+        minimum_free_bytes=round(settings.capture_min_free_gb * 1024**3),
+    ),
+    capture_service=capture_service,
+)
+full_field_archive = FullFieldArchiveService(
+    database.path,
+    trace_store,
+    queue_size=settings.trace_ingest_queue_size,
+)
+session_assembler = SessionAssembler(
+    batch_sink=full_field_archive.submit,
+    invalidation_sink=full_field_archive.submit,
+    field_trace_hz=settings.field_trace_hz,
+)
+packet_health = PacketHealthTracker(
+    reorder_window_s=settings.packet_loss_confirm_ms / 1000.0,
+    recent_frame_capacity=max(64, settings.packet_reorder_window * 128),
+)
+forwarder = DatagramForwarder(queue_size=settings.forward_queue_size)
 strategy = StrategyEngine(store, database)
 setup_advisor = SetupAdvisor(store, database)
-analysis = AnalysisEngine(store, database, strategy)
-tools = TelemetryTools(store, database, analysis, strategy, setup_advisor)
+analysis = AnalysisEngine(store, database, strategy, trace_archive)
+tools = TelemetryTools(
+    store,
+    database,
+    analysis,
+    strategy,
+    setup_advisor,
+    session_catalog=database.catalog,
+    comparison_service=comparison_service,
+    field_analysis_service=field_service,
+)
 brain = EngineerBrain(store, tools, database)
 briefing = BriefingEngine(store, database, analysis, setup_advisor, tools)
 audio = AudioService()
 voice: NativeVoiceController | None = None
 proactive: ProactiveEngineer | None = None
-udp_transport: asyncio.DatagramTransport | None = None
+network_service: NetworkService
 watchdog_task: asyncio.Task[None] | None = None
 event_persistence_task: asyncio.Task[None] | None = None
 maintenance_task: asyncio.Task[None] | None = None
+catalog_task: asyncio.Task[None] | None = None
+interfaces_task: asyncio.Task[None] | None = None
 
 
 async def _connection_watchdog() -> None:
     last_session_write = 0.0
     classified_sessions: set[int] = set()
+    previous_catalog_session_id: str | None = None
     while True:
         await asyncio.sleep(1.0)
         await store.mark_disconnected_if_stale(settings.disconnect_after_s)
         snapshot = await store.snapshot_live()
         loop_time = asyncio.get_running_loop().time()
         session_uid = int(snapshot.get("session_uid") or 0)
+        current_catalog_session_id = (
+            session_id(
+                session_uid,
+                int(snapshot.get("restart_epoch", 0) or 0),
+            )
+            if session_uid
+            else None
+        )
+        if (
+            previous_catalog_session_id is not None
+            and current_catalog_session_id != previous_catalog_session_id
+        ):
+            await database.catalog.finalize_session(
+                previous_catalog_session_id, status="incomplete"
+            )
+        if current_catalog_session_id is not None:
+            previous_catalog_session_id = current_catalog_session_id
         # A finished session must be recorded immediately: waiting for the next
         # periodic write risks losing the result if Pit Wall is closed straight
         # after the chequered flag.
@@ -75,13 +181,15 @@ async def _connection_watchdog() -> None:
             and int(classification.get("position", 0) or 0) > 0
             and session_uid not in classified_sessions
         )
-        if session_uid and (
-            newly_classified or loop_time - last_session_write >= 10
-        ):
+        if session_uid and (newly_classified or loop_time - last_session_write >= 10):
             await database.upsert_session(snapshot)
             last_session_write = loop_time
             if newly_classified:
                 classified_sessions.add(session_uid)
+                if current_catalog_session_id is not None:
+                    await database.catalog.finalize_session(
+                        current_catalog_session_id, status="complete"
+                    )
 
 
 async def _event_persistence_worker() -> None:
@@ -112,7 +220,14 @@ async def _persist_briefing(kind: str, payload: dict[str, object]) -> dict[str, 
 
 async def _persist_finished_session() -> None:
     """Persist and debrief the final result in the packet-handling cycle."""
-    await database.upsert_session(await store.snapshot_live())
+    snapshot = await store.snapshot_live()
+    await database.upsert_session(snapshot)
+    game_uid = int(snapshot.get("session_uid", 0) or 0)
+    if game_uid:
+        await database.catalog.finalize_session(
+            session_id(game_uid, int(snapshot.get("restart_epoch", 0) or 0)),
+            status="complete",
+        )
     try:
         result = await _persist_briefing("post_race", await briefing.post_race())
         if voice is not None:
@@ -130,6 +245,36 @@ async def _persist_qualifying_lap() -> None:
             await voice.speak_text(str(result["text"]))
     except Exception as exc:
         log.warning("Qualifying-lap debrief could not be generated: %s", exc)
+
+
+def _create_udp_protocol() -> F1DatagramProtocol:
+    """Build the proven parser behind the managed 4.2 network lifecycle."""
+
+    return F1DatagramProtocol(
+        store,
+        voice.on_button_status if voice is not None else None,
+        on_player_lap_history=database.backfill_lap_sectors,
+        on_final_classification=_persist_finished_session,
+        on_qualifying_lap=_persist_qualifying_lap,
+        packet_health=packet_health,
+        capture_service=capture_service,
+        session_assembler=session_assembler,
+        capture_mode=settings.capture_mode,
+        on_session_key_change=capture_coordinator.observe_session,
+    )
+
+
+network_service = NetworkService(
+    _create_udp_protocol,
+    bind_host=settings.udp_bind_host,
+    port=settings.udp_port,
+    stale_after_ms=max(250, round(settings.disconnect_after_s * 1000)),
+    packet_health=packet_health,
+    forwarder=forwarder,
+    delegate_tracks_health=True,
+    profile_repository=network_profiles,
+)
+tools.network_service = network_service
 
 
 async def _startup_maintenance() -> None:
@@ -152,12 +297,107 @@ async def _startup_maintenance() -> None:
         log.warning("Database maintenance skipped: %s", exc)
 
 
+async def _startup_catalog_sync() -> None:
+    """Backfill legacy laps in resumable batches without delaying startup."""
+
+    try:
+        while True:
+            report = await database.catalog.sync_legacy(batch_size=250)
+            if not int(report.get("laps_remaining", 0)):
+                return
+            await asyncio.sleep(0)
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        log.warning("4.2 Library backfill deferred: %s", exc)
+
+
+async def _startup_warm_interfaces() -> None:
+    """Populate the adapter cache before the driver opens Connection.
+
+    Windows adapter discovery spawns PowerShell, which on a cold start can take
+    well over ten seconds. Doing it here means the first Connection Center
+    request is served from cache instead of waiting on that process.
+    """
+
+    try:
+        discovery = await network_service.interfaces()
+        log.info(
+            "Adapter discovery warmed: %d interface(s) via %s",
+            len(discovery.interfaces),
+            discovery.source,
+        )
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        log.warning("Adapter discovery warm-up deferred: %s", exc)
+
+
+def _report_trace_recovery(recovery: RecoveryReport) -> None:
+    """Surface recoverable trace-store damage without aborting application startup."""
+
+    if recovery.invalid_temporary_files:
+        log.warning(
+            "Trace-store recovery left invalid temporary files: %s",
+            recovery.invalid_temporary_files,
+        )
+    if recovery.orphan_chunks:
+        log.warning(
+            "Trace-store recovery found unreferenced chunks: %s",
+            recovery.orphan_chunks,
+        )
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global voice, proactive, udp_transport, watchdog_task, event_persistence_task
-    global maintenance_task
+    global voice, proactive, watchdog_task, event_persistence_task
+    global maintenance_task, catalog_task, interfaces_task, session_assembler
     settings.data_dir.mkdir(parents=True, exist_ok=True)
     await database.initialize()
+    stale_sessions = await database.catalog.finalize_recording_sessions()
+    if stale_sessions:
+        log.info(
+            "Recovered %d session(s) left recording by an earlier exit",
+            stale_sessions,
+        )
+    capture_recovery = await capture_service.recover_pending()
+    for report in capture_recovery.recovered:
+        try:
+            relative_path = report.path.resolve().relative_to(
+                settings.capture_dir.resolve()
+            )
+            await database.catalog.register_raw_capture(
+                None,
+                relative_path.as_posix(),
+                report,
+            )
+        except Exception as exc:
+            log.warning("Recovered capture could not be catalogued: %s", exc)
+    if capture_recovery.unresolved:
+        log.warning(
+            "Capture recovery left %d unresolved file(s): %s",
+            len(capture_recovery.unresolved),
+            capture_recovery.unresolved,
+        )
+    try:
+        await network_service.load_persisted_profile()
+    except Exception as exc:
+        log.warning("Saved network profile could not be loaded: %s", exc)
+    if session_assembler.closed:
+        session_assembler = SessionAssembler(
+            batch_sink=full_field_archive.submit,
+            invalidation_sink=full_field_archive.submit,
+            field_trace_hz=settings.field_trace_hz,
+        )
+    await full_field_archive.start()
+    recovery = await asyncio.to_thread(trace_store.recover_pending_writes)
+    _report_trace_recovery(recovery)
+    catalog_task = asyncio.create_task(
+        _startup_catalog_sync(), name="pitwall-catalog-backfill"
+    )
+    interfaces_task = asyncio.create_task(
+        _startup_warm_interfaces(), name="pitwall-interface-warm"
+    )
     if settings.db_maintenance_on_start:
         maintenance_task = asyncio.create_task(
             _startup_maintenance(), name="pitwall-db-maintenance"
@@ -178,31 +418,48 @@ async def lifespan(app: FastAPI):
     initial_provider = str(router_status["resolved_provider"])
     await store.update(llm_provider=initial_provider, llm_model=settings.model)
     await analysis.start()
+    await analysis_jobs.start()
     voice = NativeVoiceController(store, brain, audio)
     await voice.initialize()
     proactive = ProactiveEngineer(store, brain, voice, setup_advisor, strategy)
     await proactive.start()
-    loop = asyncio.get_running_loop()
+    listener_config = network_service.listener_snapshot()
+    if settings.raw_capture != "off":
+        try:
+            await capture_coordinator.start(
+                metadata={
+                    "parser_version": "f1-packets-2026",
+                    "receive_bind": {
+                        "host": listener_config.bind_host,
+                        "port": listener_config.port,
+                    },
+                    "capture_mode": settings.capture_mode,
+                }
+            )
+        except Exception as exc:
+            await store.update(last_error=f"Raw capture could not start: {exc}")
     try:
-        udp_transport, _ = await loop.create_datagram_endpoint(
-            lambda: F1DatagramProtocol(
-                store,
-                voice.on_button_status,
-                on_player_lap_history=database.backfill_lap_sectors,
-                on_final_classification=_persist_finished_session,
-                on_qualifying_lap=_persist_qualifying_lap,
-            ),
-            local_addr=(settings.udp_host, settings.udp_port),
-        )
-    except OSError as exc:
+        await network_service.start_listener()
+    except ListenerBindError as exc:
         await store.update(
-            last_error=f"UDP port {settings.udp_port} could not be opened: {exc}"
+            last_error=f"UDP port {listener_config.port} could not be opened: {exc}"
         )
     watchdog_task = asyncio.create_task(_connection_watchdog())
     event_persistence_task = asyncio.create_task(
         _event_persistence_worker(), name="pitwall-event-persistence"
     )
     yield
+    # Stop accepting datagrams first. The parser's connection_lost callback
+    # closes its bounded consumer before capture and state are finalized.
+    await network_service.stop_listener()
+    session_assembler.shutdown()
+    await full_field_archive.stop()
+    if capture_coordinator.running or capture_service.running:
+        try:
+            await capture_coordinator.stop()
+        except Exception as exc:
+            log.warning("Raw capture finalization failed: %s", exc)
+    await analysis_jobs.stop()
     if watchdog_task:
         watchdog_task.cancel()
         try:
@@ -210,9 +467,28 @@ async def lifespan(app: FastAPI):
         except asyncio.CancelledError:
             pass
     if event_persistence_task:
+        try:
+            await asyncio.wait_for(store.event_queue.join(), timeout=5.0)
+        except TimeoutError:
+            log.warning(
+                "Timed out draining %d queued session event(s)",
+                store.event_queue.qsize(),
+            )
         event_persistence_task.cancel()
         try:
             await event_persistence_task
+        except asyncio.CancelledError:
+            pass
+    if catalog_task:
+        catalog_task.cancel()
+        try:
+            await catalog_task
+        except asyncio.CancelledError:
+            pass
+    if interfaces_task:
+        interfaces_task.cancel()
+        try:
+            await interfaces_task
         except asyncio.CancelledError:
             pass
     if maintenance_task:
@@ -226,11 +502,45 @@ async def lifespan(app: FastAPI):
     if voice:
         await voice.shutdown()
     await analysis.stop()
-    if udp_transport:
-        udp_transport.close()
+    active_session = session_assembler.session
+    if active_session is not None:
+        await database.catalog.finalize_session(
+            active_session.id, status="incomplete"
+        )
 
 
-app = FastAPI(title="Pit Wall", version="3.8.0", lifespan=lifespan)
+app = FastAPI(title="Pit Wall", version="4.2.0", lifespan=lifespan)
+app.add_middleware(
+    LanAccessMiddleware,
+    enabled=settings.web_lan_access,
+    token=(
+        settings.web_access_token.get_secret_value()
+        if settings.web_access_token is not None
+        else None
+    ),
+)
+app.include_router(create_network_router(network_service))
+app.include_router(
+    create_sessions_router(
+        database.catalog,
+        trace_root=settings.trace_dir,
+        capture_root=settings.capture_dir,
+        enqueue_reprocess=analysis_jobs.submit,
+    )
+)
+app.include_router(create_analysis_router(comparison_service))
+app.include_router(create_field_router(field_service))
+app.include_router(create_storage_router(storage_service))
+app.include_router(create_track_models_router(track_model_service))
+app.include_router(
+    create_live_router(
+        store,
+        network_service=network_service,
+        configured_max_hz=settings.live_ws_max_hz,
+    )
+)
+_static_root = Path(__file__).resolve().parents[2] / "static"
+app.mount("/static", StaticFiles(directory=_static_root), name="static")
 
 
 class AskRequest(BaseModel):
@@ -297,10 +607,18 @@ async def overlay() -> HTMLResponse:
 @app.get("/api/health")
 async def health() -> dict[str, object]:
     snapshot = await store.snapshot_live()
+    listener = network_service.listener_snapshot()
     return {
         "ok": True,
         "version": app.version,
-        "udp_listener": udp_transport is not None,
+        "udp_listener": listener.state.value not in {"off", "error"},
+        "udp_listener_state": listener.state.value,
+        "capture": capture_service.snapshot().to_dict(),
+        "full_field_archive": asdict(full_field_archive.snapshot()),
+        "session_assembler": asdict(session_assembler.quality_report()),
+        "analysis_jobs": analysis_jobs.snapshot_dict(),
+        "trace_store": trace_store.cache_info(),
+        "schema_version": database.schema_version,
         "telemetry_connected": snapshot["connected"],
         "telemetry_stale": snapshot["telemetry_stale"],
         "openai_key_configured": bool(settings.api_key),
@@ -336,7 +654,12 @@ async def health() -> dict[str, object]:
 
 @app.get("/api/tracks")
 async def tracks() -> dict[str, object]:
-    return {"tracks": [{"id": int(track_id), "name": str(name)} for track_id, name in sorted(TRACKS.items())]}
+    return {
+        "tracks": [
+            {"id": int(track_id), "name": str(name)}
+            for track_id, name in sorted(TRACKS.items())
+        ]
+    }
 
 
 @app.get("/api/history")
@@ -345,9 +668,17 @@ async def history(
     limit: int = Query(default=50, ge=1, le=250),
 ) -> dict[str, object]:
     snapshot = await store.snapshot_live()
-    session_uid = int(snapshot.get("session_uid", 0)) if scope == "current_session" else None
-    track_id = int(snapshot.get("track_id", -1)) if scope in {"current_session", "current_track"} else None
-    return await database.history_query(track_id=track_id, session_uid=session_uid, limit=limit)
+    session_uid = (
+        int(snapshot.get("session_uid", 0)) if scope == "current_session" else None
+    )
+    track_id = (
+        int(snapshot.get("track_id", -1))
+        if scope in {"current_session", "current_track"}
+        else None
+    )
+    return await database.history_query(
+        track_id=track_id, session_uid=session_uid, limit=limit
+    )
 
 
 @app.post("/api/maintenance")
@@ -367,6 +698,7 @@ async def run_maintenance(
 @app.get("/api/racing-line")
 async def racing_line() -> dict[str, object]:
     return await analysis.get_racing_line_analysis("last")
+
 
 @app.get("/api/state")
 async def get_state() -> dict[str, object]:
@@ -413,22 +745,37 @@ async def review(track_id: int | None = Query(default=None)) -> dict[str, object
 async def debrief(session_uid: int | None = Query(default=None)) -> dict[str, object]:
     """Deterministic end-of-session debrief for the current or a named session."""
     snapshot = await store.snapshot_live()
-    selected = int(session_uid if session_uid is not None else snapshot.get("session_uid", 0))
+    selected = int(
+        session_uid if session_uid is not None else snapshot.get("session_uid", 0)
+    )
     if not selected:
         raise HTTPException(404, "No session is active or specified.")
     return await database.session_debrief(selected)
 
 
 @app.get("/api/export/laps.csv")
-async def export_laps_csv(track_id: int | None = Query(default=None)) -> PlainTextResponse:
+async def export_laps_csv(
+    track_id: int | None = Query(default=None),
+) -> PlainTextResponse:
     """Export stored laps for a track (or the current track) as CSV."""
     snapshot = await store.snapshot_live()
     selected = int(track_id if track_id is not None else snapshot.get("track_id", -1))
     laps = await database.recent_laps(selected, 500)
     columns = [
-        "session_uid", "lap_num", "lap_time_ms", "valid", "compound",
-        "tyre_age_start", "tyre_age_end", "s1_ms", "s2_ms", "s3_ms",
-        "fuel_start_kg", "fuel_end_kg", "position", "created_at",
+        "session_uid",
+        "lap_num",
+        "lap_time_ms",
+        "valid",
+        "compound",
+        "tyre_age_start",
+        "tyre_age_end",
+        "s1_ms",
+        "s2_ms",
+        "s3_ms",
+        "fuel_start_kg",
+        "fuel_end_kg",
+        "position",
+        "created_at",
     ]
     lines = [",".join(columns)]
     for lap in laps:
@@ -437,7 +784,9 @@ async def export_laps_csv(track_id: int | None = Query(default=None)) -> PlainTe
     return PlainTextResponse(
         body,
         media_type="text/csv",
-        headers={"Content-Disposition": f'attachment; filename="pitwall_laps_{selected}.csv"'},
+        headers={
+            "Content-Disposition": f'attachment; filename="pitwall_laps_{selected}.csv"'
+        },
     )
 
 
@@ -448,9 +797,17 @@ async def export_session_json(
 ) -> JSONResponse:
     """Export the full stored history bundle as a downloadable JSON file."""
     snapshot = await store.snapshot_live()
-    session_uid = int(snapshot.get("session_uid", 0)) if scope == "current_session" else None
-    track_id = int(snapshot.get("track_id", -1)) if scope in {"current_session", "current_track"} else None
-    data = await database.history_query(track_id=track_id, session_uid=session_uid, limit=limit)
+    session_uid = (
+        int(snapshot.get("session_uid", 0)) if scope == "current_session" else None
+    )
+    track_id = (
+        int(snapshot.get("track_id", -1))
+        if scope in {"current_session", "current_track"}
+        else None
+    )
+    data = await database.history_query(
+        track_id=track_id, session_uid=session_uid, limit=limit
+    )
     return JSONResponse(
         data,
         headers={"Content-Disposition": 'attachment; filename="pitwall_session.json"'},
@@ -535,7 +892,9 @@ async def realtime_open() -> dict[str, object]:
     opened = await voice.realtime.open()
     if not opened:
         snapshot = await store.snapshot_live()
-        raise HTTPException(503, str(snapshot.get("last_error") or "Could not open session"))
+        raise HTTPException(
+            503, str(snapshot.get("last_error") or "Could not open session")
+        )
     return {"open": True, "model": settings.realtime_model}
 
 
@@ -547,7 +906,9 @@ async def realtime_shakedown() -> dict[str, object]:
         radio = RealtimeRadio(store, tools)
     result = await radio.shakedown()
     if not result.get("ok"):
-        raise HTTPException(503, str(result.get("reason") or "Realtime shakedown failed"))
+        raise HTTPException(
+            503, str(result.get("reason") or "Realtime shakedown failed")
+        )
     return result
 
 
@@ -642,6 +1003,7 @@ async def set_strategy_override(request: StrategyOverrideRequest) -> dict[str, o
     override.update(payload)
     override["source"] = "dashboard"
     import time as _time
+
     override["updated_at"] = _time.time()
     await store.update(strategy_override=override)
     plan = await strategy.recompute()
@@ -652,11 +1014,18 @@ async def set_strategy_override(request: StrategyOverrideRequest) -> dict[str, o
 async def clear_strategy_override() -> dict[str, object]:
     snapshot = await store.snapshot_analysis()
     override = dict(snapshot.get("strategy_override", {}))
-    override.update({
-        "enabled": False, "locked": False, "start_compound": None,
-        "next_box_lap": None, "next_compound": None, "preferred_stops": None,
-        "note": "cleared from dashboard", "source": "dashboard",
-    })
+    override.update(
+        {
+            "enabled": False,
+            "locked": False,
+            "start_compound": None,
+            "next_box_lap": None,
+            "next_compound": None,
+            "preferred_stops": None,
+            "note": "cleared from dashboard",
+            "source": "dashboard",
+        }
+    )
     await store.update(strategy_override=override)
     return {"override": override, "strategy": await strategy.recompute()}
 
@@ -667,7 +1036,9 @@ async def get_driver_preferences() -> dict[str, object]:
 
 
 @app.post("/api/preferences")
-async def set_driver_preferences(request: DriverPreferencesRequest) -> dict[str, object]:
+async def set_driver_preferences(
+    request: DriverPreferencesRequest,
+) -> dict[str, object]:
     snapshot = await store.snapshot_analysis()
     preferences = dict(snapshot.get("driver_preferences", {}))
     payload = request.model_dump(exclude_none=True)

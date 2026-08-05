@@ -43,6 +43,51 @@ class BriefingEngine:
         self.setup_advisor = setup_advisor
         self.tools = tools
 
+    async def review_findings(
+        self, comparison_id: str, *, limit: int = 3
+    ) -> dict[str, Any]:
+        """Select diverse high-opportunity findings plus one positive pattern.
+
+        The comparison service already ranks findings with segment and
+        root-cause diversity penalties, so this preserves that order rather
+        than re-scoring it. It only separates the positive pattern, which is
+        ranked alongside the losses but answers a different question: what the
+        driver should keep doing.
+        """
+        payload = await self.tools.get_lap_findings(comparison_id, limit=10)
+        if not payload.get("available"):
+            return {
+                "available": False,
+                "reason": payload.get("reason") or "No stored findings for this comparison.",
+                "comparison_id": comparison_id,
+                "findings": [],
+                "positive": None,
+            }
+        findings = [item for item in payload.get("findings") or [] if isinstance(item, dict)]
+        positive = next((item for item in findings if item.get("positive")), None)
+        improvements: list[dict[str, Any]] = []
+        seen_segments: set[str] = set()
+        for item in findings:
+            if item.get("positive"):
+                continue
+            segment = str(item.get("segment_id") or "")
+            # The service already applied a diversity penalty; this is a hard
+            # guard so one corner cannot occupy every slot of a spoken debrief.
+            if segment and segment in seen_segments:
+                continue
+            seen_segments.add(segment)
+            improvements.append(item)
+            if len(improvements) >= max(1, limit):
+                break
+        return {
+            "available": bool(improvements or positive),
+            "comparison_id": comparison_id,
+            "findings": improvements,
+            "positive": positive,
+            "units": payload.get("units", {}),
+            "segments_represented": len(seen_segments),
+        }
+
     @staticmethod
     def _target_lap(
         mode: str, sector_bests: dict[str, Any], laps: list[dict[str, Any]]

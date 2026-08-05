@@ -9,6 +9,9 @@ build/
 *.egg-info/
 PitWallData/
 
+# Scratch data roots produced by local UI/integration runs
+.codex-ui-test-data/
+
 # Editor/OS noise
 .vscode/
 .idea/

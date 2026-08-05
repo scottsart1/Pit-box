@@ -10,6 +10,19 @@ import uvicorn
 from .config import settings
 
 
+def local_dashboard_url(host: str, port: int) -> str:
+    """Return a browser destination, never the server-only wildcard address."""
+
+    normalized = host.strip().casefold()
+    if normalized == "0.0.0.0":
+        normalized = "127.0.0.1"
+    elif normalized in {"::", "[::]"}:
+        normalized = "[::1]"
+    elif ":" in normalized and not normalized.startswith("["):
+        normalized = f"[{normalized}]"
+    return f"http://{normalized}:{int(port)}"
+
+
 def configure_logging() -> None:
     """Send Pit Wall logs to a rotating file as well as the console.
 
@@ -46,7 +59,9 @@ def run() -> None:
     if settings.open_browser:
         threading.Timer(
             1.5,
-            lambda: webbrowser.open(f"http://{settings.web_host}:{settings.web_port}"),
+            lambda: webbrowser.open(
+                local_dashboard_url(settings.web_host, settings.web_port)
+            ),
         ).start()
     uvicorn.run(
         "pitwall.app:app",
@@ -54,6 +69,8 @@ def run() -> None:
         port=settings.web_port,
         reload=False,
         log_level=settings.log_level.lower(),
+        # LAN pairing credentials must never appear in raw request-line logs.
+        access_log=False,
     )
 
 
