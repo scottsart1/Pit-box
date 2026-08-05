@@ -43,6 +43,17 @@ def _rich_evidence(**changes: object) -> SegmentEvidence:
     return SegmentEvidence(**values)  # type: ignore[arg-type]
 
 
+def test_every_finding_type_has_a_diversity_family() -> None:
+    """rank_findings indexes _FAMILIES directly, so a new finding type added
+    without a family would raise KeyError the first time it was ranked —
+    inside the debrief path, after a session the driver cannot repeat."""
+
+    from pitwall.telemetry.coaching import _FAMILIES
+
+    missing = sorted(item.name for item in FindingType if item not in _FAMILIES)
+    assert not missing, f"FindingType members missing a diversity family: {missing}"
+
+
 def test_coaching_rules_emit_required_findings_and_build_causal_chain() -> None:
     result = build_coaching_evidence(_rich_evidence())
     kinds = {finding.finding_type for finding in result.findings}
