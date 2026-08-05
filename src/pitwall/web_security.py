@@ -25,16 +25,76 @@ def _loopback(host: str) -> bool:
         return host.casefold() in {"localhost", "testclient"}
 
 
-def _same_origin(headers: dict[str, str]) -> bool:
+def _web_scheme(scheme: str) -> str:
+    """Return the HTTP origin scheme corresponding to an ASGI connection."""
+
+    normalized = scheme.casefold()
+    return {"ws": "http", "wss": "https"}.get(normalized, normalized)
+
+
+def _default_port(scheme: str) -> int | None:
+    return {"http": 80, "https": 443}.get(scheme)
+
+
+def _authority(value: str, scheme: str) -> tuple[str, int] | None:
+    """Parse a Host/origin authority into a normalized host and effective port."""
+
+    try:
+        parsed = urlsplit(f"//{value}")
+        hostname = (parsed.hostname or "").casefold().rstrip(".")
+        port = parsed.port
+    except ValueError:
+        return None
+    if not hostname or parsed.username is not None or parsed.password is not None:
+        return None
+    effective_port = port if port is not None else _default_port(scheme)
+    if effective_port is None:
+        return None
+    return hostname, effective_port
+
+
+def _same_origin(headers: dict[str, str], scope: Scope) -> bool:
     origin = headers.get("origin")
     if not origin:
         return True
-    parsed = urlsplit(origin)
-    host = headers.get("host", "").split(":", 1)[0].casefold()
-    return (
-        parsed.scheme in {"http", "https"}
-        and (parsed.hostname or "").casefold() == host
+    try:
+        parsed = urlsplit(origin)
+        origin_scheme = parsed.scheme.casefold()
+        origin_host = (parsed.hostname or "").casefold().rstrip(".")
+        origin_port = parsed.port
+    except ValueError:
+        return False
+    if (
+        origin_scheme not in {"http", "https"}
+        or not origin_host
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.path not in {"", "/"}
+        or parsed.query
+        or parsed.fragment
+    ):
+        return False
+
+    request_scheme = _web_scheme(str(scope.get("scheme", "http")))
+    if request_scheme not in {"http", "https"} or origin_scheme != request_scheme:
+        return False
+
+    host_header = headers.get("host", "")
+    if host_header:
+        request_authority = _authority(host_header, request_scheme)
+    else:
+        server = scope.get("server")
+        if not server:
+            return False
+        server_host, server_port = server
+        request_authority = (str(server_host).casefold().rstrip("."), int(server_port))
+    if request_authority is None:
+        return False
+
+    effective_origin_port = (
+        origin_port if origin_port is not None else _default_port(origin_scheme)
     )
+    return request_authority == (origin_host, effective_origin_port)
 
 
 def _cookie_token(headers: dict[str, str]) -> str | None:
@@ -100,16 +160,21 @@ class LanAccessMiddleware:
         if not self.enabled or scope["type"] not in {"http", "websocket"}:
             await self.app(scope, receive, send)
             return
+        headers = _headers(scope)
+        if headers.get("sec-fetch-site", "").casefold() == "cross-site":
+            await self._reject(
+                scope, send, 403, "Cross-site requests are not allowed by Pit Wall"
+            )
+            return
+        if not _same_origin(headers, scope):
+            await self._reject(
+                scope, send, 403, "Origin is not allowed for Pit Wall LAN access"
+            )
+            return
         client = scope.get("client")
         client_host = str(client[0]) if client else ""
         if _loopback(client_host):
             await self.app(scope, receive, send)
-            return
-        headers = _headers(scope)
-        if not _same_origin(headers):
-            await self._reject(
-                scope, send, 403, "Origin is not allowed for Pit Wall LAN access"
-            )
             return
         credential, source = self._credential(scope, headers)
         if not credential or not hmac.compare_digest(credential, self.token):

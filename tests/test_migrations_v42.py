@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import sqlite3
 
 import pytest
@@ -84,6 +85,34 @@ async def test_integrity_report_exposes_version_without_database_contents(
     assert report["ok"] is True
     assert report["checks"] == ["ok"]
     assert report["schema_version"] == LATEST_SCHEMA_VERSION
+
+
+@pytest.mark.asyncio
+async def test_concurrent_initializers_share_migration_lock(tmp_path) -> None:
+    path = tmp_path / "pitwall.sqlite3"
+    first = PitWallDatabase(path)
+    second = PitWallDatabase(path)
+
+    await asyncio.gather(first.initialize(), second.initialize())
+
+    assert first.schema_version == LATEST_SCHEMA_VERSION
+    assert second.schema_version == LATEST_SCHEMA_VERSION
+    assert path.with_name(f"{path.name}.migration.lock").exists()
+
+
+@pytest.mark.asyncio
+async def test_newer_database_schema_is_not_downgraded(tmp_path) -> None:
+    path = tmp_path / "pitwall.sqlite3"
+    await PitWallDatabase(path).initialize()
+    with sqlite3.connect(path) as db:
+        db.execute(
+            "INSERT INTO schema_versions(version, applied_at, app_version, checksum) "
+            "VALUES (?, 'future', 'future', 'future')",
+            (LATEST_SCHEMA_VERSION + 1,),
+        )
+
+    with pytest.raises(RuntimeError, match="refusing a downgrade"):
+        await PitWallDatabase(path).initialize()
 
 
 def test_v42_network_and_capture_settings_validate_and_keep_legacy_udp_alias(

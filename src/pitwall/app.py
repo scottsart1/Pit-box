@@ -33,10 +33,11 @@ from .api.live import create_live_router
 from .api.network import create_network_router
 from .api.sessions import create_sessions_router
 from .api.storage import create_storage_router
+from .api.track_models import create_track_models_router
 from .audio import AudioService
 from .brain import EngineerBrain
 from .briefing import BriefingEngine
-from .capture import scan_capture
+from .capture_lifecycle import SessionCaptureCoordinator
 from .capture_service import CaptureService
 from .catalog import session_id
 from .comparison_service import ComparisonService
@@ -57,7 +58,8 @@ from .storage_service import RetentionPolicy, StorageService
 from .strategy import StrategyEngine
 from .tools import TelemetryTools
 from .trace_archive import TraceArchiveService
-from .trace_store import TraceStore
+from .trace_store import RecoveryReport, TraceStore
+from .track_model_service import TrackModelService
 from .udp import TRACKS, F1DatagramProtocol, classify_session
 from .voice import NativeVoiceController
 from .web_security import LanAccessMiddleware
@@ -73,11 +75,24 @@ trace_store = TraceStore(
 )
 trace_archive = TraceArchiveService(database, trace_store)
 comparison_service = ComparisonService(database.path, trace_store)
-field_service = FieldAnalysisService(database.path)
+field_service = FieldAnalysisService(database.path, trace_store=trace_store)
+track_model_service = TrackModelService(database.path, trace_store, settings.data_dir)
 analysis_jobs = AnalysisJobService(
     database.path,
     comparison_service,
+    track_model_builder=track_model_service,
     worker_count=settings.analysis_workers,
+)
+capture_service = CaptureService(
+    settings.capture_dir,
+    queue_size=settings.capture_queue_size,
+    max_file_bytes=round(settings.capture_max_gb * 1024**3),
+    minimum_free_bytes=round(settings.capture_min_free_gb * 1024**3),
+)
+capture_coordinator = SessionCaptureCoordinator(
+    capture_service,
+    database.catalog,
+    settings.capture_dir,
 )
 storage_service = StorageService(
     database.path,
@@ -87,9 +102,7 @@ storage_service = StorageService(
         max_age_days=settings.retention_days,
         minimum_free_bytes=round(settings.capture_min_free_gb * 1024**3),
     ),
-)
-capture_service = CaptureService(
-    settings.capture_dir, queue_size=settings.capture_queue_size
+    capture_service=capture_service,
 )
 full_field_archive = FullFieldArchiveService(
     database.path,
@@ -134,12 +147,30 @@ catalog_task: asyncio.Task[None] | None = None
 async def _connection_watchdog() -> None:
     last_session_write = 0.0
     classified_sessions: set[int] = set()
+    previous_catalog_session_id: str | None = None
     while True:
         await asyncio.sleep(1.0)
         await store.mark_disconnected_if_stale(settings.disconnect_after_s)
         snapshot = await store.snapshot_live()
         loop_time = asyncio.get_running_loop().time()
         session_uid = int(snapshot.get("session_uid") or 0)
+        current_catalog_session_id = (
+            session_id(
+                session_uid,
+                int(snapshot.get("restart_epoch", 0) or 0),
+            )
+            if session_uid
+            else None
+        )
+        if (
+            previous_catalog_session_id is not None
+            and current_catalog_session_id != previous_catalog_session_id
+        ):
+            await database.catalog.finalize_session(
+                previous_catalog_session_id, status="incomplete"
+            )
+        if current_catalog_session_id is not None:
+            previous_catalog_session_id = current_catalog_session_id
         # A finished session must be recorded immediately: waiting for the next
         # periodic write risks losing the result if Pit Wall is closed straight
         # after the chequered flag.
@@ -154,6 +185,10 @@ async def _connection_watchdog() -> None:
             last_session_write = loop_time
             if newly_classified:
                 classified_sessions.add(session_uid)
+                if current_catalog_session_id is not None:
+                    await database.catalog.finalize_session(
+                        current_catalog_session_id, status="complete"
+                    )
 
 
 async def _event_persistence_worker() -> None:
@@ -184,7 +219,14 @@ async def _persist_briefing(kind: str, payload: dict[str, object]) -> dict[str, 
 
 async def _persist_finished_session() -> None:
     """Persist and debrief the final result in the packet-handling cycle."""
-    await database.upsert_session(await store.snapshot_live())
+    snapshot = await store.snapshot_live()
+    await database.upsert_session(snapshot)
+    game_uid = int(snapshot.get("session_uid", 0) or 0)
+    if game_uid:
+        await database.catalog.finalize_session(
+            session_id(game_uid, int(snapshot.get("restart_epoch", 0) or 0)),
+            status="complete",
+        )
     try:
         result = await _persist_briefing("post_race", await briefing.post_race())
         if voice is not None:
@@ -217,6 +259,7 @@ def _create_udp_protocol() -> F1DatagramProtocol:
         capture_service=capture_service,
         session_assembler=session_assembler,
         capture_mode=settings.capture_mode,
+        on_session_key_change=capture_coordinator.observe_session,
     )
 
 
@@ -268,12 +311,33 @@ async def _startup_catalog_sync() -> None:
         log.warning("4.2 Library backfill deferred: %s", exc)
 
 
+def _report_trace_recovery(recovery: RecoveryReport) -> None:
+    """Surface recoverable trace-store damage without aborting application startup."""
+
+    if recovery.invalid_temporary_files:
+        log.warning(
+            "Trace-store recovery left invalid temporary files: %s",
+            recovery.invalid_temporary_files,
+        )
+    if recovery.orphan_chunks:
+        log.warning(
+            "Trace-store recovery found unreferenced chunks: %s",
+            recovery.orphan_chunks,
+        )
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global voice, proactive, watchdog_task, event_persistence_task
     global maintenance_task, catalog_task, session_assembler
     settings.data_dir.mkdir(parents=True, exist_ok=True)
     await database.initialize()
+    stale_sessions = await database.catalog.finalize_recording_sessions()
+    if stale_sessions:
+        log.info(
+            "Recovered %d session(s) left recording by an earlier exit",
+            stale_sessions,
+        )
     capture_recovery = await capture_service.recover_pending()
     for report in capture_recovery.recovered:
         try:
@@ -305,8 +369,7 @@ async def lifespan(app: FastAPI):
         )
     await full_field_archive.start()
     recovery = await asyncio.to_thread(trace_store.recover_pending_writes)
-    if recovery.errors:
-        log.warning("Trace-store recovery reported errors: %s", recovery.errors)
+    _report_trace_recovery(recovery)
     catalog_task = asyncio.create_task(
         _startup_catalog_sync(), name="pitwall-catalog-backfill"
     )
@@ -338,7 +401,7 @@ async def lifespan(app: FastAPI):
     listener_config = network_service.listener_snapshot()
     if settings.raw_capture != "off":
         try:
-            await capture_service.start(
+            await capture_coordinator.start(
                 metadata={
                     "parser_version": "f1-packets-2026",
                     "receive_bind": {
@@ -366,6 +429,11 @@ async def lifespan(app: FastAPI):
     await network_service.stop_listener()
     session_assembler.shutdown()
     await full_field_archive.stop()
+    if capture_coordinator.running or capture_service.running:
+        try:
+            await capture_coordinator.stop()
+        except Exception as exc:
+            log.warning("Raw capture finalization failed: %s", exc)
     await analysis_jobs.stop()
     if watchdog_task:
         watchdog_task.cancel()
@@ -374,6 +442,13 @@ async def lifespan(app: FastAPI):
         except asyncio.CancelledError:
             pass
     if event_persistence_task:
+        try:
+            await asyncio.wait_for(store.event_queue.join(), timeout=5.0)
+        except TimeoutError:
+            log.warning(
+                "Timed out draining %d queued session event(s)",
+                store.event_queue.qsize(),
+            )
         event_persistence_task.cancel()
         try:
             await event_persistence_task
@@ -396,25 +471,11 @@ async def lifespan(app: FastAPI):
     if voice:
         await voice.shutdown()
     await analysis.stop()
-    if capture_service.running:
-        try:
-            snapshot = await store.snapshot_live()
-            capture_path = await capture_service.stop()
-            if capture_path is not None:
-                report = await asyncio.to_thread(scan_capture, capture_path)
-                game_uid = int(snapshot.get("session_uid", 0) or 0)
-                key = (
-                    session_id(game_uid, int(snapshot.get("restart_epoch", 0) or 0))
-                    if game_uid
-                    else None
-                )
-                await database.catalog.register_raw_capture(
-                    key,
-                    capture_path.relative_to(settings.capture_dir).as_posix(),
-                    report,
-                )
-        except Exception as exc:
-            log.warning("Raw capture finalization failed: %s", exc)
+    active_session = session_assembler.session
+    if active_session is not None:
+        await database.catalog.finalize_session(
+            active_session.id, status="incomplete"
+        )
 
 
 app = FastAPI(title="Pit Wall", version="4.2.0", lifespan=lifespan)
@@ -439,6 +500,7 @@ app.include_router(
 app.include_router(create_analysis_router(comparison_service))
 app.include_router(create_field_router(field_service))
 app.include_router(create_storage_router(storage_service))
+app.include_router(create_track_models_router(track_model_service))
 app.include_router(
     create_live_router(
         store,

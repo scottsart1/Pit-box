@@ -345,6 +345,7 @@ class NetworkService:
         self._prior_working_adapter_ids: set[str] = set()
         self._prior_working_addresses: set[str] = set()
         self._receiver_queue_high_water = 0
+        self._receiver_queue_drops = 0
         self._receiver_callback_errors = 0
 
     @property
@@ -600,6 +601,7 @@ class NetworkService:
                 self._listener_error = None
                 self._listener_error_code = None
                 self._receiver_queue_high_water = 0
+                self._receiver_queue_drops = 0
                 self._receiver_callback_errors = 0
                 try:
                     await self.persist_profile(bind_host=host, port=self._port)
@@ -717,6 +719,10 @@ class NetworkService:
         try:
             self._receiver_queue_high_water = max(
                 self._receiver_queue_high_water, int(queue.qsize())
+            )
+            self._receiver_queue_drops = max(
+                self._receiver_queue_drops,
+                int(getattr(delegate, "receiver_queue_drops", 0)),
             )
         except (AttributeError, TypeError, ValueError):
             return
@@ -907,7 +913,12 @@ class NetworkService:
                 depth=receiver_depth,
                 capacity=receiver_capacity,
                 high_water=self._receiver_queue_high_water,
-                drops=self._receiver_callback_errors,
+                drops=max(
+                    self._receiver_queue_drops,
+                    int(getattr(protocol.delegate, "receiver_queue_drops", 0))
+                    if protocol is not None
+                    else 0,
+                ),
             ),
             "forwarding": QueueSnapshot(
                 depth=forward.queue_depth,

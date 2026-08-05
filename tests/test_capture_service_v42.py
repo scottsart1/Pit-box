@@ -77,3 +77,19 @@ async def test_capture_service_recovers_complete_blocks_after_unclean_stop(
     assert report.packet_count == 1
     assert [frame.data for frame in CaptureReader(report.path)] == [b"packet"]
     assert not temporary.exists()
+
+
+@pytest.mark.asyncio
+async def test_capture_service_stops_admission_at_configured_size_limit(tmp_path) -> None:
+    service = CaptureService(tmp_path, max_file_bytes=10, queue_size=8)
+    await service.start(relative_path="limited.pwcap")
+    assert service.submit(b"12345678", ("127.0.0.1", 20_777))
+    assert service.submit(b"abcdefgh", ("127.0.0.1", 20_777))
+    await service.queue.join()
+
+    snapshot = service.snapshot()
+    assert snapshot.state == "limit_reached"
+    assert snapshot.last_error == "capture_file_size_limit_reached"
+    assert snapshot.queue_drops == 2
+    assert service.submit(b"later", ("127.0.0.1", 20_777)) is False
+    assert await service.stop() is not None

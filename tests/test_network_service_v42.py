@@ -70,13 +70,17 @@ class RecordingProtocol(asyncio.DatagramProtocol):
         self.packet_queue: asyncio.Queue[bytes] = asyncio.Queue(maxsize=8)
         self.transport: asyncio.BaseTransport | None = None
         self.lost = False
+        self.receiver_queue_drops = 0
 
     def connection_made(self, transport: asyncio.BaseTransport) -> None:
         self.transport = transport
 
     def datagram_received(self, data: bytes, addr: tuple[str, int]) -> None:
         self.received.append((data, addr))
-        self.packet_queue.put_nowait(data)
+        try:
+            self.packet_queue.put_nowait(data)
+        except asyncio.QueueFull:
+            self.receiver_queue_drops += 1
 
     def connection_lost(self, exc: Exception | None) -> None:
         del exc
@@ -214,6 +218,14 @@ async def test_listener_lifecycle_receiving_stale_and_queue_projection() -> None
     assert snapshot.queues["receiver"].high_water == 1
     assert service.prior_working_adapter_ids == {"wifi-guid"}
     assert delegates[0].received == [(datagram, ("192.168.1.61", 54_022))]
+
+    for frame in range(11, 20):
+        endpoints.protocols[-1].datagram_received(
+            packet_bytes(frame), ("192.168.1.61", 54_022)
+        )
+    snapshot = await service.snapshot()
+    assert snapshot.queues["receiver"].depth == 8
+    assert snapshot.queues["receiver"].drops == 2
 
     clock.advance(1.001)
     assert service.listener_snapshot().state is ListenerState.STALE

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import sqlite3
 from pathlib import Path
 
@@ -10,6 +11,23 @@ from pitwall.comparison_service import ComparisonService
 from pitwall.database import PitWallDatabase
 from pitwall.trace_archive import TraceArchiveService
 from pitwall.trace_store import TraceStore
+
+
+class _TrackModels:
+    def __init__(self) -> None:
+        self.sessions: list[str] = []
+
+    async def build_for_session(
+        self,
+        session_id: str,
+        *,
+        force: bool = False,
+        max_laps: int = 12,
+        review_segments: int = 10,
+    ) -> dict[str, object]:
+        del force, max_laps, review_segments
+        self.sessions.append(session_id)
+        return {"status": "published"}
 
 
 def _lap(number: int, time_ms: int) -> dict[str, object]:
@@ -63,9 +81,11 @@ async def test_durable_reprocess_job_builds_comparisons_and_completes(
     requested = await database.catalog.request_reprocess(str(session["id"]))
     assert requested is not None
 
+    track_models = _TrackModels()
     jobs = AnalysisJobService(
         database.path,
         ComparisonService(database.path, trace_store),
+        track_model_builder=track_models,
         worker_count=1,
         queue_size=4,
     )
@@ -79,6 +99,14 @@ async def test_durable_reprocess_job_builds_comparisons_and_completes(
             (requested["job"]["id"],),
         ).fetchone()
         comparison_count = db.execute("SELECT COUNT(*) FROM comparisons").fetchone()[0]
+        audit = json.loads(
+            db.execute(
+                "SELECT detail_json FROM audit_events WHERE subject_id=?",
+                (requested["job"]["id"],),
+            ).fetchone()[0]
+        )
     assert state == ("complete", 1.0)
     assert comparison_count == 1
+    assert track_models.sessions == [str(session["id"])]
+    assert audit["track_model_status"] == "published"
     assert jobs.snapshot().failed == 0

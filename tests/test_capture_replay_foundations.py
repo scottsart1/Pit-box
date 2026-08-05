@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 
+import pitwall.replay as replay_module
 from pitwall.capture import (
     CapturedDatagram,
     CaptureReader,
@@ -18,6 +19,7 @@ from pitwall.replay import (
     ReplayFaultConfig,
     ReplayFaultHooks,
     build_replay_plan,
+    replay_capture,
 )
 
 
@@ -115,9 +117,45 @@ def test_pwcap_anonymize_redacts_transport_but_preserves_payload(tmp_path: Path)
     assert report.valid
     assert report.metadata["adapter"] == "<redacted>"
     assert report.metadata["track"] == "Spa"
-    assert report.metadata["privacy_mode"] == "transport-redacted-only"
+    assert report.metadata["privacy_mode"] == "transport_metadata_only"
+    assert report.metadata["payload_anonymized"] is False
+    assert report.metadata["transport_metadata_redacted"] is True
     assert copied[0].source == ("0.0.0.0", 0)
     assert copied[0].data == b"packet-0"
+
+
+def test_replay_anonymize_cli_requires_transport_only_acknowledgement(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "source.pwcap"
+    destination = tmp_path / "transport-only.pwcap"
+    with CaptureWriter(source) as writer:
+        frame = _frames(1)[0]
+        writer.write(
+            frame.data,
+            frame.source,
+            monotonic_ns=frame.monotonic_ns,
+            wall_ns=frame.wall_ns,
+        )
+
+    with pytest.raises(SystemExit, match="requires --transport-only"):
+        replay_module.main(["anonymize", str(source), str(destination)])
+    assert not destination.exists()
+
+    assert (
+        replay_module.main(
+            [
+                "anonymize",
+                str(source),
+                str(destination),
+                "--transport-only",
+            ]
+        )
+        == 0
+    )
+    metadata = CaptureReader(destination).metadata
+    assert metadata["privacy_mode"] == "transport_metadata_only"
+    assert metadata["payload_anonymized"] is False
 
 
 def test_invalid_capture_is_diagnosable_without_throwing_from_scan(tmp_path: Path) -> None:
@@ -170,6 +208,41 @@ def test_seeded_replay_faults_and_hooks_are_reproducible() -> None:
     assert hooked.duplicate_packet_count == 2
     assert hooked.packets[0].capture_index == 1
     assert all(packet.source == "replay" for packet in hooked.packets)
+
+
+def test_eager_replay_plan_has_a_packet_safety_limit() -> None:
+    with pytest.raises(ValueError, match="packet safety limit"):
+        build_replay_plan(_frames(3), max_source_packets=2)
+
+
+@pytest.mark.asyncio
+async def test_default_capture_replay_streams_without_building_a_plan(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = tmp_path / "streamed.pwcap"
+    with CaptureWriter(path, block_target_frames=1) as writer:
+        for frame in _frames(4):
+            writer.write(
+                frame.data,
+                frame.source,
+                monotonic_ns=frame.monotonic_ns,
+                wall_ns=frame.wall_ns,
+            )
+
+    def fail_if_planned(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("default replay must not materialize a replay plan")
+
+    monkeypatch.setattr(replay_module, "build_replay_plan", fail_if_planned)
+    emitted = []
+    stats = await replay_capture(path, emitted.append, speed=100_000)
+
+    assert [packet.capture_index for packet in emitted] == [0, 1, 2, 3]
+    assert stats.planned == 4
+    assert stats.source_packets == 4
+    assert stats.emitted == 4
+    # The streaming path intentionally does not retain an O(packet-count) index log.
+    assert stats.emitted_capture_indexes == []
 
 
 @pytest.mark.asyncio

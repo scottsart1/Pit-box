@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from pitwall.database import PitWallDatabase
+from pitwall.field_service import FieldAnalysisService
 from pitwall.full_field_archive import FullFieldArchiveService
 from pitwall.session_assembler import (
     BranchInvalidation,
@@ -25,9 +26,8 @@ async def test_opponent_batch_is_archived_and_player_batch_is_left_to_legacy_pat
 ) -> None:
     database = PitWallDatabase(tmp_path / "pitwall.sqlite3")
     await database.initialize()
-    archive = FullFieldArchiveService(
-        database.path, TraceStore(tmp_path / "traces"), queue_size=8
-    )
+    trace_store = TraceStore(tmp_path / "traces")
+    archive = FullFieldArchiveService(database.path, trace_store, queue_size=8)
     await archive.start()
     assembler = SessionAssembler(batch_sink=archive.submit, field_trace_hz=20)
 
@@ -69,6 +69,19 @@ async def test_opponent_batch_is_archived_and_player_batch_is_left_to_legacy_pat
                     units={"lap_distance_m": "m", "speed_mps": "m/s"},
                 )
             )
+            assembler.consume(
+                SampleEvent(
+                    stamp(frame, frame / 10),
+                    index,
+                    1,
+                    "lap_data",
+                    {
+                        "lap_distance_m": distance,
+                        "position": index + 1,
+                    },
+                    units={"lap_distance_m": "m", "position": "position"},
+                )
+            )
         assembler.consume(LapEvent(stamp(8, 1.0), index, 1, 2, 60_000, True))
 
     await archive.stop()
@@ -86,6 +99,23 @@ async def test_opponent_batch_is_archived_and_player_batch_is_left_to_legacy_pat
         assert row is not None
         assert row["car_index"] == 1
         assert row["trace_manifest_id"]
+
+    session = assembler.session
+    assert session is not None
+    positions = await FieldAnalysisService(
+        database.path,
+        trace_store=trace_store,
+    ).positions(session.id)
+    rival = next(item for item in positions["series"] if item["car_index"] == 1)
+    assert positions["availability"] == "observed"
+    assert rival["points"] == [
+        {
+            "lap_number": 1,
+            "position": 2,
+            "availability": "observed",
+            "context_mask": 0,
+        }
+    ]
 
 
 @pytest.mark.asyncio

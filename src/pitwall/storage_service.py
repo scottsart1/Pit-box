@@ -10,6 +10,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from .capture_service import CaptureService
+
 
 @dataclass(frozen=True, slots=True)
 class RetentionPolicy:
@@ -40,10 +42,12 @@ class StorageService:
         data_root: Path,
         *,
         policy: RetentionPolicy,
+        capture_service: CaptureService | None = None,
     ) -> None:
         self.database_path = Path(database_path)
         self.data_root = Path(data_root).resolve()
         self.policy = policy
+        self.capture_service = capture_service
 
     def _connect(self) -> sqlite3.Connection:
         connection = sqlite3.connect(self.database_path, timeout=15)
@@ -74,10 +78,33 @@ class StorageService:
             ).fetchall()
         return [dict(row) for row in rows]
 
+    def _capture_totals(self) -> tuple[int, int]:
+        """Return all catalogued and currently unassigned capture bytes."""
+
+        with self._connect() as db:
+            row = db.execute(
+                """
+                SELECT COALESCE(SUM(byte_count), 0) AS total_bytes,
+                       COALESCE(SUM(CASE WHEN session_id IS NULL
+                                         THEN byte_count ELSE 0 END), 0)
+                           AS unassigned_bytes
+                FROM raw_captures
+                """
+            ).fetchone()
+        return int(row["total_bytes"]), int(row["unassigned_bytes"])
+
+    def _active_capture_bytes(self) -> int:
+        if self.capture_service is None:
+            return 0
+        snapshot = self.capture_service.snapshot()
+        return int(snapshot.active_file_bytes) if self.capture_service.running else 0
+
     def _status_sync(self) -> dict[str, Any]:
         rows = self._rows()
         trace_bytes = sum(int(row["trace_bytes"] or 0) for row in rows)
-        capture_bytes = sum(int(row["capture_bytes"] or 0) for row in rows)
+        catalogued_capture_bytes, unassigned_capture_bytes = self._capture_totals()
+        active_capture_bytes = self._active_capture_bytes()
+        capture_bytes = catalogued_capture_bytes + active_capture_bytes
         database_bytes = (
             self.database_path.stat().st_size if self.database_path.exists() else 0
         )
@@ -92,6 +119,9 @@ class StorageService:
             "database_bytes": database_bytes,
             "trace_bytes": trace_bytes,
             "capture_bytes": capture_bytes,
+            "catalogued_capture_bytes": catalogued_capture_bytes,
+            "active_capture_bytes": active_capture_bytes,
+            "unassigned_capture_bytes": unassigned_capture_bytes,
             "managed_bytes": trace_bytes + capture_bytes,
             "disk_free_bytes": disk.free,
             "disk_total_bytes": disk.total,
@@ -110,10 +140,10 @@ class StorageService:
 
     def _preview_sync(self, now: datetime) -> dict[str, Any]:
         rows = self._rows()
-        managed = sum(
-            int(row["trace_bytes"] or 0) + int(row["capture_bytes"] or 0)
-            for row in rows
-        )
+        trace_bytes = sum(int(row["trace_bytes"] or 0) for row in rows)
+        catalogued_capture_bytes, unassigned_capture_bytes = self._capture_totals()
+        active_capture_bytes = self._active_capture_bytes()
+        managed = trace_bytes + catalogued_capture_bytes + active_capture_bytes
         selected: dict[str, dict[str, Any]] = {}
         for row in rows:
             if bool(row["starred"]) or str(row["status"]) == "recording":
@@ -177,6 +207,8 @@ class StorageService:
             "protected": {
                 "starred": sum(bool(row["starred"]) for row in rows),
                 "recording": sum(str(row["status"]) == "recording" for row in rows),
+                "unassigned_capture_bytes": unassigned_capture_bytes,
+                "active_capture_bytes": active_capture_bytes,
             },
         }
 

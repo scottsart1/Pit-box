@@ -403,7 +403,10 @@ class SessionCatalog:
                     session_type=excluded.session_type,
                     mode_profile=excluded.mode_profile,
                     ended_at=COALESCE(recorded_sessions.ended_at, excluded.ended_at),
-                    status=excluded.status,
+                    status=CASE
+                        WHEN recorded_sessions.status='complete' THEN 'complete'
+                        ELSE excluded.status
+                    END,
                     packet_format=excluded.packet_format,
                     capture_mode=excluded.capture_mode,
                     updated_at=excluded.updated_at
@@ -462,6 +465,74 @@ class SessionCatalog:
                 ),
             )
         return key
+
+    async def finalize_session(
+        self,
+        key: str,
+        *,
+        status: str = "incomplete",
+    ) -> bool:
+        """Close one recording without ever downgrading a completed result."""
+
+        normalized = str(status).strip().casefold()
+        if normalized not in {"complete", "incomplete"}:
+            raise ValueError("session status must be 'complete' or 'incomplete'")
+        async with self._lock:
+            return await asyncio.to_thread(
+                self._finalize_session_sync, str(key), normalized
+            )
+
+    def _finalize_session_sync(self, key: str, status: str) -> bool:
+        now = _utc_now()
+        with self._connect() as db:
+            result = db.execute(
+                """
+                UPDATE recorded_sessions
+                SET ended_at=COALESCE(ended_at, ?),
+                    status=CASE
+                        WHEN status='complete' THEN 'complete'
+                        WHEN ?='complete' THEN 'complete'
+                        ELSE 'incomplete'
+                    END,
+                    updated_at=?
+                WHERE id=?
+                """,
+                (now, status, now, key),
+            )
+            return result.rowcount == 1
+
+    async def finalize_recording_sessions(
+        self,
+        *,
+        exclude_session_id: str | None = None,
+    ) -> int:
+        """Mark stale process-owned recordings incomplete during recovery/switch."""
+
+        async with self._lock:
+            return await asyncio.to_thread(
+                self._finalize_recording_sessions_sync,
+                None if exclude_session_id is None else str(exclude_session_id),
+            )
+
+    def _finalize_recording_sessions_sync(
+        self,
+        exclude_session_id: str | None,
+    ) -> int:
+        now = _utc_now()
+        query = """
+            UPDATE recorded_sessions
+            SET ended_at=COALESCE(ended_at, ?),
+                status='incomplete',
+                updated_at=?
+            WHERE status='recording'
+        """
+        parameters: list[Any] = [now, now]
+        if exclude_session_id is not None:
+            query += " AND id<>?"
+            parameters.append(exclude_session_id)
+        with self._connect() as db:
+            result = db.execute(query, parameters)
+            return max(0, int(result.rowcount))
 
     async def list_sessions(
         self,

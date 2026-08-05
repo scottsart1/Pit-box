@@ -31,6 +31,10 @@ DuplicateHook = Callable[[CapturedDatagram, int, random.Random], int]
 JitterHook = Callable[[CapturedDatagram, int, random.Random], int]
 ReorderKeyHook = Callable[[CapturedDatagram, int, random.Random], float]
 
+# Fault injection needs global knowledge of a capture so it can reorder packets.
+# Keep that intentionally eager workflow bounded; ordinary playback streams.
+DEFAULT_EAGER_REPLAY_PACKET_LIMIT = 250_000
+
 
 @dataclass(frozen=True, slots=True)
 class ReplayFaultConfig:
@@ -198,10 +202,27 @@ def build_replay_plan(
     *,
     faults: ReplayFaultConfig | None = None,
     hooks: ReplayFaultHooks | None = None,
+    max_source_packets: int | None = DEFAULT_EAGER_REPLAY_PACKET_LIMIT,
 ) -> ReplayPlan:
-    """Build a reproducible delivery plan without reading the wall clock."""
+    """Build an eager, reproducible fault-injection plan.
 
-    source = list(frames)
+    This API intentionally materializes its input because deterministic windowed
+    reordering needs random access.  Normal capture playback uses
+    :func:`replay_capture`, which streams.  Pass ``max_source_packets=None`` only
+    when the caller has independently established a safe memory budget.
+    """
+
+    if max_source_packets is not None and max_source_packets < 1:
+        raise ValueError("max_source_packets must be positive or None")
+    source: list[CapturedDatagram] = []
+    for frame in frames:
+        if max_source_packets is not None and len(source) >= max_source_packets:
+            raise ValueError(
+                "eager replay plan exceeds the packet safety limit "
+                f"({max_source_packets}); use replay_capture without faults to stream, "
+                "or explicitly choose a larger max_source_packets"
+            )
+        source.append(frame)
     config = faults or ReplayFaultConfig()
     configured_hooks = hooks or ReplayFaultHooks()
     packets, dropped, duplicates = _faulted_packets(source, config, configured_hooks)
@@ -329,6 +350,67 @@ class ReplayController:
         return stats
 
 
+def _fault_injection_requested(
+    faults: ReplayFaultConfig | None,
+    hooks: ReplayFaultHooks | None,
+) -> bool:
+    if hooks is not None and any(
+        hook is not None
+        for hook in (
+            hooks.drop,
+            hooks.duplicate_count,
+            hooks.jitter,
+            hooks.reorder_key,
+        )
+    ):
+        return True
+    return bool(
+        faults is not None
+        and (
+            faults.loss_rate
+            or faults.duplicate_rate
+            or faults.reorder_rate
+            or faults.jitter_ns
+        )
+    )
+
+
+async def _stream_replay(
+    frames: Iterable[CapturedDatagram],
+    sink: Callable[[ReplayPacket], Any | Awaitable[Any]],
+    *,
+    speed: float,
+) -> ReplayStats:
+    """Replay in capture order while retaining only the current frame."""
+
+    if speed <= 0:
+        raise ValueError("speed must be greater than zero")
+    loop = asyncio.get_running_loop()
+    origin = loop.time()
+    first_capture_ns: int | None = None
+    stats = ReplayStats()
+    for index, frame in enumerate(frames):
+        if first_capture_ns is None:
+            first_capture_ns = frame.monotonic_ns
+        offset_ns = max(0, int(frame.monotonic_ns - first_capture_ns))
+        packet = ReplayPacket(
+            datagram=frame,
+            capture_index=index,
+            scheduled_offset_ns=offset_ns,
+        )
+        stats.planned += 1
+        stats.source_packets += 1
+        target = origin + offset_ns / 1_000_000_000 / speed
+        delay = target - loop.time()
+        if delay > 0:
+            await asyncio.sleep(delay)
+        result = sink(packet)
+        if inspect.isawaitable(result):
+            await result
+        stats.emitted += 1
+    return stats
+
+
 async def replay_capture(
     path: str | Path,
     sink: Callable[[ReplayPacket], Any | Awaitable[Any]],
@@ -337,7 +419,13 @@ async def replay_capture(
     faults: ReplayFaultConfig | None = None,
     hooks: ReplayFaultHooks | None = None,
 ) -> ReplayStats:
+    """Replay a capture, streaming unless actual fault injection is requested."""
+
+    if speed <= 0:
+        raise ValueError("speed must be greater than zero")
     reader = CaptureReader(path)
+    if not _fault_injection_requested(faults, hooks):
+        return await _stream_replay(reader, sink, speed=speed)
     plan = build_replay_plan(reader, faults=faults, hooks=hooks)
     return await ReplayController(plan, sink, speed=speed).run()
 
@@ -363,9 +451,23 @@ def _build_parser() -> argparse.ArgumentParser:
     inspect_parser.add_argument("path", type=Path)
     validate_parser = commands.add_parser("validate")
     validate_parser.add_argument("path", type=Path)
-    anonymize_parser = commands.add_parser("anonymize")
+    anonymize_parser = commands.add_parser(
+        "anonymize",
+        description=(
+            "Redact transport metadata only. Original game datagram payload bytes "
+            "are preserved and may still contain participant identifiers."
+        ),
+    )
     anonymize_parser.add_argument("source", type=Path)
     anonymize_parser.add_argument("destination", type=Path)
+    anonymize_parser.add_argument(
+        "--transport-only",
+        action="store_true",
+        help=(
+            "confirm that only source/transport metadata is redacted; packet "
+            "payloads are not anonymized"
+        ),
+    )
     play_parser = commands.add_parser("play")
     play_parser.add_argument("path", type=Path)
     play_parser.add_argument("--host", default="127.0.0.1")
@@ -384,6 +486,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(json.dumps(report.to_dict(), indent=2, sort_keys=True))
         return 0 if report.valid else 1
     if arguments.command == "anonymize":
+        if not arguments.transport_only:
+            raise SystemExit(
+                "anonymize requires --transport-only because packet payloads are "
+                "preserved and may contain participant identifiers"
+            )
         report = anonymize_capture(arguments.source, arguments.destination)
         print(json.dumps(report.to_dict(), indent=2, sort_keys=True))
         return 0 if report.valid else 1

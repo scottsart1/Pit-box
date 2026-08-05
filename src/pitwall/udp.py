@@ -314,6 +314,7 @@ class F1DatagramProtocol(asyncio.DatagramProtocol):
         capture_service: CaptureService | None = None,
         session_assembler: SessionAssembler | None = None,
         capture_mode: str = "balanced",
+        on_session_key_change: Callable[[str], None] | None = None,
     ) -> None:
         self.store = store
         self.on_button_status = on_button_status
@@ -325,6 +326,7 @@ class F1DatagramProtocol(asyncio.DatagramProtocol):
         self.capture_service = capture_service
         self.session_assembler = session_assembler
         self.capture_mode = str(capture_mode)
+        self.on_session_key_change = on_session_key_change
         self.loop = asyncio.get_running_loop()
         self.transport: asyncio.DatagramTransport | None = None
         self.packet_queue: asyncio.Queue[ReceivedDatagram] = asyncio.Queue(
@@ -356,6 +358,13 @@ class F1DatagramProtocol(asyncio.DatagramProtocol):
         self._assembler_sealed_session_id: str | None = None
         self._assembler_errors: set[str] = set()
         self._accepting_datagrams = True
+        self._receiver_queue_drops = 0
+
+    @property
+    def receiver_queue_drops(self) -> int:
+        """Datagrams rejected specifically because the parser queue was full."""
+
+        return self._receiver_queue_drops
 
     def _reset_archive_tracking(self) -> None:
         self._assembler_laps = [0] * 24
@@ -442,6 +451,7 @@ class F1DatagramProtocol(asyncio.DatagramProtocol):
             # Preserve packet order and keep the event loop responsive. A full
             # queue is visible in health telemetry rather than spawning another
             # task for every datagram.
+            self._receiver_queue_drops += 1
             self.loop.create_task(self.store.increment_dropped_packets())
 
     async def drain_before_close(self, timeout_s: float = 2.0) -> None:
@@ -606,6 +616,8 @@ class F1DatagramProtocol(asyncio.DatagramProtocol):
         if current_id != previous_id:
             self._reset_archive_tracking()
             self._assembler_session_id = current_id
+            if current_id is not None and self.on_session_key_change is not None:
+                self.on_session_key_change(current_id)
         if sealed is not None and current_id != sealed:
             self._assembler_sealed_session_id = None
 

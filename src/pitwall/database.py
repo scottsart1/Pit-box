@@ -3,9 +3,12 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import shutil
 import sqlite3
 import time
+from collections.abc import Iterator
+from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -62,6 +65,55 @@ class PitWallDatabase:
     async def initialize(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         await asyncio.to_thread(self._initialize_sync)
+
+    @contextmanager
+    def _migration_file_lock_sync(
+        self, timeout_s: float = 30.0
+    ) -> Iterator[None]:
+        """Serialize schema inspection, backup, and migration across processes."""
+
+        lock_path = self.path.with_name(f"{self.path.name}.migration.lock")
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        handle = lock_path.open("a+b")
+        handle.seek(0, os.SEEK_END)
+        if handle.tell() == 0:
+            handle.write(b"\0")
+            handle.flush()
+        deadline = time.monotonic() + max(0.1, float(timeout_s))
+        locked = False
+        try:
+            while not locked:
+                try:
+                    handle.seek(0)
+                    if os.name == "nt":
+                        import msvcrt
+
+                        msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+                    else:
+                        import fcntl
+
+                        fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    locked = True
+                except OSError as exc:
+                    if time.monotonic() >= deadline:
+                        raise RuntimeError(
+                            "Timed out waiting for another Pit Wall database "
+                            "migration to finish"
+                        ) from exc
+                    time.sleep(0.05)
+            yield
+        finally:
+            if locked:
+                handle.seek(0)
+                if os.name == "nt":
+                    import msvcrt
+
+                    msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+                else:
+                    import fcntl
+
+                    fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+            handle.close()
 
     def _connect(self) -> sqlite3.Connection:
         connection = sqlite3.connect(self.path, timeout=10)
@@ -244,8 +296,18 @@ class PitWallDatabase:
         }
 
     def _initialize_sync(self) -> None:
+        with self._migration_file_lock_sync():
+            self._initialize_locked_sync()
+
+    def _initialize_locked_sync(self) -> None:
         existing_database = self.path.exists() and self.path.stat().st_size > 0
-        pending_migration = self._current_schema_version_sync() < LATEST_SCHEMA_VERSION
+        current_version = self._current_schema_version_sync()
+        if current_version > LATEST_SCHEMA_VERSION:
+            raise RuntimeError(
+                "Pit Wall database schema is newer than this application "
+                f"({current_version} > {LATEST_SCHEMA_VERSION}); refusing a downgrade"
+            )
+        pending_migration = current_version < LATEST_SCHEMA_VERSION
         if existing_database and pending_migration:
             checks = self._integrity_check_sync(quick=True)
             if checks != ["ok"]:

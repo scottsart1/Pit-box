@@ -15,7 +15,14 @@ from typing import Any
 import numpy as np
 from numpy.typing import NDArray
 
-from .telemetry.alignment import align_distance_traces, clean_distance_axis
+from .telemetry.alignment import (
+    GapRule,
+    SignalKind,
+    SignalSpec,
+    align_distance_traces,
+    clean_distance_axis,
+    resample_distance,
+)
 from .telemetry.availability import Availability
 from .telemetry.coaching import (
     CoachingFinding,
@@ -34,6 +41,7 @@ from .telemetry.comparison import (
 )
 from .telemetry.segments import (
     DetectionStatus,
+    DistanceWindow,
     Segment,
     detect_extremum_event,
     detect_sustained_event,
@@ -108,6 +116,62 @@ class LapTrace:
     checksum: str
     source: str
     coverage: dict[str, float]
+    provenance: dict[str, str]
+
+
+@dataclass(frozen=True, slots=True)
+class _SegmentSelection:
+    segments: tuple[Segment, ...]
+    track_model_id: str | None
+    track_model_version: int | None
+    track_model_checksum: str | None
+    segment_model_id: str | None
+    segment_model_version: int | None
+    segment_model_checksum: str | None
+    model_quality: float
+    segment_source: str
+
+    @property
+    def persisted(self) -> bool:
+        return self.track_model_id is not None and self.segment_model_id is not None
+
+    @property
+    def track_hash_key(self) -> str:
+        return self.track_model_id or "distance_axis_only_v1"
+
+    @property
+    def segment_hash_key(self) -> str:
+        return self.segment_model_id or "uniform_review_v1"
+
+    def hash_settings(self) -> dict[str, object]:
+        settings: dict[str, object] = {
+            "spacing_m": 0.5,
+            "sign": "positive_candidate_later",
+        }
+        if self.persisted:
+            settings.update(
+                {
+                    "track_model_id": self.track_model_id,
+                    "track_model_version": self.track_model_version,
+                    "track_model_checksum": self.track_model_checksum,
+                    "segment_model_id": self.segment_model_id,
+                    "segment_model_version": self.segment_model_version,
+                    "segment_model_checksum": self.segment_model_checksum,
+                    "model_quality": self.model_quality,
+                }
+            )
+        return settings
+
+    def projection(self) -> dict[str, Any]:
+        return {
+            "track_model_id": self.track_model_id,
+            "track_model_version": self.track_model_version,
+            "segment_model_id": self.segment_model_id,
+            "segment_model_version": self.segment_model_version,
+            "model_quality": self.model_quality,
+            "segment_source": self.segment_source,
+            "fallback": not self.persisted,
+        }
 
 
 def _utc_now() -> str:
@@ -314,6 +378,69 @@ class ComparisonService:
             checksum,
             "trace_store",
             {name: _coverage(values) for name, values in signals.items()},
+            {
+                name: "observed" if np.any(np.isfinite(values)) else "unavailable"
+                for name, values in signals.items()
+            },
+        )
+
+    @staticmethod
+    def _merge_motion_geometry(base: LapTrace, motion_slice: Any) -> LapTrace:
+        """Project observed motion positions onto the telemetry distance axis.
+
+        Full-field manifests store controls and world motion in separate sample
+        groups with independent packet rates.  The telemetry axis stays
+        canonical; motion values are interpolated only across bounded 8 metre
+        gaps, never extrapolated, and are labelled derived in the projection.
+        """
+
+        source_distance = _finite_array(
+            motion_slice.axis_values, motion_slice.axis_available
+        )
+        raw: dict[str, NDArray[np.float64]] = {}
+        for canonical, aliases in {
+            "world_x": ("world_x", "x"),
+            "world_z": ("world_z", "z"),
+        }.items():
+            for alias in aliases:
+                series = motion_slice.series.get(alias)
+                if series is not None:
+                    raw[canonical] = _finite_array(series.values, series.available)
+                    break
+        if not raw:
+            return base
+        clean = clean_distance_axis(source_distance, raw, epoch_policy="last")
+        finite_target = np.isfinite(base.distance_m)
+        if not np.any(finite_target) or not clean.distance_m.size:
+            return base
+        targets, inverse = np.unique(
+            base.distance_m[finite_target], return_inverse=True
+        )
+        spec = SignalSpec(SignalKind.CONTINUOUS, GapRule(8.0, 0.0))
+        resampled = resample_distance(
+            clean,
+            targets,
+            specs={name: spec for name in raw},
+        )
+        signals = {name: values.copy() for name, values in base.signals.items()}
+        provenance = dict(base.provenance)
+        for name, values in resampled.signals.items():
+            projected = _nan_array(len(base.distance_m))
+            projected[finite_target] = values[inverse]
+            existing = signals.get(name, _nan_array(len(base.distance_m)))
+            fill = ~np.isfinite(existing) & np.isfinite(projected)
+            if np.any(fill):
+                existing[fill] = projected[fill]
+                signals[name] = existing
+                provenance[name] = "derived"
+        return LapTrace(
+            base.lap_id,
+            base.distance_m,
+            signals,
+            base.checksum,
+            base.source,
+            {name: _coverage(values) for name, values in signals.items()},
+            provenance,
         )
 
     def _legacy_trace_sync(self, record: LapRecord) -> LapTrace:
@@ -367,6 +494,10 @@ class ComparisonService:
             hashlib.sha256(raw_json.encode("utf-8")).hexdigest(),
             "legacy_json",
             {name: _coverage(item) for name, item in signals.items()},
+            {
+                name: "observed" if np.any(np.isfinite(item)) else "unavailable"
+                for name, item in signals.items()
+            },
         )
 
     def _load_trace_sync(self, record: LapRecord) -> LapTrace:
@@ -382,6 +513,16 @@ class ComparisonService:
                         record.trace_manifest_id,
                         sample_group="telemetry",
                     )
+                    trace = self._canonical_manifest_trace(record, trace_slice)
+                    try:
+                        motion_slice = self.trace_store.read_range(
+                            record.trace_manifest_id,
+                            fields=("world_x", "world_z"),
+                            sample_group="motion",
+                        )
+                    except KeyError:
+                        return trace
+                    return self._merge_motion_geometry(trace, motion_slice)
                 except KeyError:
                     # Player traces produced by older 4.2 development builds
                     # may contain a single unnamed/useful group.  Retain that
@@ -563,6 +704,175 @@ class ComparisonService:
         )
 
     @staticmethod
+    def _clip_phase_window(
+        value: Any,
+        start_m: float,
+        end_m: float,
+    ) -> DistanceWindow | None:
+        if value is None:
+            return None
+        if isinstance(value, dict):
+            raw_start = value.get("start_m", value.get("start"))
+            raw_end = value.get("end_m", value.get("end"))
+        elif isinstance(value, (list, tuple)) and len(value) == 2:
+            raw_start, raw_end = value
+        else:
+            raise ValueError("invalid persisted segment phase window")
+        lower = max(start_m, float(raw_start))
+        upper = min(end_m, float(raw_end))
+        return DistanceWindow(lower, upper) if upper > lower else None
+
+    def _persisted_segment_selection_sync(
+        self,
+        candidate: LapRecord,
+        start_m: float,
+        end_m: float,
+    ) -> _SegmentSelection | None:
+        """Resolve one exact-layout active model or return the safe fallback signal."""
+
+        if candidate.track_id is None or not candidate.layout_signature:
+            return None
+        try:
+            with self._connect() as db:
+                model = db.execute(
+                    """
+                    SELECT tm.id AS track_model_id,
+                           tm.model_version AS track_model_version,
+                           tm.checksum AS track_model_checksum,
+                           tm.quality_score AS model_quality,
+                           sm.id AS segment_model_id,
+                           sm.version AS segment_model_version,
+                           sm.checksum AS segment_model_checksum,
+                           sm.source AS segment_source
+                    FROM track_models tm
+                    JOIN segment_models sm ON sm.track_model_id=tm.id
+                    WHERE tm.track_id=? AND tm.layout_signature=?
+                      AND tm.active=1 AND sm.active=1
+                    ORDER BY tm.model_version DESC, sm.version DESC
+                    LIMIT 1
+                    """,
+                    (candidate.track_id, candidate.layout_signature),
+                ).fetchone()
+                if model is None:
+                    return None
+                rows = db.execute(
+                    """
+                    SELECT * FROM segments
+                    WHERE segment_model_id=?
+                    ORDER BY ordinal, start_m, id
+                    """,
+                    (str(model["segment_model_id"]),),
+                ).fetchall()
+        except sqlite3.OperationalError:
+            # A pre-4.2 database can still compare legacy laps after startup;
+            # the migration path will supply these tables on its next run.
+            return None
+        quality = float(model["model_quality"])
+        if (
+            not np.isfinite(quality)
+            or not 0.0 < quality <= 1.0
+            or len(rows) > 64
+        ):
+            return None
+        try:
+            clipped: list[Segment] = []
+            seen_ids: set[str] = set()
+            seen_ordinals: set[int] = set()
+            previous_end: float | None = None
+            for row in rows:
+                segment_id = str(row["id"])
+                ordinal = int(row["ordinal"])
+                if segment_id in seen_ids or ordinal in seen_ordinals:
+                    raise ValueError("duplicate persisted segment identity")
+                seen_ids.add(segment_id)
+                seen_ordinals.add(ordinal)
+                raw_start = float(row["start_m"])
+                raw_end = float(row["end_m"])
+                if not np.isfinite(raw_start) or not np.isfinite(raw_end):
+                    raise ValueError("non-finite persisted segment boundary")
+                if raw_end <= raw_start:
+                    raise ValueError("persisted segment has an invalid boundary")
+                if previous_end is not None and raw_start < previous_end - 1e-6:
+                    raise ValueError("persisted segments overlap")
+                previous_end = raw_end
+                clipped_start = max(start_m, raw_start)
+                clipped_end = min(end_m, raw_end)
+                if clipped_end <= clipped_start:
+                    continue
+                phase = json.loads(str(row["phase_json"] or "{}"))
+                if not isinstance(phase, dict):
+                    raise TypeError("persisted segment phase metadata is invalid")
+                confidence = float(row["confidence"])
+                if not np.isfinite(confidence):
+                    raise ValueError("persisted segment confidence is non-finite")
+                clipped.append(
+                    Segment(
+                        id=segment_id,
+                        label=str(row["label"]),
+                        ordinal=ordinal,
+                        start_m=clipped_start,
+                        end_m=clipped_end,
+                        brake_window=self._clip_phase_window(
+                            phase.get("brake"), clipped_start, clipped_end
+                        ),
+                        turn_in_window=self._clip_phase_window(
+                            phase.get("turn_in"), clipped_start, clipped_end
+                        ),
+                        apex_window=self._clip_phase_window(
+                            phase.get("apex"), clipped_start, clipped_end
+                        ),
+                        exit_window=self._clip_phase_window(
+                            phase.get("exit"), clipped_start, clipped_end
+                        ),
+                        direction=(
+                            str(row["direction"])
+                            if row["direction"] is not None
+                            else None
+                        ),
+                        confidence=confidence,
+                        source=str(phase.get("source") or model["segment_source"]),
+                    )
+                )
+        except (TypeError, ValueError, json.JSONDecodeError):
+            return None
+        if not clipped:
+            return None
+        return _SegmentSelection(
+            segments=tuple(clipped),
+            track_model_id=str(model["track_model_id"]),
+            track_model_version=int(model["track_model_version"]),
+            track_model_checksum=str(model["track_model_checksum"]),
+            segment_model_id=str(model["segment_model_id"]),
+            segment_model_version=int(model["segment_model_version"]),
+            segment_model_checksum=str(model["segment_model_checksum"]),
+            model_quality=quality,
+            segment_source=str(model["segment_source"]),
+        )
+
+    def _segment_selection_sync(
+        self,
+        candidate: LapRecord,
+        start_m: float,
+        end_m: float,
+    ) -> _SegmentSelection:
+        persisted = self._persisted_segment_selection_sync(
+            candidate, start_m, end_m
+        )
+        if persisted is not None:
+            return persisted
+        return _SegmentSelection(
+            segments=self._uniform_segments(start_m, end_m),
+            track_model_id=None,
+            track_model_version=None,
+            track_model_checksum=None,
+            segment_model_id=None,
+            segment_model_version=None,
+            segment_model_checksum=None,
+            model_quality=0.65,
+            segment_source="uniform_distance_v1",
+        )
+
+    @staticmethod
     def _clean(trace: LapTrace, track_length_m: float | None = None) -> Any:
         return clean_distance_axis(
             trace.distance_m,
@@ -663,11 +973,29 @@ class ComparisonService:
             index = finite[int(np.argmin(np.abs(d[finite] - distance_value)))]
             return float(values[index])
 
+        def elapsed_time(values: NDArray[np.float64]) -> float | None:
+            finite = np.flatnonzero(np.isfinite(values))
+            if finite.size < 2:
+                return None
+            elapsed = float(values[finite[-1]] - values[finite[0]])
+            return elapsed if elapsed > 0 else None
+
         confidence = min(
             _coverage(candidate_speed),
             _coverage(reference_speed),
         )
         return {
+            "segment_time_s": _metric_fact(
+                "segment_time_s",
+                elapsed_time(candidate["time_s"][inside]),
+                elapsed_time(reference["time_s"][inside]),
+                "s",
+                min(
+                    _coverage(candidate["time_s"][inside]),
+                    _coverage(reference["time_s"][inside]),
+                ),
+                segment.id,
+            ),
             "brake_onset_m": _metric_fact(
                 "brake_onset_m",
                 brake_c,
@@ -816,19 +1144,23 @@ class ComparisonService:
             reference_clean,
             spacing_m=0.5,
         )
-        segments = self._uniform_segments(
-            float(aligned.distance_m[0]), float(aligned.distance_m[-1])
+        selection = await asyncio.to_thread(
+            self._segment_selection_sync,
+            candidate,
+            float(aligned.distance_m[0]),
+            float(aligned.distance_m[-1]),
         )
+        segments = selection.segments
         comparison_input = ComparisonInput(
             candidate_lap_id=candidate.id,
             reference_kind=reference_kind,
             reference_key=reference.id,
             candidate_checksum=candidate_trace.checksum,
             reference_checksum=reference_trace.checksum,
-            track_model_version="distance_axis_only_v1",
-            segment_model_version="uniform_review_v1",
+            track_model_version=selection.track_hash_key,
+            segment_model_version=selection.segment_hash_key,
             algorithm_bundle=ALGORITHM_BUNDLE,
-            settings={"spacing_m": 0.5, "sign": "positive_candidate_later"},
+            settings=selection.hash_settings(),
         )
         result = build_comparison_result(
             comparison_input,
@@ -837,7 +1169,7 @@ class ComparisonService:
             aligned.candidate.signals["time_s"],
             aligned.reference.signals["time_s"],
             segments,
-            model_quality=0.65,
+            model_quality=selection.model_quality,
         )
         segment_by_id = {segment.id: segment for segment in segments}
         evidence_rows: list[tuple[Segment, dict[str, MetricFact], float, float]] = []
@@ -862,7 +1194,7 @@ class ComparisonService:
                         repeatability=0.0,
                         sample_count=1,
                         data_coverage=segment_result.coverage,
-                        model_quality=0.65,
+                        model_quality=selection.model_quality,
                         compatibility_weight=compatibility.compatibility_weight,
                         gear_outcome_supported=True,
                     )
@@ -876,6 +1208,7 @@ class ComparisonService:
             reference,
             evidence_rows,
             findings,
+            selection,
         )
         return {
             "schema_version": 1,
@@ -890,6 +1223,7 @@ class ComparisonService:
             "sign_convention": "positive means candidate arrived later",
             "reconciled": result.reconciled,
             "reconciliation_error_s": result.reconciliation_error_s,
+            "analysis_model": selection.projection(),
             "segments": [
                 {
                     "segment_id": item.segment_id,
@@ -899,7 +1233,7 @@ class ComparisonService:
                     "end_m": item.end_m,
                     "delta_s": item.delta_s,
                     "coverage": item.coverage,
-                    "model_source": "uniform_distance_v1",
+                    "model_source": segment_by_id[item.segment_id].source,
                 }
                 for item in result.segment_results
             ],
@@ -929,6 +1263,7 @@ class ComparisonService:
         reference: LapRecord,
         segments: list[tuple[Segment, dict[str, MetricFact], float, float]],
         findings: list[dict[str, Any]],
+        selection: _SegmentSelection,
     ) -> None:
         compatibility_json = json.dumps(
             self._compatibility_dict(result.compatibility),
@@ -946,10 +1281,12 @@ class ComparisonService:
                         compatibility_class, compatibility_json, track_model_id,
                         segment_model_id, algorithm_bundle, input_hash,
                         lap_delta_ms, coverage_ratio, quality_score, state, created_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?, ?, ?, ?, 'ready', ?)
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'ready', ?)
                     ON CONFLICT(input_hash) DO UPDATE SET
                         compatibility_class=excluded.compatibility_class,
                         compatibility_json=excluded.compatibility_json,
+                        track_model_id=excluded.track_model_id,
+                        segment_model_id=excluded.segment_model_id,
                         lap_delta_ms=excluded.lap_delta_ms,
                         coverage_ratio=excluded.coverage_ratio,
                         quality_score=excluded.quality_score,
@@ -962,6 +1299,8 @@ class ComparisonService:
                         reference.id,
                         result.compatibility.classification.value,
                         compatibility_json,
+                        selection.track_model_id,
+                        selection.segment_model_id,
                         result.algorithm_bundle,
                         result.input_hash,
                         None
@@ -1057,6 +1396,55 @@ class ComparisonService:
         async with self._write_lock:
             await asyncio.to_thread(write)
 
+    @staticmethod
+    def _stored_analysis_model(
+        db: sqlite3.Connection,
+        comparison: sqlite3.Row,
+    ) -> dict[str, Any]:
+        track_model_id = comparison["track_model_id"]
+        segment_model_id = comparison["segment_model_id"]
+        if track_model_id is None or segment_model_id is None:
+            return {
+                "track_model_id": None,
+                "track_model_version": None,
+                "segment_model_id": None,
+                "segment_model_version": None,
+                "model_quality": 0.65,
+                "segment_source": "uniform_distance_v1",
+                "fallback": True,
+            }
+        row = db.execute(
+            """
+            SELECT tm.model_version AS track_model_version,
+                   tm.quality_score AS model_quality,
+                   sm.version AS segment_model_version,
+                   sm.source AS segment_source
+            FROM track_models tm
+            JOIN segment_models sm ON sm.track_model_id=tm.id
+            WHERE tm.id=? AND sm.id=?
+            """,
+            (str(track_model_id), str(segment_model_id)),
+        ).fetchone()
+        if row is None:
+            return {
+                "track_model_id": str(track_model_id),
+                "track_model_version": None,
+                "segment_model_id": str(segment_model_id),
+                "segment_model_version": None,
+                "model_quality": None,
+                "segment_source": "persisted_unknown",
+                "fallback": False,
+            }
+        return {
+            "track_model_id": str(track_model_id),
+            "track_model_version": int(row["track_model_version"]),
+            "segment_model_id": str(segment_model_id),
+            "segment_model_version": int(row["segment_model_version"]),
+            "model_quality": float(row["model_quality"]),
+            "segment_source": str(row["segment_source"]),
+            "fallback": False,
+        }
+
     def _get_comparison_sync(self, comparison_id: str) -> dict[str, Any]:
         with self._connect() as db:
             row = db.execute(
@@ -1077,6 +1465,7 @@ class ComparisonService:
                 "SELECT * FROM findings WHERE comparison_id=? ORDER BY rank",
                 (comparison_id,),
             ).fetchall()
+            analysis_model = self._stored_analysis_model(db, row)
         candidate = self._load_lap_record_sync(str(row["candidate_lap_id"]))
         reference = self._load_lap_record_sync(str(row["reference_key"]))
         findings = []
@@ -1134,6 +1523,7 @@ class ComparisonService:
                 else int(row["lap_delta_ms"]) / 1000.0
             ),
             "sign_convention": "positive means candidate arrived later",
+            "analysis_model": analysis_model,
             "segments": [
                 {
                     "segment_id": str(item["segment_key"]),
@@ -1143,6 +1533,7 @@ class ComparisonService:
                     "end_m": float(item["end_m"]),
                     "delta_s": item["delta_s"],
                     "coverage": float(item["coverage_ratio"]),
+                    "model_source": analysis_model["segment_source"],
                     "metrics": json.loads(str(item["metrics_json"])),
                 }
                 for item in segments
@@ -1216,7 +1607,11 @@ class ComparisonService:
                     float(value) if finite else None
                     for value, finite in zip(selected_values, available)
                 ],
-                "availability": "observed" if np.any(available) else "unavailable",
+                "availability": (
+                    trace.provenance.get(name, "observed")
+                    if np.any(available)
+                    else "unavailable"
+                ),
                 "coverage": _coverage(selected_values),
             }
         return {

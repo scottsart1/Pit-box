@@ -28,6 +28,7 @@ from .telemetry.field_analysis import (
     build_corner_matrix,
     build_pace_matrix,
 )
+from .trace_store import TraceFormatError, TraceStore, TraceStoreError
 
 
 class FieldServiceError(RuntimeError):
@@ -120,6 +121,7 @@ class _StoredLap:
     fuel_end_kg: float | None
     weather_class: str | None
     legacy_position: int | None
+    trace_manifest_id: str | None
 
 
 class FieldAnalysisService:
@@ -129,6 +131,7 @@ class FieldAnalysisService:
         self,
         database_path: Path,
         *,
+        trace_store: TraceStore | None = None,
         min_coverage: float = 0.80,
         min_cars_per_lap: int = 2,
         min_cars_per_segment: int = 2,
@@ -142,6 +145,7 @@ class FieldAnalysisService:
         if max_lap_rows < 24 or max_comparison_rows < 24:
             raise ValueError("query bounds must be at least 24 rows")
         self.database_path = Path(database_path)
+        self.trace_store = trace_store
         self.min_coverage = float(min_coverage)
         self.min_cars_per_lap = int(min_cars_per_lap)
         self.min_cars_per_segment = int(min_cars_per_segment)
@@ -251,6 +255,11 @@ class FieldAnalysisService:
                 int(row["legacy_position"])
                 if row["legacy_position"] is not None
                 and int(row["legacy_position"]) > 0
+                else None
+            ),
+            trace_manifest_id=(
+                str(row["trace_manifest_id"])
+                if row["trace_manifest_id"]
                 else None
             ),
         )
@@ -750,6 +759,31 @@ class FieldAnalysisService:
     async def corners(self, session_id: str) -> dict[str, Any]:
         return await asyncio.to_thread(self._corners_sync, session_id)
 
+    def _stored_position(self, lap: _StoredLap) -> int | None:
+        if self.trace_store is None or not lap.trace_manifest_id:
+            return None
+        try:
+            trace = self.trace_store.read_range(
+                lap.trace_manifest_id,
+                fields=("position",),
+                sample_group="lap_data",
+            )
+            series = trace.series["position"]
+        except (
+            FileNotFoundError,
+            KeyError,
+            OSError,
+            TraceFormatError,
+            TraceStoreError,
+        ):
+            return None
+        values = np.asarray(series.values, dtype=np.float64)
+        available = np.asarray(series.available, dtype=bool)
+        usable = np.flatnonzero(
+            available & np.isfinite(values) & (values >= 1) & (values <= 24)
+        )
+        return round(float(values[usable[-1]])) if usable.size else None
+
     def _positions_sync(self, session_id: str) -> dict[str, Any]:
         with self._connect() as db:
             self._session_row(db, session_id)
@@ -757,14 +791,25 @@ class FieldAnalysisService:
             rows, truncated = self._lap_rows(db, session_id)
         laps = [self._lap(row) for row in rows]
         by_car: dict[str, list[dict[str, Any]]] = defaultdict(list)
+        events: list[dict[str, Any]] = []
         for lap in laps:
-            if lap.legacy_position is not None:
+            position = lap.legacy_position or self._stored_position(lap)
+            if position is not None:
                 by_car[lap.car_id].append(
                     {
                         "lap_number": lap.lap_number,
-                        "position": lap.legacy_position,
+                        "position": position,
                         "availability": "observed",
                         "context_mask": int(self._context_mask(lap)),
+                    }
+                )
+            if lap.pit_context:
+                events.append(
+                    {
+                        "type": "pit_context",
+                        "car_id": lap.car_id,
+                        "lap_number": lap.lap_number,
+                        "availability": "observed",
                     }
                 )
         series = []
@@ -795,13 +840,12 @@ class FieldAnalysisService:
                 None
                 if available_cars
                 else (
-                    "The current saved schema has no full-field position series. "
-                    "Reprocess a compatible raw capture after position-event "
-                    "persistence is available."
+                    "No valid lap-end positions were found in saved lap-data "
+                    "traces or legacy lap rows."
                 )
             ),
             "series": series,
-            "events": [],
+            "events": events,
             "cars_with_data": available_cars,
             "cars_observed": len(cars),
             "context_schema": self.context_schema(),

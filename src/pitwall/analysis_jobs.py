@@ -9,9 +9,20 @@ import time
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 
 from .comparison_service import ComparisonService, ComparisonServiceError
+
+
+class TrackModelBuilder(Protocol):
+    async def build_for_session(
+        self,
+        session_id: str,
+        *,
+        force: bool = False,
+        max_laps: int = 12,
+        review_segments: int = 10,
+    ) -> dict[str, Any]: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -35,11 +46,13 @@ class AnalysisJobService:
         database_path: Path,
         comparison_service: ComparisonService,
         *,
+        track_model_builder: TrackModelBuilder | None = None,
         worker_count: int = 2,
         queue_size: int = 128,
     ) -> None:
         self.database_path = Path(database_path)
         self.comparisons = comparison_service
+        self.track_models = track_model_builder
         self.worker_count = max(1, int(worker_count))
         self.queue: asyncio.Queue[str] = asyncio.Queue(maxsize=max(1, int(queue_size)))
         self._tasks: list[asyncio.Task[None]] = []
@@ -201,6 +214,19 @@ class AnalysisJobService:
             return
         session_id = str(row["session_id"])
         await asyncio.to_thread(self._set_state, job_id, "running", progress=0.0)
+        track_model: dict[str, Any] | None = None
+        track_model_error: str | None = None
+        if self.track_models is not None:
+            try:
+                track_model = await self.track_models.build_for_session(session_id)
+            except Exception as exc:  # noqa: BLE001 - comparison work can still proceed
+                track_model_error = f"{type(exc).__name__}: {exc}"[:1_000]
+            await asyncio.to_thread(
+                self._set_state,
+                job_id,
+                "running",
+                progress=0.1,
+            )
         laps = await asyncio.to_thread(self._laps, session_id)
         player = [item for item in laps if bool(item["is_player"])]
         reference = (player or laps)[0] if laps else None
@@ -225,7 +251,7 @@ class AnalysisJobService:
                 self._set_state,
                 job_id,
                 "running",
-                progress=index / max(1, len(candidates)),
+                progress=0.1 + 0.9 * index / max(1, len(candidates)),
             )
         result = {
             "session_id": session_id,
@@ -233,6 +259,10 @@ class AnalysisJobService:
             "candidate_laps": len(candidates),
             "comparisons_completed": completed,
             "skipped": skipped[:100],
+            "track_model_status": (
+                str(track_model.get("status")) if track_model is not None else None
+            ),
+            "track_model_error": track_model_error,
         }
         await asyncio.to_thread(self._audit, job_id, result)
         await asyncio.to_thread(self._set_state, job_id, "complete", progress=1.0)

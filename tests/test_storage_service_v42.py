@@ -9,6 +9,8 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from pitwall.api.storage import create_storage_router
+from pitwall.capture import CaptureWriter, scan_capture
+from pitwall.capture_service import CaptureService
 from pitwall.database import PitWallDatabase
 from pitwall.storage_service import RetentionPolicy, StorageService
 
@@ -46,7 +48,50 @@ async def test_retention_preview_protects_starred_and_recording_sessions(
 
     assert [item["session_id"] for item in preview["candidates"]] == ["old-delete"]
     assert preview["automatic_deletion"] is False
-    assert preview["protected"] == {"starred": 1, "recording": 1}
+    assert preview["protected"] == {
+        "starred": 1,
+        "recording": 1,
+        "unassigned_capture_bytes": 0,
+        "active_capture_bytes": 0,
+    }
+
+
+@pytest.mark.asyncio
+async def test_storage_counts_unassigned_and_active_captures(tmp_path: Path) -> None:
+    database = PitWallDatabase(tmp_path / "pitwall.sqlite3")
+    await database.initialize()
+    capture_root = tmp_path / "captures"
+    closed_path = capture_root / "unassigned.pwcap"
+    with CaptureWriter(closed_path) as writer:
+        writer.write(b"closed", ("127.0.0.1", 20_777))
+    closed = scan_capture(closed_path)
+    await database.catalog.register_raw_capture(
+        None, "unassigned.pwcap", closed
+    )
+
+    active = CaptureService(capture_root)
+    await active.start(relative_path="active.pwcap")
+    active.submit(b"active", ("127.0.0.1", 20_777))
+    await active.queue.join()
+    service = StorageService(
+        database.path,
+        tmp_path,
+        policy=RetentionPolicy(10_000_000, 90, 1),
+        capture_service=active,
+    )
+
+    status = await service.status()
+    preview = await service.preview_retention()
+
+    assert status["catalogued_capture_bytes"] == closed.file_size
+    assert status["unassigned_capture_bytes"] == closed.file_size
+    assert status["active_capture_bytes"] > 0
+    assert status["capture_bytes"] == (
+        closed.file_size + status["active_capture_bytes"]
+    )
+    assert preview["protected"]["unassigned_capture_bytes"] == closed.file_size
+    assert preview["protected"]["active_capture_bytes"] > 0
+    await active.stop()
 
 
 def test_storage_api_reports_budget_and_preview(tmp_path: Path) -> None:

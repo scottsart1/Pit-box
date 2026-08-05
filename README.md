@@ -4,6 +4,9 @@ Pit Wall receives **F1 26** telemetry (UDP format **2026**) from a PS5, runs det
 strategy/corner/setup analysis locally, keeps persistent SQLite history, answers spoken questions,
 makes proactive radio calls, and serves a live dashboard at `http://127.0.0.1:8000`.
 
+For PS5 setup, forwarding, LAN access, capture/replay, offline review, recovery,
+and rollback procedures, see the [Pit Wall 4.2 operator and developer guide](docs/PIT_WALL_4_2.md).
+
 > Set **UDP Format: 2026** on the PS5. The parser resolves packet format 2026 only; anything else
 > is reported as `Unsupported F1 packet format/version`.
 
@@ -63,7 +66,7 @@ race-engineer, strategy, setup, voice, or legacy dashboard paths.
 - The Connection Center recommends the correct LAN IPv4 address, separates
   listening from valid reception, reports packet health by type, diagnoses
   bind/configuration failures, and manages isolated byte-identical forwarders.
-- Optional recoverable `.pwcap.zst` archives and compact typed trace chunks make
+- Optional recoverable, internally compressed `.pwcap` archives and compact typed trace chunks make
   sessions replayable and reopenable without the game running.
 - Full-field identity revisions, timeline epochs, bounded opponent traces, and
   explicit observed/derived/estimated/stale/unavailable metadata prevent sparse

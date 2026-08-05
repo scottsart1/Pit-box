@@ -117,6 +117,41 @@ async def test_live_catalog_uses_restart_and_car_identity_in_opaque_keys(tmp_pat
 
 
 @pytest.mark.asyncio
+async def test_recording_sessions_are_finalized_without_downgrading_results(tmp_path) -> None:
+    path = tmp_path / "pitwall.sqlite3"
+    database = PitWallDatabase(path)
+    await database.initialize()
+    catalog = SessionCatalog(path)
+
+    first = await catalog.upsert_live_session({"session_uid": 1001})
+    second = await catalog.upsert_live_session({"session_uid": 1002})
+    assert first is not None and second is not None
+    assert await catalog.finalize_session(first, status="complete") is True
+    assert await catalog.finalize_recording_sessions(exclude_session_id=first) == 1
+
+    completed = await catalog.get_session(first)
+    interrupted = await catalog.get_session(second)
+    assert completed is not None and completed["status"] == "complete"
+    assert interrupted is not None and interrupted["status"] == "incomplete"
+    assert interrupted["ended_at"] is not None
+
+    # A late live-state write must not turn a classified result back into an
+    # actively recording session.
+    await catalog.upsert_live_session({"session_uid": 1001})
+    completed = await catalog.get_session(first)
+    assert completed is not None and completed["status"] == "complete"
+
+
+@pytest.mark.asyncio
+async def test_finalize_session_validates_status(tmp_path) -> None:
+    path = tmp_path / "pitwall.sqlite3"
+    database = PitWallDatabase(path)
+    await database.initialize()
+    with pytest.raises(ValueError, match="complete.*incomplete"):
+        await database.catalog.finalize_session("missing", status="recording")
+
+
+@pytest.mark.asyncio
 async def test_library_pagination_and_metadata_patch_are_deterministic(tmp_path) -> None:
     path = tmp_path / "pitwall.sqlite3"
     database = PitWallDatabase(path)
