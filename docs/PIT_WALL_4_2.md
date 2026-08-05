@@ -507,6 +507,52 @@ distance-aligned comparison, field projections, APIs, and UI contracts. They do
 not replace the final hardware shakedown with a PS5, the target Windows firewall
 and network, real audio devices, or live provider credentials.
 
+### Player trace density
+
+A player lap trace keeps a sample once the car has moved
+`PITWALL_TRACE_MIN_DISTANCE_M` (default `0.5`) or `PITWALL_TRACE_MIN_INTERVAL_S`
+has passed, up to `PITWALL_TRACE_MAX_POINTS`.
+
+These controls were originally sized for drawing a dashboard graph, where a
+dropped sample only coarsened a line. Segment analysis reads the same trace and
+will not interpolate across a wide gap, so thinning can make a corner report
+**Unavailable**. Measured over a simulated 78 s lap of a 4,520 m circuit:
+
+| Spacing | Samples per lap | Worst spacing |
+|---|---|---|
+| `1.5` (pre-4.2 behavior) | 2,340 | 1.99 m |
+| `0.5` (current default) | 4,680 | 0.99 m |
+
+The live dashboard projects any trace down to about 1,200 points before it is
+serialized, so density changes do not measurably affect the live view. Set
+`PITWALL_TRACE_MIN_DISTANCE_M=0.25` for more detail, or `1.5` to reproduce the
+older, smaller traces.
+
+### Sessions recorded before 4.2
+
+Sessions captured by an earlier release are backfilled into the Library and
+remain fully browseable, but they were not recorded for segment analysis. Those
+releases stored a lap as material-change snapshots rather than a uniform
+distance series, to keep the database small. A measured example from a real
+3.8 race lap: 1,524 samples across 4,520 m, a median sample spacing of 1.9 m,
+but a largest gap of 48.8 m.
+
+Distance alignment refuses to interpolate across a gap wider than its bridge
+threshold, so a review sector containing one of those holes reports
+**Unavailable** instead of a delta inferred across missing track. On a legacy
+lap this typically leaves whole-lap timing and a minority of sectors usable:
+
+- lap delta and cumulative delta remain correct, because they need the lap
+  endpoints rather than continuous coverage;
+- individual sectors resolve only where the samples are dense enough;
+- coaching findings that need a control trace inside a sparse sector are
+  suppressed rather than estimated.
+
+This is the intended behavior, not a defect: the alternative is inventing a
+brake point in the middle of a fifty-metre hole. Sessions recorded by 4.2 are
+stored as continuous traces and do not have this limitation. To compare
+segments on a circuit you last drove before upgrading, record one new session.
+
 ## Current 4.2 boundaries
 
 - The receiver accepts the implemented F1 2026 packet format; another year is

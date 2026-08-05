@@ -106,3 +106,35 @@ async def test_red_flag_restart_grid_uses_typed_driver_state() -> None:
     state = await store.snapshot()
     assert [item["car_idx"] for item in state["restart_grid"]] == [7, 2]
     assert state["restart_grid"][0]["tyre_compound"] == "MEDIUM"
+
+
+def test_trace_thinning_stays_dense_enough_for_segment_analysis() -> None:
+    """Trace spacing must stay well inside the alignment bridge threshold.
+
+    Distance alignment refuses to interpolate across a gap wider than its
+    bridge threshold (5 m). If trace thinning is ever loosened past that, a
+    corner silently reports "unavailable" instead of its metrics, which reads
+    as missing data rather than as a capture setting.
+    """
+    from pitwall.config import settings
+    from pitwall.state import SessionState
+
+    state = SessionState()
+    length_m, lap_s, hz = 4520.0, 78.0, 60.0
+    for index in range(int(lap_s * hz)):
+        seconds = index / hz
+        StateStore._append_trace_locked(
+            state,
+            {
+                "t": seconds,
+                "d": length_m * (seconds / lap_s),
+                "speed": 250, "throttle": 1.0, "brake": 0.0, "steer": 0.0,
+                "gear": 7, "lat_g": 0.0, "long_g": 0.0,
+            },
+        )
+
+    traces = state.traces
+    assert len(traces) > 3_000, "a full lap should retain analysis-grade density"
+    gaps = [traces[i + 1]["d"] - traces[i]["d"] for i in range(len(traces) - 1)]
+    assert max(gaps) < 5.0, "trace spacing exceeded the alignment bridge threshold"
+    assert settings.trace_min_distance_m <= 1.0

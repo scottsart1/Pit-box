@@ -10,6 +10,8 @@ from collections.abc import Callable
 from dataclasses import asdict, dataclass, field, fields, is_dataclass
 from typing import Any, Literal
 
+from .config import settings
+
 WHEEL_LABELS = ("FL", "FR", "RL", "RR")
 SnapshotProfile = Literal["full", "analysis", "live"]
 
@@ -772,21 +774,37 @@ class StateStore:
     def _append_trace_locked(
         state: SessionState,
         point: dict[str, Any],
-        min_distance_m: float = 1.5,
+        min_distance_m: float | None = None,
     ) -> None:
+        """Record one player trace sample, thinned only as configured.
+
+        This thinning was sized when a lap trace was kept purely to draw a
+        dashboard graph, so dropping a sample cost nothing. Segment analysis
+        changed that: alignment refuses to interpolate across a gap wider than
+        its bridge threshold, so every skipped sample can turn a corner's
+        metrics into "unavailable" rather than merely coarsening a line.
+        The spacing and cap are therefore configurable, and default to
+        analysis-grade density rather than the old graph-grade density.
+        """
+        limit = (
+            settings.trace_min_distance_m
+            if min_distance_m is None
+            else float(min_distance_m)
+        )
         traces = state.traces
         if traces:
             previous = traces[-1]
             distance_change = float(point["d"]) - float(previous["d"])
             time_change = float(point["t"]) - float(previous["t"])
-            if distance_change < min_distance_m and time_change < 0.05:
+            if distance_change < limit and time_change < settings.trace_min_interval_s:
                 return
         traces.append(point)
-        if len(traces) > 6000:
-            del traces[: len(traces) - 6000]
+        maximum = settings.trace_max_points
+        if len(traces) > maximum:
+            del traces[: len(traces) - maximum]
 
     async def add_trace_point(
-        self, point: dict[str, Any], min_distance_m: float = 1.5
+        self, point: dict[str, Any], min_distance_m: float | None = None
     ) -> None:
         async with self._lock:
             self._append_trace_locked(self.state, point, min_distance_m)

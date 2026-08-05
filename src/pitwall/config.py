@@ -223,6 +223,17 @@ class Settings(BaseSettings):
     strategy_fuel_save_s_per_lap: float = 0.35
     map_distance_bin_m: float = 6.0
     map_deviation_threshold_m: float = 1.25
+
+    # Player lap-trace density. These once existed only to keep a dashboard
+    # graph cheap, and 1.5 m / 20 Hz / 6000 points was generous for that.
+    # Segment analysis reads the same trace and will not interpolate across a
+    # gap wider than its bridge threshold, so a sample skipped here can make a
+    # corner's metrics unavailable instead of merely coarser. The defaults are
+    # therefore set for analysis, and one lap at 0.5 m still costs only a few
+    # thousand points. Raise trace_min_distance_m to trade detail for size.
+    trace_min_distance_m: float = 0.5
+    trace_min_interval_s: float = 0.02
+    trace_max_points: int = 30_000
     analysis_distance_step_m: float = 0.5
     trace_cache_max_mb: int = 128
 
@@ -262,6 +273,18 @@ class Settings(BaseSettings):
                     "with at least 16 characters"
                 )
         return self
+
+    @field_validator("trace_min_distance_m")
+    @classmethod
+    def validate_trace_spacing(cls, value: float) -> float:
+        # Below a few centimetres the samples are duplicates of each other at
+        # any realistic speed; above five metres a corner stops resolving.
+        return max(0.05, min(5.0, float(value)))
+
+    @field_validator("trace_max_points")
+    @classmethod
+    def validate_trace_points(cls, value: int) -> int:
+        return max(2_000, min(200_000, int(value)))
 
     @field_validator("audio_device", mode="before")
     @classmethod
