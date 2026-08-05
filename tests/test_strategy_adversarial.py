@@ -306,3 +306,42 @@ async def test_unservable_compound_rule_is_spoken_not_hidden(stack):
         assert "disqualif" in lowered or "compound" in lowered, (
             f"illegal plan reported as a routine call: {instruction!r}"
         )
+
+
+# ---------------------------------------------------------------------------
+# The generator itself, run small, so the invariants stay enforced in CI.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_randomized_scenarios_hold_every_invariant():
+    """A bounded slice of the fuzz batch, so the checks run on every commit.
+
+    The full sweep lives in ``tools/strategy_fuzz.py`` and is run by hand at
+    thousands of scenarios; this keeps a fixed, seeded subset in the suite so
+    a regression cannot land silently between sweeps.
+    """
+    from tools.strategy_fuzz import run_batch
+
+    for seed in (7, 23):
+        tested, violations = await run_batch(40, seed)
+        errors = [item for item in violations if item.severity == "error"]
+        assert tested == 40
+        assert not errors, "\n".join(
+            f"scenario {item.scenario_id} {item.check}: {item.detail}"
+            for item in errors[:10]
+        )
+
+
+@pytest.mark.asyncio
+async def test_randomized_adversarial_profiles_hold_every_invariant():
+    """The forced high-risk profiles, which is where the real defects were."""
+    from tools.strategy_fuzz import run_batch
+
+    tested, violations = await run_batch(40, 7, adversarial=True)
+    errors = [item for item in violations if item.severity == "error"]
+    assert tested == 40
+    assert not errors, "\n".join(
+        f"scenario {item.scenario_id} {item.check}: {item.detail}"
+        for item in errors[:10]
+    )
