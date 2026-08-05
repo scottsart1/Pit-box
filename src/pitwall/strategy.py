@@ -2084,34 +2084,35 @@ class StrategyEngine:
             fit = None
             instruction = "Stay out to the finish."
             tyre_reason = f"Current {current_compound.lower()}s project to {best['projected_finish_wear_pct']:.0f}% at the finish."
-            # Staying out on a plan that cannot satisfy the mandatory compound
-            # change ends the race in disqualification. That is the single most
-            # important thing to say, and saying only "stay out to the finish"
-            # hid it behind a routine-sounding call.
-            if not best.get("legal", True):
-                rule_state = self._compound_rule(state)
-                eligible = [
-                    compound
-                    for compound in rule_state.get("eligible_next_compounds", [])
-                    if compound in available_sets
-                ]
-                if eligible:
-                    instruction = (
-                        "Warning: the mandatory dry-compound change is still "
-                        f"outstanding. Box for {eligible[0]} before the flag or "
-                        "the result is a disqualification."
-                    )
-                else:
-                    instruction = (
-                        "Warning: the mandatory dry-compound change cannot be "
-                        "served - no eligible dry set is available. Staying out "
-                        "risks disqualification."
-                    )
-                tyre_reason = (
-                    f"{rule_state.get('dry_count', 0)} of "
-                    f"{rule_state.get('required_dry_count', 2)} dry compounds used. "
-                    + tyre_reason
+        # Any recommendation that cannot satisfy the mandatory compound change
+        # ends the race in disqualification. That applies whether the plan
+        # stays out or stops: a stop that refits the same dry compound serves
+        # nothing, so "Box lap 18 for HARD." sounded like a normal call while
+        # still heading for a DQ. The warning therefore wraps both branches.
+        if not best.get("legal", True):
+            rule_state = self._compound_rule(state)
+            eligible = [
+                compound
+                for compound in rule_state.get("eligible_next_compounds", [])
+                if compound in available_sets
+            ]
+            if eligible:
+                instruction = (
+                    "Warning: the mandatory dry-compound change is still "
+                    f"outstanding. Box for {eligible[0]} before the flag or "
+                    "the result is a disqualification."
                 )
+            else:
+                instruction = (
+                    "Warning: the mandatory dry-compound change cannot be "
+                    "served - no eligible dry set is available. The race "
+                    "finishes under threat of disqualification."
+                )
+            tyre_reason = (
+                f"{rule_state.get('dry_count', 0)} of "
+                f"{rule_state.get('required_dry_count', 2)} dry compounds used. "
+                + tyre_reason
+            )
 
         evidence_samples = max(
             int(style_evidence.get("sample_size", 0)),

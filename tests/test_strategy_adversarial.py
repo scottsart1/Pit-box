@@ -206,6 +206,76 @@ async def test_illegal_stay_out_never_beats_a_legal_plan(stack):
 
 
 @pytest.mark.asyncio
+async def test_a_stop_that_serves_nothing_still_warns(stack):
+    """An illegal plan that stops must warn too, not just an illegal stay-out.
+
+    The first fix only covered the stay-out branch, so a plan that stopped and
+    refitted the same dry compound produced a confident "Box lap 18 for HARD."
+    while still finishing the race disqualified.
+    """
+    store, _, strategy, _, _, _ = stack
+
+    def setup(state):
+        _race(
+            state,
+            current_lap=14,
+            total_laps=20,
+            compound="HARD",
+            age=16,
+            wear=[80.0, 82.0, 84.0, 86.0],
+            sets=[{"compound": "HARD", "available": True, "usable_life_laps": 25}],
+        )
+
+    await store.mutate(setup)
+    result = await strategy.recompute()
+    recommendation = result.get("recommended", {})
+    plans = result.get("plans", [])
+
+    if plans and not plans[0].get("legal", True):
+        instruction = str(recommendation.get("instruction", "")).lower()
+        assert "disqualif" in instruction or "compound" in instruction, (
+            "a stop that cannot serve the mandatory change was announced as a "
+            f"routine call: {recommendation.get('instruction')!r}"
+        )
+
+
+@pytest.mark.asyncio
+async def test_red_flag_tyre_change_is_free_and_still_offered(stack):
+    """The endgame payback guard must not suppress a free red-flag change.
+
+    Under a red flag the field is stationary in the pit lane, so fitting wets
+    for a wet restart costs nothing and is correct however few laps remain.
+    """
+    store, _, strategy, _, _, _ = stack
+
+    def setup(state):
+        _race(
+            state,
+            current_lap=53,
+            total_laps=53,
+            weather="Storm",
+            rain_pct=100,
+            phase="red_flag",
+            compound="SOFT",
+            age=20,
+            sets=[{"compound": "WET", "available": True}],
+        )
+
+    await store.mutate(setup)
+    result = await strategy.recompute()
+    recommendation = result.get("recommended", {})
+
+    assert float(result.get("pit_loss_s", 99)) == 0.0, (
+        "a red-flag tyre change must not be priced as a green-flag stop"
+    )
+    base = (result.get("neutralisation") or {}).get("base_pit_loss_s")
+    assert base is None or float(base) > 0.0, (
+        "the green-flag pit cost must remain knowable under a red flag"
+    )
+    assert str(recommendation.get("fit_compound")) in {"WET", "INTER"}
+
+
+@pytest.mark.asyncio
 async def test_unservable_compound_rule_is_spoken_not_hidden(stack):
     """Heading for disqualification must not sound like a routine call.
 

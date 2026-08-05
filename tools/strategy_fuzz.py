@@ -86,7 +86,100 @@ class Scenario:
     notes: list[str] = field(default_factory=list)
 
 
-def build_scenario(index: int, rng: random.Random) -> Scenario:
+# Regions of the decision space that random sampling reaches too rarely to
+# count as tested. Uniform generation put an outstanding mandatory compound
+# change at 2.4% of scenarios, which is where the worst defect lived, so these
+# are forced rather than waited for.
+ADVERSARIAL_PROFILES = (
+    "rule_outstanding_late",
+    "rule_unservable",
+    "sc_pit_window_overlap",
+    "endgame_wet_arrival",
+    "fuel_critical",
+    "tyres_dead",
+    "formation_and_rolling_start",
+    "red_flag_tyre_change",
+)
+
+
+def apply_adversarial_profile(
+    setup: dict[str, Any], profile: str, rng: random.Random
+) -> str:
+    """Force a scenario into a high-risk region of the decision space."""
+    total = setup["total_laps"]
+    if profile == "rule_outstanding_late":
+        # Mandatory dry change still unserved with just enough time to take it.
+        setup["mode_profile"], setup["session_type"] = "race", "Race"
+        setup["weather"], setup["rain_next_15_pct"] = "Clear", 0
+        setup["current_lap"] = max(1, total - rng.randint(2, 8))
+        setup["tyre_compound"] = "HARD"
+        setup["used_compounds"] = ["HARD"]
+        setup["tyre_sets"] = [
+            {"compound": "HARD", "available": True, "wear_pct": 30.0,
+             "usable_life_laps": 30},
+            {"compound": "MEDIUM", "available": True, "wear_pct": 0.0,
+             "usable_life_laps": 25},
+        ]
+        return "mandatory dry change outstanding, time remains"
+    if profile == "rule_unservable":
+        setup["mode_profile"], setup["session_type"] = "race", "Race"
+        setup["weather"], setup["rain_next_15_pct"] = "Clear", 0
+        setup["current_lap"] = max(1, total - rng.randint(1, 5))
+        setup["tyre_compound"] = "HARD"
+        setup["used_compounds"] = ["HARD"]
+        setup["tyre_sets"] = [
+            {"compound": "HARD", "available": True, "wear_pct": 20.0,
+             "usable_life_laps": 30}
+        ]
+        return "mandatory dry change with no eligible set"
+    if profile == "sc_pit_window_overlap":
+        setup["mode_profile"], setup["session_type"] = "race", "Race"
+        setup["safety_car"], setup["race_control_phase"] = "full", "safety_car"
+        setup["current_lap"] = max(1, int(total * rng.uniform(0.4, 0.6)))
+        setup["game_strategy"]["game_ideal_lap"] = setup["current_lap"]
+        setup["game_strategy"]["game_latest_lap"] = setup["current_lap"] + 1
+        setup["tyre_age"] = rng.randint(18, 32)
+        setup["tyre_wear"] = [rng.uniform(60, 80) for _ in range(4)]
+        return "safety car exactly over the pit window"
+    if profile == "endgame_wet_arrival":
+        setup["mode_profile"], setup["session_type"] = "race", "Race"
+        setup["weather"] = rng.choice(["Light rain", "Heavy rain", "Storm"])
+        setup["rain_next_15_pct"] = rng.randint(70, 100)
+        setup["current_lap"] = total - rng.randint(0, 2)
+        setup["tyre_compound"] = rng.choice(DRY_COMPOUNDS)
+        setup["tyre_sets"] = [
+            {"compound": "WET", "available": True, "wear_pct": 0.0},
+            {"compound": "INTER", "available": True, "wear_pct": 0.0},
+        ]
+        return "rain arrives with 1-3 laps to run"
+    if profile == "fuel_critical":
+        setup["mode_profile"], setup["session_type"] = "race", "Race"
+        setup["fuel_laps_delta"] = round(rng.uniform(-2.5, -0.1), 2)
+        setup["current_lap"] = max(1, int(total * rng.uniform(0.6, 0.95)))
+        return "fuel short of race distance"
+    if profile == "tyres_dead":
+        setup["mode_profile"], setup["session_type"] = "race", "Race"
+        setup["tyre_wear"] = [rng.uniform(93, 99) for _ in range(4)]
+        setup["tyre_age"] = rng.randint(35, 50)
+        setup["current_lap"] = max(1, int(total * rng.uniform(0.5, 0.9)))
+        return "tyres at the end of their life"
+    if profile == "formation_and_rolling_start":
+        setup["mode_profile"], setup["session_type"] = "race", "Race"
+        setup["current_lap"] = rng.choice([0, 1])
+        setup["safety_car"], setup["race_control_phase"] = "formation", "formation"
+        setup["tyre_age"], setup["tyre_wear"] = 0, [0.0, 0.0, 0.0, 0.0]
+        return "formation lap / rolling start"
+    if profile == "red_flag_tyre_change":
+        setup["mode_profile"], setup["session_type"] = "race", "Race"
+        setup["race_control_phase"] = "red_flag"
+        setup["current_lap"] = max(1, int(total * rng.uniform(0.3, 0.8)))
+        return "red flag, free tyre change"
+    return "unprofiled"
+
+
+def build_scenario(
+    index: int, rng: random.Random, adversarial: bool = False
+) -> Scenario:
     """One randomized but internally plausible race state."""
     track_id, track_name, default_laps, base_lap = rng.choice(TRACKS)
     mode = rng.choices(
@@ -188,6 +281,20 @@ def build_scenario(index: int, rng: random.Random) -> Scenario:
         },
         "pit_lane_time_ms": rng.choice([0, 0, 18_000, 21_500, 24_000]),
     }
+    if adversarial:
+        profile = ADVERSARIAL_PROFILES[index % len(ADVERSARIAL_PROFILES)]
+        note = f"{profile}: {apply_adversarial_profile(setup, profile, rng)}"
+        # Re-derive the field so identities stay consistent with any changes.
+        setup["drivers"] = _build_field(
+            rng, setup["active_cars"], setup["player_position"], base_lap,
+            setup["tyre_compound"], setup["tyre_age"], setup["tyre_wear"],
+        )
+        return Scenario(
+            index, 0,
+            f"{track_name}/{setup['mode_profile']}/{setup['weather']}"
+            f"/{setup['race_control_phase']}",
+            setup, [note],
+        )
     return Scenario(index, 0, f"{track_name}/{mode}/{weather}/{phase}", setup, [note])
 
 
@@ -437,10 +544,15 @@ def check_plan(sc: Scenario, plan: dict[str, Any]) -> list[Violation]:
             bad("negative_pit_loss", f"effective_pit_loss_s={effective}")
 
     # --- endgame sanity ---------------------------------------------------
-    if remaining <= 1 and rec.get("stops_remaining"):
+    # A stop into the flag is only wrong when it costs something. Under a red
+    # flag the field is stationary and the change is free, so fitting wets for
+    # a possible wet restart is correct however few laps remain.
+    free_change = float(effective or 0.0) <= 0.0 and s["race_control_phase"] == "red_flag"
+    if remaining <= 1 and rec.get("stops_remaining") and not free_change:
         bad(
             "stop_with_no_laps_left",
-            f"remaining={remaining} but stops_remaining={rec.get('stops_remaining')}",
+            f"remaining={remaining} but stops_remaining={rec.get('stops_remaining')} "
+            f"at a pit cost of {effective}s",
         )
 
     # --- rejoin / finish projections stay inside the field ----------------
@@ -478,15 +590,47 @@ def check_plan(sc: Scenario, plan: dict[str, Any]) -> list[Violation]:
                 f"pit_loss_s={pit_loss} outside any real F1 pit lane",
             )
 
+    # --- an illegal plan may never outrank a legal one --------------------
+    # A disqualified car scores nothing, so skipping a mandatory compound
+    # change must never win on projected position. Recommending an illegal
+    # plan is only defensible when no legal plan exists at all.
+    if plans:
+        legal_plans = [p for p in plans if p.get("legal")]
+        if legal_plans and not plans[0].get("legal", True):
+            bad(
+                "illegal_plan_ranked_first",
+                f"top plan is illegal while {len(legal_plans)} legal plan(s) exist",
+            )
+        if not plans[0].get("legal", True):
+            # Forced-illegal is survivable, but it must be said out loud.
+            text = str(rec.get("instruction") or "").lower()
+            if "disqualif" not in text and "compound" not in text:
+                bad(
+                    "illegal_plan_not_announced",
+                    f"heading for disqualification but the call is {rec.get('instruction')!r}",
+                )
+
     # --- compound rule must actually be honoured --------------------------
     if rule.get("applies") and rule.get("change_outstanding") and remaining > 1:
         fitted = [str(c).upper() for c in (plans[0].get("compounds") or [])[1:]] if plans else []
-        if plans and not any(c in set(DRY_COMPOUNDS) for c in fitted):
+        # Only a fault if a compound that would serve the rule was actually
+        # available. With no eligible set the rule cannot be served at all,
+        # and the correct behaviour is to say so, which is checked separately.
+        offered = {
+            str(item.get("compound", "")).upper()
+            for item in s["tyre_sets"]
+            if item.get("available")
+        }
+        servable = [
+            compound
+            for compound in rule.get("eligible_next_compounds", [])
+            if str(compound).upper() in offered
+        ]
+        if plans and servable and not any(c in set(DRY_COMPOUNDS) for c in fitted):
             bad(
                 "outstanding_rule_not_served",
-                f"dry-compound change outstanding with {remaining} laps left but "
-                f"top plan fits {fitted or 'nothing'}",
-                severity="warn",
+                f"dry-compound change outstanding with {remaining} laps left and "
+                f"{servable} available, but top plan fits {fitted or 'nothing'}",
             )
 
     # --- the spoken call must name the compound it recommends -------------
@@ -597,7 +741,8 @@ async def check_companion_tools(sc: Scenario, tools: Any) -> list[Violation]:
 
 
 async def run_batch(count: int, seed: int, verbose: bool = False,
-                    only: int | None = None) -> tuple[int, list[Violation]]:
+                    only: int | None = None,
+                    adversarial: bool = False) -> tuple[int, list[Violation]]:
     import tempfile
 
     tmp = Path(tempfile.mkdtemp(prefix="strategy_fuzz_"))
@@ -615,7 +760,7 @@ async def run_batch(count: int, seed: int, verbose: bool = False,
         if only is not None and index != only:
             continue
         rng = random.Random(seed * 100_003 + index)
-        sc = build_scenario(index, rng)
+        sc = build_scenario(index, rng, adversarial=adversarial)
         await store.mutate(lambda s, setup=sc.setup: apply(s, setup))
         try:
             plan = await tools.get_pit_strategy()
@@ -665,10 +810,16 @@ def main() -> int:
     parser.add_argument("--verbose", action="store_true")
     parser.add_argument("--only", type=int, default=None)
     parser.add_argument("--json", type=str, default=None)
+    parser.add_argument(
+        "--adversarial",
+        action="store_true",
+        help="force high-risk profiles instead of sampling uniformly",
+    )
     args = parser.parse_args()
 
     tested, violations = asyncio.run(
-        run_batch(args.scenarios, args.seed, args.verbose, args.only)
+        run_batch(args.scenarios, args.seed, args.verbose, args.only,
+                  adversarial=args.adversarial)
     )
     errors = [v for v in violations if v.severity == "error"]
     warns = [v for v in violations if v.severity == "warn"]
