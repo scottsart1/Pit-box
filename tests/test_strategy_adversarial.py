@@ -345,3 +345,87 @@ async def test_randomized_adversarial_profiles_hold_every_invariant():
         f"scenario {item.scenario_id} {item.check}: {item.detail}"
         for item in errors[:10]
     )
+
+
+# ---------------------------------------------------------------------------
+# A tyre that never wears does not exist.
+# ---------------------------------------------------------------------------
+
+
+def _engine():
+    from pitwall.strategy import StrategyEngine
+
+    return StrategyEngine.__new__(StrategyEngine)
+
+
+def test_single_wear_sample_does_not_override_the_prior():
+    """One observation is noise, not a wear rate.
+
+    The per-wheel path accepted personal history at any sample size while the
+    scalar path required two. A single lap whose wear did not tick over
+    therefore produced a 0%/lap tyre, a stint on it projected 0% wear at the
+    finish, and that both looked ideal to the ranking and reached the radio as
+    "the soft stint projects 0%".
+    """
+    engine = _engine()
+    state = {"track_id": 7, "car_setup": {}, "tyre": {"compound": "MEDIUM"}}
+    historical = {
+        "compounds": {
+            "SOFT": {
+                "wheel_wear_per_lap_pct": [0.0, 0.0, 0.0, 0.0],
+                "wear_sample_size": 1,
+                "max_wear_per_lap_pct": 0.0,
+            }
+        }
+    }
+
+    rates, source, _, _ = engine._wheel_wear_rates(state, "SOFT", historical, 1.0)
+
+    assert all(rate > 0.0 for rate in rates), (
+        f"projected a tyre that never wears: {rates}"
+    )
+    assert source != "personal_per_wheel_history", (
+        "a single sample must not be presented as personal history"
+    )
+
+
+def test_established_wear_history_is_still_used():
+    """The guard must not discard genuinely earned personal history."""
+    engine = _engine()
+    state = {"track_id": 7, "car_setup": {}, "tyre": {"compound": "MEDIUM"}}
+    historical = {
+        "compounds": {
+            "SOFT": {
+                "wheel_wear_per_lap_pct": [4.1, 4.3, 4.8, 5.0],
+                "wear_sample_size": 8,
+                "max_wear_per_lap_pct": 5.0,
+            }
+        }
+    }
+
+    rates, source, samples, _ = engine._wheel_wear_rates(state, "SOFT", historical, 1.0)
+
+    assert source == "personal_per_wheel_history"
+    assert samples == 8
+    assert rates == [4.1, 4.3, 4.8, 5.0]
+
+
+def test_one_bad_wheel_falls_back_without_discarding_the_others():
+    """A single implausible wheel must not throw away three good ones."""
+    engine = _engine()
+    state = {"track_id": 7, "car_setup": {}, "tyre": {"compound": "MEDIUM"}}
+    historical = {
+        "compounds": {
+            "SOFT": {
+                "wheel_wear_per_lap_pct": [4.1, 0.0, 4.8, 5.0],
+                "wear_sample_size": 3,
+                "max_wear_per_lap_pct": 5.0,
+            }
+        }
+    }
+
+    rates, source, _, _ = engine._wheel_wear_rates(state, "SOFT", historical, 1.0)
+
+    assert source == "personal_per_wheel_history"
+    assert rates[0] == 4.1 and rates[2] == 4.8 and rates[3] == 5.0
+    assert rates[1] > 0.0, "the implausible wheel kept a zero rate"

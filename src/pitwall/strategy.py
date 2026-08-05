@@ -1072,15 +1072,47 @@ class StrategyEngine:
         live = self._live_wheel_wear_samples(state, compound)
         if any(live):
             fallback, _, _ = self._wear_rate(state, compound, historical, style_factor)
-            rates = [float(median(values)) if values else fallback for values in live]
+            # Samples are clamped at zero when collected, so a lap whose wear
+            # did not tick over contributes 0.0. Taking that as the rate gives
+            # a tyre that never wears; fall back to the prior for that wheel.
+            rates = [
+                float(median(values))
+                if values and float(median(values)) > 0.0
+                else fallback
+                for values in live
+            ]
             return rates, "live_per_wheel_wear", min(len(v) for v in live if v), setup_effects(state.get("car_setup", {}), int(state.get("track_id", -1)))
 
         history = historical.get("compounds", {}).get(compound, {})
         history_rates = history.get("wheel_wear_per_lap_pct") or []
-        if len(history_rates) == 4 and any(value is not None for value in history_rates):
-            fallback = float(history.get("max_wear_per_lap_pct") or DEFAULT_WEAR_PER_LAP.get(compound, 3.0))
-            rates = [float(value) if value is not None else fallback for value in history_rates]
-            return rates, "personal_per_wheel_history", int(history.get("wear_sample_size", 0)), setup_effects(state.get("car_setup", {}), int(state.get("track_id", -1)))
+        history_samples = int(history.get("wear_sample_size", 0))
+        # Match the sample discipline the scalar path already applies: one
+        # observation is noise, not a rate. Without this a single sample was
+        # trusted outright, and a lap whose wear did not tick over produced a
+        # 0%/lap tyre. A stint on it then projected 0% wear at the finish,
+        # which both looked perfect to the ranking and reached the radio.
+        if len(history_rates) == 4 and history_samples >= 2:
+            fallback = float(
+                history.get("max_wear_per_lap_pct")
+                or DEFAULT_WEAR_PER_LAP.get(compound, 3.0)
+            )
+            # A tyre that wears nothing per lap does not exist, so a
+            # non-positive rate is a data artifact rather than a measurement.
+            rates = [
+                float(value)
+                if value is not None and float(value) > 0.0
+                else fallback
+                for value in history_rates
+            ]
+            if any(rate > 0.0 for rate in rates):
+                return (
+                    rates,
+                    "personal_per_wheel_history",
+                    history_samples,
+                    setup_effects(
+                        state.get("car_setup", {}), int(state.get("track_id", -1))
+                    ),
+                )
 
         scalar, source, sample_size = self._wear_rate(state, compound, historical, style_factor)
         effects = setup_effects(state.get("car_setup", {}), int(state.get("track_id", -1)))
