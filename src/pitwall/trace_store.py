@@ -59,6 +59,18 @@ class TraceFormatError(TraceStoreError):
     """Raised when a trace chunk or manifest fails validation."""
 
 
+class TraceManifestMissing(TraceStoreError, FileNotFoundError):
+    """Raised when a catalogued manifest has no file on disk.
+
+    Distinct from a format error: the record is intact and the session stays
+    listable, but this lap's telemetry cannot be read until it is rebuilt.
+
+    It is deliberately still a ``FileNotFoundError`` so existing recovery and
+    reconciliation paths that catch the OS error keep working; the added type
+    only lets the API turn it into a diagnosable response instead of a 500.
+    """
+
+
 def _canonical_json(value: Mapping[str, Any]) -> bytes:
     return json.dumps(
         value,
@@ -798,8 +810,17 @@ class TraceStore:
         try:
             raw = path.read_bytes()
             value = json.loads(raw)
-        except FileNotFoundError:
-            raise
+        except FileNotFoundError as exc:
+            # A catalog row can outlive its file: an interrupted write, a
+            # half-restored data root, a manual delete. Raising the bare OS
+            # error surfaced a 500 and a stack trace, which is neither
+            # listable nor diagnosable. Name it so callers can report the
+            # lap as unavailable and point at the missing file.
+            raise TraceManifestMissing(
+                f"trace manifest {manifest_id} is catalogued but its file is "
+                f"missing; the lap's telemetry cannot be read. Reprocess the "
+                f"session to rebuild it, or delete the lap."
+            ) from exc
         except (UnicodeDecodeError, json.JSONDecodeError) as exc:
             raise TraceFormatError(f"invalid trace manifest: {manifest_id}") from exc
         if not isinstance(value, dict):

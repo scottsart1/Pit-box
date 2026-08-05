@@ -136,3 +136,31 @@ def test_verify_bypasses_cache_and_detects_on_disk_tampering(tmp_path: Path) -> 
     report = store.verify_manifest(manifest.id)
     assert not report.valid
     assert "checksum mismatch" in report.errors[0]
+
+
+def test_missing_manifest_file_is_named_not_a_bare_os_error(tmp_path):
+    """A catalogued manifest whose file is gone must be diagnosable.
+
+    Raising the bare FileNotFoundError escaped the API as a 500 with a stack
+    trace, so a session with one unreadable lap looked like a broken server
+    rather than a lap that needs reprocessing.
+    """
+    from pitwall.trace_store import (
+        TraceManifestMissing,
+        TraceStore,
+        TraceStoreError,
+    )
+
+    store = TraceStore(tmp_path)
+
+    with pytest.raises(TraceManifestMissing) as caught:
+        store.load_manifest("tm_absent")
+
+    # Callers catch the store's base error; this must not bypass them.
+    assert isinstance(caught.value, TraceStoreError)
+    # Still an OS error, so existing recovery paths that catch
+    # FileNotFoundError keep working unchanged.
+    assert isinstance(caught.value, FileNotFoundError)
+    message = str(caught.value)
+    assert "tm_absent" in message
+    assert "reprocess" in message.lower(), "the error must say what to do next"

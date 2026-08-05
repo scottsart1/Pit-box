@@ -48,7 +48,7 @@ from .telemetry.segments import (
     make_segment,
 )
 from .trace_archive import normalise_legacy_trace
-from .trace_store import TraceFormatError, TraceStore
+from .trace_store import TraceFormatError, TraceManifestMissing, TraceStore
 
 ALGORITHM_BUNDLE = "analysis_4.2.0"
 
@@ -529,9 +529,15 @@ class ComparisonService:
                     # additive compatibility path without masking corrupt files.
                     trace_slice = self.trace_store.read_range(record.trace_manifest_id)
                 return self._canonical_manifest_trace(record, trace_slice)
-            except (FileNotFoundError, KeyError, TraceFormatError):
+            except (FileNotFoundError, KeyError, TraceFormatError, TraceManifestMissing) as exc:
                 if record.legacy_lap_id is None:
-                    raise
+                    # Report this as an unavailable trace rather than letting an
+                    # OS error escape as a 500. The lap row is intact and the
+                    # session stays listable; only this lap's telemetry is
+                    # unreadable, and the caller needs to be told which.
+                    raise TraceUnavailableError(
+                        f"telemetry for lap {record.lap_id} cannot be read: {exc}"
+                    ) from exc
         return self._legacy_trace_sync(record)
 
     async def lap_trace(self, lap_key: str) -> tuple[LapRecord, LapTrace]:

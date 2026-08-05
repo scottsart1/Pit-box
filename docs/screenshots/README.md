@@ -39,9 +39,28 @@ never reads or writes a real driver's saved sessions.
 | `02-drive-radio-feed.png` | Drive, full height | The same screen including the radio feed and voice controls |
 | `03-connection-center.png` | Connection | Receiving state, recommended console IP, ranked adapters with reasons |
 | `04-library.png` | Library | Saved sessions with size, trace state and per-session actions |
-| `05-session-review.png` | Session Review | Session metadata, lap table, coverage |
+| `05-session-review.png` | Session Review | 20 drivers, 220 laps, 100% trace coverage, per-lap comparability |
 | `06-field-lab.png` | Field Lab | All 20 cars with last, best and median clean pace |
-| `07-lap-lab.png` | Lap Lab | Candidate against reference, compatibility class, synchronized map and traces |
+
+`01-live-dashboard.png`, `02-review-history.png`, `03-setup-lab.png` and
+`04-overlay.png` predate 4.2 and show the earlier single-page dashboard. They
+are kept for history; they are not what the current build looks like.
+
+### Lap Lab is not yet captured
+
+Lap Lab is the one screen without an image here. The feature works - a lap
+comparison against a strict reference returns aligned timing, and on a real
+recorded session it produced a +0.182 s lap delta where the raw lap times
+differed by 0.183 s. The demo capture session was interrupted and restarted
+several times while the harness was being built, which left trace manifests
+catalogued whose files were never finalized, so the comparison could not read
+its telemetry.
+
+Capturing it needs one uninterrupted demo run: start the demo server, let
+`demo_broadcast` run without stopping it for at least four laps of real time
+so the traces are dense, stop the broadcast once, restart the server so the
+session finalizes cleanly, reprocess, then capture. Do not clear the data root
+or kill the broadcaster mid-lap in between.
 
 ## Honest limitations visible in these images
 
