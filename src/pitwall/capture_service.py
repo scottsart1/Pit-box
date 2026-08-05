@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import shutil
 import time
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
@@ -26,6 +27,7 @@ class CaptureServiceSnapshot:
     packets_queued: int
     packets_written: int
     bytes_written: int
+    active_file_bytes: int
     queue_drops: int
     write_errors: int
     last_write_at: float | None
@@ -44,12 +46,23 @@ class CaptureRecoverySummary:
 class CaptureService:
     """Bounded asynchronous bridge from the UDP hot path to PWCAP storage."""
 
-    def __init__(self, root: Path, *, queue_size: int = 8192) -> None:
+    def __init__(
+        self,
+        root: Path,
+        *,
+        queue_size: int = 8192,
+        max_file_bytes: int | None = None,
+        minimum_free_bytes: int = 0,
+    ) -> None:
         self.root = root.resolve()
         self.root.mkdir(parents=True, exist_ok=True)
         self.queue: asyncio.Queue[CapturedDatagram] = asyncio.Queue(
             maxsize=max(1, int(queue_size))
         )
+        self.max_file_bytes = (
+            None if max_file_bytes is None else max(1, int(max_file_bytes))
+        )
+        self.minimum_free_bytes = max(0, int(minimum_free_bytes))
         self._writer: CaptureWriter | None = None
         self._worker_task: asyncio.Task[None] | None = None
         self._relative_path: str | None = None
@@ -62,6 +75,7 @@ class CaptureService:
         self._queue_high_water = 0
         self._last_write_at: float | None = None
         self._last_error: str | None = None
+        self._current_datagram_bytes = 0
 
     @property
     def running(self) -> bool:
@@ -133,6 +147,7 @@ class CaptureService:
         self._relative_path = destination.relative_to(self.root).as_posix()
         self._state = "recording"
         self._last_error = None
+        self._current_datagram_bytes = 0
         self._worker_task = asyncio.create_task(
             self._worker(), name="pitwall-raw-capture-writer"
         )
@@ -202,6 +217,25 @@ class CaptureService:
             try:
                 if writer is None:
                     raise RuntimeError("capture writer is not open")
+                incoming_bytes = sum(len(item.data) for item in batch)
+                if (
+                    self.max_file_bytes is not None
+                    and self._current_datagram_bytes + incoming_bytes
+                    > self.max_file_bytes
+                ):
+                    self._state = "limit_reached"
+                    self._last_error = "capture_file_size_limit_reached"
+                    self._queue_drops += len(batch)
+                    continue
+                if self.minimum_free_bytes:
+                    free_bytes = await asyncio.to_thread(
+                        lambda: shutil.disk_usage(self.root).free
+                    )
+                    if free_bytes - incoming_bytes < self.minimum_free_bytes:
+                        self._state = "limit_reached"
+                        self._last_error = "capture_minimum_free_disk_reached"
+                        self._queue_drops += len(batch)
+                        continue
                 await asyncio.to_thread(self._write_batch, writer, batch)
             except asyncio.CancelledError:
                 raise
@@ -211,7 +245,8 @@ class CaptureService:
                 self._state = "error"
             else:
                 self._packets_written += len(batch)
-                self._bytes_written += sum(len(item.data) for item in batch)
+                self._bytes_written += incoming_bytes
+                self._current_datagram_bytes += incoming_bytes
                 self._last_write_at = time.time()
             finally:
                 for _ in batch:
@@ -256,6 +291,14 @@ class CaptureService:
         return path
 
     def snapshot(self) -> CaptureServiceSnapshot:
+        active_file_bytes = 0
+        writer = self._writer
+        if writer is not None:
+            try:
+                active_file_bytes = writer.temp_path.stat().st_size
+            except OSError:
+                active_file_bytes = 0
+            active_file_bytes += writer.pending_bytes
         return CaptureServiceSnapshot(
             state=self._state,
             relative_path=self._relative_path,
@@ -265,6 +308,7 @@ class CaptureService:
             packets_queued=self._packets_queued,
             packets_written=self._packets_written,
             bytes_written=self._bytes_written,
+            active_file_bytes=active_file_bytes,
             queue_drops=self._queue_drops,
             write_errors=self._write_errors,
             last_write_at=self._last_write_at,

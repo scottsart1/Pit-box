@@ -300,6 +300,16 @@ class CaptureWriter:
 
     append_datagram = write
 
+    @property
+    def pending_bytes(self) -> int:
+        """Datagram bytes buffered in memory, not yet flushed to the temp file.
+
+        A block is only written to disk once it reaches its size/frame target
+        or the writer closes, so file size alone understates an active
+        capture's true size between flushes.
+        """
+        return len(self._pending)
+
     def flush_block(self) -> None:
         if not self._pending_count:
             return
@@ -726,8 +736,14 @@ def anonymize_capture(
     }
     metadata = _redact_metadata(reader.metadata, {key.casefold() for key in keys})
     metadata["privacy_mode"] = (
-        "custom-payload-redacted" if datagram_transform else "transport-redacted-only"
+        "caller_supplied_payload_transform"
+        if datagram_transform
+        else "transport_metadata_only"
     )
+    # A byte transform cannot be verified here against every supported game
+    # packet version.  Never claim that participant data inside payloads is gone.
+    metadata["payload_anonymized"] = False
+    metadata["transport_metadata_redacted"] = True
     metadata["anonymized_wall_ns"] = time.time_ns()
     with CaptureWriter(destination_path, metadata=metadata) as writer:
         for frame in reader:
