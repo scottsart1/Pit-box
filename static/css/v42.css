@@ -418,8 +418,15 @@ button:disabled,
   .page { min-height: 0; }
   .connection-shell { padding: 10px; gap: 10px; }
   .panel-surface { padding: 13px; }
+  /* These rows pair a heading with a status badge. Stacking them without
+     allowing a wrap kept both children on one line, so the Connection page
+     scrolled sideways on a 390px phone and the listener state could only be
+     read by dragging the page across. */
   .connection-heading-row,
-  .section-heading { align-items: flex-start; }
+  .section-heading {
+    align-items: flex-start;
+    flex-wrap: wrap;
+  }
   .destination-grid,
   .setup-steps,
   .status-details,

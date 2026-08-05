@@ -91,6 +91,11 @@ class InterfacesResponse(VersionedResponse):
     recommended_ipv4: str | None
     recommended_adapter_id: str | None
     warnings: list[str] = Field(default_factory=list)
+    # False when platform discovery was unavailable and the safe socket-derived
+    # fallback answered instead. The fallback cannot report adapter kind,
+    # gateway or metric, so a client should present it as provisional and ask
+    # again rather than treating it as the final adapter list.
+    discovery_authoritative: bool = True
 
 
 class ListenerResponse(ApiModel):

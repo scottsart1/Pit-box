@@ -176,6 +176,7 @@ def _interface_response(
                 ]
             )
         ),
+        discovery_authoritative=snapshot.discovery.source != "stdlib-fallback",
     )
 
 

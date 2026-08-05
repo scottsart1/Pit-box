@@ -579,7 +579,17 @@ export function setConnectionCenterActive(active) {
   stopPolling();
   if (!uiState.active) return;
   refreshConnectionCenter();
-  uiState.pollTimer = window.setInterval(() => refreshStatus({ quiet: true }), POLL_INTERVAL_MS);
+  uiState.pollTimer = window.setInterval(() => {
+    refreshStatus({ quiet: true });
+    // Windows adapter discovery spawns PowerShell and can still be warming
+    // when this screen first opens. That first answer is the socket-derived
+    // fallback, which cannot report adapter kind, gateway or metric. Ask
+    // again until the platform answers, so the panel is not stranded on a
+    // provisional view until someone presses Refresh.
+    if (uiState.interfaces && uiState.interfaces.discovery_authoritative === false) {
+      refreshInterfaces();
+    }
+  }, POLL_INTERVAL_MS);
 }
 
 function syncTabs(pageName) {

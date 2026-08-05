@@ -114,6 +114,40 @@ def make_app(service: NetworkService) -> FastAPI:
 
 
 @pytest.mark.asyncio
+async def test_interfaces_flag_a_fallback_answer_as_provisional() -> None:
+    """A client must be able to tell a real adapter list from the fallback.
+
+    The socket-derived fallback cannot report adapter kind, gateway or metric,
+    so the Connection Center presents it as provisional and asks again instead
+    of stranding the panel on it.
+    """
+    endpoints = EndpointCreator(None)
+
+    async def resolver(host: str, port: int):
+        del port
+        return [host]
+
+    fallback = DiscoveryResult(
+        (IPv4Interface("fallback:10.1.2.3", "Detected IPv4 interface", "10.1.2.3"),),
+        "stdlib-fallback",
+        ("Windows interface discovery exceeded 2.0s.",),
+    )
+    service = NetworkService(
+        asyncio.DatagramProtocol,
+        endpoint_creator=endpoints,
+        interface_discoverer=lambda: fallback,
+        forwarder=DatagramForwarder(resolver=resolver),
+        bind_probe=lambda host, port: None,
+    )
+    transport = httpx.ASGITransport(app=make_app(service))
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        payload = (await client.get("/api/v1/network/interfaces")).json()
+
+    assert payload["discovery_authoritative"] is False
+    assert any("discovery" in warning for warning in payload["warnings"])
+
+
+@pytest.mark.asyncio
 async def test_interfaces_listener_status_and_packet_projection() -> None:
     service, endpoints = make_service()
     transport = httpx.ASGITransport(app=make_app(service))
@@ -122,6 +156,7 @@ async def test_interfaces_listener_status_and_packet_projection() -> None:
         assert interfaces.status_code == 200
         assert interfaces.json()["recommended_ipv4"] == "192.168.10.42"
         assert interfaces.json()["interfaces"][0]["reasons"]
+        assert interfaces.json()["discovery_authoritative"] is True
 
         initial = await client.get("/api/v1/network/status")
         assert initial.json()["listener"]["state"] == "off"
