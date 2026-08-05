@@ -1176,7 +1176,32 @@ class ProactiveEngineer:
                 "or going away?"
             )
         if kind == "tyre_wear":
-            return f"Tyre warning, wear is {payload.get('wear_fl_fr_rl_rr')}. {payload.get('strategy', {}).get('instruction', 'Protect the limiting tyre.')}"
+            # This is spoken over the radio, so it has to be sayable. Formatting
+            # the raw list put "wear is [78.0, 80.5, 71.0, 73.5]" in the
+            # engineer's mouth. A driver needs the worst corner and its number,
+            # not four decimals in reading order.
+            wear = [
+                float(value)
+                for value in (payload.get("wear_fl_fr_rl_rr") or [])
+                if isinstance(value, (int, float))
+            ]
+            instruction = str(
+                payload.get("strategy", {}).get("instruction")
+                or "Protect the limiting tyre."
+            )
+            if len(wear) == 4:
+                corners = ("front left", "front right", "rear left", "rear right")
+                worst = max(range(4), key=lambda index: wear[index])
+                return (
+                    f"Tyre warning. {corners[worst].capitalize()} is the limiting "
+                    f"corner at {wear[worst]:.0f} percent. {instruction}"
+                )
+            if wear:
+                return (
+                    f"Tyre warning, worst corner {max(wear):.0f} percent. "
+                    f"{instruction}"
+                )
+            return f"Tyre warning. {instruction}"
         if kind == "lap_deleted":
             return "That qualifying lap is invalid. Reset, recharge, and build the next attempt."
         if kind == "quali_clear_air":

@@ -11,6 +11,8 @@ PitWallData/
 
 # Scratch data roots produced by local UI/integration runs
 .codex-ui-test-data/
+# Isolated data root used when capturing documentation screenshots
+.demo-data/
 
 # Editor/OS noise
 .vscode/

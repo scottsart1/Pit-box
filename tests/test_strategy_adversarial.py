@@ -429,3 +429,50 @@ def test_one_bad_wheel_falls_back_without_discarding_the_others():
     assert source == "personal_per_wheel_history"
     assert rates[0] == 4.1 and rates[2] == 4.8 and rates[3] == 5.0
     assert rates[1] > 0.0, "the implausible wheel kept a zero rate"
+
+
+# ---------------------------------------------------------------------------
+# Radio is spoken aloud, so it has to be sayable.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"wear_fl_fr_rl_rr": [78.0, 80.5, 71.0, 73.5]},
+        {"wear_fl_fr_rl_rr": [60.0, 62.0, 88.0, 85.0]},
+        {"wear_fl_fr_rl_rr": [91.0]},
+        {"wear_fl_fr_rl_rr": []},
+        {},
+    ],
+)
+def test_tyre_warning_is_sayable(payload):
+    """No spoken call may contain a raw Python container.
+
+    The template interpolated the wear list directly, so the engineer said
+    "wear is [78.0, 80.5, 71.0, 73.5]" over the radio.
+    """
+    from pitwall.proactive import ProactiveEngineer
+
+    text = ProactiveEngineer._fallback_text(
+        {"type": "tyre_wear", "payload": payload}, {}
+    )
+
+    assert "[" not in text and "]" not in text, f"raw list in spoken radio: {text!r}"
+    assert "Tyre warning" in text
+
+
+def test_tyre_warning_names_the_limiting_corner():
+    """A driver needs the worst corner, not four numbers in reading order."""
+    from pitwall.proactive import ProactiveEngineer
+
+    text = ProactiveEngineer._fallback_text(
+        {
+            "type": "tyre_wear",
+            "payload": {"wear_fl_fr_rl_rr": [60.0, 62.0, 88.0, 85.0]},
+        },
+        {},
+    )
+
+    assert "Rear left" in text
+    assert "88 percent" in text

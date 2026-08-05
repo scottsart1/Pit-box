@@ -98,14 +98,53 @@ class Race:
             int((BASE_LAP_S + offset + self.rng.uniform(-0.15, 0.35)) * 1000)
             for _, _, _, offset in FIELD
         ]
+        # Cumulative gap to the leader in seconds. A real mid-race field is
+        # spread over half a minute or more, which is what makes an undercut
+        # or a rejoin position mean anything.
+        self.gap_to_leader = [0.0]
+        for index in range(1, len(FIELD)):
+            self.gap_to_leader.append(
+                self.gap_to_leader[-1] + self.rng.uniform(0.9, 3.4)
+            )
 
-    def advance(self) -> None:
+    def set_display_state(self) -> None:
+        """Pin the player's car to the scenario the demo is meant to show.
+
+        The warm-up laps exist only to populate lap history, pace and the map.
+        They also age the tyres, so without this the displayed race is not the
+        decision point the demo was designed around.
+        """
+        self.age[PLAYER_INDEX] = 19
+        self.wear[PLAYER_INDEX] = [71.0, 73.5, 78.0, 80.5]
+        self.compound[PLAYER_INDEX] = "MEDIUM"
+
+    def advance(self, warm_up: bool = False) -> None:
         elapsed = time.monotonic() - self.t0
         self.session_time = 3120.0 + elapsed
         self.frame += 1
         for index in range(len(FIELD)):
             speed_ms = TRACK_LENGTH_M / (self.lap_ms[index] / 1000.0)
-            self.distance[index] = (self.distance[index] + speed_ms * 0.05) % TRACK_LENGTH_M
+            step = speed_ms * (0.9 if warm_up else 0.05)
+            moved = self.distance[index] + step
+            if moved >= TRACK_LENGTH_M:
+                # A lap completed. Vary the next one so the pace trace looks
+                # like a stint rather than a metronome.
+                self.age[index] += 1
+                drift = self.rng.uniform(-0.12, 0.28)
+                self.lap_ms[index] = int(
+                    (BASE_LAP_S + FIELD[index][3] + drift) * 1000
+                    + self.age[index] * 26
+                )
+                for wheel in range(4):
+                    self.wear[index][wheel] = min(
+                        98.0, self.wear[index][wheel] + self.rng.uniform(1.2, 2.1)
+                    )
+                if index == PLAYER_INDEX:
+                    # The lap number must roll over on the same packet the
+                    # player crosses the line, or lap completion is never
+                    # detected and no lap is ever recorded.
+                    self.lap += 1
+            self.distance[index] = moved % TRACK_LENGTH_M
 
     def player_speed_kph(self) -> int:
         # A plausible speed trace around the lap rather than a constant.
@@ -188,13 +227,16 @@ class Race:
             item.grid_position = index + 1
             item.driver_status = 4
             item.result_status = 2
-            gap = int(sum(FIELD[i][3] for i in range(index + 1)) * 1000) + index * 480
-            item.delta_to_race_leader_ms_part = gap % 1000
-            item.delta_to_race_leader_minutes_part = 0
-            ahead = 0 if index == 0 else int(
-                (FIELD[index][3] - FIELD[index - 1][3]) * 1000
-            ) + 480
-            item.delta_to_car_in_front_ms_part = max(0, ahead)
+            # Realistic mid-race spread: seconds between cars, not tenths, so
+            # the rejoin and undercut models see a plausible field.
+            gap_to_leader = self.gap_to_leader[index]
+            item.delta_to_race_leader_ms_part = int(gap_to_leader * 1000) % 60_000
+            item.delta_to_race_leader_minutes_part = int(gap_to_leader // 60)
+            ahead = (
+                0.0 if index == 0
+                else gap_to_leader - self.gap_to_leader[index - 1]
+            )
+            item.delta_to_car_in_front_ms_part = int(max(0.0, ahead) * 1000) % 60_000
             item.delta_to_car_in_front_minutes_part = 0
             item.speed_trap_fastest_speed = 308.0 - index * 0.7
             leader_ms = leader_ms or self.lap_ms[index]
@@ -232,8 +274,11 @@ class Race:
             item.fuel_mix = 1
             item.front_brake_bias = 57
             item.pit_limiter_status = 0
-            remaining = TOTAL_LAPS - self.lap
-            item.fuel_in_tank = 1.9 * remaining + (2.4 if index == PLAYER_INDEX else 3.0)
+            # Fuel is held steady across the demo laps on purpose. A load that
+            # drifts lap to lap makes every pair of laps "comparable with
+            # caveats" on fuel, which correctly blocks strict coaching and
+            # leaves the analysis screens with nothing to show.
+            item.fuel_in_tank = 34.0 if index == PLAYER_INDEX else 36.0
             item.fuel_capacity = 110.0
             # The player is marginal on fuel: a real thing to ask about.
             item.fuel_remaining_laps = (
@@ -252,6 +297,48 @@ class Race:
             item.ers_harvested_this_lap_mguk = 1.4e5
             item.ers_harvested_this_lap_mguh = 9.0e4
             item.ers_deployed_this_lap = 2.6e5
+        return bytes(packet.pack())
+
+    def motion_packet(self) -> bytes:
+        """World positions, so the track map and racing line can build.
+
+        The shape is a stylised Silverstone-like circuit rather than survey
+        data: enough structure for the map and line comparison to be
+        demonstrated honestly as synthetic.
+        """
+        packet = P.PacketMotionData()
+        packet.header = _header(0, self.frame, self.session_time)
+        for index in range(len(FIELD)):
+            item = packet.car_motion_data[index]
+            u = self.distance[index] / TRACK_LENGTH_M * math.tau
+            # A closed asymmetric loop: two long straights, a fast sweep and a
+            # slow complex, so corner detection has something real to find.
+            x = 620.0 * math.sin(u) + 180.0 * math.sin(3.0 * u + 0.6)
+            z = 430.0 * math.cos(u) - 150.0 * math.sin(2.0 * u)
+            # Cars run slightly different lines; the player is on the racing line.
+            offset = 0.0 if index == PLAYER_INDEX else ((index % 5) - 2) * 1.6
+            item.world_position_x = x + offset * math.cos(u)
+            item.world_position_y = 12.0
+            item.world_position_z = z + offset * math.sin(u)
+            corner = math.sin(u * 3.0) ** 2
+            # g forces and direction vectors are transmitted as scaled shorts,
+            # not floats: g in 1/32768 units, directions normalised to 32767.
+            def g(value: float) -> int:
+                return max(-32768, min(32767, int(value * 32768.0 / 8.0)))
+
+            item.g_force_lateral = g(3.4 * (1.0 - corner) * math.sin(u * 5.0))
+            item.g_force_longitudinal = g(-4.1 * (1.0 - corner) + 1.6 * corner)
+            item.g_force_vertical = g(1.0)
+            heading = math.atan2(math.cos(u), -math.sin(u))
+            item.world_forward_dir_x = int(math.sin(heading) * 32767)
+            item.world_forward_dir_y = 0
+            item.world_forward_dir_z = int(math.cos(heading) * 32767)
+            item.world_right_dir_x = int(math.cos(heading) * 32767)
+            item.world_right_dir_y = 0
+            item.world_right_dir_z = int(-math.sin(heading) * 32767)
+            item.yaw = heading
+            item.pitch = 0.0
+            item.roll = 0.0
         return bytes(packet.pack())
 
     def damage_packet(self) -> bytes:
@@ -289,12 +376,38 @@ def main() -> int:
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     race = Race(args.seed)
     target = (args.host, args.port)
-    deadline = time.monotonic() + args.seconds
-    tick = 0
     print(f"broadcasting synthetic Silverstone race to {args.host}:{args.port} "
           f"for {args.seconds:.0f}s")
+
+    # Run several laps quickly first, so the pace trace, lap history and track
+    # map are populated from real completed laps before the race settles at
+    # its display lap. Without this the screens are technically live but empty.
+    race.lap = 28
+    race.distance = [d * 0.2 for d in race.distance]
+    warm_up_target = 34
+    guard = 0
+    while race.lap < warm_up_target and guard < 4000:
+        guard += 1
+        race.advance(warm_up=True)
+        sock.sendto(race.session_packet(), target)
+        sock.sendto(race.participants_packet(), target)
+        sock.sendto(race.lap_packet(), target)
+        sock.sendto(race.motion_packet(), target)
+        sock.sendto(race.telemetry_packet(), target)
+        sock.sendto(race.status_packet(), target)
+        sock.sendto(race.damage_packet(), target)
+        time.sleep(0.015)
+    race.set_display_state()
+    print(f"warm-up complete: now on lap {race.lap} after {guard} ticks")
+
+    deadline = time.monotonic() + args.seconds
+    tick = 0
     while time.monotonic() < deadline:
         race.advance()
+        # Hold the designed decision point on screen: the demo is a
+        # single moment of a race, not a race that runs away from it.
+        race.set_display_state()
+        sock.sendto(race.motion_packet(), target)
         # Rates roughly mirror the game: telemetry/lap fast, session/status slower.
         sock.sendto(race.lap_packet(), target)
         sock.sendto(race.telemetry_packet(), target)
