@@ -4,6 +4,13 @@ Pit Wall receives **F1 26** telemetry (UDP format **2026**) from a PS5, runs det
 strategy/corner/setup analysis locally, keeps persistent SQLite history, answers spoken questions,
 makes proactive radio calls, and serves a live dashboard at `http://127.0.0.1:8000`.
 
+![The Drive screen during a race](docs/screenshots/01-drive-live-command-center.png)
+
+*Mid-race at Silverstone: the full field with tyre age and gaps, live inputs,
+per-corner wear, and the ranked stop plans behind the call. More in
+[docs/screenshots](docs/screenshots/) — the race shown there is synthetic, but
+every screen is the real application, not a mockup.*
+
 For PS5 setup, forwarding, LAN access, capture/replay, offline review, recovery,
 and rollback procedures, see the [Pit Wall 4.2 operator and developer guide](docs/PIT_WALL_4_2.md).
 
