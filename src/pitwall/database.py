@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import shutil
 import sqlite3
 import time
@@ -9,7 +10,10 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from .catalog import SessionCatalog
 from .migrations import LATEST_SCHEMA_VERSION, MIGRATIONS
+
+log = logging.getLogger(__name__)
 
 _SQLITE_INT64_MIN = -(1 << 63)
 _SQLITE_INT64_MAX = (1 << 63) - 1
@@ -53,6 +57,7 @@ class PitWallDatabase:
         self._lock = asyncio.Lock()
         self.last_backup_path: Path | None = None
         self.schema_version = 0
+        self.catalog = SessionCatalog(path)
 
     async def initialize(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -184,6 +189,49 @@ class PitWallDatabase:
             path = await asyncio.to_thread(self._backup_sync)
             self.last_backup_path = path
             return path
+
+    def _restore_backup_sync(self, backup_path: Path) -> None:
+        backup_root = (self.path.parent / "backups").resolve()
+        resolved = backup_path.resolve()
+        try:
+            resolved.relative_to(backup_root)
+        except ValueError as exc:
+            raise ValueError("backup path must be inside the Pit Wall backup directory") from exc
+        if not resolved.is_file():
+            raise FileNotFoundError(resolved)
+        source = sqlite3.connect(resolved, timeout=30)
+        destination = sqlite3.connect(self.path, timeout=30)
+        try:
+            check = [str(row[0]) for row in source.execute("PRAGMA quick_check")]
+            if check != ["ok"]:
+                raise RuntimeError(f"Refusing to restore a corrupt backup: {check}")
+            source.backup(destination)
+            destination.commit()
+        finally:
+            destination.close()
+            source.close()
+
+    async def restore_backup(self, backup_path: Path) -> Path:
+        """Restore an explicitly selected verified backup.
+
+        A safety image of the current database is created first, so even an
+        intentional rollback remains recoverable. Runtime services must be
+        stopped before this administrative operation is invoked.
+        """
+        async with self._lock:
+            safety_backup = await asyncio.to_thread(self._backup_sync)
+            await asyncio.to_thread(self._restore_backup_sync, backup_path)
+            checks = await asyncio.to_thread(self._integrity_check_sync, quick=True)
+            if checks != ["ok"]:
+                raise RuntimeError(
+                    "Restored database failed integrity verification; current-state "
+                    f"backup retained at {safety_backup}"
+                )
+            self.schema_version = await asyncio.to_thread(
+                self._current_schema_version_sync
+            )
+            self.last_backup_path = safety_backup
+            return safety_backup
 
     async def integrity_report(self, *, deep: bool = False) -> dict[str, Any]:
         checks = await asyncio.to_thread(self._integrity_check_sync, quick=not deep)
@@ -558,6 +606,10 @@ class PitWallDatabase:
     async def upsert_session(self, state: dict[str, Any]) -> None:
         async with self._lock:
             await asyncio.to_thread(self._upsert_session_sync, state)
+        try:
+            await self.catalog.upsert_live_session(state)
+        except Exception as exc:  # noqa: BLE001 - legacy write remains authoritative
+            log.warning("4.2 session catalog update deferred: %s", exc)
 
     def _upsert_session_sync(self, state: dict[str, Any]) -> None:
         if not state.get("session_uid"):
@@ -612,15 +664,24 @@ class PitWallDatabase:
         self,
         lap: dict[str, Any],
         corner_metrics: list[dict[str, Any]],
-    ) -> None:
+    ) -> str | None:
         async with self._lock:
-            await asyncio.to_thread(self._save_lap_sync, lap, corner_metrics)
+            legacy_lap_id = await asyncio.to_thread(
+                self._save_lap_sync, lap, corner_metrics
+            )
+        try:
+            return await self.catalog.record_player_lap(
+                lap, legacy_lap_id=legacy_lap_id
+            )
+        except Exception as exc:  # noqa: BLE001 - resumable backfill repairs this
+            log.warning("4.2 lap catalog update deferred: %s", exc)
+            return None
 
     def _save_lap_sync(
         self,
         lap: dict[str, Any],
         corner_metrics: list[dict[str, Any]],
-    ) -> None:
+    ) -> int:
         with self._connect() as db:
             db.execute(
                 """
@@ -729,6 +790,16 @@ class PitWallDatabase:
                         time.time(),
                     ),
                 )
+            row = db.execute(
+                "SELECT id FROM laps WHERE session_uid=? AND lap_num=?",
+                (
+                    _session_uid_to_sqlite(lap["session_uid"]),
+                    int(lap["lap_num"]),
+                ),
+            ).fetchone()
+            if row is None:
+                raise RuntimeError("saved lap could not be read back")
+            return int(row["id"])
 
     async def get_personal_best(self, track_id: int) -> dict[str, Any] | None:
         async with self._lock:

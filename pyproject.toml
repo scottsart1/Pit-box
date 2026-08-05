@@ -1,6 +1,6 @@
 [project]
 name = "pit-wall-openai"
-version = "3.8.0"
+version = "4.2.0"
 description = "OpenAI-backed live F1 26 race engineer for PS5 telemetry"
 requires-python = ">=3.11,<3.15"
 dependencies = [

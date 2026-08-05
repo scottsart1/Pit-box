@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+import ipaddress
 from pathlib import Path
 
-from pydantic import AliasChoices, Field, SecretStr, field_validator
+from pydantic import AliasChoices, Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -110,6 +111,7 @@ class Settings(BaseSettings):
     live_ws_max_hz: int = 10
     forward_queue_size: int = 4096
     capture_queue_size: int = 8192
+    trace_ingest_queue_size: int = 512
     packet_reorder_window: int = 8
     packet_loss_confirm_ms: int = 500
     native_voice: bool = True
@@ -237,6 +239,30 @@ class Settings(BaseSettings):
     def trace_dir(self) -> Path:
         return self.data_dir / "traces"
 
+    @model_validator(mode="after")
+    def validate_web_access(self) -> Settings:
+        host = self.web_host.casefold()
+        try:
+            loopback = ipaddress.ip_address(host).is_loopback
+        except ValueError:
+            loopback = host == "localhost"
+        if not loopback and not self.web_lan_access:
+            raise ValueError(
+                "non-loopback PITWALL_WEB_HOST requires PITWALL_WEB_LAN_ACCESS=true"
+            )
+        if self.web_lan_access:
+            token = (
+                self.web_access_token.get_secret_value()
+                if self.web_access_token is not None
+                else ""
+            )
+            if len(token) < 16:
+                raise ValueError(
+                    "PITWALL_WEB_LAN_ACCESS requires PITWALL_WEB_ACCESS_TOKEN "
+                    "with at least 16 characters"
+                )
+        return self
+
     @field_validator("audio_device", mode="before")
     @classmethod
     def parse_audio_device(cls, value: object) -> object:
@@ -312,6 +338,7 @@ class Settings(BaseSettings):
     @field_validator(
         "forward_queue_size",
         "capture_queue_size",
+        "trace_ingest_queue_size",
         "trace_cache_max_mb",
         "packet_reorder_window",
         "packet_loss_confirm_ms",
@@ -345,7 +372,9 @@ class Settings(BaseSettings):
     @classmethod
     def validate_verbosity(cls, value: str) -> str:
         normalized = value.strip().lower()
-        return normalized if normalized in {"terse", "standard", "chatty"} else "standard"
+        return (
+            normalized if normalized in {"terse", "standard", "chatty"} else "standard"
+        )
 
     @field_validator("model")
     @classmethod
@@ -373,10 +402,9 @@ class Settings(BaseSettings):
     @field_validator("llm_provider")
     @classmethod
     def validate_primary_provider(cls, value: str) -> str:
-        normalized = value.strip().lower()
         # Legacy DeepSeek/auto settings are intentionally migrated to OpenAI so
         # an old .env cannot silently reactivate the unreliable provider path.
-        return "openai" if normalized in {"openai", "deepseek", "auto"} else "openai"
+        return "openai"
 
     @field_validator("llm_fallback_provider")
     @classmethod

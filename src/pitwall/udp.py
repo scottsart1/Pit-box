@@ -1,15 +1,34 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import time
 from collections.abc import Awaitable, Callable, Iterable
+from dataclasses import dataclass
 from typing import Any
 
 from f1.packets import SESSIONS, resolve
 from f1.packets import TRACKS as F1_TRACKS
 
+from .capture_service import CaptureService
+from .forwarding import DatagramForwarder
 from .identity import team_name
+from .networking import (
+    HeaderInspection,
+    PacketHealthKey,
+    PacketHealthTracker,
+    inspect_2026_header,
+)
+from .session_assembler import (
+    EventStamp,
+    FlashbackEvent,
+    LapEvent,
+    ParticipantEvent,
+    SampleEvent,
+    SessionAssembler,
+    SessionEvent,
+)
 from .state import StateStore
 
 log = logging.getLogger(__name__)
@@ -176,8 +195,7 @@ def classify_session(
     except ValueError:
         first_race_index = -1
     has_later_race_slot = first_race_index >= 0 and any(
-        value in {16, 17}
-        for value in weekend_session_ids[first_race_index + 1 :]
+        value in {16, 17} for value in weekend_session_ids[first_race_index + 1 :]
     )
     if int(raw_type_id) == 15 and has_later_race_slot:
         return (
@@ -247,6 +265,37 @@ def _packet_player_index(packet: Any, values: Any) -> int | None:
     return index if 0 <= index < count else None
 
 
+@dataclass(frozen=True, slots=True)
+class ReceivedDatagram:
+    """Immutable input handed from the socket callback to parser consumers."""
+
+    data: bytes
+    source: tuple[str, int]
+    received_monotonic_ns: int
+    received_wall_ns: int
+    inspection: HeaderInspection
+
+    @property
+    def received_monotonic(self) -> float:
+        return self.received_monotonic_ns / 1_000_000_000
+
+    @property
+    def received_wall(self) -> float:
+        return self.received_wall_ns / 1_000_000_000
+
+    @property
+    def health_key(self) -> PacketHealthKey | None:
+        header = self.inspection.header
+        if header is None:
+            return None
+        return PacketHealthKey(
+            int(header.session_uid),
+            int(header.packet_id),
+            self.source[0],
+            self.source[1],
+        )
+
+
 class F1DatagramProtocol(asyncio.DatagramProtocol):
     """Live F1 2026 UDP receiver using the f1-packets parser."""
 
@@ -260,15 +309,27 @@ class F1DatagramProtocol(asyncio.DatagramProtocol):
         ) = None,
         on_final_classification: Callable[[], Awaitable[Any]] | None = None,
         on_qualifying_lap: Callable[[], Awaitable[Any]] | None = None,
+        packet_health: PacketHealthTracker | None = None,
+        forwarder: DatagramForwarder | None = None,
+        capture_service: CaptureService | None = None,
+        session_assembler: SessionAssembler | None = None,
+        capture_mode: str = "balanced",
     ) -> None:
         self.store = store
         self.on_button_status = on_button_status
         self.on_player_lap_history = on_player_lap_history
         self.on_final_classification = on_final_classification
         self.on_qualifying_lap = on_qualifying_lap
+        self.packet_health = packet_health
+        self.forwarder = forwarder
+        self.capture_service = capture_service
+        self.session_assembler = session_assembler
+        self.capture_mode = str(capture_mode)
         self.loop = asyncio.get_running_loop()
         self.transport: asyncio.DatagramTransport | None = None
-        self.packet_queue: asyncio.Queue[Any] = asyncio.Queue(maxsize=queue_capacity)
+        self.packet_queue: asyncio.Queue[ReceivedDatagram] = asyncio.Queue(
+            maxsize=queue_capacity
+        )
         self.consumer_task: asyncio.Task[None] | None = None
         self._stats_counter = 0
         self._unhandled_packets: set[str] = set()
@@ -276,12 +337,42 @@ class F1DatagramProtocol(asyncio.DatagramProtocol):
         # repeats the final-classification packet for as long as the results
         # screen is shown, which previously re-appended CHQF and re-wrote the
         # session row on every repeat.
-        self._classified_sessions: set[int] = set()
+        self._classified_sessions: set[str] = set()
         self._qualifying_debrief_laps: set[tuple[int, int]] = set()
         self._briefing_tasks: set[asyncio.Task[Any]] = set()
+        self._last_header_error: str | None = None
+        self._assembler_laps = [0] * 24
+        self._assembler_distances = [0.0] * 24
+        self._assembler_active_cars = 0
+        self._assembler_restricted: set[int] = set()
+        self._assembler_context: list[dict[str, Any]] = [{} for _ in range(24)]
+        self._assembler_invalid = [False] * 24
+        self._assembler_pit_context = [False] * 24
+        self._assembler_flag_context = [False] * 24
+        self._assembler_fuel_start: list[float | None] = [None] * 24
+        self._assembler_fuel_end: list[float | None] = [None] * 24
+        self._assembler_global_flag_context = False
+        self._assembler_session_id: str | None = None
+        self._assembler_sealed_session_id: str | None = None
+        self._assembler_errors: set[str] = set()
+        self._accepting_datagrams = True
+
+    def _reset_archive_tracking(self) -> None:
+        self._assembler_laps = [0] * 24
+        self._assembler_distances = [0.0] * 24
+        self._assembler_active_cars = 0
+        self._assembler_restricted.clear()
+        self._assembler_context = [{} for _ in range(24)]
+        self._assembler_invalid = [False] * 24
+        self._assembler_pit_context = [False] * 24
+        self._assembler_flag_context = [False] * 24
+        self._assembler_fuel_start = [None] * 24
+        self._assembler_fuel_end = [None] * 24
+        self._assembler_global_flag_context = False
 
     def connection_made(self, transport: asyncio.BaseTransport) -> None:
         self.transport = transport  # type: ignore[assignment]
+        self._accepting_datagrams = True
         self.consumer_task = self.loop.create_task(
             self._consume_packets(), name="pitwall-udp-consumer"
         )
@@ -293,6 +384,7 @@ class F1DatagramProtocol(asyncio.DatagramProtocol):
     def connection_lost(self, exc: Exception | None) -> None:
         if exc:
             log.warning("F1 UDP listener stopped: %s", exc)
+        self._accepting_datagrams = False
         if self.consumer_task:
             self.consumer_task.cancel()
             self.consumer_task = None
@@ -302,31 +394,124 @@ class F1DatagramProtocol(asyncio.DatagramProtocol):
         self.loop.create_task(self.store.update(connected=False, packet_rate_hz=0.0))
 
     def datagram_received(self, data: bytes, addr: Any) -> None:
-        try:
-            packet = resolve(data)
-        except KeyError:
-            self.loop.create_task(
-                self.store.update(last_error="Unsupported F1 packet format/version")
-            )
+        if not self._accepting_datagrams:
             return
-        except Exception as exc:
-            log.debug("Dropped malformed packet from %s: %s", addr, exc)
-            self.loop.create_task(self.store.increment_dropped_packets())
+        monotonic_ns = time.monotonic_ns()
+        wall_ns = time.time_ns()
+        try:
+            source = (str(addr[0]), int(addr[1]))
+        except (IndexError, TypeError, ValueError):
+            source = ("0.0.0.0", 0)
+        if self.packet_health is not None:
+            inspection = self.packet_health.observe_datagram(
+                data,
+                source,
+                received_monotonic=monotonic_ns / 1_000_000_000,
+                received_wall=wall_ns / 1_000_000_000,
+                parsed=None,
+            )
+        else:
+            inspection = inspect_2026_header(data)
+
+        # Both optional consumers are bounded and return immediately. They see
+        # the exact bytes received; no parsed object is ever reserialized.
+        if self.forwarder is not None:
+            self.forwarder.submit(data)
+        if self.capture_service is not None:
+            self.capture_service.submit(
+                data,
+                source,
+                monotonic_ns=monotonic_ns,
+                wall_ns=wall_ns,
+            )
+
+        if not inspection.valid:
+            message = inspection.message or "Unsupported F1 packet format/version"
+            if message != self._last_header_error:
+                self._last_header_error = message
+                self.loop.create_task(self.store.update(last_error=message))
             return
 
+        received = ReceivedDatagram(
+            bytes(data), source, monotonic_ns, wall_ns, inspection
+        )
+
         try:
-            self.packet_queue.put_nowait(packet)
+            self.packet_queue.put_nowait(received)
         except asyncio.QueueFull:
             # Preserve packet order and keep the event loop responsive. A full
             # queue is visible in health telemetry rather than spawning another
             # task for every datagram.
             self.loop.create_task(self.store.increment_dropped_packets())
 
+    async def drain_before_close(self, timeout_s: float = 2.0) -> None:
+        """Stop admission and let already accepted datagrams finish parsing."""
+
+        self._accepting_datagrams = False
+        task = self.consumer_task
+        if task is None:
+            return
+        try:
+            await asyncio.wait_for(
+                self.packet_queue.join(), timeout=max(0.0, timeout_s)
+            )
+        except TimeoutError:
+            # Optional queued work must not make listener shutdown unbounded.
+            while True:
+                try:
+                    self.packet_queue.get_nowait()
+                except asyncio.QueueEmpty:
+                    break
+                self.packet_queue.task_done()
+                await self.store.increment_dropped_packets()
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
+        self.consumer_task = None
+
     async def _consume_packets(self) -> None:
         while True:
-            packet = await self.packet_queue.get()
+            received = await self.packet_queue.get()
             try:
-                await self._handle(packet)
+                try:
+                    packet = resolve(received.data)
+                except KeyError:
+                    if (
+                        self.packet_health is not None
+                        and received.health_key is not None
+                    ):
+                        self.packet_health.mark_parse_result(
+                            received.health_key,
+                            valid=False,
+                            error_code="unsupported_packet",
+                        )
+                    await self.store.update(
+                        last_error="Unsupported F1 packet format/version"
+                    )
+                    await self.store.increment_dropped_packets()
+                    continue
+                except Exception as exc:
+                    if (
+                        self.packet_health is not None
+                        and received.health_key is not None
+                    ):
+                        self.packet_health.mark_parse_result(
+                            received.health_key,
+                            valid=False,
+                            error_code=type(exc).__name__,
+                        )
+                    log.debug(
+                        "Dropped malformed packet from %s: %s",
+                        received.source,
+                        exc,
+                    )
+                    await self.store.increment_dropped_packets()
+                    continue
+                if self.packet_health is not None and received.health_key is not None:
+                    self.packet_health.mark_parse_result(
+                        received.health_key, valid=True
+                    )
+                await self._handle(packet, received)
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
@@ -342,14 +527,36 @@ class F1DatagramProtocol(asyncio.DatagramProtocol):
                         self.packet_queue.qsize(), self.packet_queue.maxsize
                     )
 
-    async def _handle(self, packet: Any) -> None:
+    async def _handle(
+        self, packet: Any, received: ReceivedDatagram | None = None
+    ) -> None:
         header = packet.header
         await self.store.mark_packet(
             header.packet_format,
             header.game_year,
             header.session_uid,
+            int(getattr(header, "packet_id", -1)),
+            int(getattr(header, "frame_identifier", 0)),
+            int(getattr(header, "overall_frame_identifier", 0)),
         )
         name = packet.__class__.__name__
+        if self.session_assembler is not None:
+            try:
+                self._normalise_for_archive(packet, received)
+                session = self.session_assembler.session
+                if session is not None:
+                    await self.store.synchronize_session_epoch(
+                        int(session.game_session_uid),
+                        session.restart_epoch,
+                        self.session_assembler.timeline_epoch,
+                    )
+            except Exception as exc:  # noqa: BLE001 - archive cannot break live state
+                marker = f"{name}:{type(exc).__name__}:{exc}"
+                if marker not in self._assembler_errors:
+                    self._assembler_errors.add(marker)
+                    log.warning(
+                        "Full-field normalization skipped for %s: %s", name, exc
+                    )
         handler = getattr(self, f"handle_{name}", None)
         if handler:
             await handler(packet)
@@ -358,6 +565,514 @@ class F1DatagramProtocol(asyncio.DatagramProtocol):
             # makes a newly added telemetry packet invisible during diagnosis.
             self._unhandled_packets.add(name)
             log.info("No handler for %s; packet ignored", name)
+
+    @staticmethod
+    def _archive_stamp(packet: Any, received: ReceivedDatagram | None) -> EventStamp:
+        header = packet.header
+        return EventStamp(
+            session_uid=int(getattr(header, "session_uid", 0)),
+            frame_identifier=int(getattr(header, "frame_identifier", 0)),
+            overall_frame_identifier=int(
+                getattr(header, "overall_frame_identifier", 0)
+            ),
+            session_time_s=float(getattr(header, "session_time", 0.0)),
+            monotonic_ns=(
+                received.received_monotonic_ns
+                if received is not None
+                else time.monotonic_ns()
+            ),
+            wall_ns=(
+                received.received_wall_ns if received is not None else time.time_ns()
+            ),
+        )
+
+    def _archive_event(self, event: Any) -> None:
+        assembler = self.session_assembler
+        if assembler is None:
+            return
+        current = assembler.session
+        sealed = self._assembler_sealed_session_id
+        if sealed is not None:
+            incoming_uid = str(event.stamp.session_uid)
+            can_transition = isinstance(event, SessionEvent) or (
+                current is None or current.game_session_uid != incoming_uid
+            )
+            if not can_transition:
+                return
+        previous_id = current.id if current is not None else None
+        assembler.consume(event)
+        current = assembler.session
+        current_id = current.id if current is not None else None
+        if current_id != previous_id:
+            self._reset_archive_tracking()
+            self._assembler_session_id = current_id
+        if sealed is not None and current_id != sealed:
+            self._assembler_sealed_session_id = None
+
+    def _archive_lap_number(self, index: int) -> int:
+        return max(0, int(self._assembler_laps[index]))
+
+    def _archive_distance(self, index: int) -> float:
+        return max(0.0, float(self._assembler_distances[index]))
+
+    def _normalise_for_archive(
+        self, packet: Any, received: ReceivedDatagram | None
+    ) -> None:
+        """Convert supported parser packets into bounded typed field events."""
+
+        stamp = self._archive_stamp(packet, received)
+        name = packet.__class__.__name__
+        player_index = int(getattr(packet.header, "player_car_index", 255))
+
+        if name == "PacketSessionData":
+            track_id = int(getattr(packet, "track_id", -1))
+            track_length = int(getattr(packet, "track_length", 0))
+            packet_format = int(getattr(packet.header, "packet_format", 0))
+            safety_car_status = int(getattr(packet, "safety_car_status", 0))
+            marshal_zones = list(getattr(packet, "marshal_zones", []))[
+                : int(getattr(packet, "num_marshal_zones", 0))
+            ]
+            global_flag_context = bool(
+                safety_car_status
+                or any(
+                    int(getattr(zone, "zone_flag", 0)) != 0 for zone in marshal_zones
+                )
+            )
+            self._archive_event(
+                SessionEvent(
+                    stamp,
+                    track_id=track_id,
+                    layout_signature=(f"f1:{packet_format}:{track_id}:{track_length}"),
+                    session_type=int(getattr(packet, "session_type", 0)),
+                    packet_format=packet_format,
+                    player_car_index=(player_index if 0 <= player_index < 24 else None),
+                    metadata={
+                        "track_length_m": track_length,
+                        "weather_class": WEATHER.get(
+                            int(getattr(packet, "weather", -1)), "Unknown"
+                        ),
+                        "equal_performance": bool(
+                            getattr(packet, "equal_car_performance", 0)
+                        ),
+                        "capture_mode": self.capture_mode,
+                    },
+                )
+            )
+            self._assembler_global_flag_context = global_flag_context
+            return
+
+        if name == "PacketParticipantsData":
+            count = min(24, int(getattr(packet, "num_active_cars", 0)))
+            self._assembler_active_cars = count
+            restricted: set[int] = set()
+            for index, participant in enumerate(list(packet.participants)[:count]):
+                is_restricted = (
+                    int(getattr(participant, "your_telemetry", 0)) == 0
+                    and index != player_index
+                )
+                if is_restricted:
+                    restricted.add(index)
+                self._archive_event(
+                    ParticipantEvent(
+                        stamp,
+                        index,
+                        {
+                            "driver_id": int(getattr(participant, "driver_id", -1)),
+                            "network_id": str(
+                                getattr(participant, "network_id", "") or ""
+                            ),
+                            "name": _name(getattr(participant, "name", b"")),
+                            "race_number": int(getattr(participant, "race_number", 0)),
+                            "team_id": int(getattr(participant, "team_id", -1)),
+                            "nationality_id": int(
+                                getattr(participant, "nationality", -1)
+                            ),
+                            "is_ai": bool(getattr(participant, "ai_controlled", True)),
+                            "is_player": index == player_index,
+                        },
+                    )
+                )
+            self._assembler_active_cars = count
+            self._assembler_restricted = restricted
+            return
+
+        if name == "PacketLapData":
+            entries = list(packet.lap_data)
+            count = self._assembler_active_cars or min(24, len(entries))
+            for index, lap in enumerate(entries[:count]):
+                current_lap = int(getattr(lap, "current_lap_num", 0))
+                previous_lap = self._assembler_laps[index]
+                lap_invalid = bool(getattr(lap, "current_lap_invalid", False))
+                pit_status = int(getattr(lap, "pit_status", 0))
+                distance = max(0.0, float(getattr(lap, "lap_distance", 0.0)))
+                self._assembler_distances[index] = distance
+                if previous_lap > 0 and current_lap > previous_lap:
+                    context = dict(self._assembler_context[index])
+                    context.update(
+                        {
+                            "fuel_start_kg": self._assembler_fuel_start[index],
+                            "fuel_end_kg": self._assembler_fuel_end[index],
+                            "pit_context": self._assembler_pit_context[index],
+                            "flag_context": self._assembler_flag_context[index],
+                        }
+                    )
+                    last_lap_ms = int(getattr(lap, "last_lap_time_in_ms", 0))
+                    self._archive_event(
+                        LapEvent(
+                            stamp,
+                            index,
+                            previous_lap,
+                            current_lap,
+                            last_lap_ms or None,
+                            bool(
+                                last_lap_ms > 0 and not self._assembler_invalid[index]
+                            ),
+                            context=context,
+                        )
+                    )
+                    self._assembler_invalid[index] = False
+                    self._assembler_pit_context[index] = False
+                    self._assembler_flag_context[index] = False
+                    self._assembler_fuel_start[index] = None
+                    self._assembler_fuel_end[index] = None
+                self._assembler_laps[index] = current_lap
+                if current_lap <= 0:
+                    continue
+                self._assembler_invalid[index] = (
+                    self._assembler_invalid[index] or lap_invalid
+                )
+                self._assembler_pit_context[index] = (
+                    self._assembler_pit_context[index] or pit_status != 0
+                )
+                self._assembler_flag_context[index] = (
+                    self._assembler_flag_context[index]
+                    or self._assembler_global_flag_context
+                )
+                self._archive_event(
+                    SampleEvent(
+                        stamp,
+                        index,
+                        current_lap,
+                        "lap_data",
+                        {
+                            "lap_distance_m": distance,
+                            "total_distance_m": float(
+                                getattr(lap, "total_distance", 0.0)
+                            ),
+                            "current_lap_time_s": int(
+                                getattr(lap, "current_lap_time_in_ms", 0)
+                            )
+                            / 1000.0,
+                            "position": int(getattr(lap, "car_position", 0)),
+                            "sector": int(getattr(lap, "sector", 0)),
+                            "pit_status": pit_status,
+                            "invalid": lap_invalid,
+                        },
+                        units={
+                            "lap_distance_m": "m",
+                            "total_distance_m": "m",
+                            "current_lap_time_s": "s",
+                            "position": "position",
+                        },
+                        freshness_ms=250,
+                    )
+                )
+            return
+
+        if name == "PacketCarTelemetryData":
+            entries = list(packet.car_telemetry_data)
+            count = self._assembler_active_cars or min(24, len(entries))
+            for index, telemetry in enumerate(entries[:count]):
+                lap_number = self._archive_lap_number(index)
+                if lap_number <= 0:
+                    continue
+                unavailable = index in self._assembler_restricted
+                values: dict[str, int | float | bool | None] = {
+                    "lap_distance_m": self._archive_distance(index),
+                    "speed_mps": None
+                    if unavailable
+                    else float(getattr(telemetry, "speed", 0)) / 3.6,
+                    "speed_kph": None
+                    if unavailable
+                    else float(getattr(telemetry, "speed", 0)),
+                    "throttle": None
+                    if unavailable
+                    else float(getattr(telemetry, "throttle", 0.0)),
+                    "brake": None
+                    if unavailable
+                    else float(getattr(telemetry, "brake", 0.0)),
+                    "steering": None
+                    if unavailable
+                    else float(getattr(telemetry, "steer", 0.0)),
+                    "gear": None if unavailable else int(getattr(telemetry, "gear", 0)),
+                    "engine_rpm": None
+                    if unavailable
+                    else int(getattr(telemetry, "engine_rpm", 0)),
+                    "drs": None
+                    if unavailable
+                    else bool(getattr(telemetry, "drs", False)),
+                }
+                availability = {
+                    key: "unavailable"
+                    for key in values
+                    if key != "lap_distance_m" and unavailable
+                }
+                self._archive_event(
+                    SampleEvent(
+                        stamp,
+                        index,
+                        lap_number,
+                        "telemetry",
+                        values,
+                        availability=availability,
+                        units={
+                            "lap_distance_m": "m",
+                            "speed_mps": "m/s",
+                            "speed_kph": "km/h",
+                            "throttle": "ratio",
+                            "brake": "ratio",
+                            "steering": "ratio",
+                            "gear": "gear",
+                            "engine_rpm": "rpm",
+                        },
+                        freshness_ms=250,
+                    )
+                )
+            return
+
+        if name == "PacketMotionData":
+            entries = list(packet.car_motion_data)
+            count = self._assembler_active_cars or min(24, len(entries))
+            for index, motion in enumerate(entries[:count]):
+                lap_number = self._archive_lap_number(index)
+                if lap_number <= 0:
+                    continue
+                self._archive_event(
+                    SampleEvent(
+                        stamp,
+                        index,
+                        lap_number,
+                        "motion",
+                        {
+                            "lap_distance_m": self._archive_distance(index),
+                            "world_x": float(getattr(motion, "world_position_x", 0.0)),
+                            "world_y": float(getattr(motion, "world_position_y", 0.0)),
+                            "world_z": float(getattr(motion, "world_position_z", 0.0)),
+                            "velocity_x": float(
+                                getattr(motion, "world_velocity_x", 0.0)
+                            ),
+                            "velocity_y": float(
+                                getattr(motion, "world_velocity_y", 0.0)
+                            ),
+                            "velocity_z": float(
+                                getattr(motion, "world_velocity_z", 0.0)
+                            ),
+                            "lateral_g": float(getattr(motion, "g_force_lateral", 0.0)),
+                            "longitudinal_g": float(
+                                getattr(motion, "g_force_longitudinal", 0.0)
+                            ),
+                            "yaw": float(getattr(motion, "yaw", 0.0)),
+                            "pitch": float(getattr(motion, "pitch", 0.0)),
+                            "roll": float(getattr(motion, "roll", 0.0)),
+                        },
+                        units={
+                            "lap_distance_m": "m",
+                            "world_x": "m",
+                            "world_y": "m",
+                            "world_z": "m",
+                            "velocity_x": "m/s",
+                            "velocity_y": "m/s",
+                            "velocity_z": "m/s",
+                            "lateral_g": "g",
+                            "longitudinal_g": "g",
+                            "yaw": "rad",
+                            "pitch": "rad",
+                            "roll": "rad",
+                        },
+                        freshness_ms=250,
+                    )
+                )
+            return
+
+        if name == "PacketCarStatusData":
+            entries = list(packet.car_status_data)
+            count = self._assembler_active_cars or min(24, len(entries))
+            for index, status in enumerate(entries[:count]):
+                lap_number = self._archive_lap_number(index)
+                if lap_number <= 0:
+                    continue
+                unavailable = index in self._assembler_restricted
+                compound = VISUAL_COMPOUNDS.get(
+                    int(getattr(status, "visual_tyre_compound", -1)), "UNKNOWN"
+                )
+                fuel_kg = (
+                    None if unavailable else float(getattr(status, "fuel_in_tank", 0.0))
+                )
+                if fuel_kg is not None:
+                    if self._assembler_fuel_start[index] is None:
+                        self._assembler_fuel_start[index] = fuel_kg
+                    self._assembler_fuel_end[index] = fuel_kg
+                self._assembler_context[index].update(
+                    {
+                        "tyre_compound": compound,
+                        "tyre_age_laps": int(getattr(status, "tyres_age_laps", 0)),
+                        "fuel_kg": fuel_kg,
+                    }
+                )
+                values = {
+                    "lap_distance_m": self._archive_distance(index),
+                    "fuel_kg": fuel_kg,
+                    "ers_energy_j": None
+                    if unavailable
+                    else float(getattr(status, "ers_store_energy", 0.0)),
+                    "ers_deploy_mode": None
+                    if unavailable
+                    else int(getattr(status, "ers_deploy_mode", 0)),
+                    "tyre_age_laps": int(getattr(status, "tyres_age_laps", 0)),
+                    "actual_tyre_compound": int(
+                        getattr(status, "actual_tyre_compound", 0)
+                    ),
+                    "visual_tyre_compound": int(
+                        getattr(status, "visual_tyre_compound", 0)
+                    ),
+                }
+                self._archive_event(
+                    SampleEvent(
+                        stamp,
+                        index,
+                        lap_number,
+                        "status",
+                        values,
+                        availability={
+                            key: "unavailable"
+                            for key in ("fuel_kg", "ers_energy_j", "ers_deploy_mode")
+                            if unavailable
+                        },
+                        units={
+                            "lap_distance_m": "m",
+                            "fuel_kg": "kg",
+                            "ers_energy_j": "J",
+                            "tyre_age_laps": "lap",
+                        },
+                        freshness_ms=1_500,
+                        retain_all=True,
+                    )
+                )
+            return
+
+        if name == "PacketCarTelemetry2Data":
+            entries = list(packet.car_telemetry2_data)
+            count = self._assembler_active_cars or min(24, len(entries))
+            for index, telemetry in enumerate(entries[:count]):
+                lap_number = self._archive_lap_number(index)
+                if lap_number <= 0:
+                    continue
+                unavailable = index in self._assembler_restricted
+                self._archive_event(
+                    SampleEvent(
+                        stamp,
+                        index,
+                        lap_number,
+                        "telemetry_2026",
+                        {
+                            "lap_distance_m": self._archive_distance(index),
+                            "overtake_active": None
+                            if unavailable
+                            else bool(getattr(telemetry, "overtake_active", False)),
+                            "overtake_available": None
+                            if unavailable
+                            else bool(getattr(telemetry, "overtake_available", False)),
+                            "active_aero_mode": None
+                            if unavailable
+                            else int(getattr(telemetry, "active_aero_mode", 0)),
+                        },
+                        availability={
+                            key: "unavailable"
+                            for key in (
+                                "overtake_active",
+                                "overtake_available",
+                                "active_aero_mode",
+                            )
+                            if unavailable
+                        },
+                        freshness_ms=500,
+                    )
+                )
+            return
+
+        if name == "PacketCarDamageData":
+            entries = list(packet.car_damage_data)
+            count = self._assembler_active_cars or min(24, len(entries))
+            for index, damage in enumerate(entries[:count]):
+                lap_number = self._archive_lap_number(index)
+                if lap_number <= 0:
+                    continue
+                unavailable = index in self._assembler_restricted
+                wears = normalize_wheels(getattr(damage, "tyres_wear", []))
+                values: dict[str, int | float | bool | None] = {
+                    "lap_distance_m": self._archive_distance(index),
+                    "front_left_wing_damage": None
+                    if unavailable
+                    else int(getattr(damage, "front_left_wing_damage", 0)),
+                    "front_right_wing_damage": None
+                    if unavailable
+                    else int(getattr(damage, "front_right_wing_damage", 0)),
+                    "rear_wing_damage": None
+                    if unavailable
+                    else int(getattr(damage, "rear_wing_damage", 0)),
+                    "floor_damage": None
+                    if unavailable
+                    else int(getattr(damage, "floor_damage", 0)),
+                }
+                for wheel, offset in zip(("fl", "fr", "rl", "rr"), range(4)):
+                    values[f"tyre_wear_{wheel}"] = (
+                        None
+                        if unavailable or offset >= len(wears)
+                        else float(wears[offset])
+                    )
+                self._archive_event(
+                    SampleEvent(
+                        stamp,
+                        index,
+                        lap_number,
+                        "damage",
+                        values,
+                        availability={
+                            key: "unavailable"
+                            for key in values
+                            if key != "lap_distance_m" and unavailable
+                        },
+                        units={
+                            "lap_distance_m": "m",
+                            **{
+                                f"tyre_wear_{wheel}": "%"
+                                for wheel in ("fl", "fr", "rl", "rr")
+                            },
+                        },
+                        freshness_ms=3_000,
+                        retain_all=True,
+                    )
+                )
+            return
+
+        if name == "PacketEventData" and _event_code(packet) == "FLBK":
+            detail = packet.event_details.flashback
+            self._archive_event(
+                FlashbackEvent(
+                    stamp,
+                    int(detail.flashback_frame_identifier),
+                    float(detail.flashback_session_time),
+                    reason="game_flashback_event",
+                )
+            )
+            return
+
+        if name == "PacketFinalClassificationData":
+            assembler = self.session_assembler
+            if assembler is not None:
+                assembler.finalize_current_session(reason="final_classification")
+                if assembler.session is not None:
+                    self._assembler_sealed_session_id = assembler.session.id
 
     async def handle_PacketSessionData(self, packet: Any) -> None:
         samples = list(packet.weather_forecast_samples)[
@@ -400,7 +1115,9 @@ class F1DatagramProtocol(asyncio.DatagramProtocol):
                 "start_m": round(float(zone.zone_start) * track_length, 1),
                 "end_m": round(float(zone.zone_end) * track_length, 1),
             }
-            for zone in list(packet.drs_zones)[: int(getattr(packet, "num_drs_zones", 0))]
+            for zone in list(packet.drs_zones)[
+                : int(getattr(packet, "num_drs_zones", 0))
+            ]
         ]
         active_aero_zones = [
             {
@@ -422,8 +1139,11 @@ class F1DatagramProtocol(asyncio.DatagramProtocol):
         ]
 
         snapshot = await self.store.peek(
-            "current_lap", "session_mode_override", "strategy",
-            "red_flag_active", "race_control_phase",
+            "current_lap",
+            "session_mode_override",
+            "strategy",
+            "red_flag_active",
+            "race_control_phase",
         )
         raw_session_type_id = int(packet.session_type)
         session_length_id = int(getattr(packet, "session_length", 0))
@@ -519,9 +1239,7 @@ class F1DatagramProtocol(asyncio.DatagramProtocol):
             ),
             pit_speed_limit_kph=int(getattr(packet, "pit_speed_limit", 0)),
             ai_difficulty=int(getattr(packet, "ai_difficulty", 0)),
-            equal_car_performance=bool(
-                getattr(packet, "equal_car_performance", 0)
-            ),
+            equal_car_performance=bool(getattr(packet, "equal_car_performance", 0)),
             parc_ferme_rules=bool(getattr(packet, "parc_ferme_rules", 0)),
             car_damage_rate=int(getattr(packet, "car_damage_rate", 0)),
             tyre_temperature_sim=int(getattr(packet, "tyre_temperature", 0)),
@@ -532,12 +1250,8 @@ class F1DatagramProtocol(asyncio.DatagramProtocol):
             formula=int(getattr(packet, "formula", 0)),
             time_of_day_min=int(getattr(packet, "time_of_day", 0)),
             network_game=bool(getattr(packet, "network_game", 0)),
-            weekend_link_identifier=int(
-                getattr(packet, "weekend_link_identifier", 0)
-            ),
-            session_link_identifier=int(
-                getattr(packet, "session_link_identifier", 0)
-            ),
+            weekend_link_identifier=int(getattr(packet, "weekend_link_identifier", 0)),
+            session_link_identifier=int(getattr(packet, "session_link_identifier", 0)),
             strategy=strategy,
         )
 
@@ -637,12 +1351,8 @@ class F1DatagramProtocol(asyncio.DatagramProtocol):
             state.unserved_drive_through_penalties = int(
                 player.num_unserved_drive_through_pens
             )
-            state.unserved_stop_go_penalties = int(
-                player.num_unserved_stop_go_pens
-            )
-            state.pit_stop_should_serve_penalty = bool(
-                player.pit_stop_should_serve_pen
-            )
+            state.unserved_stop_go_penalties = int(player.num_unserved_stop_go_pens)
+            state.pit_stop_should_serve_penalty = bool(player.pit_stop_should_serve_pen)
             state.pit_status = int(player.pit_status)
             state.pit_lane_time_ms = int(player.pit_lane_time_in_lane_in_ms)
             for index, lap in enumerate(packet.lap_data):
@@ -652,18 +1362,13 @@ class F1DatagramProtocol(asyncio.DatagramProtocol):
                 if not driver.active:
                     continue
                 new_driver_lap = int(lap.current_lap_num)
-                if (
-                    driver.current_lap > 0
-                    and new_driver_lap > driver.current_lap
-                ):
+                if driver.current_lap > 0 and new_driver_lap > driver.current_lap:
                     driver.energy_lap_history.append(
                         {
                             "lap": int(driver.current_lap),
                             "deployed_j": round(float(driver.ers_deployed_lap_j), 1),
                             "harvested_j": round(float(driver.ers_harvested_lap_j), 1),
-                            "manual_override_used": bool(
-                                driver.overtake_used_this_lap
-                            ),
+                            "manual_override_used": bool(driver.overtake_used_this_lap),
                         }
                     )
                     del driver.energy_lap_history[:-30]
@@ -731,8 +1436,7 @@ class F1DatagramProtocol(asyncio.DatagramProtocol):
                     driver.gap_to_player_s = None
                 elif driver.position > 0:
                     driver.gap_to_player_s = round(
-                        float(driver.delta_to_leader_s or 0.0)
-                        - player_delta_to_leader,
+                        float(driver.delta_to_leader_s or 0.0) - player_delta_to_leader,
                         3,
                     )
                 if index != player_index and driver.gap_to_player_s is not None:
@@ -741,7 +1445,8 @@ class F1DatagramProtocol(asyncio.DatagramProtocol):
                     should_sample = (
                         last is None
                         or int(last.get("lap", -1)) != driver.current_lap
-                        or session_time_s - float(last.get("session_time_s", 0.0)) >= 2.0
+                        or session_time_s - float(last.get("session_time_s", 0.0))
+                        >= 2.0
                     )
                     if should_sample:
                         history.append(
@@ -930,9 +1635,7 @@ class F1DatagramProtocol(asyncio.DatagramProtocol):
                 # Rival energy and fuel are in the packet. The attack/defence
                 # tools previously assumed they were not exposed.
                 driver.fuel_kg = round(float(status.fuel_in_tank), 2)
-                driver.fuel_remaining_laps = round(
-                    float(status.fuel_remaining_laps), 2
-                )
+                driver.fuel_remaining_laps = round(float(status.fuel_remaining_laps), 2)
                 driver.ers_pct = round(
                     float(status.ers_store_energy) / 4_000_000 * 100, 1
                 )
@@ -992,9 +1695,7 @@ class F1DatagramProtocol(asyncio.DatagramProtocol):
         unanswerable.
         """
         player_index = _packet_player_index(packet, packet.car_damage_data)
-        decoded = [
-            self._damage_fields(entry) for entry in packet.car_damage_data
-        ]
+        decoded = [self._damage_fields(entry) for entry in packet.car_damage_data]
 
         def apply(state):  # type: ignore[no-untyped-def]
             for index, fields_ in enumerate(decoded):
@@ -1158,10 +1859,18 @@ class F1DatagramProtocol(asyncio.DatagramProtocol):
         readyStatus is 0 = not ready, 1 = ready, 2 = spectating; only 1 counts
         as ready.
         """
-        players = list(getattr(packet, "lobby_players", []))[: int(getattr(packet, "num_players", 0))]
-        ready = sum(1 for player in players if int(getattr(player, "ready_status", 0)) == 1)
-        spectating = sum(1 for player in players if int(getattr(player, "ready_status", 0)) == 2)
-        human = sum(1 for player in players if not bool(getattr(player, "ai_controlled", True)))
+        players = list(getattr(packet, "lobby_players", []))[
+            : int(getattr(packet, "num_players", 0))
+        ]
+        ready = sum(
+            1 for player in players if int(getattr(player, "ready_status", 0)) == 1
+        )
+        spectating = sum(
+            1 for player in players if int(getattr(player, "ready_status", 0)) == 2
+        )
+        human = sum(
+            1 for player in players if not bool(getattr(player, "ai_controlled", True))
+        )
         await self.store.update(
             lobby={
                 "num_players": int(getattr(packet, "num_players", 0)),
@@ -1263,8 +1972,19 @@ class F1DatagramProtocol(asyncio.DatagramProtocol):
             return
         result = packet.classification_data[player_index]
         session_uid = int(getattr(packet.header, "session_uid", 0))
-        already_recorded = session_uid in self._classified_sessions
-        self._classified_sessions.add(session_uid)
+        assembler_session = (
+            self.session_assembler.session
+            if self.session_assembler is not None
+            else None
+        )
+        classification_key = (
+            assembler_session.id
+            if assembler_session is not None
+            and assembler_session.game_session_uid == str(session_uid)
+            else str(session_uid)
+        )
+        already_recorded = classification_key in self._classified_sessions
+        self._classified_sessions.add(classification_key)
         await self.store.update(
             final_classification={
                 "position": int(result.position),
@@ -1351,15 +2071,15 @@ class F1DatagramProtocol(asyncio.DatagramProtocol):
                 state.safety_car = "none"
                 state.restart_grid = [
                     {
-                        "car_idx": int(driver.get("car_idx", -1)),
-                        "position": int(driver.get("position", 0)),
-                        "name": driver.get("name", "Unknown"),
-                        "tyre_compound": driver.get("tyre_compound", "UNKNOWN"),
-                        "tyre_age": int(driver.get("tyre_age", 0)),
+                        "car_idx": int(driver.car_idx),
+                        "position": int(driver.position),
+                        "name": driver.name or "Unknown",
+                        "tyre_compound": driver.tyre_compound or "UNKNOWN",
+                        "tyre_age": int(driver.tyre_age),
                     }
                     for driver in sorted(
-                        (item for item in state.drivers if int(item.get("position", 0)) > 0),
-                        key=lambda item: int(item.get("position", 0)),
+                        (item for item in state.drivers if int(item.position) > 0),
+                        key=lambda item: int(item.position),
                     )
                 ]
 
@@ -1443,7 +2163,12 @@ class F1DatagramProtocol(asyncio.DatagramProtocol):
                 "frame_identifier": int(detail.flashback_frame_identifier),
                 "session_time": float(detail.flashback_session_time),
             }
-            await self.store.mutate(lambda state: state.traces.clear())
+
+            def apply_flashback(state):  # type: ignore[no-untyped-def]
+                state.timeline_epoch += 1
+                state.traces.clear()
+
+            await self.store.mutate(apply_flashback)
         elif code == "COLL":
             detail = packet.event_details.collision
             player_index = int(getattr(packet.header, "player_car_index", 255))

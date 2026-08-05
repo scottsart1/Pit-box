@@ -2,14 +2,21 @@ from __future__ import annotations
 
 import asyncio
 import copy
+import logging
 import math
 from statistics import median, pstdev
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from .database import PitWallDatabase
-from .state import StateStore
 from .racing_line import compare_lines
+from .state import StateStore
 from .strategy import StrategyEngine
+
+if TYPE_CHECKING:
+    from .trace_archive import TraceArchiveService
+
+
+log = logging.getLogger(__name__)
 
 
 def fmt_ms(ms: int | float | None) -> str | None:
@@ -43,10 +50,12 @@ class AnalysisEngine:
         store: StateStore,
         database: PitWallDatabase,
         strategy: StrategyEngine,
+        trace_archive: TraceArchiveService | None = None,
     ) -> None:
         self.store = store
         self.database = database
         self.strategy = strategy
+        self.trace_archive = trace_archive
         self._task: asyncio.Task[None] | None = None
         self._stopped = asyncio.Event()
 
@@ -102,7 +111,26 @@ class AnalysisEngine:
         }
         timing_fields = lap_summary.get("timing_fields", {})
         lap.update(timing_fields)
-        await self.database.save_lap(lap, corners)
+        recorded_lap_id = await self.database.save_lap(lap, corners)
+        if self.trace_archive is not None:
+            try:
+                archive = await self.trace_archive.archive_player_lap(
+                    lap, recorded_lap_id=recorded_lap_id
+                )
+                lap_summary["trace_archive"] = {
+                    "state": archive.state,
+                    "manifest_id": archive.manifest_id,
+                    "sample_count": archive.sample_count,
+                    "coverage_ratio": archive.coverage_ratio,
+                    "reason": archive.reason,
+                }
+            except Exception as exc:  # noqa: BLE001 - legacy save is authoritative
+                log.warning("4.2 typed trace archive deferred: %s", exc)
+                lap_summary["trace_archive"] = {
+                    "state": "deferred",
+                    "manifest_id": None,
+                    "reason": str(exc),
+                }
         # Laps saved before their session-history packet arrived carry zero
         # sectors; fill them once the game has reported the split.
         await self.database.backfill_lap_sectors(

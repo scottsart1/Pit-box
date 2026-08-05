@@ -131,6 +131,14 @@ class SessionState:
     packet_format: int = 0
     game_year: int = 0
     session_uid: int = 0
+    restart_epoch: int = 0
+    timeline_epoch: int = 0
+    source_mode: str = "live"
+    state_revision: int = 0
+    packet_group_freshness: dict[str, float] = field(default_factory=dict)
+    availability: dict[str, str] = field(default_factory=dict)
+    frame_identifier: int = 0
+    overall_frame_identifier: int = 0
     session_type: str = "Waiting for F1 telemetry"
     mode_profile: str = "idle"
     raw_session_type_id: int = 0
@@ -424,6 +432,107 @@ class StateStore:
         # Reference lap for the live delta: sorted (lap_distance_m, time_into_lap_s).
         self._delta_ref: list[tuple[float, float]] = []
 
+    def _reset_session_locked(self) -> None:
+        """Reset session-scoped state while retaining driver preferences/voice."""
+
+        previous = self.state
+        cadence = int(previous.proactive.get("cadence_laps", 2))
+        proactive = {
+            "enabled": bool(previous.proactive.get("enabled", True)),
+            "cadence_laps": cadence,
+            "last_spoken_lap": 0,
+            "queued": 0,
+            "last_call": "",
+            "last_queued_lap": 0,
+            "next_due_lap": cadence,
+            "oldest_wait_s": 0.0,
+            "delivery_state": "idle",
+        }
+        self.state = SessionState(
+            ptt_mask=previous.ptt_mask,
+            ptt_status=previous.ptt_status,
+            ptt_release_mode=previous.ptt_release_mode,
+            ptt_last_button_status=previous.ptt_last_button_status,
+            ptt_mask_events=previous.ptt_mask_events,
+            ptt_release_reason=previous.ptt_release_reason,
+            wake_enabled=previous.wake_enabled,
+            wake_status=previous.wake_status,
+            wake_phrase=previous.wake_phrase,
+            wake_armed=previous.wake_armed,
+            wake_trigger_count=previous.wake_trigger_count,
+            wake_rejected_count=previous.wake_rejected_count,
+            wake_last_transcript=previous.wake_last_transcript,
+            wake_last_reason=previous.wake_last_reason,
+            wake_config_source=previous.wake_config_source,
+            wake_input_rms=previous.wake_input_rms,
+            wake_noise_rms=previous.wake_noise_rms,
+            wake_threshold_rms=previous.wake_threshold_rms,
+            llm_provider=previous.llm_provider,
+            llm_model=previous.llm_model,
+            llm_last_latency_ms=previous.llm_last_latency_ms,
+            llm_last_tool_rounds=previous.llm_last_tool_rounds,
+            llm_last_error=previous.llm_last_error,
+            temperature_unit=previous.temperature_unit,
+            radio_verbosity=previous.radio_verbosity,
+            strategy_spoken_signature="",
+            proactive=proactive,
+            session_mode_override="auto",
+            driver_preferences=copy.deepcopy(previous.driver_preferences),
+            strategy_risk_appetite=str(previous.strategy_risk_appetite),
+            standing_instructions=copy.deepcopy(previous.standing_instructions),
+            state_revision=previous.state_revision + 1,
+        )
+        self._packet_times.clear()
+        self._delta_ref = []
+
+    async def synchronize_session_epoch(
+        self,
+        session_uid: int,
+        restart_epoch: int,
+        timeline_epoch: int,
+    ) -> None:
+        """Keep player/live identifiers aligned with the field assembler."""
+
+        async with self._lock:
+            uid = int(session_uid)
+            restart = max(0, int(restart_epoch))
+            timeline = max(0, int(timeline_epoch))
+            if self.state.session_uid == uid and restart > self.state.restart_epoch:
+                # mark_packet already accounted for the packet that proved the
+                # restart. Preserve that bounded receive fact across the reset.
+                packet = {
+                    "connected": self.state.connected,
+                    "packet_format": self.state.packet_format,
+                    "game_year": self.state.game_year,
+                    "frame_identifier": self.state.frame_identifier,
+                    "overall_frame_identifier": self.state.overall_frame_identifier,
+                    "last_packet_at": self.state.last_packet_at,
+                    "packets_received": self.state.packets_received,
+                    "packet_rate_hz": self.state.packet_rate_hz,
+                    "packet_group_freshness": copy.deepcopy(
+                        self.state.packet_group_freshness
+                    ),
+                    "availability": copy.deepcopy(self.state.availability),
+                }
+                self._reset_session_locked()
+                for name, value in packet.items():
+                    setattr(self.state, name, value)
+                self.state.session_uid = uid
+                self.state.restart_epoch = restart
+                self.state.timeline_epoch = timeline
+                return
+            changed = False
+            if self.state.session_uid == uid and self.state.restart_epoch != restart:
+                self.state.restart_epoch = restart
+                changed = True
+            if self.state.session_uid == uid and self.state.timeline_epoch != timeline:
+                self.state.timeline_epoch = timeline
+                # Never splice a pre-rewind in-progress trace into the new branch.
+                self.state.traces.clear()
+                changed = True
+            if changed:
+                self.state.state_revision += 1
+
     async def set_delta_reference(
         self,
         trace: list[dict[str, Any]],
@@ -582,16 +691,27 @@ class StateStore:
 
     async def update(self, **values: Any) -> None:
         async with self._lock:
+            changed = False
             for key, value in values.items():
-                if hasattr(self.state, key):
+                if hasattr(self.state, key) and getattr(self.state, key) != value:
                     setattr(self.state, key, value)
+                    changed = True
+            if changed:
+                self.state.state_revision += 1
 
     async def mutate(self, callback: Callable[[SessionState], Any]) -> None:
         async with self._lock:
             callback(self.state)
+            self.state.state_revision += 1
 
     async def mark_packet(
-        self, packet_format: int, game_year: int, session_uid: int
+        self,
+        packet_format: int,
+        game_year: int,
+        session_uid: int,
+        packet_id: int | None = None,
+        frame_identifier: int | None = None,
+        overall_frame_identifier: int | None = None,
     ) -> None:
         now = time.monotonic()
         async with self._lock:
@@ -600,62 +720,10 @@ class StateStore:
                 and session_uid
                 and session_uid != self.state.session_uid
             ):
-                ptt_mask = self.state.ptt_mask
-                ptt_status = self.state.ptt_status
                 # Manual session labels and strategy locks are session-scoped.
                 # A pre-session override survives the first UID because this reset
                 # only runs when replacing one non-zero UID with another.
-                driver_preferences = copy.deepcopy(self.state.driver_preferences)
-                risk_appetite = str(self.state.strategy_risk_appetite)
-                cadence = int(self.state.proactive.get("cadence_laps", 2))
-                proactive = {
-                    "enabled": bool(self.state.proactive.get("enabled", True)),
-                    "cadence_laps": cadence,
-                    "last_spoken_lap": 0,
-                    "queued": 0,
-                    "last_call": "",
-                    "last_queued_lap": 0,
-                    "next_due_lap": cadence,
-                    "oldest_wait_s": 0.0,
-                    "delivery_state": "idle",
-                }
-                self.state = SessionState(
-                    ptt_mask=ptt_mask,
-                    ptt_status=ptt_status,
-                    ptt_release_mode=self.state.ptt_release_mode,
-                    ptt_last_button_status=self.state.ptt_last_button_status,
-                    ptt_mask_events=self.state.ptt_mask_events,
-                    ptt_release_reason=self.state.ptt_release_reason,
-                    wake_enabled=self.state.wake_enabled,
-                    wake_status=self.state.wake_status,
-                    wake_phrase=self.state.wake_phrase,
-                    wake_armed=self.state.wake_armed,
-                    wake_trigger_count=self.state.wake_trigger_count,
-                    wake_rejected_count=self.state.wake_rejected_count,
-                    wake_last_transcript=self.state.wake_last_transcript,
-                    wake_last_reason=self.state.wake_last_reason,
-                    wake_config_source=self.state.wake_config_source,
-                    wake_input_rms=self.state.wake_input_rms,
-                    wake_noise_rms=self.state.wake_noise_rms,
-                    wake_threshold_rms=self.state.wake_threshold_rms,
-                    llm_provider=self.state.llm_provider,
-                    llm_model=self.state.llm_model,
-                    llm_last_latency_ms=self.state.llm_last_latency_ms,
-                    llm_last_tool_rounds=self.state.llm_last_tool_rounds,
-                    llm_last_error=self.state.llm_last_error,
-                    temperature_unit=self.state.temperature_unit,
-                    radio_verbosity=self.state.radio_verbosity,
-                    strategy_spoken_signature="",
-                    proactive=proactive,
-                    session_mode_override="auto",
-                    driver_preferences=driver_preferences,
-                    strategy_risk_appetite=risk_appetite,
-                )
-                self._packet_times.clear()
-                # The live-delta reference belongs to the previous session's
-                # track/PB; drop it so a new session does not compare against a
-                # stale reference until its own personal best is established.
-                self._delta_ref = []
+                self._reset_session_locked()
 
             self._packet_times.append(now)
             cutoff = now - 2.0
@@ -665,9 +733,18 @@ class StateStore:
             self.state.packet_format = int(packet_format)
             self.state.game_year = int(game_year)
             self.state.session_uid = int(session_uid)
+            if frame_identifier is not None:
+                self.state.frame_identifier = int(frame_identifier)
+            if overall_frame_identifier is not None:
+                self.state.overall_frame_identifier = int(overall_frame_identifier)
             self.state.last_packet_at = time.time()
+            if packet_id is not None:
+                group = str(int(packet_id))
+                self.state.packet_group_freshness[group] = self.state.last_packet_at
+                self.state.availability[f"packet:{group}"] = "observed"
             self.state.packets_received += 1
             self.state.packet_rate_hz = round(len(self._packet_times) / 2.0, 1)
+            self.state.state_revision += 1
 
     async def mark_disconnected_if_stale(self, stale_after_s: float) -> bool:
         now = time.time()
@@ -808,7 +885,12 @@ class StateStore:
                 start = state.current_lap_started or {}
                 completed = {
                     "session_uid": state.session_uid,
+                    "restart_epoch": state.restart_epoch,
+                    "timeline_epoch": state.timeline_epoch,
+                    "player_car_index": state.player_car_index,
+                    "packet_format": state.packet_format,
                     "track_id": state.track_id,
+                    "track_length_m": state.track_length_m,
                     "track_name": state.track_name,
                     "session_type": state.session_type,
                     "mode_profile": state.mode_profile,

@@ -1,4 +1,4 @@
-# Pit Wall 3.8.0 — OpenAI race engineer for PS5 and Windows
+# Pit Wall 4.2.0 — OpenAI race engineer for PS5 and Windows
 
 Pit Wall receives **F1 26** telemetry (UDP format **2026**) from a PS5, runs deterministic
 strategy/corner/setup analysis locally, keeps persistent SQLite history, answers spoken questions,
@@ -6,6 +6,74 @@ makes proactive radio calls, and serves a live dashboard at `http://127.0.0.1:80
 
 > Set **UDP Format: 2026** on the PS5. The parser resolves packet format 2026 only; anything else
 > is reported as `Unsupported F1 packet format/version`.
+
+## Connect a PS5: IP, port, UDP, and forwarding
+
+Open **Connection** in Pit Wall first. It lists the PC's active IPv4 adapters
+and puts the recommended console destination in large copyable text. Enter that
+LAN address and port `20777` in the game's telemetry settings, then start a
+session. **Listening** means Windows gave Pit Wall the socket; **Receiving** is
+shown only after a valid F1 packet actually arrives.
+
+- `127.0.0.1` means this PC talking to itself. It is valid for the local browser
+  but must never be entered on the PS5.
+- `0.0.0.0` is a listener setting meaning every local IPv4 interface. It is not
+  a destination address.
+- A private LAN address such as `192.168.1.42` or `10.0.0.18` is normally what
+  the PS5 needs. The console and PC should normally be on the same home LAN.
+- `169.254.x.x` usually means Windows did not receive a normal network address.
+  VPN and virtual adapters are also de-prioritized unless valid F1 traffic was
+  previously seen there.
+- The port identifies the application on the PC. If another program already
+  owns the selected address/port, the Connection Center reports the bind
+  conflict rather than claiming telemetry is connected.
+
+UDP sends independent datagrams without a handshake or delivery guarantee.
+Packets can be lost, duplicated, or reordered, so Pit Wall reports health by
+packet type using frame identifiers, observed rate, age, provisional gaps,
+confirmed loss, duplicates, and reordering. A bound socket by itself cannot
+prove that the PS5 is configured correctly.
+
+Optional **Forwarding** sends a byte-identical copy of each sane datagram to
+other local/LAN telemetry tools. This is application fan-out, not router port
+forwarding or public internet exposure. Forward targets run on a separate
+bounded queue; a slow or unavailable target cannot hold up Pit Wall ingestion.
+Self-loops, duplicate destinations, broadcast/multicast, and unconfirmed public
+addresses are rejected.
+
+Telemetry and browser binds are deliberately separate:
+
+```env
+PITWALL_UDP_BIND_HOST=0.0.0.0
+PITWALL_UDP_PORT=20777
+PITWALL_WEB_HOST=127.0.0.1
+PITWALL_WEB_PORT=8000
+```
+
+Only enable `PITWALL_WEB_LAN_ACCESS=true` when a phone/tablet needs the
+dashboard. Bind the web host to `0.0.0.0`, set a long
+`PITWALL_WEB_ACCESS_TOKEN`, and keep it on a trusted LAN. Pit Wall never opens a
+router or firewall to the public internet automatically.
+
+## What changed in 4.2.0
+
+4.2.0 adds the local-first telemetry foundation without replacing the proven
+race-engineer, strategy, setup, voice, or legacy dashboard paths.
+
+- The Connection Center recommends the correct LAN IPv4 address, separates
+  listening from valid reception, reports packet health by type, diagnoses
+  bind/configuration failures, and manages isolated byte-identical forwarders.
+- Optional recoverable `.pwcap.zst` archives and compact typed trace chunks make
+  sessions replayable and reopenable without the game running.
+- Full-field identity revisions, timeline epochs, bounded opponent traces, and
+  explicit observed/derived/estimated/stale/unavailable metadata prevent sparse
+  opponent data from being presented as complete telemetry.
+- Versioned session, trace, comparison, field, network, and live WebSocket APIs
+  share deterministic calculations and preserve legacy routes for overlays and
+  existing workflows.
+- Distance-aligned comparisons, compatibility reports, segment deltas,
+  confidence propagation, and evidence-backed coaching keep numerical facts out
+  of language-model prompts.
 
 ## What changed in 3.8.0
 

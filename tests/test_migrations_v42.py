@@ -6,11 +6,13 @@ import pytest
 
 from pitwall.config import Settings
 from pitwall.database import PitWallDatabase
-from pitwall.migrations import LATEST_SCHEMA_VERSION
+from pitwall.migrations import LATEST_SCHEMA_VERSION, MIGRATIONS
 
 
 @pytest.mark.asyncio
-async def test_existing_database_is_backed_up_before_additive_v42_migration(tmp_path) -> None:
+async def test_existing_database_is_backed_up_before_additive_v42_migration(
+    tmp_path,
+) -> None:
     path = tmp_path / "pitwall.sqlite3"
     with sqlite3.connect(path) as db:
         db.execute("CREATE TABLE sentinel(value TEXT NOT NULL)")
@@ -25,9 +27,12 @@ async def test_existing_database_is_backed_up_before_additive_v42_migration(tmp_
     with sqlite3.connect(database.last_backup_path) as backup:
         assert backup.execute("SELECT value FROM sentinel").fetchone()[0] == "keep me"
         # The backup is a true pre-migration image.
-        assert backup.execute(
-            "SELECT COUNT(*) FROM sqlite_master WHERE name='recorded_sessions'"
-        ).fetchone()[0] == 0
+        assert (
+            backup.execute(
+                "SELECT COUNT(*) FROM sqlite_master WHERE name='recorded_sessions'"
+            ).fetchone()[0]
+            == 0
+        )
     with sqlite3.connect(path) as migrated:
         assert migrated.execute("SELECT value FROM sentinel").fetchone()[0] == "keep me"
         for table in (
@@ -38,14 +43,18 @@ async def test_existing_database_is_backed_up_before_additive_v42_migration(tmp_
             "trace_manifests",
             "raw_captures",
             "comparisons",
+            "comparison_segment_results",
             "findings",
             "network_profiles",
             "analysis_jobs",
         ):
-            assert migrated.execute(
-                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?",
-                (table,),
-            ).fetchone()[0] == 1
+            assert (
+                migrated.execute(
+                    "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?",
+                    (table,),
+                ).fetchone()[0]
+                == 1
+            )
 
 
 @pytest.mark.asyncio
@@ -60,11 +69,15 @@ async def test_v42_migration_is_idempotent_and_does_not_repeat_backup(tmp_path) 
     assert second.schema_version == LATEST_SCHEMA_VERSION
     assert second.last_backup_path is None
     with sqlite3.connect(path) as db:
-        assert db.execute("SELECT COUNT(*) FROM schema_versions").fetchone()[0] == 1
+        assert db.execute("SELECT COUNT(*) FROM schema_versions").fetchone()[0] == len(
+            MIGRATIONS
+        )
 
 
 @pytest.mark.asyncio
-async def test_integrity_report_exposes_version_without_database_contents(tmp_path) -> None:
+async def test_integrity_report_exposes_version_without_database_contents(
+    tmp_path,
+) -> None:
     database = PitWallDatabase(tmp_path / "pitwall.sqlite3")
     await database.initialize()
     report = await database.integrity_report()
@@ -91,4 +104,14 @@ def test_v42_network_and_capture_settings_validate_and_keep_legacy_udp_alias(
         Settings(_env_file=None, capture_mode="maximum-ish")
     with pytest.raises(ValueError, match="retention days"):
         Settings(_env_file=None, retention_days=-1)
-
+    with pytest.raises(ValueError, match="WEB_LAN_ACCESS"):
+        Settings(_env_file=None, web_host="0.0.0.0")
+    with pytest.raises(ValueError, match="WEB_ACCESS_TOKEN"):
+        Settings(_env_file=None, web_lan_access=True)
+    secured = Settings(
+        _env_file=None,
+        web_host="0.0.0.0",
+        web_lan_access=True,
+        web_access_token="correct-horse-battery-staple",
+    )
+    assert secured.web_lan_access is True

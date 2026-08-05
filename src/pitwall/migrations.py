@@ -308,6 +308,57 @@ V4_2_CATALOG = Migration(
 )
 
 
-MIGRATIONS: tuple[Migration, ...] = (V4_2_CATALOG,)
-LATEST_SCHEMA_VERSION = MIGRATIONS[-1].version
+V4_2_COMPARISON_RESULTS = Migration(
+    version=4201,
+    app_version="4.2.0",
+    statements=(
+        """
+        CREATE TABLE IF NOT EXISTS comparison_segment_results (
+            comparison_id TEXT NOT NULL REFERENCES comparisons(id) ON DELETE CASCADE,
+            ordinal INTEGER NOT NULL,
+            segment_key TEXT NOT NULL,
+            label TEXT NOT NULL,
+            start_m REAL NOT NULL,
+            end_m REAL NOT NULL,
+            delta_s REAL,
+            coverage_ratio REAL NOT NULL,
+            metrics_json TEXT NOT NULL DEFAULT '{}',
+            PRIMARY KEY(comparison_id, ordinal),
+            UNIQUE(comparison_id, segment_key)
+        )
+        """,
+        "CREATE INDEX IF NOT EXISTS idx_comparison_segments_key ON comparison_segment_results(comparison_id, segment_key)",
+    ),
+)
 
+
+V4_2_ARCHIVE_PROVENANCE = Migration(
+    version=4202,
+    app_version="4.2.0",
+    statements=(
+        """
+        CREATE TABLE IF NOT EXISTS full_field_lap_batches (
+            batch_id TEXT PRIMARY KEY,
+            session_id TEXT NOT NULL REFERENCES recorded_sessions(id) ON DELETE CASCADE,
+            lap_id TEXT NOT NULL REFERENCES recorded_laps(id) ON DELETE CASCADE,
+            timeline_epoch INTEGER NOT NULL,
+            first_overall_frame INTEGER NOT NULL,
+            last_overall_frame INTEGER NOT NULL,
+            started_session_time_s REAL NOT NULL,
+            ended_session_time_s REAL NOT NULL,
+            finalization_reason TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        )
+        """,
+        "CREATE INDEX IF NOT EXISTS idx_field_batches_timeline ON full_field_lap_batches(session_id, timeline_epoch, last_overall_frame, ended_session_time_s)",
+        "CREATE INDEX IF NOT EXISTS idx_field_batches_lap ON full_field_lap_batches(lap_id)",
+    ),
+)
+
+
+MIGRATIONS: tuple[Migration, ...] = (
+    V4_2_CATALOG,
+    V4_2_COMPARISON_RESULTS,
+    V4_2_ARCHIVE_PROVENANCE,
+)
+LATEST_SCHEMA_VERSION = MIGRATIONS[-1].version
