@@ -465,12 +465,20 @@ RunCommand = Callable[..., subprocess.CompletedProcess[str]]
 
 def discover_ipv4_interfaces(
     *,
-    timeout_s: float = 2.0,
+    timeout_s: float = 20.0,
     platform_name: str | None = None,
     runner: RunCommand = subprocess.run,
     fallback: Callable[[], tuple[IPv4Interface, ...]] = fallback_ipv4_interfaces,
 ) -> DiscoveryResult:
-    """Discover IPv4 interfaces without elevation and with a hard command timeout."""
+    """Discover IPv4 interfaces without elevation and with a hard command timeout.
+
+    The timeout budgets a cold ``powershell.exe`` start, not just the cmdlets.
+    On a measured Windows 11 machine the same script returned in 9-17 s because
+    process startup dominates, so a 2 s budget failed every time and silently
+    degraded the Connection Center to one unclassified socket-derived address.
+    The result is cached by the caller, so this cost is paid once per refresh
+    rather than per request.
+    """
 
     system = platform_name or platform.system()
     warnings: list[str] = []

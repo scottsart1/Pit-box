@@ -190,6 +190,74 @@ def build_service(
     return service, endpoint_creator, delegates
 
 
+def _service_with_discoverer(discoverer) -> NetworkService:
+    async def resolver(host: str, port: int):
+        del port
+        return [host]
+
+    return NetworkService(
+        RecordingProtocol,
+        endpoint_creator=FakeEndpointCreator(),
+        interface_discoverer=discoverer,
+        forwarder=DatagramForwarder(queue_size=8, resolver=resolver),
+        bind_probe=lambda host, port: None,
+    )
+
+
+@pytest.mark.asyncio
+async def test_successful_interface_discovery_is_cached() -> None:
+    calls = {"n": 0}
+
+    def counting() -> DiscoveryResult:
+        calls["n"] += 1
+        return discovery()
+
+    service = _service_with_discoverer(counting)
+
+    first = await service.interfaces()
+    second = await service.interfaces()
+
+    assert first is second
+    assert calls["n"] == 1, "an authoritative result should be discovered once"
+
+
+@pytest.mark.asyncio
+async def test_degraded_fallback_discovery_is_not_cached() -> None:
+    """A slow first PowerShell start must not strand the Connection Center.
+
+    The fallback reports one unclassified address with no gateway or adapter
+    kind. Caching it would keep serving that degraded view long after platform
+    discovery recovered.
+    """
+    results = [
+        DiscoveryResult(
+            (IPv4Interface("fallback:10.0.0.5", "Detected IPv4 interface", "10.0.0.5"),),
+            "stdlib-fallback",
+            ("Windows interface discovery exceeded 2.0s.",),
+        ),
+        discovery(),
+    ]
+    calls = {"n": 0}
+
+    def flaky() -> DiscoveryResult:
+        value = results[min(calls["n"], len(results) - 1)]
+        calls["n"] += 1
+        return value
+
+    service = _service_with_discoverer(flaky)
+
+    degraded = await service.interfaces()
+    assert degraded.source == "stdlib-fallback"
+
+    recovered = await service.interfaces()
+    assert recovered.source == "fixture"
+    assert recovered.interfaces[0].adapter_id == "wifi-guid"
+
+    # Once authoritative, it is cached and not rediscovered.
+    assert await service.interfaces() is recovered
+    assert calls["n"] == 2
+
+
 @pytest.mark.asyncio
 async def test_listener_lifecycle_receiving_stale_and_queue_projection() -> None:
     clock = Clock()

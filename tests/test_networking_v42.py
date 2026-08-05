@@ -213,6 +213,34 @@ def test_windows_discovery_timeout_uses_safe_fallback() -> None:
     assert "exceeded 0.1s" in result.warnings[0]
 
 
+def test_discovery_timeout_budgets_a_cold_powershell_start() -> None:
+    """A cold powershell.exe start was measured at 9-17s on Windows 11.
+
+    The previous 2s budget expired every time, so the Connection Center
+    silently served one unclassified socket-derived address instead of the
+    ranked adapter list it exists to provide.
+    """
+    import inspect
+
+    signature = inspect.signature(discover_ipv4_interfaces)
+    assert signature.parameters["timeout_s"].default >= 10.0
+
+
+def test_windows_discovery_passes_its_timeout_to_the_runner() -> None:
+    seen: dict[str, object] = {}
+
+    def record(command, **kwargs):  # type: ignore[no-untyped-def]
+        seen.update(kwargs)
+        return subprocess.CompletedProcess(command, 0, json.dumps([]), "")
+
+    discover_ipv4_interfaces(
+        platform_name="Windows",
+        runner=record,
+        fallback=lambda: (),
+    )
+    assert seen["timeout"] >= 10.0
+
+
 def test_minimal_header_inspection_is_exactly_29_bytes() -> None:
     data = packet_bytes(packet_id=16, session_uid=99, frame=123, overall=120)
     inspection = inspect_2026_header(data)

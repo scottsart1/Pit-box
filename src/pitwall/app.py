@@ -142,6 +142,7 @@ watchdog_task: asyncio.Task[None] | None = None
 event_persistence_task: asyncio.Task[None] | None = None
 maintenance_task: asyncio.Task[None] | None = None
 catalog_task: asyncio.Task[None] | None = None
+interfaces_task: asyncio.Task[None] | None = None
 
 
 async def _connection_watchdog() -> None:
@@ -311,6 +312,27 @@ async def _startup_catalog_sync() -> None:
         log.warning("4.2 Library backfill deferred: %s", exc)
 
 
+async def _startup_warm_interfaces() -> None:
+    """Populate the adapter cache before the driver opens Connection.
+
+    Windows adapter discovery spawns PowerShell, which on a cold start can take
+    well over ten seconds. Doing it here means the first Connection Center
+    request is served from cache instead of waiting on that process.
+    """
+
+    try:
+        discovery = await network_service.interfaces()
+        log.info(
+            "Adapter discovery warmed: %d interface(s) via %s",
+            len(discovery.interfaces),
+            discovery.source,
+        )
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        log.warning("Adapter discovery warm-up deferred: %s", exc)
+
+
 def _report_trace_recovery(recovery: RecoveryReport) -> None:
     """Surface recoverable trace-store damage without aborting application startup."""
 
@@ -329,7 +351,7 @@ def _report_trace_recovery(recovery: RecoveryReport) -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global voice, proactive, watchdog_task, event_persistence_task
-    global maintenance_task, catalog_task, session_assembler
+    global maintenance_task, catalog_task, interfaces_task, session_assembler
     settings.data_dir.mkdir(parents=True, exist_ok=True)
     await database.initialize()
     stale_sessions = await database.catalog.finalize_recording_sessions()
@@ -372,6 +394,9 @@ async def lifespan(app: FastAPI):
     _report_trace_recovery(recovery)
     catalog_task = asyncio.create_task(
         _startup_catalog_sync(), name="pitwall-catalog-backfill"
+    )
+    interfaces_task = asyncio.create_task(
+        _startup_warm_interfaces(), name="pitwall-interface-warm"
     )
     if settings.db_maintenance_on_start:
         maintenance_task = asyncio.create_task(
@@ -458,6 +483,12 @@ async def lifespan(app: FastAPI):
         catalog_task.cancel()
         try:
             await catalog_task
+        except asyncio.CancelledError:
+            pass
+    if interfaces_task:
+        interfaces_task.cancel()
+        try:
+            await interfaces_task
         except asyncio.CancelledError:
             pass
     if maintenance_task:

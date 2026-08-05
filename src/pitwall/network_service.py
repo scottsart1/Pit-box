@@ -492,11 +492,22 @@ class NetworkService:
         return True
 
     async def interfaces(self, *, refresh: bool = False) -> DiscoveryResult:
+        """Ranked adapters, cached once platform discovery actually succeeds.
+
+        A degraded fallback result is returned but deliberately not cached. The
+        fallback reports a single unclassified address with no gateway or
+        adapter kind, so caching it would strand the Connection Center on a
+        transient failure - a slow first PowerShell start, a busy machine -
+        with no way back short of a manual refresh.
+        """
         if self._discovery is not None and not refresh:
             return self._discovery
         async with self._discovery_lock:
             if self._discovery is None or refresh:
-                self._discovery = await asyncio.to_thread(self._interface_discoverer)
+                discovery = await asyncio.to_thread(self._interface_discoverer)
+                if discovery.source == "stdlib-fallback":
+                    return discovery
+                self._discovery = discovery
             return self._discovery
 
     def _recommendation(self, discovery: DiscoveryResult) -> InterfaceRecommendation:
