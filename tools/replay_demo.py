@@ -18,7 +18,6 @@ working end to end before it reaches a real session.
 from __future__ import annotations
 
 import argparse
-import ctypes
 import math
 import random
 import socket
@@ -27,10 +26,13 @@ import time
 from f1.packets import (
     PacketCarDamageData,
     PacketCarStatusData,
+    PacketCarTelemetry2Data,
     PacketCarTelemetryData,
     PacketEventData,
+    PacketFinalClassificationData,
     PacketHeader,
     PacketLapData,
+    PacketLapPositionsData,
     PacketMotionData,
     PacketParticipantsData,
     PacketSessionData,
@@ -126,6 +128,7 @@ class Car:
         self.retired = False
         self.speed = 0
         self.sectors: list[tuple[int, int, int]] = []
+        self.position_history: list[int] = []
 
     @property
     def lap_time_s(self) -> float:
@@ -314,6 +317,62 @@ def build_telemetry(cars: list[Car], session_time: float, frame: int) -> bytes:
     return bytes(packet)
 
 
+def build_telemetry2(cars: list[Car], session_time: float, frame: int) -> bytes:
+    packet = PacketCarTelemetry2Data()
+    packet.header = header(16, session_time, frame)
+    for car in cars:
+        entry = packet.car_telemetry2_data[car.index]
+        fraction = car.distance / TRACK_LENGTH
+        in_zone = fraction > 0.88 or 0.42 < fraction < 0.50
+        entry.active_aero_mode = 1 if in_zone else 0
+        entry.active_aero_available = 1
+        entry.active_aero_activation_distance = 0 if in_zone else 250
+        entry.overtake_available = 1 if car.ers > 350_000 else 0
+        entry.overtake_active = 1 if in_zone and car.ers > 350_000 else 0
+        entry.overtake_activation_distance = 0 if in_zone else 250
+        setattr(entry, "2026_regulations", 1)
+    return bytes(packet)
+
+
+def build_lap_positions(cars: list[Car], session_time: float, frame: int) -> bytes:
+    packet = PacketLapPositionsData()
+    packet.header = header(15, session_time, frame)
+    count = min(50, max((len(car.position_history) for car in cars), default=0))
+    packet.num_laps = count
+    packet.lap_start = 1
+    for lap_offset in range(count):
+        for car in cars:
+            if lap_offset < len(car.position_history):
+                packet.position_for_vehicle_idx[lap_offset * 24 + car.index] = (
+                    car.position_history[lap_offset]
+                )
+    return bytes(packet)
+
+
+def build_final_classification(
+    cars: list[Car], session_time: float, frame: int, total_laps: int
+) -> bytes:
+    packet = PacketFinalClassificationData()
+    packet.header = header(8, session_time, frame)
+    packet.num_cars = len(cars)
+    points = {1: 25, 2: 18, 3: 15, 4: 12, 5: 10, 6: 8, 7: 6, 8: 4, 9: 2, 10: 1}
+    for car in cars:
+        entry = packet.classification_data[car.index]
+        entry.position = car.position if not car.retired else len(cars)
+        entry.num_laps = min(total_laps, max(0, car.lap - 1))
+        entry.grid_position = car.grid
+        entry.points = points.get(entry.position, 0)
+        entry.num_pit_stops = car.stops
+        entry.result_status = 3 if not car.retired else 7
+        entry.best_lap_time_in_ms = car.best_lap_ms
+        entry.total_race_time = car.race_time
+        entry.num_tyre_stints = max(1, car.stops + 1)
+        entry.tyre_stints_actual[0] = COMPOUNDS[car.compound]
+        entry.tyre_stints_visual[0] = COMPOUNDS[car.compound]
+        entry.tyre_stints_end_laps[0] = 255
+    return bytes(packet)
+
+
 def build_motion(cars: list[Car], session_time: float, frame: int) -> bytes:
     packet = PacketMotionData()
     packet.header = header(0, session_time, frame)
@@ -440,6 +499,7 @@ def run(host: str, port: int, total_laps: int, speed: float, seed: int) -> None:
                     (int(lap_ms * 0.34), int(lap_ms * 0.37), lap_ms - int(lap_ms * 0.34) - int(lap_ms * 0.37))
                 )
                 car.best_lap_ms = min(car.lap_times)
+                car.position_history.append(car.position)
                 car.lap += 1
                 car.tyre_age += 1
                 rate = WEAR_PER_LAP[car.compound]
@@ -464,6 +524,7 @@ def run(host: str, port: int, total_laps: int, speed: float, seed: int) -> None:
         sock.sendto(build_lap_data(cars, session_time, frame), target)
         sock.sendto(build_motion(cars, session_time, frame), target)
         sock.sendto(build_telemetry(cars, session_time, frame), target)
+        sock.sendto(build_telemetry2(cars, session_time, frame), target)
 
         if frame % 5 == 0:
             sock.sendto(build_car_status(cars, session_time, frame), target)
@@ -471,6 +532,7 @@ def run(host: str, port: int, total_laps: int, speed: float, seed: int) -> None:
         if frame % 10 == 0:
             sock.sendto(build_session(session_time, frame, total_laps, player.lap), target)
             sock.sendto(build_participants(cars, session_time, frame), target)
+            sock.sendto(build_lap_positions(cars, session_time, frame), target)
         if frame % 3 == 0:
             car = cars[history_cursor % len(cars)]
             history_cursor += 1
@@ -490,7 +552,12 @@ def run(host: str, port: int, total_laps: int, speed: float, seed: int) -> None:
         )
         time.sleep(wall_tick)
 
-    print("\nRace complete.")
+    frame += 1
+    sock.sendto(build_lap_positions(cars, session_time, frame), target)
+    sock.sendto(
+        build_final_classification(cars, session_time, frame, total_laps), target
+    )
+    print("\nRace complete; final classification sent for the race report.")
 
 
 def main() -> None:

@@ -3,10 +3,11 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from collections.abc import Awaitable, Callable
-from typing import Any, Iterable
+from collections.abc import Awaitable, Callable, Iterable
+from typing import Any
 
-from f1.packets import SESSIONS, TRACKS as F1_TRACKS, resolve
+from f1.packets import SESSIONS, resolve
+from f1.packets import TRACKS as F1_TRACKS
 
 from .identity import team_name
 from .state import StateStore
@@ -258,11 +259,13 @@ class F1DatagramProtocol(asyncio.DatagramProtocol):
             Callable[[int, list[dict[str, Any]]], Awaitable[Any]] | None
         ) = None,
         on_final_classification: Callable[[], Awaitable[Any]] | None = None,
+        on_qualifying_lap: Callable[[], Awaitable[Any]] | None = None,
     ) -> None:
         self.store = store
         self.on_button_status = on_button_status
         self.on_player_lap_history = on_player_lap_history
         self.on_final_classification = on_final_classification
+        self.on_qualifying_lap = on_qualifying_lap
         self.loop = asyncio.get_running_loop()
         self.transport: asyncio.DatagramTransport | None = None
         self.packet_queue: asyncio.Queue[Any] = asyncio.Queue(maxsize=queue_capacity)
@@ -274,6 +277,8 @@ class F1DatagramProtocol(asyncio.DatagramProtocol):
         # screen is shown, which previously re-appended CHQF and re-wrote the
         # session row on every repeat.
         self._classified_sessions: set[int] = set()
+        self._qualifying_debrief_laps: set[tuple[int, int]] = set()
+        self._briefing_tasks: set[asyncio.Task[Any]] = set()
 
     def connection_made(self, transport: asyncio.BaseTransport) -> None:
         self.transport = transport  # type: ignore[assignment]
@@ -291,6 +296,9 @@ class F1DatagramProtocol(asyncio.DatagramProtocol):
         if self.consumer_task:
             self.consumer_task.cancel()
             self.consumer_task = None
+        for task in self._briefing_tasks:
+            task.cancel()
+        self._briefing_tasks.clear()
         self.loop.create_task(self.store.update(connected=False, packet_rate_hz=0.0))
 
     def datagram_received(self, data: bytes, addr: Any) -> None:
@@ -585,6 +593,9 @@ class F1DatagramProtocol(asyncio.DatagramProtocol):
         if player_index is None:
             return
         player = packet.lap_data[player_index]
+        before = await self.store.peek(
+            "mode_profile", "session_uid", "pit_status", "current_lap"
+        )
         session_time_s = float(getattr(packet.header, "session_time", 0.0) or 0.0)
         await self.store.transition_lap(
             new_lap=int(player.current_lap_num),
@@ -640,8 +651,26 @@ class F1DatagramProtocol(asyncio.DatagramProtocol):
                 driver = state.drivers[index]
                 if not driver.active:
                     continue
+                new_driver_lap = int(lap.current_lap_num)
+                if (
+                    driver.current_lap > 0
+                    and new_driver_lap > driver.current_lap
+                ):
+                    driver.energy_lap_history.append(
+                        {
+                            "lap": int(driver.current_lap),
+                            "deployed_j": round(float(driver.ers_deployed_lap_j), 1),
+                            "harvested_j": round(float(driver.ers_harvested_lap_j), 1),
+                            "manual_override_used": bool(
+                                driver.overtake_used_this_lap
+                            ),
+                        }
+                    )
+                    del driver.energy_lap_history[:-30]
+                    driver.overtake_used_this_lap = False
+                was_in_pit = bool(driver.pit_lane_timer_active)
                 driver.position = int(lap.car_position)
-                driver.current_lap = int(lap.current_lap_num)
+                driver.current_lap = new_driver_lap
                 driver.delta_to_front_s = (
                     _ms(
                         int(lap.delta_to_car_in_front_minutes_part),
@@ -660,6 +689,21 @@ class F1DatagramProtocol(asyncio.DatagramProtocol):
                 driver.pit_lane_timer_active = bool(lap.pit_lane_timer_active)
                 driver.pit_lane_time_ms = int(lap.pit_lane_time_in_lane_in_ms)
                 driver.pit_stop_timer_ms = int(lap.pit_stop_timer_in_ms)
+                if driver.pit_lane_timer_active:
+                    driver.current_pit_stop_max_ms = max(
+                        int(driver.current_pit_stop_max_ms),
+                        int(driver.pit_stop_timer_ms),
+                    )
+                elif was_in_pit and driver.current_pit_stop_max_ms > 0:
+                    driver.pit_stop_history.append(
+                        {
+                            "lap": new_driver_lap,
+                            "stop_number": max(1, int(driver.pit_stops)),
+                            "stationary_time_ms": int(driver.current_pit_stop_max_ms),
+                        }
+                    )
+                    del driver.pit_stop_history[:-12]
+                    driver.current_pit_stop_max_ms = 0
                 result_status = int(getattr(lap, "result_status", 0))
                 driver.result_status = result_status
                 driver.result_label = RESULT_STATUS.get(result_status, "unknown")
@@ -710,6 +754,45 @@ class F1DatagramProtocol(asyncio.DatagramProtocol):
                         del history[:-90]
 
         await self.store.mutate(apply)
+
+        # A qualifying in-lap is the safe, deterministic delivery point for the
+        # preceding timed-lap debrief. Some game modes expose the transition via
+        # pit_status, others only via driver_status==2, so support both and
+        # de-duplicate by completed lap.
+        mode = str(before.get("mode_profile", ""))
+        entered_in_lap = (
+            int(player.pit_status) != 0 and int(before.get("pit_status", 0) or 0) == 0
+        ) or int(getattr(player, "driver_status", 0) or 0) == 2
+        timed_lap = max(0, int(player.current_lap_num) - 1)
+        marker = (int(before.get("session_uid", 0) or 0), timed_lap)
+        if (
+            self.on_qualifying_lap
+            and mode == "qualifying"
+            and entered_in_lap
+            and timed_lap > 0
+            and int(player.last_lap_time_in_ms) > 0
+            and marker not in self._qualifying_debrief_laps
+        ):
+            self._qualifying_debrief_laps.add(marker)
+            task = self.loop.create_task(
+                self._qualifying_debrief_after_history(),
+                name=f"pitwall-quali-debrief-{timed_lap}",
+            )
+            self._briefing_tasks.add(task)
+            task.add_done_callback(self._briefing_tasks.discard)
+
+    async def _qualifying_debrief_after_history(self) -> None:
+        # SessionHistory normally trails the LapData in-lap transition by a few
+        # frames. Yielding lets that packet update lap/sector history before the
+        # deterministic payload freezes, without blocking the UDP consumer.
+        try:
+            await asyncio.sleep(0.30)
+            if self.on_qualifying_lap:
+                await self.on_qualifying_lap()
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            log.warning("Qualifying debrief callback failed: %s", exc)
 
     async def handle_PacketCarTelemetryData(self, packet: Any) -> None:
         player_index = _packet_player_index(packet, packet.car_telemetry_data)
@@ -781,6 +864,8 @@ class F1DatagramProtocol(asyncio.DatagramProtocol):
                     continue
                 driver.overtake_active = active
                 driver.overtake_available = available
+                if active:
+                    driver.overtake_used_this_lap = True
 
         await self.store.mutate(apply_field)
         if player_index is None:

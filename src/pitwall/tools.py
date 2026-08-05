@@ -1516,6 +1516,7 @@ class TelemetryTools:
             recommendation = "Do not compromise your line yet; build a clean exit and manage tyres."
         elif state.get("ers_pct", 0) < 20:
             recommendation = "Use positioning rather than battery; harvest where the rival cannot pass."
+        assessment = self.strategy.defence_assessment(state)
         return {
             "available": True,
             "driver": target.get("name"),
@@ -1529,6 +1530,7 @@ class TelemetryTools:
             "rival_telemetry_restricted": bool(target.get("restricted")),
             "recommendation": recommendation,
             "warning": "Avoid weaving or reactive moves; make one clear defensive choice.",
+            "assessment": assessment,
         }
 
     async def get_setup_learning(
@@ -1948,7 +1950,12 @@ class TelemetryTools:
             ),
             (
                 "get_defence_plan",
-                "Build a live defence plan against a rival using gap, tyres and ERS.",
+                (
+                    "Build and quantify a live defence plan using measured closing "
+                    "rate, sustainable defence laps, track overtaking difficulty, "
+                    "passing-zone count, position retention and a deterministic "
+                    "defence-quality score out of ten. Use for 'rate my defending'."
+                ),
                 {"driver": {"type": "string"}},
             ),
             (

@@ -6,9 +6,9 @@ import copy
 import math
 import time
 from collections import deque
+from collections.abc import Callable
 from dataclasses import asdict, dataclass, field, fields, is_dataclass
-from typing import Any, Callable, Literal
-
+from typing import Any, Literal
 
 WHEEL_LABELS = ("FL", "FR", "RL", "RR")
 SnapshotProfile = Literal["full", "analysis", "live"]
@@ -112,6 +112,13 @@ class DriverState:
     lap_history: list[dict[str, Any]] = field(default_factory=list)
     tyre_stints: list[dict[str, Any]] = field(default_factory=list)
     position_history: list[dict[str, int]] = field(default_factory=list)
+    # Per-lap deployment evidence and completed stationary pit-stop times. These
+    # histories are bounded by the UDP handlers and omitted from the 4 Hz live
+    # snapshot; briefings use the full analysis snapshot.
+    energy_lap_history: list[dict[str, Any]] = field(default_factory=list)
+    overtake_used_this_lap: bool = False
+    pit_stop_history: list[dict[str, Any]] = field(default_factory=list)
+    current_pit_stop_max_ms: int = 0
     # Lightweight live gap samples used for evidence-based closing/falling-back
     # answers. This is independent of restricted session-history packets.
     gap_history: list[dict[str, float | int]] = field(default_factory=list)
@@ -288,6 +295,23 @@ class SessionState:
     standing_instructions: list[dict[str, Any]] = field(default_factory=list)
     # Signature of the last strategy call actually spoken to the driver.
     strategy_spoken_signature: str = ""
+    # A refused pit call pauses automatic strategy-change radio for five laps.
+    # Safety/legality calls remain active and material race-state changes can
+    # release the hold once with an explicit reason.
+    strategy_hold: dict[str, Any] = field(
+        default_factory=lambda: {
+            "active": False,
+            "until_lap": 0,
+            "reason": "",
+            "set_at": 0.0,
+            "set_at_lap": 0,
+            "baseline": {},
+            "change_reason": "",
+            "raised_after_release": False,
+        }
+    )
+    driver_tyre_feedback: dict[str, Any] = field(default_factory=dict)
+    strategy_risk_appetite: str = "balanced"
     # Driver-owned plan constraints. When enabled, strategy ranks legal plans
     # inside these constraints instead of silently replacing the driver's call.
     strategy_override: dict[str, Any] = field(
@@ -315,6 +339,7 @@ class SessionState:
             "traction": 0,
             "tyre_life": 0,
             "straight_line": 0,
+            "strategy_risk_appetite": "balanced",
         }
     )
     # Grid frozen at the most recent red flag, used for restart briefings.
@@ -385,6 +410,8 @@ class SessionState:
         }
     )
     final_classification: dict[str, Any] = field(default_factory=dict)
+    # Latest generated brief/debrief of each kind for the live and review UI.
+    briefings: dict[str, Any] = field(default_factory=dict)
 
 
 class StateStore:
@@ -472,6 +499,8 @@ class StateStore:
                         serialized.pop("tyre_stints", None)
                         serialized.pop("position_history", None)
                         serialized.pop("gap_history", None)
+                        serialized.pop("energy_lap_history", None)
+                        serialized.pop("pit_stop_history", None)
                     drivers.append(serialized)
                 data[name] = drivers
             elif name == "traces":
@@ -508,6 +537,10 @@ class StateStore:
 
         data["telemetry_stale"] = not data["connected"] and bool(data["last_packet_at"])
         data["wheel_labels"] = list(WHEEL_LABELS)
+        if profile == "live":
+            # A bounded sparkline feed avoids returning the full completed-lap
+            # history while still making the dashboard's pace trend useful.
+            data["recent_laps"] = copy.deepcopy(self.state.completed_laps[-8:])
         return data
 
     async def snapshot(self) -> dict[str, Any]:
@@ -573,6 +606,7 @@ class StateStore:
                 # A pre-session override survives the first UID because this reset
                 # only runs when replacing one non-zero UID with another.
                 driver_preferences = copy.deepcopy(self.state.driver_preferences)
+                risk_appetite = str(self.state.strategy_risk_appetite)
                 cadence = int(self.state.proactive.get("cadence_laps", 2))
                 proactive = {
                     "enabled": bool(self.state.proactive.get("enabled", True)),
@@ -615,6 +649,7 @@ class StateStore:
                     proactive=proactive,
                     session_mode_override="auto",
                     driver_preferences=driver_preferences,
+                    strategy_risk_appetite=risk_appetite,
                 )
                 self._packet_times.clear()
                 # The live-delta reference belongs to the previous session's

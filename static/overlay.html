@@ -48,6 +48,7 @@ body.solid{background:#070b0f}
   <div class="card" id="stratCard">
     <div class="label">Strategy</div>
     <div class="instr" id="strat">Building…</div>
+    <div class="row"><span class="label">Finish / wear / deg</span><span class="tyre" id="stratMeta">—</span></div>
   </div>
   <div class="card" id="radioCard">
     <div class="label">Last radio</div>
@@ -85,6 +86,13 @@ function render(state){
 
   const rec = (state.strategy && state.strategy.recommended) || {};
   document.getElementById("strat").textContent = rec.instruction || "Building…";
+  const slope = state.analysis && state.analysis.deg_model && state.analysis.deg_model.current_slope_s_per_lap;
+  const hold = state.strategy_hold && state.strategy_hold.active;
+  document.getElementById("stratMeta").textContent = hold
+    ? "DRIVER HOLD"
+    : "P" + (rec.projected_finish_position || "—") + " / " +
+      (rec.projected_finish_wear_pct == null ? "—" : Math.round(rec.projected_finish_wear_pct) + "%") + " / " +
+      (slope == null ? "—" : "+" + Number(slope).toFixed(2) + "s/L");
 
   const log = state.radio_log || [];
   let last = "";

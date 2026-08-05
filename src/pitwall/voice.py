@@ -72,6 +72,13 @@ class NativeVoiceController:
         self._speech_task: asyncio.Task[bool] | None = None
         self._recording_guard_task: asyncio.Task[None] | None = None
         self._release_candidate_task: asyncio.Task[None] | None = None
+        # The sounddevice callback runs on its own thread. It must not create an
+        # unreferenced asyncio task for every 30 ms block: under Realtime that
+        # produced thousands of pending tasks and eventually delayed the radio.
+        # One bounded queue and one owned consumer preserve order and apply
+        # backpressure without ever blocking the audio callback.
+        self._audio_queue: asyncio.Queue[np.ndarray] = asyncio.Queue(maxsize=64)
+        self._audio_consumer_task: asyncio.Task[None] | None = None
 
         self._mask_event_count = 0
         self._first_mask_event_at = 0.0
@@ -251,6 +258,10 @@ class NativeVoiceController:
             wake_noise_rms=0.0,
             wake_threshold_rms=float(settings.wake_min_speech_rms),
         )
+        if self._audio_consumer_task is None or self._audio_consumer_task.done():
+            self._audio_consumer_task = self.loop.create_task(
+                self._consume_audio_queue(), name="pitwall-audio-block-consumer"
+            )
         if settings.native_voice:
             await self._ensure_input_stream()
         prepare_acknowledgements = getattr(
@@ -276,12 +287,14 @@ class NativeVoiceController:
             self._wake_arm_task,
             self._ack_prepare_task,
             self._release_candidate_task,
+            self._audio_consumer_task,
         ):
             if task and not task.done():
                 task.cancel()
                 with contextlib.suppress(asyncio.CancelledError):
                     await task
         self._release_candidate_task = None
+        self._audio_consumer_task = None
         self.audio.stop_playback()
         if self.stream is not None:
             try:
@@ -556,7 +569,8 @@ class NativeVoiceController:
                 del frames, time_info
                 if status:
                     log.debug("Audio input status: %s", status)
-                self._consume_audio_block(indata.copy())
+                block = indata.copy()
+                self.loop.call_soon_threadsafe(self._queue_audio_block, block)
 
             self.stream = sd.InputStream(
                 samplerate=settings.audio_sample_rate,
@@ -581,6 +595,38 @@ class NativeVoiceController:
         if not block.size:
             return 0.0
         return float(np.sqrt(np.mean(block.astype(np.float64) ** 2)))
+
+    def _queue_audio_block(self, block: np.ndarray) -> None:
+        """Enqueue a microphone block on the event-loop thread.
+
+        If the consumer falls behind, drop the oldest audio rather than growing
+        memory without bound. A 64-block queue still retains nearly two seconds
+        at the default block size, comfortably beyond ordinary scheduling jitter.
+        """
+        if self._shutdown:
+            return
+        if self._audio_queue.full():
+            with contextlib.suppress(asyncio.QueueEmpty):
+                self._audio_queue.get_nowait()
+                self._audio_queue.task_done()
+        with contextlib.suppress(asyncio.QueueFull):
+            self._audio_queue.put_nowait(block)
+
+    async def _consume_audio_queue(self) -> None:
+        while True:
+            block = await self._audio_queue.get()
+            try:
+                if self.realtime_active and self.realtime is not None:
+                    self._publish_wake_diagnostics(time.monotonic())
+                    await self.realtime.send_audio(block, settings.audio_sample_rate)
+                else:
+                    self._consume_audio_block(block)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                log.debug("Audio block consumer recovered: %s", exc)
+            finally:
+                self._audio_queue.task_done()
 
     def _update_wake_noise(self, rms: float) -> None:
         """Track background level only while idle and below the configured cap."""
@@ -643,13 +689,10 @@ class NativeVoiceController:
         # and the driver can interrupt the engineer mid-sentence.
         if self.realtime_active:
             self._publish_wake_diagnostics(now)
-            realtime = self.realtime
-            if realtime is not None:
-                self.loop.call_soon_threadsafe(
-                    lambda: self.loop.create_task(
-                        realtime.send_audio(block, settings.audio_sample_rate)
-                    )
-                )
+            # Direct calls are retained for unit tests and diagnostics. Normal
+            # sounddevice traffic reaches this method through the owned consumer,
+            # whose Realtime branch awaits send_audio without spawning a task.
+            self._queue_audio_block(block)
             return
 
         if self._signal_pressed:
@@ -1121,9 +1164,12 @@ class NativeVoiceController:
 
         # With a conversation already open, route the call through that session
         # so the engineer never speaks on two audio paths at once.
-        if self.realtime_active and self.realtime is not None:
-            if await self.realtime.say(text):
-                return True
+        if (
+            self.realtime_active
+            and self.realtime is not None
+            and await self.realtime.say(text)
+        ):
+            return True
 
         async def first_audio() -> None:
             await self.store.update(

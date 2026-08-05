@@ -1,4 +1,4 @@
-# Pit Wall 3.7.0 — OpenAI race engineer for PS5 and Windows
+# Pit Wall 3.8.0 — OpenAI race engineer for PS5 and Windows
 
 Pit Wall receives **F1 26** telemetry (UDP format **2026**) from a PS5, runs deterministic
 strategy/corner/setup analysis locally, keeps persistent SQLite history, answers spoken questions,
@@ -6,6 +6,28 @@ makes proactive radio calls, and serves a live dashboard at `http://127.0.0.1:80
 
 > Set **UDP Format: 2026** on the PS5. The parser resolves packet format 2026 only; anything else
 > is reported as `Unsupported F1 packet format/version`.
+
+## What changed in 3.8.0
+
+3.8.0 makes the pit wall outcome-aware and turns the dashboard into a standing race brief.
+
+- Strategy now ranks legal plans by projected finishing position and championship points before
+  elapsed time. Rival finish projections, circuit overtaking difficulty, positions recoverable,
+  Monte Carlo position bands and conservative/balanced/aggressive risk preferences are explicit.
+- Refusing a stop creates a five-lap driver hold. Automatic strategy calls remain silent until the
+  hold expires or safety car, red flag, weather, damage or hard wear limits materially change.
+- Tyre-state answers feed a bounded, decaying wear/degradation input. Conflicts with measured wear
+  are visible, and feedback cannot by itself invert the position-primary plan.
+- Manual pre-session briefs work without live telemetry; qualifying in-lap debriefs and final race
+  reports are generated, persisted and shown on the dashboard, with deterministic fallback text.
+- New live panels cover rival pace and sectors, damage and finish wear, pace degradation, the
+  points-position objective, race flow and the full strategy rationale. The overlay carries the
+  projected finish, wear and degradation or the active driver hold.
+- Audio capture now uses one bounded consumer instead of one task per 30 ms block. Database VACUUM
+  no longer holds the application database lock, and proactive delivery records why calls were
+  blocked, expired or superseded.
+- `tools/replay_demo.py` now emits 2026 active-aero/Manual Override state, lap-position history and
+  a final classification packet so the race-report path can be exercised end to end.
 
 ## What changed in 3.7.0
 

@@ -7,7 +7,6 @@ import time
 from pathlib import Path
 from typing import Any
 
-
 _SQLITE_INT64_MIN = -(1 << 63)
 _SQLITE_INT64_MAX = (1 << 63) - 1
 _UINT64_MODULUS = 1 << 64
@@ -237,8 +236,24 @@ class PitWallDatabase:
                     payload_json TEXT NOT NULL,
                     text TEXT NOT NULL,
                     delivered INTEGER NOT NULL,
+                    outcome TEXT NOT NULL DEFAULT '',
+                    refusal_reason TEXT NOT NULL DEFAULT '',
+                    queued_at REAL,
                     created_at REAL NOT NULL
                 );
+
+                CREATE TABLE IF NOT EXISTS briefings (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    session_uid INTEGER NOT NULL,
+                    track_id INTEGER NOT NULL,
+                    kind TEXT NOT NULL,
+                    payload_json TEXT NOT NULL,
+                    text TEXT NOT NULL,
+                    created_at REAL NOT NULL
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_briefings_session_kind
+                    ON briefings(session_uid, kind, created_at);
 
                 CREATE TABLE IF NOT EXISTS session_events (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -261,6 +276,20 @@ class PitWallDatabase:
             for column, column_type in migrations.items():
                 if column not in existing:
                     db.execute(f"ALTER TABLE laps ADD COLUMN {column} {column_type}")
+            proactive_existing = {
+                row[1]
+                for row in db.execute("PRAGMA table_info(proactive_calls)").fetchall()
+            }
+            proactive_migrations = {
+                "outcome": "TEXT NOT NULL DEFAULT ''",
+                "refusal_reason": "TEXT NOT NULL DEFAULT ''",
+                "queued_at": "REAL",
+            }
+            for column, column_type in proactive_migrations.items():
+                if column not in proactive_existing:
+                    db.execute(
+                        f"ALTER TABLE proactive_calls ADD COLUMN {column} {column_type}"
+                    )
 
     async def maintain(
         self,
@@ -274,9 +303,30 @@ class PitWallDatabase:
         and racing-line comparison, so the fastest valid lap per track always
         keeps its trace regardless of age.
         """
+        # Cleanup writes are serialized with normal database work. VACUUM is
+        # deliberately outside that lock: on a large historic file it can take
+        # minutes, and holding the application lock would stall lap, radio and
+        # strategy persistence for the whole operation.
         async with self._lock:
-            return await asyncio.to_thread(
-                self._maintain_sync, int(keep_trace_sessions), bool(vacuum)
+            report = await asyncio.to_thread(
+                self._maintain_sync, int(keep_trace_sessions), False
+            )
+        if vacuum:
+            await asyncio.to_thread(self._vacuum_sync)
+        report["size_after_bytes"] = await asyncio.to_thread(self._database_size_sync)
+        return report
+
+    def _vacuum_sync(self) -> None:
+        connection = sqlite3.connect(self.path, timeout=120, isolation_level=None)
+        try:
+            connection.execute("VACUUM")
+        finally:
+            connection.close()
+
+    def _database_size_sync(self) -> int:
+        with self._connect() as db:
+            return int(db.execute("PRAGMA page_count").fetchone()[0]) * int(
+                db.execute("PRAGMA page_size").fetchone()[0]
             )
 
     def _maintain_sync(self, keep_trace_sessions: int, vacuum: bool) -> dict[str, Any]:
@@ -346,18 +396,8 @@ class PitWallDatabase:
             ).rowcount
 
         if vacuum:
-            # VACUUM cannot run inside the implicit transaction the context
-            # manager opens, so it needs its own connection.
-            connection = sqlite3.connect(self.path, timeout=120, isolation_level=None)
-            try:
-                connection.execute("VACUUM")
-            finally:
-                connection.close()
-
-        with self._connect() as db:
-            report["size_after_bytes"] = int(
-                db.execute("PRAGMA page_count").fetchone()[0]
-            ) * int(db.execute("PRAGMA page_size").fetchone()[0])
+            self._vacuum_sync()
+        report["size_after_bytes"] = self._database_size_sync()
         return report
 
     async def upsert_session(self, state: dict[str, Any]) -> None:
@@ -1235,7 +1275,7 @@ class PitWallDatabase:
             for index in (1, 2, 3, 7, 8, 9):
                 if query[index] == 0.0 and features:
                     query[index] = float(median([row[index] for row in features]))
-            wear_prediction, wear_coeffs, wear_rmse = self._ridge_fit_predict(features, wear_targets, query)
+            wear_prediction, _wear_coeffs, wear_rmse = self._ridge_fit_predict(features, wear_targets, query)
             _pace_prediction, pace_coeffs, pace_rmse = self._ridge_fit_predict(features, pace_targets, query)
             deg_slope = pace_coeffs[0] if pace_coeffs else None
             result["compounds"][compound] = {
@@ -1476,13 +1516,17 @@ class PitWallDatabase:
         text: str,
         delivered: bool,
     ) -> None:
+        blocked = event.get("blocked_reasons", []) or []
+        refusal_reason = ", ".join(dict.fromkeys(str(item) for item in blocked))
+        outcome = str(event.get("delivery_outcome") or ("delivered" if delivered else text))
         with self._connect() as db:
             db.execute(
                 """
                 INSERT INTO proactive_calls(
                     session_uid, track_id, lap_num, event_type,
-                    payload_json, text, delivered, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    payload_json, text, delivered, outcome, refusal_reason,
+                    queued_at, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     _session_uid_to_sqlite(state.get("session_uid", 0)),
@@ -1492,6 +1536,45 @@ class PitWallDatabase:
                     json.dumps(event.get("payload", {})),
                     text,
                     1 if delivered else 0,
+                    outcome,
+                    refusal_reason,
+                    float(event.get("queued_at", 0.0) or 0.0),
+                    time.time(),
+                ),
+            )
+
+    async def save_briefing(
+        self,
+        state: dict[str, Any],
+        kind: str,
+        payload: dict[str, Any],
+        text: str,
+    ) -> None:
+        async with self._lock:
+            await asyncio.to_thread(
+                self._save_briefing_sync, state, kind, payload, text
+            )
+
+    def _save_briefing_sync(
+        self,
+        state: dict[str, Any],
+        kind: str,
+        payload: dict[str, Any],
+        text: str,
+    ) -> None:
+        with self._connect() as db:
+            db.execute(
+                """
+                INSERT INTO briefings(
+                    session_uid, track_id, kind, payload_json, text, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    _session_uid_to_sqlite(state.get("session_uid", 0)),
+                    int(state.get("track_id", -1)),
+                    str(kind),
+                    json.dumps(payload),
+                    str(text),
                     time.time(),
                 ),
             )
@@ -1632,6 +1715,14 @@ class PitWallDatabase:
                     (*params, limit),
                 ).fetchall()
             ]
+            briefings = [
+                _restore_session_uid(dict(row))
+                for row in db.execute(
+                    f"SELECT * FROM briefings{where} "
+                    "ORDER BY created_at DESC LIMIT ?",
+                    (*params, limit),
+                ).fetchall()
+            ]
             line_rows = [
                 _restore_session_uid(dict(row))
                 for row in db.execute(
@@ -1655,6 +1746,8 @@ class PitWallDatabase:
             item["model"] = json.loads(item.pop("model_json") or "{}")
         for item in proactive:
             item["payload"] = json.loads(item.pop("payload_json") or "{}")
+        for item in briefings:
+            item["payload"] = json.loads(item.pop("payload_json") or "{}")
         for item in line_rows:
             item["metrics"] = json.loads(item.pop("metrics_json") or "{}")
         for item in session_events:
@@ -1665,6 +1758,7 @@ class PitWallDatabase:
             "strategies": strategies,
             "radio": radio,
             "proactive_calls": proactive,
+            "briefings": briefings,
             "line_metrics": line_rows,
             "session_events": session_events,
         }

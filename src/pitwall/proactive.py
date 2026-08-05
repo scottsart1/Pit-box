@@ -58,8 +58,8 @@ SUPPRESSIBLE_SUBJECTS: dict[str, frozenset[str]] = {
     "battery": frozenset({"energy_low"}),
     "ers": frozenset({"energy_low"}),
     "energy": frozenset({"energy_low"}),
-    "strategy": frozenset({"strategy_change", "compound_requirement"}),
-    "pit": frozenset({"strategy_change", "compound_requirement"}),
+    "strategy": frozenset({"strategy_change", "compound_requirement", "driver_check"}),
+    "pit": frozenset({"strategy_change", "compound_requirement", "driver_check"}),
     "corner": frozenset({"corner_coaching"}),
     "coaching": frozenset({"corner_coaching"}),
     "line": frozenset({"corner_coaching"}),
@@ -99,6 +99,7 @@ EVENT_PRIORITY = {
     "rival_pitted": IMPORTANT,
     "rival_pace": IMPORTANT,
     "strategy_change": IMPORTANT,
+    "driver_check": IMPORTANT,
     "tyre_wear": IMPORTANT,
     "fuel_warning": IMPORTANT,
     "energy_low": IMPORTANT,
@@ -140,6 +141,7 @@ class ProactiveEngineer:
         self.strategy = strategy
         self.database = brain.database
         self.pending: deque[dict[str, Any]] = deque(maxlen=24)
+        self._discarded: deque[dict[str, Any]] = deque(maxlen=64)
         self._task: asyncio.Task[None] | None = None
         self._session_uid = 0
         self._last_spoken_at = 0.0
@@ -171,6 +173,7 @@ class ProactiveEngineer:
         self._engine_failure_alerted = False
         self._energy_alert_lap = 0
         self._race_start_done = False
+        self._driver_check_stints: set[tuple[str, int]] = set()
         self._cooldowns: dict[str, float] = {}
         self._safe_since = 0.0
         # Refreshed each detection pass so _enqueue can honour them.
@@ -353,6 +356,18 @@ class ProactiveEngineer:
         expires_s: float | None = None,
     ) -> None:
         now_mono = time.monotonic()
+        # Rival pace is a continuously improving observation. Refresh the
+        # payload of the already queued call in place, preserving its original
+        # deadline and queue age so repeated samples cannot postpone it forever.
+        if event_type == "rival_pace":
+            existing = next(
+                (item for item in self.pending if item.get("type") == event_type),
+                None,
+            )
+            if existing is not None:
+                existing["payload"] = payload
+                existing["last_updated_at"] = time.time()
+                return
         if now_mono - self._cooldowns.get(event_type, -1e9) < cooldown_s:
             return
         if self.is_suppressed(event_type, self._standing_instructions):
@@ -367,9 +382,18 @@ class ProactiveEngineer:
             # news. Leaving these uncoalesced filled the queue with stale stops
             # that then aged out unspoken.
             "rival_pace", "engine_failure", "rival_pitted",
+            "driver_check",
         }
         if event_type in coalesced:
-            self.pending = deque((item for item in self.pending if item.get("type") != event_type), maxlen=24)
+            kept: list[dict[str, Any]] = []
+            for item in self.pending:
+                if item.get("type") == event_type:
+                    item["delivery_outcome"] = "superseded"
+                    item.setdefault("blocked_reasons", []).append("superseded")
+                    self._discarded.append(item)
+                else:
+                    kept.append(item)
+            self.pending = deque(kept, maxlen=24)
         now = time.time()
         priority = CRITICAL if critical else EVENT_PRIORITY.get(event_type, ROUTINE)
         event = {
@@ -381,12 +405,19 @@ class ProactiveEngineer:
             "deliver_by": now + (8.0 if critical else settings.proactive_delivery_deadline_s),
             "expires_at": now + (expires_s if expires_s is not None else (45.0 if critical else 180.0)),
             "session_uid": self._session_uid,
+            "blocked_reasons": [],
         }
+        if len(self.pending) == self.pending.maxlen:
+            dropped = self.pending.pop() if critical else self.pending.popleft()
+            dropped["delivery_outcome"] = "queue_full"
+            dropped.setdefault("blocked_reasons", []).append("queue full")
+            self._discarded.append(dropped)
         self.pending.appendleft(event) if critical else self.pending.append(event)
 
     async def _reset_for_session(self, session_uid: int) -> None:
         self._session_uid = int(session_uid)
         self.pending.clear()
+        self._discarded.clear()
         self._last_spoken_at = 0.0
         self._last_lap_queued = 0
         self._last_learning_lap = 0
@@ -408,6 +439,7 @@ class ProactiveEngineer:
         self._engine_failure_alerted = False
         self._energy_alert_lap = 0
         self._race_start_done = False
+        self._driver_check_stints = set()
         self._cooldowns.clear()
         self._safe_since = 0.0
         await self.store.mutate(lambda s: s.proactive.update({
@@ -579,11 +611,25 @@ class ProactiveEngineer:
                 or int(state.get("unserved_stop_go_penalties", 0))
                 or state.get("pit_stop_should_serve_penalty")
             )
+        if kind == "strategy_change":
+            hold = state.get("strategy_hold", {}) or {}
+            return not bool(hold.get("active"))
+        if kind == "driver_check":
+            box_lap = (
+                state.get("strategy", {}).get("recommended", {}).get("box_lap")
+            )
+            current_lap = int(state.get("current_lap", 0) or 0)
+            return bool(
+                box_lap is not None
+                and 1 <= int(box_lap) - current_lap <= 3
+                and str(state.get("race_control_phase", "green")) == "green"
+            )
         return True
 
     def _safe_to_speak(self, state: dict[str, Any], event: dict[str, Any]) -> bool:
         if not state.get("connected") or state.get("game_paused"):
             self._safe_since = 0.0
+            self._mark_blocked(event, "disconnected or paused")
             return False
         # An open speech session makes the controller "busy" for the whole of its
         # lifetime. Treating that as a blanket block suppressed red flags,
@@ -595,10 +641,12 @@ class ProactiveEngineer:
         engineer_busy = self.voice.is_busy and not conversation_open
         if state.get("ptt_pressed") or engineer_busy:
             self._safe_since = 0.0
+            self._mark_blocked(event, "driver or engineer busy")
             return False
         if conversation_open and self._priority_of(event) != CRITICAL:
             # Non-critical chatter still waits for the driver to finish talking.
             self._safe_since = 0.0
+            self._mark_blocked(event, "conversation open")
             return False
         now = time.time()
         overdue = now >= float(event.get("deliver_by", now + 1))
@@ -607,18 +655,46 @@ class ProactiveEngineer:
         speed = int(state.get("speed_kph", 0))
         throttle = float(state.get("throttle", 0))
         safe = speed < 75 or (brake <= settings.proactive_max_brake and lat_g <= settings.proactive_max_lateral_g and throttle >= 0.45)
+        if event.get("type") == "energy_low" and self._priority_of(event) <= IMPORTANT:
+            # Battery calls matter while attacking. They may use a wider straight-
+            # line window, but never heavy braking or a high-G corner.
+            safe = safe or (
+                throttle >= 0.25
+                and brake <= 0.22
+                and lat_g <= 1.55
+            )
         # Deadline fallback still refuses heavy braking/high-G, but no longer waits
         # forever for full throttle on tracks with short straights.
         if overdue:
             safe = speed < 90 or (brake < 0.35 and lat_g < 1.85)
         if not safe:
             self._safe_since = 0.0
+            self._mark_blocked(event, "unsafe driving phase")
             return False
         if event.get("critical") or overdue:
             return True
         if not self._safe_since:
             self._safe_since = time.monotonic()
-        return time.monotonic() - self._safe_since >= settings.proactive_safe_hold_s
+        ready = time.monotonic() - self._safe_since >= settings.proactive_safe_hold_s
+        if not ready:
+            self._mark_blocked(event, "safe window not held")
+        return ready
+
+    @staticmethod
+    def _mark_blocked(event: dict[str, Any], reason: str) -> None:
+        reasons = event.setdefault("blocked_reasons", [])
+        if reason not in reasons:
+            reasons.append(reason)
+
+    @staticmethod
+    def _relevance_reason(
+        event: dict[str, Any], state: dict[str, Any]
+    ) -> str | None:
+        if int(event.get("session_uid", 0)) != int(state.get("session_uid", 0)):
+            return "superseded by new session"
+        if time.time() > float(event.get("expires_at", 0)):
+            return "expired"
+        return None if ProactiveEngineer._event_still_relevant(event, state) else "superseded"
 
     @staticmethod
     def _urgent_strategy(state: dict[str, Any]) -> dict[str, Any]:
@@ -644,6 +720,8 @@ class ProactiveEngineer:
             state.get("weather"), int(state.get("rain_next_15_pct", 0)),
             state.get("tyre", {}).get("compound"), int(state.get("tyre", {}).get("age_laps", 0)),
             tuple(round(float(x), 1) for x in state.get("tyre", {}).get("wear", [])),
+            tuple(sorted((state.get("driver_tyre_feedback", {}) or {}).items())),
+            state.get("strategy_risk_appetite", "balanced"),
             tuple((d.get("car_idx"), d.get("pit_stops"), d.get("tyre_compound")) for d in state.get("drivers", [])),
         ))
         if signature != self._last_strategy_inputs_signature:
@@ -652,10 +730,115 @@ class ProactiveEngineer:
             return await self.store.snapshot_analysis()
         return state
 
+    @staticmethod
+    def _hold_material_change(
+        state: dict[str, Any], hold: dict[str, Any]
+    ) -> str | None:
+        baseline = hold.get("baseline", {}) or {}
+        phase = str(state.get("race_control_phase", "green"))
+        if phase != str(baseline.get("race_control_phase", "green")):
+            return f"race control changed to {phase.replace('_', ' ')}"
+        wet_now = int(state.get("rain_next_15_pct", 0) or 0) >= 55
+        if wet_now and not bool(baseline.get("wet")):
+            return "the weather crossed the wet-strategy threshold"
+        if str(state.get("tyre", {}).get("compound")) != str(
+            baseline.get("compound")
+        ):
+            return "the fitted tyre changed"
+        current_damage = state.get("damage", {}) or {}
+        for key, old_value in (baseline.get("damage", {}) or {}).items():
+            new_value = current_damage.get(key, 0)
+            if isinstance(old_value, bool) or isinstance(new_value, bool):
+                increased = bool(new_value) and not bool(old_value)
+            else:
+                increased = float(new_value or 0) > float(old_value or 0) + 1.0
+            if increased:
+                return f"new {str(key).replace('_', ' ')} damage arrived"
+        max_wear = max(
+            [float(value) for value in state.get("tyre", {}).get("wear", [0])]
+            or [0.0]
+        )
+        if max_wear >= 82.0 and float(baseline.get("max_wear_pct", 0.0)) < 82.0:
+            return f"limiting tyre wear crossed the hard safety limit at {max_wear:.0f}%"
+        return None
+
+    async def _evaluate_strategy_hold(
+        self, state: dict[str, Any]
+    ) -> tuple[dict[str, Any], str | None]:
+        hold = dict(state.get("strategy_hold", {}) or {})
+        if not hold.get("active"):
+            return state, None
+        change = self._hold_material_change(state, hold)
+        current_lap = int(state.get("current_lap", 0) or 0)
+        if change is None and current_lap < int(hold.get("until_lap", 0) or 0):
+            return state, None
+        reason = change or "the five-lap driver hold expired"
+        hold.update(
+            active=False,
+            change_reason=reason,
+            released_at=time.time(),
+            raised_after_release=False,
+        )
+        await self.store.update(strategy_hold=hold)
+        refreshed = await self.store.snapshot_analysis()
+        return refreshed, reason
+
+    def _detect_driver_check(self, state: dict[str, Any]) -> None:
+        if state.get("mode_profile") not in {"race", "sprint"}:
+            return
+        if str(state.get("race_control_phase", "green")) != "green":
+            return
+        if self.voice.is_busy or state.get("ptt_pressed"):
+            return
+        recommended = state.get("strategy", {}).get("recommended", {}) or {}
+        box_lap = recommended.get("box_lap")
+        current_lap = int(state.get("current_lap", 0) or 0)
+        if box_lap is None or int(box_lap) - current_lap not in {2, 3}:
+            return
+        tyre = state.get("tyre", {}) or {}
+        stint_key = (
+            str(tyre.get("compound", "UNKNOWN")),
+            current_lap - int(tyre.get("age_laps", 0) or 0),
+        )
+        if stint_key in self._driver_check_stints:
+            return
+        self._driver_check_stints.add(stint_key)
+        plans = state.get("strategy", {}).get("plans", []) or []
+        self._enqueue(
+            "driver_check",
+            {
+                "laps_to_window": int(box_lap) - current_lap,
+                "box_lap": int(box_lap),
+                "current_wear_pct": round(
+                    max([float(value) for value in tyre.get("wear", [0])] or [0.0]),
+                    1,
+                ),
+                "degradation_s_per_lap": state.get("analysis", {})
+                .get("deg_model", {})
+                .get("current_slope_s_per_lap"),
+                "projected_finish_wear_pct": recommended.get(
+                    "projected_finish_wear_pct"
+                ),
+                "candidate_plans": [
+                    {
+                        key: plan.get(key)
+                        for key in (
+                            "box_laps", "compounds", "projected_finish_position",
+                            "projected_finish_wear_pct", "points_expected",
+                        )
+                    }
+                    for plan in plans[:2]
+                ],
+            },
+            cooldown_s=0.0,
+            expires_s=90.0,
+        )
+
     async def _detect(self, state: dict[str, Any]) -> None:
         if not state.get("connected") or state.get("game_paused"):
             return
         state = await self._refresh_strategy_if_needed(state)
+        state, released_hold_reason = await self._evaluate_strategy_hold(state)
         self._standing_instructions = state.get("standing_instructions", [])
         proactive = state.get("proactive", {})
         analyzed_lap = int(state.get("analysis", {}).get("last_lap_analyzed", 0))
@@ -818,6 +1001,7 @@ class ProactiveEngineer:
         self._detect_component_wear(state)
         self._detect_energy(state)
         self._detect_rival_pace(state)
+        self._detect_driver_check(state)
 
         unserved = (
             int(state.get("unserved_drive_through_penalties", 0)),
@@ -900,7 +1084,23 @@ class ProactiveEngineer:
 
         recommended = state.get("strategy", {}).get("recommended", {})
         strategy_signature = f"{recommended.get('box_lap')}:{recommended.get('fit_compound')}:{recommended.get('stops_remaining')}"
-        if recommended and strategy_signature != self._last_strategy_signature:
+        hold = state.get("strategy_hold", {}) or {}
+        if released_hold_reason and recommended and not hold.get("raised_after_release"):
+            payload = {
+                **recommended,
+                "hold_released_reason": released_hold_reason,
+                "instruction": recommended.get("instruction"),
+            }
+            self._enqueue("strategy_change", payload, cooldown_s=0.0)
+            hold = dict(hold)
+            hold["raised_after_release"] = True
+            await self.store.update(strategy_hold=hold)
+            self._last_strategy_signature = strategy_signature
+        elif hold.get("active"):
+            # Track the current signature without speaking it. When the hold
+            # releases, the explicit branch above raises the call exactly once.
+            self._last_strategy_signature = strategy_signature
+        elif recommended and strategy_signature != self._last_strategy_signature:
             old = self._last_strategy_signature
             self._last_strategy_signature = strategy_signature
             stability = state.get("strategy", {}).get("stability", {})
@@ -964,7 +1164,17 @@ class ProactiveEngineer:
         if kind == "race_control":
             return f"Race control: {payload.get('to', 'change')}. {payload.get('strategy', {}).get('instruction', 'Stand by for the revised plan.')}"
         if kind == "strategy_change":
-            return str(payload.get("instruction", "Strategy has changed; check the dashboard."))
+            changed = payload.get("hold_released_reason")
+            prefix = f"Your strategy hold is released because {changed}. " if changed else ""
+            return prefix + str(
+                payload.get("instruction", "Strategy has changed; check the dashboard.")
+            )
+        if kind == "driver_check":
+            laps = int(payload.get("laps_to_window", 2) or 2)
+            return (
+                f"{laps} laps to the window. How are the rears â€” holding, "
+                "or going away?"
+            )
         if kind == "tyre_wear":
             return f"Tyre warning, wear is {payload.get('wear_fl_fr_rl_rr')}. {payload.get('strategy', {}).get('instruction', 'Protect the limiting tyre.')}"
         if kind == "lap_deleted":
@@ -1163,10 +1373,19 @@ class ProactiveEngineer:
         )
 
     async def _deliver(self, state: dict[str, Any]) -> None:
+        while self._discarded:
+            discarded = self._discarded.popleft()
+            outcome = str(discarded.get("delivery_outcome") or "superseded")
+            await self.database.save_proactive_call(
+                state, discarded, outcome, False
+            )
         for event in list(self.pending):
-            if not self._event_still_relevant(event, state):
+            reason = self._relevance_reason(event, state)
+            if reason is not None:
+                event["delivery_outcome"] = reason
+                self._mark_blocked(event, reason)
                 await self.database.save_proactive_call(
-                    state, event, "expired or superseded", False
+                    state, event, reason, False
                 )
 
         event = self._select(state)
@@ -1183,6 +1402,7 @@ class ProactiveEngineer:
                 else settings.proactive_important_interval_s
             )
             if time.monotonic() - self._last_spoken_at < interval:
+                self._mark_blocked(event, "minimum interval")
                 return
 
         with contextlib.suppress(ValueError):
@@ -1193,6 +1413,7 @@ class ProactiveEngineer:
         try:
             delivered = await self.voice.speak_text(text)
         finally:
+            event["delivery_outcome"] = "delivered" if delivered else "voice delivery failed"
             await self.database.save_proactive_call(state, event, text, delivered)
         if delivered:
             self._last_spoken_at = time.monotonic()
@@ -1214,8 +1435,8 @@ class ProactiveEngineer:
                     state = await self.store.snapshot_analysis()
                 await self._detect(state)
                 oldest = max(0.0, time.time() - float(self.pending[0].get("queued_at", time.time()))) if self.pending else 0.0
-                await self.store.mutate(lambda s: s.proactive.update({
-                    "queued": len(self.pending), "oldest_wait_s": round(oldest, 1),
+                await self.store.mutate(lambda s, wait=oldest: s.proactive.update({
+                    "queued": len(self.pending), "oldest_wait_s": round(wait, 1),
                     "delivery_state": "queued" if self.pending else "waiting",
                 }))
                 await self._deliver(await self.store.snapshot_analysis())

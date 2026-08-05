@@ -20,7 +20,6 @@ from .providers import ProviderResult, ProviderRouter
 from .state import StateStore
 from .tools import TelemetryTools
 
-
 PERSONA = """
 You are Pit Wall, a senior Formula 1 simulator race engineer.
 
@@ -93,6 +92,10 @@ whether it threatens finishing), then leave it alone. Repeating an unactionable 
 worse than silence. Only recommend a stop for damage when the front wing is the problem, or when
 the tyre stop it is being combined with is already justified on its own.
 
+Driver tyre feedback is evidence, not telemetry. When the driver's report and the bounded model
+disagree, state the model's position once with the wear or degradation number that drives it. If the
+driver repeats the decision, acknowledge it and follow it; do not re-argue the same pit call.
+
 Normally answer in one or two short radio sentences. A deeper requested explanation may use
 three concise sentences. Every sentence must contain driver-useful information. Do not mention being an AI.
 """.strip()
@@ -100,11 +103,29 @@ three concise sentences. Every sentence must contain driver-useful information. 
 PROACTIVE_PERSONA = """
 You are making an unsolicited race-engineer radio call. Be useful, not chatty.
 Lead with the single most important action or target. Include at most three numbers.
-Do not repeat a recent call unless the situation materially changed. Do not ask a question.
+Do not repeat a recent call unless the situation materially changed. Do not ask a question,
+except for a driver_check event: then ask exactly one closed tyre-state question using the supplied
+choices (holding or going away), with no open-ended follow-up.
 For a two-lap progress update, cover pace versus target, tyre/strategy status, and one driving
 opportunity only when supported. Keep it to two short radio sentences.
 In qualifying, replace race gaps and race strategy with pole/session-best time, the driver's best,
 theoretical best, target time, required delta, clear-air/run status, and one lap-building opportunity.
+""".strip()
+
+PRE_SESSION_PERSONA = """
+You are delivering a pre-session briefing, not an at-speed radio reply. Be calm and structured in
+five to eight concise sentences. State all three supplied session goals explicitly. Every strategy,
+target or weather projection must include its supplied confidence, and a null projection must be
+described as unavailable rather than estimated. Separate personal historical evidence from track
+baselines. Do not add facts, circuit lore, strategy times or grid-side claims that are absent from
+the deterministic payload.
+""".strip()
+
+DEBRIEF_PERSONA = """
+You are delivering a lap or session debrief. Be analytical and direct about where time or positions
+went. Compare only numbers present in the deterministic payload. End with exactly one actionable
+instruction and put no advice before that final instruction. For a post-race debrief use two concise
+sentences suitable for the slow-down lap; a qualifying-lap debrief may use up to three.
 """.strip()
 
 _VERBOSITY_GUIDANCE = {
@@ -199,6 +220,18 @@ _DEEP_TERMS = (
 )
 
 _FEEDBACK_PATTERNS = {
+    "tyres_gone": (
+        "they're gone", "they are gone", "tyres gone", "tires gone",
+        "no grip left", "falling off a cliff",
+    ),
+    "tyres_going": (
+        "starting to go", "dropping off", "losing the rears",
+    ),
+    "tyres_fine": (
+        "still good", "plenty left", "tyres are fine", "tires are fine",
+        "happy with the tyres", "happy with the tires", "rears are holding",
+        "the rears are holding",
+    ),
     "understeer": ("understeer", "won't turn", "does not turn", "front won't bite"),
     "no_front_grip": ("no front grip", "fronts are gone", "front tyres are gone"),
     "oversteer": ("oversteer", "rear is loose", "rear steps out"),
@@ -235,9 +268,7 @@ def _limit_radio_sentences(text: str, route: str, verbosity: str) -> str:
         return ""
     if verbosity == "terse":
         limit = 1
-    elif route == "deep":
-        limit = 3
-    elif verbosity == "chatty":
+    elif route == "deep" or verbosity == "chatty":
         limit = 3
     else:
         limit = 2
@@ -638,7 +669,65 @@ class EngineerBrain:
         if has_any_phrase(text, ("straight line speed", "lower drag", "prioritize top speed")):
             updates["straight_line"] = 2
             updates["setup_bias"] = "straight_line"
+        if has_any_phrase(
+            text,
+            ("conservative strategy", "conservative risk", "play it safe on strategy"),
+        ):
+            updates["strategy_risk_appetite"] = "conservative"
+        elif has_any_phrase(
+            text,
+            ("aggressive strategy", "aggressive risk", "gamble on strategy"),
+        ):
+            updates["strategy_risk_appetite"] = "aggressive"
+        elif has_any_phrase(
+            text,
+            ("balanced strategy risk", "balanced risk", "normal strategy risk"),
+        ):
+            updates["strategy_risk_appetite"] = "balanced"
         return updates
+
+    @classmethod
+    def _strategy_refusal(cls, utterance: str) -> bool:
+        text = cls._normalize_text(utterance)
+        # ``has_negation`` deliberately treats the verb "stop" as a general
+        # cancellation signal.  In strategy language, however, "one-stop" and
+        # "pit stop" are nouns, so refusal detection must use an explicit
+        # negation set instead of that broad helper.
+        if has_any_phrase(
+            text,
+            (
+                "should i", "should we", "why not", "are we not", "do you want",
+                "does it mean", "does that mean", "are you sure",
+                "does not make sense", "doesn t make sense", "makes no sense",
+            ),
+        ):
+            return False
+        if re.match(
+            r"^(?:how|what|when|where|why|would|could|can|is|are|do|does|should)\b",
+            text,
+        ):
+            return False
+        explicit = has_any_phrase(
+            text,
+            (
+                "not boxing", "not pitting", "will not box", "won t box",
+                "will not pit", "won t pit", "do not box", "don t box",
+                "do not pit", "don t pit", "staying out", "stay out",
+                "no pit stop", "no more stops", "not in the mood for a box",
+            ),
+        )
+        actual_negation = has_any_phrase(
+            text,
+            (
+                "not", "dont", "don t", "do not", "wont", "won t",
+                "will not", "never", "no longer", "without", "avoid",
+                "skip", "cancel", "forget", "disregard", "ignore",
+            ),
+        )
+        return explicit or (
+            actual_negation
+            and has_any_phrase(text, ("box", "boxing", "pit", "pitting", "stop"))
+        )
 
     @classmethod
     def _driver_position_claim(cls, utterance: str) -> int | None:
@@ -928,7 +1017,7 @@ class EngineerBrain:
             return True
 
         # Everything else that asks for reasoning rather than a value.
-        if has_any_phrase(
+        return has_any_phrase(
             text,
             (
                 "why", "how come", "explain", "what if", "compare", "difference",
@@ -937,10 +1026,7 @@ class EngineerBrain:
                 "answer my question", "you said", "i told you", "i asked",
                 "the reason", "identify", "help me understand", "what might be",
             ),
-        ):
-            return True
-
-        return False
+        )
 
     async def _fast_answer(self, utterance: str) -> str | None:
         """Answer operational radio requests from state before consulting a model.
@@ -1032,11 +1118,53 @@ class EngineerBrain:
                 parts.append(f"{int(current['preferred_stops'])}-stop priority")
             return "Driver strategy locked: " + ", then ".join(parts) + "."
 
+        if self._strategy_refusal(utterance):
+            current_lap = int(state.get("current_lap", 0) or 0)
+            damage = state.get("damage", {}) or {}
+            hold = {
+                "active": True,
+                "until_lap": current_lap + 5,
+                "reason": utterance,
+                "set_at": time.time(),
+                "set_at_lap": current_lap,
+                "baseline": {
+                    "race_control_phase": state.get("race_control_phase", "green"),
+                    "wet": int(state.get("rain_next_15_pct", 0) or 0) >= 55,
+                    "damage": {
+                        key: damage.get(key, 0)
+                        for key in (
+                            "front_left_wing", "front_right_wing", "rear_wing",
+                            "floor", "diffuser", "sidepod", "gearbox", "engine",
+                            "drs_fault", "ers_fault",
+                        )
+                    },
+                    "max_wear_pct": max(
+                        [
+                            float(value)
+                            for value in state.get("tyre", {}).get("wear", [0])
+                        ]
+                        or [0.0]
+                    ),
+                    "compound": state.get("tyre", {}).get("compound"),
+                },
+                "change_reason": "",
+                "raised_after_release": False,
+            }
+            await self.store.update(strategy_hold=hold)
+            # Let the language route acknowledge the driver's exact wording;
+            # the deterministic state mutation above is the safety invariant.
+            return None
+
         preference_updates = self._preference_updates(utterance)
         if preference_updates:
             preferences = dict(state.get("driver_preferences", {}))
             preferences.update(preference_updates)
-            await self.store.update(driver_preferences=preferences)
+            update_values: dict[str, Any] = {"driver_preferences": preferences}
+            if "strategy_risk_appetite" in preference_updates:
+                update_values["strategy_risk_appetite"] = preference_updates[
+                    "strategy_risk_appetite"
+                ]
+            await self.store.update(**update_values)
             await self.database.save_preference("driver_preferences", preferences)
             return "Driver preference saved; future setup and strategy recommendations will use it."
 
@@ -1391,9 +1519,24 @@ class EngineerBrain:
     async def _capture_feedback(self, utterance: str) -> None:
         lowered = utterance.lower()
         state = await self.store.snapshot_analysis()
+        closed_answer = normalize_text(utterance)
+        if closed_answer in {"holding", "they're holding", "they re holding", "the rears are holding"}:
+            lowered = "rears are holding"
+        elif closed_answer in {"going away", "they're going away", "they re going away", "the rears are going away"}:
+            lowered = "starting to go"
         for category, patterns in _FEEDBACK_PATTERNS.items():
             if any(pattern in lowered for pattern in patterns):
                 await self.store.add_feedback(category, utterance)
+                if category in {"tyres_gone", "tyres_going", "tyres_fine"}:
+                    await self.store.update(
+                        driver_tyre_feedback={
+                            "lap": int(state.get("current_lap", 0) or 0),
+                            "category": category,
+                            "confidence": 1.0,
+                            "text": utterance,
+                            "created_at": time.time(),
+                        }
+                    )
                 await self.database.add_feedback(
                     int(state.get("session_uid", 0)),
                     int(state.get("track_id", -1)),
@@ -1411,6 +1554,7 @@ class EngineerBrain:
         route: str = "normal",
         provider: str | None = None,
         tools: list[dict[str, Any]] | None = None,
+        enforce_radio_limit: bool = True,
     ) -> str:
         prompt = prompt.strip()
         if not prompt:
@@ -1433,10 +1577,11 @@ class EngineerBrain:
             message = f"{type(exc).__name__}: {exc}"
             await self.store.update(llm_last_error=message)
             raise
-        live_state = await self.store.snapshot_analysis()
-        result.text = _limit_radio_sentences(
-            result.text, route, str(live_state.get("radio_verbosity", settings.radio_verbosity))
-        )
+        if enforce_radio_limit:
+            live_state = await self.store.snapshot_analysis()
+            result.text = _limit_radio_sentences(
+                result.text, route, str(live_state.get("radio_verbosity", settings.radio_verbosity))
+            )
         self.last_provider_result = result
         await self.store.update(
             llm_provider=result.provider,
@@ -1446,6 +1591,30 @@ class EngineerBrain:
             llm_last_error="",
         )
         return result.text
+
+    async def narrate_briefing(self, kind: str, payload: dict[str, Any]) -> str:
+        """Narrate frozen deterministic facts without giving the model tools."""
+        state = await self.store.snapshot_analysis()
+        is_pre = kind == "pre_session"
+        specialist = PRE_SESSION_PERSONA if is_pre else DEBRIEF_PERSONA
+        prompt = (
+            f"BRIEFING KIND: {kind}\n"
+            "NARRATE ONLY THIS DETERMINISTIC PAYLOAD; DO NOT COMPUTE OR INFER NEW FACTS:\n"
+            f"{json.dumps(payload, ensure_ascii=False)}"
+        )
+        return await self._run(
+            prompt,
+            settings.deep_reasoning_effort,
+            compose_persona(
+                f"{PERSONA}\n\n{specialist}",
+                str(state.get("radio_verbosity", "standard")),
+                state.get("standing_instructions", []),
+            ),
+            max_rounds=1,
+            route="deep",
+            tools=[],
+            enforce_radio_limit=False,
+        )
 
     async def compare(self, utterance: str) -> dict[str, Any]:
         """Run an opt-in, non-spoken A/B comparison on one frozen context."""
@@ -1560,8 +1729,12 @@ class EngineerBrain:
             for entry in state.get("radio_log", [])[-8:]
             if entry.get("role") == "engineer"
         ]
+        strategy_events = {
+            "strategy_change", "race_control", "tyre_wear",
+            "compound_requirement", "undercut_threat",
+        }
         prompt = (
-            f"{await self._header(include_strategy=event.get("type") in {"strategy_change", "race_control", "tyre_wear", "compound_requirement", "undercut_threat"})}\n"
+            f"{await self._header(include_strategy=event.get('type') in strategy_events)}\n"
             f"PROACTIVE EVENT: {json.dumps(event, ensure_ascii=False)}\n"
             f"RECENT ENGINEER CALLS: {json.dumps(recent_engineer, ensure_ascii=False)}"
         )

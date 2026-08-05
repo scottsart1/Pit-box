@@ -15,12 +15,18 @@ from fastapi import (
     WebSocket,
     WebSocketDisconnect,
 )
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse
+from fastapi.responses import (
+    FileResponse,
+    HTMLResponse,
+    JSONResponse,
+    PlainTextResponse,
+)
 from pydantic import BaseModel
 
 from .analysis import AnalysisEngine
 from .audio import AudioService
 from .brain import EngineerBrain
+from .briefing import BriefingEngine
 from .config import settings
 from .database import PitWallDatabase
 from .proactive import ProactiveEngineer
@@ -29,7 +35,7 @@ from .setup_advisor import SetupAdvisor
 from .state import StateStore
 from .strategy import StrategyEngine
 from .tools import TelemetryTools
-from .udp import F1DatagramProtocol, TRACKS, classify_session
+from .udp import TRACKS, F1DatagramProtocol, classify_session
 from .voice import NativeVoiceController
 
 log = logging.getLogger(__name__)
@@ -41,6 +47,7 @@ setup_advisor = SetupAdvisor(store, database)
 analysis = AnalysisEngine(store, database, strategy)
 tools = TelemetryTools(store, database, analysis, strategy, setup_advisor)
 brain = EngineerBrain(store, tools, database)
+briefing = BriefingEngine(store, database, analysis, setup_advisor, tools)
 audio = AudioService()
 voice: NativeVoiceController | None = None
 proactive: ProactiveEngineer | None = None
@@ -86,9 +93,43 @@ async def _event_persistence_worker() -> None:
             store.event_queue.task_done()
 
 
+async def _persist_briefing(kind: str, payload: dict[str, object]) -> dict[str, object]:
+    try:
+        text = await brain.narrate_briefing(kind, payload)
+    except Exception as exc:
+        log.warning("Briefing narration fell back to deterministic text: %s", exc)
+        text = briefing.fallback_text(kind, payload)
+    snapshot = await store.snapshot_analysis()
+    save_state = dict(snapshot)
+    if payload.get("track_id") is not None:
+        save_state["track_id"] = int(payload["track_id"])
+    await database.save_briefing(save_state, kind, payload, text)
+    briefings = dict(snapshot.get("briefings", {}))
+    briefings[kind] = {"payload": payload, "text": text}
+    await store.update(briefings=briefings)
+    return {"kind": kind, "payload": payload, "text": text}
+
+
 async def _persist_finished_session() -> None:
-    """Persist the final result in the same packet-handling cycle."""
+    """Persist and debrief the final result in the packet-handling cycle."""
     await database.upsert_session(await store.snapshot_live())
+    try:
+        result = await _persist_briefing("post_race", await briefing.post_race())
+        if voice is not None:
+            await voice.speak_text(str(result["text"]))
+    except Exception as exc:
+        log.warning("Post-race debrief could not be generated: %s", exc)
+
+
+async def _persist_qualifying_lap() -> None:
+    try:
+        result = await _persist_briefing(
+            "post_qualifying_lap", await briefing.post_qualifying_lap()
+        )
+        if voice is not None:
+            await voice.speak_text(str(result["text"]))
+    except Exception as exc:
+        log.warning("Qualifying-lap debrief could not be generated: %s", exc)
 
 
 async def _startup_maintenance() -> None:
@@ -123,7 +164,13 @@ async def lifespan(app: FastAPI):
         )
     saved_preferences = await database.load_preference("driver_preferences", None)
     if isinstance(saved_preferences, dict):
-        await store.update(driver_preferences=saved_preferences)
+        risk = str(saved_preferences.get("strategy_risk_appetite", "balanced"))
+        if risk not in {"conservative", "balanced", "aggressive"}:
+            risk = "balanced"
+        await store.update(
+            driver_preferences=saved_preferences,
+            strategy_risk_appetite=risk,
+        )
     saved_instructions = await database.load_preference("standing_instructions", None)
     if isinstance(saved_instructions, list):
         await store.update(standing_instructions=saved_instructions)
@@ -143,6 +190,7 @@ async def lifespan(app: FastAPI):
                 voice.on_button_status,
                 on_player_lap_history=database.backfill_lap_sectors,
                 on_final_classification=_persist_finished_session,
+                on_qualifying_lap=_persist_qualifying_lap,
             ),
             local_addr=(settings.udp_host, settings.udp_port),
         )
@@ -182,7 +230,7 @@ async def lifespan(app: FastAPI):
         udp_transport.close()
 
 
-app = FastAPI(title="Pit Wall", version="3.7.0", lifespan=lifespan)
+app = FastAPI(title="Pit Wall", version="3.8.0", lifespan=lifespan)
 
 
 class AskRequest(BaseModel):
@@ -226,6 +274,7 @@ class DriverPreferencesRequest(BaseModel):
     traction: int | None = None
     tyre_life: int | None = None
     straight_line: int | None = None
+    strategy_risk_appetite: str | None = None
 
 
 class WakeRequest(BaseModel):
@@ -322,6 +371,35 @@ async def racing_line() -> dict[str, object]:
 @app.get("/api/state")
 async def get_state() -> dict[str, object]:
     return await store.snapshot_live()
+
+
+@app.get("/api/compare")
+async def rival_compare(driver: str = Query(default="ahead")) -> dict[str, object]:
+    return await tools.get_pace_verdict(driver)
+
+
+@app.get("/api/objective")
+async def position_objective(
+    target: int = Query(default=10, ge=1, le=24),
+) -> dict[str, object]:
+    return await tools.get_position_target(target)
+
+
+@app.get("/api/race-flow")
+async def race_flow() -> dict[str, object]:
+    return await tools.get_race_flow()
+
+
+@app.post("/api/briefing/pre")
+async def pre_session_briefing(
+    mode: str = Query(default="race"),
+    track_id: int | None = Query(default=None),
+) -> dict[str, object]:
+    try:
+        payload = await briefing.pre_session(mode, track_id)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return await _persist_briefing("pre_session", payload)
 
 
 @app.get("/api/review")
@@ -596,9 +674,22 @@ async def set_driver_preferences(request: DriverPreferencesRequest) -> dict[str,
     for key in ("rear_stability", "rotation", "traction", "tyre_life", "straight_line"):
         if key in payload:
             payload[key] = max(0, min(3, int(payload[key])))
+    if "strategy_risk_appetite" in payload:
+        appetite = str(payload["strategy_risk_appetite"]).lower()
+        if appetite not in {"conservative", "balanced", "aggressive"}:
+            raise HTTPException(
+                400,
+                "strategy_risk_appetite must be conservative, balanced, or aggressive",
+            )
+        payload["strategy_risk_appetite"] = appetite
     preferences.update(payload)
-    await store.update(driver_preferences=preferences)
+    update: dict[str, object] = {"driver_preferences": preferences}
+    if "strategy_risk_appetite" in payload:
+        update["strategy_risk_appetite"] = payload["strategy_risk_appetite"]
+    await store.update(**update)
     await database.save_preference("driver_preferences", preferences)
+    if "strategy_risk_appetite" in payload:
+        await strategy.recompute()
     return preferences
 
 
