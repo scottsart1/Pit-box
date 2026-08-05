@@ -7,6 +7,11 @@ makes proactive radio calls, and serves a live dashboard at `http://127.0.0.1:80
 For PS5 setup, forwarding, LAN access, capture/replay, offline review, recovery,
 and rollback procedures, see the [Pit Wall 4.2 operator and developer guide](docs/PIT_WALL_4_2.md).
 
+Before trusting a fresh install with a real race weekend, work through the
+[hardware shakedown checklist](docs/SHAKEDOWN_4_2.md). It covers what the
+automated suite cannot: a real console, a real network, real audio devices, and
+a session long enough to matter.
+
 > Set **UDP Format: 2026** on the PS5. The parser resolves packet format 2026 only; anything else
 > is reported as `Unsupported F1 packet format/version`.
 
