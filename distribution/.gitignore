@@ -1,0 +1,37 @@
+# ============================================================================
+# NOTHING SECRET LEAVES THIS MACHINE. Verified before every commit.
+# ============================================================================
+
+# Private signing key material — NEVER commit. The public key is embedded in
+# licensing/keys.py by keygen; only that public value is tracked.
+.secrets/
+*.ed25519
+*_private.pem
+*.key
+signing_key*
+
+# The code ledger: which codes were minted, used, and redeemed-to-email.
+# Local source of truth. Never pushed.
+ledger/
+*.ledger.json
+codes_batch_*.json
+codes_batch_*.csv
+
+# D1 seed SQL contains the full code list — treat like the ledger.
+seed_codes_*.sql
+
+# Packaged build artifacts
+build/
+distbuild/
+*.spec.bak
+*.dmg
+*.exe
+*.msi
+__pycache__/
+*.pyc
+.venv-dist/
+
+# Cloudflare local state
+activation-server/.wrangler/
+activation-server/node_modules/
+activation-server/.dev.vars

@@ -1,0 +1,15 @@
+name = "pitwall-activation"
+main = "src/worker.js"
+compatibility_date = "2025-01-01"
+
+# D1 gives us a strongly-consistent, free-tier database. The atomic
+# claim (UPDATE ... WHERE claimed=0) needs that consistency; KV would not be
+# safe for single-use enforcement. Create the DB, then paste its id here:
+#   wrangler d1 create pitwall-licenses
+[[d1_databases]]
+binding = "DB"
+database_name = "pitwall-licenses"
+database_id = "REPLACE_WITH_D1_DATABASE_ID"
+
+# No secrets are needed by the worker: it holds no key. The activation URL is
+# public; abuse is bounded because a code claims exactly once.
