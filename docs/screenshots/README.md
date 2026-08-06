@@ -42,9 +42,9 @@ never reads or writes a real driver's saved sessions.
 | `05-session-review.png` | Session Review | 20 drivers, 220 laps, 100% trace coverage, per-lap comparability |
 | `06-field-lab.png` | Field Lab | All 20 cars with last, best and median clean pace |
 
-`01-live-dashboard.png`, `02-review-history.png`, `03-setup-lab.png` and
-`04-overlay.png` predate 4.2 and show the earlier single-page dashboard. They
-are kept for history; they are not what the current build looks like.
+An earlier set showing the pre-4.2 single-page dashboard has been removed, so
+every image here reflects the current build. The old files remain in git
+history if they are ever needed.
 
 ### Lap Lab is not yet captured
 
