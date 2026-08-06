@@ -136,7 +136,7 @@ def test_missing_license_reads_as_needs_activation(tmp_path):
 
 
 def test_gate_reports_needs_activation_without_a_license(tmp_path):
-    result = gate.check(tmp_path, armed=False, on_log=lambda _m: None)
+    result = gate.check(tmp_path)
     assert result.status is gate.GateStatus.NEEDS_ACTIVATION
 
 
@@ -186,3 +186,35 @@ def test_activation_rejects_a_server_entitlement_that_does_not_verify(tmp_path, 
 def test_integrity_ok_without_a_manifest_is_true():
     # A dev tree (no baked manifest) is not treated as tampered.
     assert gate.integrity_ok() is True
+
+
+def test_device_module_is_guarded():
+    # device.py computes the hash license_store binds against. If it is not in
+    # the manifest, patching it to return a constant defeats device binding
+    # while every other guarded file still hashes correctly.
+    assert "device.py" in gate._GUARDED
+
+
+def test_a_modified_guarded_module_fails_the_integrity_check(monkeypatch, tmp_path):
+    manifest = tmp_path / "integrity_manifest.txt"
+    manifest.write_text("0" * 64 + "\n", encoding="ascii")
+    monkeypatch.setattr(gate, "_MANIFEST", manifest)
+    assert gate.integrity_ok() is False
+
+
+def test_tampered_gate_refuses_to_run_without_deleting_anything(monkeypatch, tmp_path):
+    install = tmp_path / "install"
+    install.mkdir()
+    (install / "pitwall.exe").write_text("payload", encoding="utf-8")
+
+    manifest = tmp_path / "integrity_manifest.txt"
+    manifest.write_text("0" * 64 + "\n", encoding="ascii")
+    monkeypatch.setattr(gate, "_MANIFEST", manifest)
+
+    result = gate.check(tmp_path)
+
+    assert result.status is gate.GateStatus.TAMPERED
+    assert result.license is None
+    # The response is a message, not a deletion: the install is intact.
+    assert (install / "pitwall.exe").read_text(encoding="utf-8") == "payload"
+    assert "has not started" in result.detail

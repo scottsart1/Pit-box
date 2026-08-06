@@ -5,10 +5,15 @@ activation, or to disable the app because it was tampered with.
 
 Flow:
   1. Integrity self-check of the licensing modules. If the verification code
-     was patched out, fire the kill-switch.
+     was patched, refuse to start.
   2. Try to load and validate a cached license (offline). If valid, run.
   3. Otherwise return NEEDS_ACTIVATION; the UI collects a code + API key and
      calls complete_activation().
+
+The tamper response is to decline to launch, never to delete anything. The
+same detection deters casual patching, but the cost of a false positive (a
+damaged install, a quarantined file, a bad disk sector) is one reinstall
+rather than a customer losing their copy of the app.
 
 The dev app never imports this module, so `python -m pitwall.main` is ungated.
 """
@@ -20,18 +25,36 @@ import time
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
-from typing import Callable
 
-from . import killswitch
 from .activation_client import ActivationError, activate
 from .device import device_hash
 from .entitlement import Entitlement
 from .license_store import License, LicenseInvalid, load_and_validate, save_license
 
 # Files whose bytes are hashed into the integrity manifest. Patching any of them
-# to bypass verification changes the hash.
-_GUARDED = ("entitlement.py", "verify.py", "keys.py", "license_store.py", "gate.py")
+# changes the hash. device.py is guarded because it computes the machine hash
+# that license_store checks against: patching it to return a constant would
+# otherwise defeat device binding without altering any other guarded file.
+_GUARDED = (
+    "entitlement.py",
+    "verify.py",
+    "keys.py",
+    "license_store.py",
+    "device.py",
+    "gate.py",
+)
 _MANIFEST = Path(__file__).with_name("integrity_manifest.txt")
+
+# Shown to the user when the self-check fails. Written for the innocent case,
+# which is the far more likely one.
+TAMPER_MESSAGE = (
+    "Pit Wall could not verify its own program files, so it has not started.\n\n"
+    "This usually means the installation is damaged - an interrupted update, a "
+    "disk error, or antivirus quarantining a file. Reinstalling from your "
+    "original download normally fixes it.\n\n"
+    "Your saved sessions in PitWallData are untouched, and your activation code "
+    "is still valid. You will not need a new one."
+)
 
 
 class GateStatus(Enum):
@@ -74,17 +97,14 @@ def integrity_ok() -> bool:
     return _module_digest() == expected
 
 
-def check(
-    config_dir: Path,
-    *,
-    armed: bool = False,
-    on_log: Callable[[str], None] = print,
-) -> GateResult:
-    """Evaluate the license state at launch."""
+def check(config_dir: Path) -> GateResult:
+    """Evaluate the license state at launch.
+
+    Never deletes or modifies anything. TAMPERED means "do not start and show
+    `detail`"; the caller is responsible for displaying it and exiting.
+    """
     if not integrity_ok():
-        report = killswitch.trigger("license verification code was modified",
-                                    armed=armed, on_log=on_log)
-        return GateResult(GateStatus.TAMPERED, detail=str(report))
+        return GateResult(GateStatus.TAMPERED, detail=TAMPER_MESSAGE)
 
     try:
         lic = load_and_validate(config_dir)
@@ -133,6 +153,7 @@ def _utc_stamp() -> str:
 __all__ = [
     "GateStatus",
     "GateResult",
+    "TAMPER_MESSAGE",
     "check",
     "complete_activation",
     "integrity_ok",

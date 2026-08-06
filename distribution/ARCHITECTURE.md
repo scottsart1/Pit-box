@@ -33,8 +33,8 @@ What the design **does** guarantee:
 What it **does not** claim:
 
 - It cannot stop a skilled attacker who patches the compiled binary. The
-  tamper/kill-switch raises the cost of that, but a native app on hardware the
-  attacker controls can always be cracked eventually.
+  integrity self-check raises the cost of that, but a native app on hardware
+  the attacker controls can always be cracked eventually.
 - Device binding deters casual license-file copying; it is not unbreakable (see
   §5).
 
@@ -140,32 +140,43 @@ Limit, stated plainly: because the device hash is **not** part of the signed
 entitlement (it can't be — codes are pre-signed), a determined attacker who
 copies `license.json` to a second machine and patches out the device check in
 the binary can run there. Defenses that raise this cost: the server refuses a
-second *activation* on a different device, and the tamper kill-switch (§6)
-responds to a patched binary. For a $20 product this is a deliberate,
-proportionate trade-off, not an oversight.
+second *activation* on a different device, and `device.py` is inside the
+integrity manifest (§6), so patching `device_hash()` to return a constant is
+itself detected. For a $20 product this is a deliberate, proportionate
+trade-off, not an oversight.
 
 ---
 
-## 6. Tamper response / kill-switch (`killswitch.py`)
+## 6. Tamper response: refuse to run (`gate.py`)
 
-On detecting that the license-verification code was modified (a build-time hash
-of the guarded modules no longer matches the baked manifest), the app removes
-**its own install directory and nothing else**, then leaves a `README.txt`
-saying: *"You tried to kill the app. Sorry. The app killed itself."* This is
-disclosed in the EULA shown at install.
+At build time, `write_integrity_manifest()` bakes a SHA-256 over the guarded
+licensing modules. On every launch `integrity_ok()` recomputes it; a mismatch
+returns `GateStatus.TAMPERED` and the launcher shows `TAMPER_MESSAGE` and
+exits. **Nothing is deleted or modified — ever.**
 
-It is scoped and defended in depth:
+Guarded modules: `entitlement.py`, `verify.py`, `keys.py`, `license_store.py`,
+`device.py`, `gate.py`. `device.py` is in that list deliberately: it computes
+the machine hash `license_store` binds against, so patching `device_hash()` to
+return a constant would otherwise defeat device binding while every other file
+still hashed correctly.
 
-- **Never runs in development.** Requires a frozen/packaged build (`sys.frozen`)
-  **and** an explicit `armed` flag the launcher sets only in the real
-  distribution. In dev it is a dry run that logs intent.
-- Deletes only inside the resolved install root. It **refuses** a filesystem
-  root, the home directory, a too-shallow path, or any path that contains the
-  user's `PitWallData`. User telemetry and everything outside the install dir
-  are never touched.
+Absence of a manifest (a dev tree) reads as OK, so integrity is enforced only
+in a build that shipped one.
 
-This deters casual patching; it is not claimed to stop a determined cracker who
-also neutralizes the kill-switch.
+### Why not a self-deleting kill-switch
+
+An earlier draft deleted the app's own install directory on a tamper
+detection. It was dropped, deliberately. The detection cannot distinguish
+malicious patching from an interrupted update, a bad disk sector, or antivirus
+quarantining a file — and the deletion would land on a paying customer, while
+the attacker it targeted can simply patch the kill-switch out. The deterrent
+against casual patching is identical either way (the app does not run), so the
+destructive half bought nothing and carried all the risk.
+
+`TAMPER_MESSAGE` is therefore written for the innocent case: it says the
+install looks damaged, points at reinstalling, and reassures the user that
+`PitWallData` is untouched and their code is still valid. No EULA disclosure of
+a destructive response is needed, because there is none.
 
 ---
 
@@ -187,7 +198,7 @@ gitignores `dist/` as a Python build directory.
 
 ## 8. What is built vs pending
 
-**Built and tested (13 passing tests, `distribution/tests/test_licensing.py`):**
+**Built and tested (16 passing tests, `distribution/tests/test_licensing.py`):**
 
 - Ed25519 sign/verify roundtrip; forged entitlement and garbage signature
   rejected.
@@ -199,16 +210,25 @@ gitignores `dist/` as a Python build directory.
   persists; a server entitlement that doesn't verify is refused.
 - Activation Worker (D1) with the atomic claim; schema and wrangler config.
 - Private keygen and code-gen tools (ledger + D1 seed, all gitignored).
+- Tamper response: `device.py` is guarded, a modified guarded module fails the
+  check, and a TAMPERED result leaves the install byte-for-byte intact.
 
-**Pending (after this design is reviewed):**
+**Pending (design reviewed and approved):**
 
 - Windows packaging (PyInstaller/Nuitka + installer) with the first-run screen
-  that collects the LLM API key and activation code, and wires the gate +
-  `armed` kill-switch into the packaged launcher.
-- macOS packaging of the same.
-- Build-time integrity manifest generation (`gate.write_integrity_manifest`).
-- Marketing website (light palette, real screenshots, Venmo $20, generic
-  comparison, EULA with the kill-switch disclosure, empty reviews).
+  that collects the LLM API key and activation code, and wires the gate into
+  the packaged launcher.
+- macOS packaging of the same. Note this needs a Mac to build on and an Apple
+  Developer account (~$99/yr) to sign and notarize; without notarization
+  Gatekeeper blocks the app as "damaged".
+- Build-time integrity manifest generation (`gate.write_integrity_manifest`),
+  plus a build guard that refuses to package while
+  `embedded_public_key.txt` still holds the development key.
+- Marketing website (light palette, real screenshots, generic comparison, EULA,
+  empty reviews). Payment is **Venmo at $20 with manual fulfilment**: the buyer
+  pays, you mark the code `sold` in the ledger and email it. There is no
+  payment webhook, which is why the ledger lifecycle
+  (`unused → sold → redeemed_email`) is the system of record.
 - Deploying the Worker + D1 and pointing the app's activation endpoint at it.
 
 The activation endpoint's real backend footprint, for the hosting-cost note:
