@@ -34,7 +34,8 @@ def staged(tmp_path, monkeypatch):
 
     monkeypatch.setattr(build, "DIST_ROOT", tmp_path)
     monkeypatch.setattr(build, "REPO_ROOT", tmp_path.parent)
-    monkeypatch.setattr(build.shutil, "which", lambda _name: "/usr/bin/pyinstaller")
+    monkeypatch.setattr(build, "_pyinstaller_available", lambda: True)
+    monkeypatch.setattr(build.shutil, "which", lambda _name: "/usr/bin/codesign")
     monkeypatch.setattr(build.platform, "system", lambda: "Windows")
     monkeypatch.setattr(
         "distribution.launcher.ACTIVATION_ENDPOINT",
@@ -86,18 +87,36 @@ def test_a_missing_public_key_blocks_the_build(staged):
 
 
 def test_missing_pyinstaller_blocks_the_build(staged, monkeypatch):
-    monkeypatch.setattr(build.shutil, "which", lambda _name: None)
+    monkeypatch.setattr(build, "_pyinstaller_available", lambda: False)
     checks = build.preflight()
     assert not checks.ok
     assert any("PyInstaller" in problem for problem in checks.problems)
 
 
+def test_pyinstaller_is_detected_by_import_not_by_path(staged, monkeypatch):
+    """The build runs `sys.executable -m PyInstaller`, so preflight must agree.
+
+    A venv invoked by path rather than activated has no pyinstaller.exe on
+    PATH while the module imports fine. Checking PATH reported "PyInstaller is
+    not installed" on a machine that had just built successfully with it —
+    which would have blocked the real release build and left only `--dev`,
+    the mode that stamps the artifact NOT SELLABLE.
+    """
+    # Nothing on PATH at all, but the real importability check in place.
+    monkeypatch.setattr(build.shutil, "which", lambda _name: None)
+    monkeypatch.setattr(
+        build, "_pyinstaller_available",
+        lambda: importlib.util.find_spec("PyInstaller") is not None,
+    )
+    checks = build.preflight()
+    assert not any("PyInstaller" in problem for problem in checks.problems), (
+        "preflight blocked on PyInstaller while it is importable here"
+    )
+
+
 def test_an_unsigned_mac_build_warns_but_does_not_block(staged, monkeypatch):
     monkeypatch.setattr(build.platform, "system", lambda: "Darwin")
-    monkeypatch.setattr(
-        build.shutil, "which",
-        lambda name: None if name == "codesign" else "/usr/bin/pyinstaller",
-    )
+    monkeypatch.setattr(build.shutil, "which", lambda _name: None)
     checks = build.preflight()
     # Still buildable — you can produce an unsigned .app to test locally — but
     # the reason it will not open elsewhere has to be stated.
@@ -219,3 +238,105 @@ def test_the_release_steps_name_every_mac_only_command():
     steps = build.macos_release_steps()
     for command in ("codesign", "notarytool", "stapler", "spctl"):
         assert command in steps
+
+
+def test_inno_setup_is_found_where_winget_actually_puts_it(tmp_path, monkeypatch):
+    """`winget install JRSoftware.InnoSetup` unelevated installs per-user.
+
+    It lands in %LOCALAPPDATA%\\Programs and adds nothing to PATH. Searching
+    only the two Program Files directories meant the documented release step
+    ("install Inno Setup, then run --installer") ended in "Inno Setup not
+    found" — and because build_installer returns None rather than failing, the
+    build reported success having produced no installer at all.
+    """
+    monkeypatch.setattr(build.shutil, "which", lambda _name: None)
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
+
+    assert build._inno_compiler() is None, "nothing installed yet"
+
+    per_user = tmp_path / "Programs" / "Inno Setup 6" / "ISCC.exe"
+    per_user.parent.mkdir(parents=True)
+    per_user.write_bytes(b"MZ")
+
+    assert build._inno_compiler() == per_user
+
+
+def test_a_compiler_on_the_path_still_wins(tmp_path, monkeypatch):
+    monkeypatch.setattr(build.shutil, "which", lambda name: str(tmp_path / "ISCC.exe"))
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
+    assert build._inno_compiler() == tmp_path / "ISCC.exe"
+
+
+def _installer_script() -> str:
+    return (DIST / "packaging" / "pitwall.iss").read_text(encoding="utf-8")
+
+
+def _iss_section(name: str) -> str:
+    """The body of one [Section], up to the next section header."""
+    script = _installer_script()
+    header = f"[{name}]"
+    rest = script[script.index(header) + len(header):]
+    following = re.search(r"^\[", rest, flags=re.MULTILINE)
+    return rest[: following.start()] if following else rest
+
+
+def _setup_directives() -> dict[str, str]:
+    return {
+        line.split("=", 1)[0].strip().lower(): line.split("=", 1)[1].strip().lower()
+        for line in _iss_section("Setup").splitlines()
+        if "=" in line and not line.lstrip().startswith(";")
+    }
+
+
+def _code_lines(section: str) -> str:
+    """A section with its comments removed.
+
+    Needed because the comments explain the bugs these tests pin, so searching
+    the raw text finds the explanation and not the defect.
+    """
+    return "\n".join(
+        line for line in section.splitlines()
+        if not line.lstrip().startswith((";", "//"))
+    )
+
+
+def test_the_installer_guards_against_a_running_copy():
+    """Upgrading over a live process locks the executable mid-write.
+
+    An earlier revision ran tasklist.exe in InitializeSetup and threw the
+    result away, so the guard its own comment described did not exist. Restart
+    Manager does the job properly; RestartApplications must stay off because
+    [Run] already relaunches the app.
+    """
+    directives = _setup_directives()
+    assert directives.get("closeapplications") == "yes"
+    assert directives.get("restartapplications") == "no"
+    assert "tasklist" not in _code_lines(_iss_section("Code")).lower(), (
+        "the discarded-result guard is back"
+    )
+
+
+def test_the_install_needs_no_administrator():
+    # A hobby app asking for admin rights is where a cautious buyer stops.
+    assert _setup_directives().get("privilegesrequired") == "lowest"
+
+
+def test_the_uninstaller_stays_quiet_when_run_silently():
+    # A modal box in a silent uninstall has no one to dismiss it, so the
+    # uninstaller hangs until the process is killed.
+    assert "UninstallSilent" in _iss_section("Code")
+
+
+def test_the_uninstaller_never_removes_recorded_sessions():
+    # PitWallData holds race history and the licence. Removing it would destroy
+    # the driver's data and burn their one activation on a reinstall.
+    section = _iss_section("UninstallDelete")
+    assert section.strip(), "section parser matched nothing"
+    entries = [
+        line for line in section.splitlines()
+        if line.strip() and not line.lstrip().startswith(";")
+    ]
+    assert entries, "no uninstall-delete entries found to check"
+    for entry in entries:
+        assert "PitWallData" not in entry
+        assert "{userprofile}" not in entry.lower()

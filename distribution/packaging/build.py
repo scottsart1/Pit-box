@@ -17,6 +17,7 @@ not blocked on owning a Mac.
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import os
 import platform
 import re
@@ -65,6 +66,20 @@ APP_NAME = "Pit Wall"
 DEV_PUBLIC_KEY = "4jAcWRQIkwPUwz8PmKamwpIIsU3yFUWgPiKRjh6En0I="
 
 
+def _pyinstaller_available() -> bool:
+    """Whether the interpreter that will run the build can import PyInstaller.
+
+    Deliberately not `shutil.which("pyinstaller")`. The build runs
+    `sys.executable -m PyInstaller`, and a venv invoked by path rather than
+    "activated" has no pyinstaller.exe on PATH even though the module imports
+    perfectly well. Checking PATH made preflight report BLOCKED on the very
+    machine where the build succeeds — so the real release command (`build`
+    without `--dev`) would have refused to run, and only `--dev`, which is
+    marked NOT SELLABLE, would have worked.
+    """
+    return importlib.util.find_spec("PyInstaller") is not None
+
+
 @dataclass(frozen=True, slots=True)
 class Preflight:
     ok: bool
@@ -108,8 +123,11 @@ def preflight() -> Preflight:
             f"({ACTIVATION_ENDPOINT}). Point it at the deployed Worker."
         )
 
-    if shutil.which("pyinstaller") is None:
-        problems.append("PyInstaller is not installed (pip install pyinstaller).")
+    if not _pyinstaller_available():
+        problems.append(
+            f"PyInstaller cannot be imported by {sys.executable}. Install it "
+            f'with:  "{sys.executable}" -m pip install pyinstaller'
+        )
 
     if platform.system() == "Darwin" and shutil.which("codesign") is None:
         warnings.append(
@@ -186,15 +204,32 @@ def build_installer(app_dir: Path, version: str = "4.2.0") -> Path | None:
 
 
 def _inno_compiler() -> Path | None:
+    """Locate ISCC.exe, including the per-user install winget produces.
+
+    `winget install JRSoftware.InnoSetup` run without elevation — which is what
+    happens when the command is typed into an ordinary terminal — installs into
+    %LOCALAPPDATA%\\Programs and puts nothing on PATH. Checking only the two
+    Program Files locations meant following the documented release steps ended
+    in "Inno Setup not found", with the build reporting success and quietly
+    shipping no installer.
+    """
     found = shutil.which("ISCC") or shutil.which("iscc")
     if found:
         return Path(found)
-    for candidate in (
-        Path(r"C:\Program Files (x86)\Inno Setup 6\ISCC.exe"),
-        Path(r"C:\Program Files\Inno Setup 6\ISCC.exe"),
-    ):
-        if candidate.exists():
-            return candidate
+
+    roots = [
+        Path(r"C:\Program Files (x86)"),
+        Path(r"C:\Program Files"),
+    ]
+    local = os.environ.get("LOCALAPPDATA")
+    if local:
+        roots.append(Path(local) / "Programs")
+
+    for root in roots:
+        for version in ("Inno Setup 6", "Inno Setup 5"):
+            candidate = root / version / "ISCC.exe"
+            if candidate.exists():
+                return candidate
     return None
 
 

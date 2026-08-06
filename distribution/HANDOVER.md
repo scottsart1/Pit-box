@@ -1,7 +1,7 @@
 # Handover — Pit Wall distribution work
 
-State as of **6 August 2026**, commit `d3161ff` on `main`, pushed and in sync
-with `origin/main`. Working tree clean.
+State as of **6 August 2026** on `main`, pushed and in sync with `origin/main`.
+Working tree clean.
 
 Read `ARCHITECTURE.md` next to this file for the licensing design. This
 document is the practical state: what works, what does not, and what to do
@@ -13,8 +13,8 @@ next.
 
 | Suite | Command | Result |
 |---|---|---|
-| Everything | `.\.venv\Scripts\python.exe -m pytest -q` | **710 passed** |
-| Distribution only | `... -m pytest -q distribution/tests/` | **81 passed** |
+| Everything | `.\.venv\Scripts\python.exe -m pytest -q` | **717 passed** |
+| Distribution only | `... -m pytest -q distribution/tests/` | **88 passed** |
 
 Lint: `ruff check` reports pre-existing style across `src/` and `tests/` (there
 is no `[tool.ruff]` config, so defaults apply). Nothing new was introduced
@@ -66,6 +66,50 @@ exercised a stale executable. Two "bugs" were chased that had already been
 fixed. Override with `PITWALL_BUILD_DIR` if needed, but keep it off any synced
 folder.
 
+### The installer
+
+Compiled with Inno Setup 6.7.3 and put through a full install → verify →
+uninstall → verify cycle on this machine. `PitWall-Setup.exe`, 33 MB.
+
+What the run proved, rather than assumed:
+
+- Installs silently and exits 0; every one of the 1081 built files lands, and
+  the executable is byte-for-byte identical to the build output.
+- The integrity manifest ships inside the install and matches what the app
+  computes for its own executable at launch. The digest covers
+  `basename || 0x00 || bytes`, so it does not change with the install path —
+  a buyer installing anywhere gets a matching hash.
+- Start Menu and desktop shortcuts are created, and it registers per-user in
+  Add/Remove Programs under HKCU with no administrator prompt.
+- The uninstaller removes the install directory, both shortcuts and the
+  registry entry, leaving nothing behind.
+- **`PitWallData` is untouched.** Verified against a real 1591-file, 282 MB
+  session store: identical file-for-file before and after, zero differences.
+
+Three defects were found by doing this, all now covered by tests in
+`test_packaging.py`:
+
+1. **Inno Setup was never going to be found.** `winget install` run without
+   elevation installs per-user into `%LOCALAPPDATA%\Programs` and puts nothing
+   on PATH, but `_inno_compiler()` only searched the two Program Files
+   directories. Following the documented release steps would have printed
+   "Inno Setup not found" — and since `build_installer()` returns None rather
+   than failing, the build would have reported success having produced no
+   installer.
+2. **Preflight blocked the real release build.** It tested
+   `shutil.which("pyinstaller")` while the build actually runs
+   `sys.executable -m PyInstaller`. A venv invoked by path rather than
+   activated has no `pyinstaller.exe` on PATH, so preflight reported
+   "PyInstaller is not installed" on the very machine that had just built with
+   it. `--dev` masked this completely: the only mode that worked was the one
+   that stamps the artifact NOT SELLABLE.
+3. **The running-copy guard did not exist.** `InitializeSetup` ran
+   `tasklist.exe` and discarded the result, so the check its own comment
+   described never happened. Replaced with `CloseApplications=yes` /
+   `RestartApplications=no`, which uses Restart Manager and is what the buyer
+   actually sees. Also added a `UninstallSilent` guard around the post-uninstall
+   message box, which would otherwise hang a silent uninstall forever.
+
 ### The activation-key tracker
 
 ```powershell
@@ -77,11 +121,13 @@ plain code list, the D1 seed SQL, and **`activation_keys_*.xlsx`** — the sheet
 to work from when someone pays. Three tabs: instructions, the key list with
 status dropdowns, and a summary with live COUNTIF formulas and a revenue line.
 
-Formulas were verified structurally (correct functions, ranges matching the
-data exactly) but **not evaluated**: LibreOffice is not installed here and the
-xlsx skill's recalc helper needs POSIX sockets. Opening it in Excel once would
-confirm. On a fresh batch it should read: total = batch size, Unused = batch
-size, everything else 0, revenue $0.
+Formulas are **evaluated and correct**, checked by opening the real batch in
+Excel (via COM, on a copy, read-only). Excel loaded it with no repair prompt.
+On the 12-code batch the Summary tab read 12 / 12 unused / 0 / 0 / 0 / 0 and
+$0. Marking two rows Sold and one Activated moved the counts to 9 / 2 / 1 and
+revenue to $60; marking a fourth Replaced left revenue at $60, which is the
+intended behaviour — a replacement is not a second sale. The status dropdown
+survived the openpyxl round-trip as a real list validation.
 
 ### Enforcement of the two rules you asked for
 
@@ -97,10 +143,6 @@ size, everything else 0, revenue $0.
 
 ## What is built but not yet live
 
-- **The installer** (`distribution/packaging/pitwall.iss`) is written but has
-  never been compiled — Inno Setup is not installed. It is per-user (no UAC),
-  makes Start Menu and desktop shortcuts, launches at the end of setup, and
-  never touches `PitWallData` on uninstall.
 - **Download gating** (`/download` on the Worker, `website/download.js`) is
   written and the form was tested in a browser: live code formatting, an
   incomplete-code error, and a clean failure with a fallback contact when the
@@ -123,8 +165,8 @@ size, everything else 0, revenue $0.
 3. **Point the app and site at it**: `launcher.ACTIVATION_ENDPOINT` and
    `ACTIVATION_API` in `website/download.js`. Both are placeholders that block
    their respective builds until changed.
-4. **Install Inno Setup** (`winget install JRSoftware.InnoSetup`) and run
-   `build.py --installer`.
+4. **Build the installer**: `build.py --installer`. Inno Setup 6.7.3 is already
+   installed on this machine.
 5. **Host the installer** somewhere the Worker's `DOWNLOAD_URL` can reach.
 6. **Publish the site**: `python -m distribution.website.build_site` then upload
    `_site/`.

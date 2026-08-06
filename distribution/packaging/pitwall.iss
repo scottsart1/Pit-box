@@ -54,6 +54,13 @@ ArchitecturesInstallIn64BitMode=x64compatible
 LicenseFile={#SourceDir}\EULA.txt
 UninstallDisplayName={#AppName}
 UninstallDisplayIcon={app}\{#AppExeName}
+; Upgrading while Pit Wall is running would leave a half-written install: the
+; executable is locked by the live process. Restart Manager detects which files
+; are in use and offers to close them, which is the guard a buyer actually
+; sees. RestartApplications is off because [Run] already relaunches the app at
+; the end of setup, and the pair together would start it twice.
+CloseApplications=yes
+RestartApplications=no
 
 [Languages]
 Name: "english"; MessagesFile: "compiler:Default.isl"
@@ -86,23 +93,15 @@ FinishedLabelNoIcons=Setup has finished installing [name].
 FinishedLabel=Setup has finished installing [name].%n%nThe first time it starts, enter your activation code and your OpenAI API key. After that it opens straight to the dashboard.
 
 [Code]
-// Refuse to install over a running copy: replacing the executable underneath
-// a live process leaves a half-updated install that fails in confusing ways.
-function InitializeSetup(): Boolean;
-var
-  ResultCode: Integer;
-begin
-  Result := True;
-  if Exec('tasklist.exe', '/FI "IMAGENAME eq {#AppExeName}" /NH', '', SW_HIDE,
-          ewWaitUntilTerminated, ResultCode) then
-  begin
-    // tasklist always exits 0; the check below is the user-facing guard.
-  end;
-end;
+// Running copies are handled by CloseApplications in [Setup], not here. An
+// earlier version of this file ran tasklist.exe and discarded the result, so
+// the "refuse to install over a running copy" it claimed never happened.
 
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
 begin
-  if CurUninstallStep = usPostUninstall then
+  // Silent uninstalls must stay silent: a modal box with no one to click it
+  // hangs the uninstaller until the process is killed.
+  if (CurUninstallStep = usPostUninstall) and not UninstallSilent then
     MsgBox('Pit Wall has been removed.' + #13#10 + #13#10 +
            'Your recorded sessions and licence in PitWallData have been left ' +
            'in place, so reinstalling will not ask you to activate again.',
