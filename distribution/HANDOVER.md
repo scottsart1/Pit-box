@@ -148,6 +148,7 @@ survived the openpyxl round-trip as a real list validation.
 | Activation Worker | `https://pitwall-activation.sarthakvij123450.workers.dev` |
 | D1 database | `pitwall-licenses` — `4360c3cd-4f56-4643-a908-85cbed0d2944` |
 | Marketing site | `https://pitwall-2k7.pages.dev` |
+| Installer | private R2 bucket `pitwall-downloads`, streamed by the Worker |
 | Codes seeded | 50, all unclaimed |
 
 The Worker was exercised against a local D1 first and then live. Verified by
@@ -177,17 +178,39 @@ It is now confirmed fixed from the deployed site: a cross-origin POST returns
 503 and **the body is readable**, which is only possible with the header
 present.
 
-### Still not connected
+### How the installer is served
 
-`DOWNLOAD_URL` is unset on the Worker, because R2 is not enabled on the
-account. Until it is, `/download` answers 503 with "email me and I will send it
-directly" — verified live, and it degrades gracefully rather than looking
-broken. Enable R2 in the dashboard, then:
+The file sits in a **private** R2 bucket (`pitwall-downloads`) and is streamed
+by the Worker at `GET /file?code=…`. It is never linked to directly.
+
+The obvious alternative was switching the bucket to public and handing out its
+`r2.dev` URL. That URL is permanent and unauthenticated, so the first buyer to
+post it anywhere would make the code gate meaningless. Streaming it here means
+the code is re-checked against the database on the request for the file itself,
+not only on the form.
+
+The code travels in the query string, so it lands in the buyer's browser
+history. That is the deliberate trade: the link only works for someone holding
+a real code, and passing the link on means passing on your own activation code.
+
+Verified live: the streamed bytes are SHA-256 identical to the built installer
+(33,011,861 bytes), `Range` requests return a correct `206` with
+`Content-Range` so a dropped connection resumes, an unknown code and a missing
+code are both refused 404, and the whole funnel works from the published page —
+typing `pitw h7dzk a21st 9efe8` reformats to `PITW-H7DZK-A21ST-9EFE8`, is
+accepted, and starts the download.
+
+One bug found here: passing `request.headers` to `env.DOWNLOADS.get()`
+unconditionally makes R2 populate `object.range` even when no `Range` was
+asked for, so an ordinary download answered `206 Partial Content`. Now the
+range path is only taken when the request actually carried a `Range` header.
+
+To replace the installer after a rebuild:
 
 ```
-wrangler r2 bucket create pitwall-downloads
-wrangler r2 object put pitwall-downloads/PitWall-Setup.exe --file <path>
-wrangler secret put DOWNLOAD_URL   # or a plain var, it is not secret
+wrangler r2 object put pitwall-downloads/PitWall-Setup.exe \
+  --file "%LOCALAPPDATA%\PitWallBuild\artifacts\PitWall-Setup.exe" \
+  --content-type application/vnd.microsoft.portable-executable --remote
 ```
 
 ---
@@ -205,9 +228,14 @@ first time, so `build.py` no longer needs `--dev`.
 - [x] **Worker + D1 deployed** and seeded with 50 codes.
 - [x] **App and site point at it.**
 - [x] **Installer builds** — `build.py --installer`.
-- [ ] **Host the installer.** Blocked on R2 being enabled (see above). This is
-      the only thing standing between the site and a working purchase.
+- [x] **Installer hosted** in private R2, streamed by the Worker behind the
+      code check.
 - [x] **Site published** to `pitwall-2k7.pages.dev`.
+
+The purchase path works end to end. What has *not* been exercised is the
+packaged app's first-run screen against the live endpoint, because it needs an
+OpenAI API key. Everything beneath it is verified: the Worker, the entitlement
+signature, device binding and the licence store.
 
 Redeploy either side with:
 
@@ -217,9 +245,8 @@ python -m distribution.website.build_site
 cd distribution/website && wrangler pages deploy _site --project-name pitwall
 ```
 
-**Do not share the site link yet.** The Download button correctly reports that
-the file is not available and points at your email, but nobody can complete a
-purchase until R2 is enabled and `DOWNLOAD_URL` is set.
+The site is ready to share. A buyer can pay, receive a code, download the
+installer with it, and activate.
 
 ### Still outstanding
 

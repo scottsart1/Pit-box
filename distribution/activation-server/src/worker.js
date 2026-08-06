@@ -41,6 +41,16 @@ function err(code, message, status, env = null) {
   return json({ code, message }, status, env);
 }
 
+// The installer lives in a PRIVATE R2 bucket and is streamed by this Worker,
+// never linked to directly.
+//
+// The alternative was enabling public access on the bucket and handing out its
+// r2.dev URL. That URL is permanent and unauthenticated, so the first buyer to
+// post it anywhere would make the code gate meaningless. Streaming it here
+// means the file can only be fetched with a code that is still in the
+// database, checked on the file request itself rather than only on the form.
+const INSTALLER_KEY = "PitWall-Setup.exe";
+
 // A device hash is a 64-char lowercase hex SHA-256.
 function validDeviceHash(value) {
   return typeof value === "string" && /^[0-9a-f]{64}$/.test(value);
@@ -175,6 +185,20 @@ async function handleDownload(request, env) {
     );
   }
 
+  // Prefer streaming from R2 through this Worker. DOWNLOAD_URL remains as an
+  // override for hosting the file somewhere else entirely.
+  if (env.DOWNLOADS) {
+    const origin = new URL(request.url).origin;
+    return json(
+      {
+        url: `${origin}/file?code=${encodeURIComponent(codeId)}`,
+        filename: INSTALLER_KEY,
+      },
+      200,
+      env
+    );
+  }
+
   const target = env.DOWNLOAD_URL;
   if (!target) {
     return err(
@@ -184,7 +208,70 @@ async function handleDownload(request, env) {
       env
     );
   }
-  return json({ url: target, filename: "PitWall-Setup.exe" }, 200, env);
+  return json({ url: target, filename: INSTALLER_KEY }, 200, env);
+}
+
+// Serve the installer itself.
+//
+// A GET rather than a POST because the page navigates to it: that gives the
+// buyer the browser's own download UI and progress bar, and Range support so a
+// dropped connection resumes instead of restarting 33 MB.
+//
+// The code travels in the query string, which means it lands in the buyer's
+// browser history. That is the deliberate trade: the link is only useful to
+// someone holding a real code, and passing the link on means passing on your
+// own activation code, which is the thing you actually paid for.
+async function handleFile(request, env, url) {
+  const codeId = normalizeCode(url.searchParams.get("code"));
+  if (!codeId) {
+    return err("code_not_found", "Code not recognized.", 404, env);
+  }
+
+  const row = await env.DB.prepare("SELECT code_id FROM codes WHERE code_id = ?")
+    .bind(codeId)
+    .first();
+  if (!row) {
+    return err("code_not_found", "That code was not recognized.", 404, env);
+  }
+
+  if (!env.DOWNLOADS) {
+    return err("not_configured", "The download is not available yet.", 503, env);
+  }
+
+  // Only ask R2 for a range when one was actually requested. Passing the
+  // headers unconditionally makes it populate object.range even for an
+  // ordinary GET, which then answers a plain download with 206 Partial
+  // Content — wrong, and enough to confuse download managers.
+  const rangeHeader = request.headers.get("range");
+  const object = await env.DOWNLOADS.get(
+    INSTALLER_KEY,
+    rangeHeader ? { range: request.headers } : undefined
+  );
+  if (!object) {
+    return err(
+      "not_configured",
+      "The installer is not uploaded yet. Email vale.scott00@gmail.com and I will send it directly.",
+      503,
+      env
+    );
+  }
+
+  const headers = new Headers(corsHeaders(env));
+  object.writeHttpMetadata(headers);
+  headers.set("etag", object.httpEtag);
+  headers.set("content-disposition", `attachment; filename="${INSTALLER_KEY}"`);
+  headers.set("accept-ranges", "bytes");
+  // Keep the code out of the Referer sent to anywhere the buyer clicks next.
+  headers.set("referrer-policy", "no-referrer");
+
+  if (rangeHeader && object.range && typeof object.range.offset === "number") {
+    const end = object.range.offset + object.range.length - 1;
+    headers.set("content-range", `bytes ${object.range.offset}-${end}/${object.size}`);
+    headers.set("content-length", String(object.range.length));
+    return new Response(object.body, { status: 206, headers });
+  }
+  headers.set("content-length", String(object.size));
+  return new Response(object.body, { status: 200, headers });
 }
 
 export default {
@@ -211,6 +298,13 @@ export default {
         return await handleDownload(request, env);
       } catch (e) {
         return err("server_error", "Could not check that code. Try again.", 500, env);
+      }
+    }
+    if (request.method === "GET" && url.pathname === "/file") {
+      try {
+        return await handleFile(request, env, url);
+      } catch (e) {
+        return err("server_error", "Could not start the download. Try again.", 500, env);
       }
     }
     return err("not_found", "Not found.", 404, env);

@@ -11,5 +11,12 @@ binding = "DB"
 database_name = "pitwall-licenses"
 database_id = "4360c3cd-4f56-4643-a908-85cbed0d2944"
 
+# The installer. Deliberately a PRIVATE bucket streamed through the Worker
+# rather than a public r2.dev URL, so the file cannot be fetched without a code
+# that is still in the database. See handleFile in src/worker.js.
+[[r2_buckets]]
+binding = "DOWNLOADS"
+bucket_name = "pitwall-downloads"
+
 # No secrets are needed by the worker: it holds no key. The activation URL is
 # public; abuse is bounded because a code claims exactly once.
