@@ -212,6 +212,32 @@ td.no { color: var(--muted); }
 }
 .handle { font-family: var(--mono); font-weight: 700; }
 
+/* ---------- code entry ---------- */
+
+.field-label { display: block; font-weight: 700; font-size: .9rem; margin-bottom: .5rem; }
+
+.code-entry { display: flex; gap: .7rem; align-items: stretch; flex-wrap: wrap; }
+
+.code-entry input {
+  flex: 1 1 260px;
+  min-width: 0;
+  padding: .72rem .9rem;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #fff;
+  color: var(--ink);
+  font-family: var(--mono);
+  font-size: 1rem;
+  letter-spacing: .06em;
+}
+.code-entry input:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.code-entry .button { flex: 0 0 auto; }
+
+.download-status { margin: .9rem 0 0; font-size: .93rem; min-height: 1.4em; }
+.download-status[data-tone="error"] { color: var(--accent-ink); }
+.download-status[data-tone="success"] { color: var(--ok); font-weight: 600; }
+.download-status[data-tone="info"] { color: var(--muted); }
+
 /* ---------- reviews ---------- */
 
 .reviews-empty {

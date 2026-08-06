@@ -266,6 +266,37 @@ Strategy / setup / what-if  → model, high reasoning
   </div>
 </section>
 
+<section id="download" class="soft">
+  <div class="wrap">
+    <h2>Already have a code?</h2>
+    <p class="section-lede">Enter it to download the installer. The same code activates the app the first time you run it, so keep it to hand.</p>
+    <div class="buy">
+      <form id="downloadForm" novalidate>
+        <label for="downloadCode" class="field-label">Activation code</label>
+        <div class="code-entry">
+          <input id="downloadCode" name="code" type="text" inputmode="latin"
+                 autocomplete="off" autocapitalize="characters" spellcheck="false"
+                 placeholder="PITW-XXXXX-XXXXX-XXXXX" maxlength="24"
+                 aria-describedby="downloadStatus">
+          <button class="button primary" type="submit">Download</button>
+        </div>
+        <p id="downloadStatus" class="download-status" role="status" aria-live="polite"></p>
+      </form>
+      <p class="field-help">
+        No code yet? <a href="#buy">Get one for $20</a> — it takes a Venmo payment
+        and a reply from me. If you have paid and not heard back, email
+        <a href="mailto:vale.scott00@gmail.com">vale.scott00@gmail.com</a>.
+      </p>
+    </div>
+
+    <ol class="steps" style="margin-top:2rem;max-width:640px">
+      <li><div><strong>Download and run the installer.</strong> It installs for you only, so Windows will not ask for an administrator password.</div></li>
+      <li><div><strong>Pit Wall starts by itself</strong> at the end of the installer and asks for your activation code and your OpenAI API key. That is the whole setup.</div></li>
+      <li><div><strong>After that, just open it</strong> from the Start Menu or the desktop icon. It goes straight to the dashboard — no code, no setup, ever again.</div></li>
+    </ol>
+  </div>
+</section>
+
 <section class="soft">
   <div class="wrap">
     <h2>Reviews</h2>
@@ -331,5 +362,6 @@ Strategy / setup / what-if  → model, high reasoning
   </div>
 </footer>
 
+<script src="download.js" defer></script>
 </body>
 </html>

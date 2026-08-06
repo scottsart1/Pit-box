@@ -85,6 +85,12 @@ def launch(
         return LaunchResult(LaunchOutcome.RUN)
 
     message = ""
+    if result.status is gate.GateStatus.WRONG_DEVICE:
+        # Explain it up front, then still offer the form: someone who has been
+        # issued a replacement code should be able to use it right now rather
+        # than being locked out until they find support.
+        show_error(result.detail)
+        message = result.detail
     while True:
         entered = prompt(message)
         if entered is None:

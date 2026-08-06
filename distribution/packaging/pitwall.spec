@@ -26,9 +26,9 @@ datas = [
     (str(DIST_ROOT / "licensing" / "embedded_public_key.txt"), "distribution/licensing"),
 ]
 
-_manifest = DIST_ROOT / "licensing" / "integrity_manifest.txt"
-if _manifest.exists():
-    datas.append((str(_manifest), "distribution/licensing"))
+# The integrity manifest is NOT collected here. A frozen build hashes its own
+# executable, so the value cannot be known until after PyInstaller has run --
+# the build driver writes it into the finished app directory afterwards.
 
 hiddenimports = [
     # Tk is only imported inside functions in first_run.py, so the analysis

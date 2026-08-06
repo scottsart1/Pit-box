@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import sys
 import tempfile
 from contextlib import asynccontextmanager
 from dataclasses import asdict
@@ -555,7 +556,21 @@ app.include_router(
         configured_max_hz=settings.live_ws_max_hz,
     )
 )
-_static_root = Path(__file__).resolve().parents[2] / "static"
+def _static_root_path() -> Path:
+    """Locate the dashboard's files in both a source tree and a frozen build.
+
+    Walking up from ``__file__`` is correct for ``src/pitwall/app.py``, but a
+    packaged build collects the modules at a different depth, so the same
+    expression resolves to a directory outside the bundle and StaticFiles
+    raises at import time — before the server ever starts.
+    """
+    bundle = getattr(sys, "_MEIPASS", None)
+    if bundle:
+        return Path(bundle) / "static"
+    return Path(__file__).resolve().parents[2] / "static"
+
+
+_static_root = _static_root_path()
 app.mount("/static", StaticFiles(directory=_static_root), name="static")
 
 
@@ -609,15 +624,13 @@ class WakeRequest(BaseModel):
 
 @app.get("/", response_class=HTMLResponse)
 async def index() -> HTMLResponse:
-    path = Path(__file__).resolve().parents[2] / "static" / "index.html"
-    return HTMLResponse(path.read_text(encoding="utf-8"))
+    return HTMLResponse((_static_root / "index.html").read_text(encoding="utf-8"))
 
 
 @app.get("/overlay", response_class=HTMLResponse)
 async def overlay() -> HTMLResponse:
     """Transparent OBS/second-screen overlay. Append ?bg=1 for an opaque panel."""
-    path = Path(__file__).resolve().parents[2] / "static" / "overlay.html"
-    return HTMLResponse(path.read_text(encoding="utf-8"))
+    return HTMLResponse((_static_root / "overlay.html").read_text(encoding="utf-8"))
 
 
 @app.get("/api/health")

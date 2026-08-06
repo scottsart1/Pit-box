@@ -27,17 +27,30 @@ SCREENSHOT_DIR = REPO_ROOT / "docs" / "screenshots"
 OUTPUT_DIR = SITE_DIR / "_site"
 
 PAGES = ("index.html", "eula.html")
-ASSETS = ("styles.css",)
+ASSETS = ("styles.css", "download.js")
+
+# Scanned for placeholders alongside the pages. download.js carries the
+# activation endpoint, and a site published with the placeholder host has a
+# Download button that silently fails — which looks like a working page.
+SCANNED = PAGES + ("download.js",)
 
 # Every value that must be replaced before the site is public. Each is paired
 # with what to do about it, because "placeholder found" alone is not actionable.
 PLACEHOLDERS: dict[str, str] = {
-    "[STATE]": (
-        "Name the governing-law state in eula.html section 10. \"USA\" alone "
-        "does not work: US contract and consumer law is set at state level, so "
-        "the clause needs a named state (normally where you live)."
-    ),
+    # Empty: the Venmo handle, contact email and governing-law clause are all
+    # settled. Add an entry here if a new fill-in-later value is introduced.
 }
+
+# Catches placeholder *shapes* rather than known strings, so a value added
+# later cannot slip out unfilled just because nobody remembered to register
+# it above. The failure this prevents is silent: a live page reading
+# "email YOUR-EMAIL@example.com" looks exactly like a working page.
+PLACEHOLDER_PATTERNS: tuple[tuple[str, str], ...] = (
+    (r"\[[A-Z][A-Z _-]{2,}\]", "a [BRACKETED] placeholder"),
+    (r"\bYOUR[-_][A-Z]", "a YOUR-SOMETHING placeholder"),
+    (r"\bexample\.(?:com|invalid)\b", "an example.com address"),
+    (r"\bTODO\b|\bFIXME\b", "a TODO marker"),
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -67,10 +80,18 @@ def check() -> SiteCheck:
     if problems:
         return SiteCheck(False, tuple(problems))
 
-    combined = "\n".join((SITE_DIR / page).read_text(encoding="utf-8") for page in PAGES)
+    # Only the visible page matters: the HTML comments in eula.html discuss
+    # placeholders on purpose, and flagging those would make the check cry wolf.
+    combined = "\n".join(
+        re.sub(r"<!--.*?-->", "", (SITE_DIR / name).read_text(encoding="utf-8"), flags=re.DOTALL)
+        for name in SCANNED
+    )
     for token, fix in PLACEHOLDERS.items():
         if token in combined:
             problems.append(f"Placeholder {token} is still on the page. {fix}")
+    for pattern, described in PLACEHOLDER_PATTERNS:
+        for hit in sorted(set(re.findall(pattern, combined))):
+            problems.append(f"{hit!r} looks like {described}. Replace it with a real value.")
 
     for image in sorted(_referenced_images()):
         if not (SCREENSHOT_DIR / image).exists():

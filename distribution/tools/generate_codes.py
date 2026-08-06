@@ -117,12 +117,21 @@ def main() -> int:
     sql_path = LEDGER_DIR / f"seed_codes_{stamp}.sql"
     sql_path.write_text("\n".join(sql_lines) + "\n", encoding="utf-8")
 
+    # The workbook you actually work from when someone pays. Written in the
+    # same run as the ledger and the seed, so the three cannot disagree about
+    # which codes exist.
+    from distribution.tools.keys_workbook import build_from_records
+
+    workbook_path = LEDGER_DIR / f"activation_keys_{stamp}.xlsx"
+    build_from_records(records, workbook_path, f"{args.issued} · {args.count} codes")
+
     print(f"Minted {args.count} codes (sku={args.sku}, issued={args.issued}).")
     print(f"  ledger : {ledger_path}")
     print(f"  codes  : {codes_path}")
     print(f"  D1 seed: {sql_path}")
+    print(f"  TRACKER: {workbook_path}   <- the one you open when you make a sale")
     print()
-    print("All three are under distribution/ledger/ and gitignored. Never commit them.")
+    print("All four are under distribution/ledger/ and gitignored. Never commit them.")
     print("Upload the seed to D1:  wrangler d1 execute pitwall-licenses "
           f"--file {sql_path.name}")
     return 0

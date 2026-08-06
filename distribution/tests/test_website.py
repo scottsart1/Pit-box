@@ -21,6 +21,27 @@ from distribution.website import build_site  # noqa: E402
 
 INDEX = (DIST / "website" / "index.html").read_text(encoding="utf-8")
 EULA = (DIST / "website" / "eula.html").read_text(encoding="utf-8")
+DOWNLOAD_JS = (DIST / "website" / "download.js").read_text(encoding="utf-8")
+
+REAL_ENDPOINT = "https://activation.pitwall.app"
+
+
+def _stage(tmp_path, monkeypatch, *, index=None, eula=None, script=None):
+    """A site directory with every scanned file present and filled in.
+
+    Each test then breaks exactly one thing, so a failure names its own cause.
+    """
+    site = tmp_path / "website"
+    site.mkdir(exist_ok=True)
+    (site / "index.html").write_text(index if index is not None else INDEX, encoding="utf-8")
+    (site / "eula.html").write_text(eula if eula is not None else EULA, encoding="utf-8")
+    (site / "download.js").write_text(
+        script if script is not None
+        else DOWNLOAD_JS.replace("https://activation.example.invalid", REAL_ENDPOINT),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(build_site, "SITE_DIR", site)
+    return site
 
 
 # ---------------------------------------------------------------------------
@@ -28,17 +49,52 @@ EULA = (DIST / "website" / "eula.html").read_text(encoding="utf-8")
 # ---------------------------------------------------------------------------
 
 
-def test_the_unfilled_site_is_blocked_from_publishing():
-    # The governing-law state is still outstanding, so publishing must fail.
+def test_the_site_is_blocked_until_the_worker_is_deployed():
+    # download.js still points at the placeholder host. Publishing now would
+    # give buyers a Download button that fails with a network error.
     result = build_site.check()
     assert not result.ok
-    assert any("[STATE]" in problem for problem in result.problems)
+    assert any("example.invalid" in problem for problem in result.problems)
 
 
-def test_every_placeholder_names_the_fix():
+def test_the_site_passes_once_the_endpoint_is_set(tmp_path, monkeypatch):
+    _stage(tmp_path, monkeypatch)
+    result = build_site.check()
+    assert result.ok, result.report()
+
+
+def test_every_registered_placeholder_names_the_fix():
     for token, fix in build_site.PLACEHOLDERS.items():
         assert fix.endswith("."), f"{token} has no actionable fix message"
         assert len(fix) > 20
+
+
+@pytest.mark.parametrize(
+    "sneaked",
+    [
+        "<p>Pay @YOUR-HANDLE today</p>",
+        "<p>Email me at hello@example.com</p>",
+        "<p>Governed by the laws of [SOME STATE]</p>",
+        "<p>TODO: write this bit</p>",
+    ],
+)
+def test_a_newly_introduced_placeholder_is_caught_by_shape(tmp_path, monkeypatch, sneaked):
+    # The registered-token list only catches placeholders someone remembered to
+    # register. This is the net under it.
+    _stage(tmp_path, monkeypatch, index=INDEX + sneaked)
+
+    result = build_site.check()
+    assert not result.ok, f"{sneaked} was not caught"
+
+
+def test_comments_discussing_placeholders_do_not_trip_the_check(tmp_path, monkeypatch):
+    # A build note may legitimately mention YOUR-EMAIL@example.com to explain
+    # what was replaced. Only the visible page is checked; a check that cried
+    # wolf on its own documentation would be turned off within a week.
+    note = "<!-- was: YOUR-EMAIL@example.com, see [OLD NOTES], TODO tidy -->"
+    _stage(tmp_path, monkeypatch, index=note + INDEX)
+
+    assert build_site.check().ok
 
 
 def test_the_real_contact_details_are_in_place():
@@ -56,28 +112,19 @@ def test_the_buyer_is_told_to_put_their_email_in_the_venmo_note():
     assert "payment note" in INDEX
 
 
-def test_the_governing_law_clause_is_state_level():
-    # A US governing-law clause naming only the country is not enforceable as
-    # written; state law is what applies.
-    assert "State of" in EULA
-    assert "United States" in EULA
-    assert "conflict-of-laws" in EULA
+def test_the_eula_sections_are_numbered_contiguously():
+    # A section was removed; the numbering must not have gaps or duplicates.
+    numbers = [int(n) for n in re.findall(r"<h2>(\d+)\.", EULA)]
+    assert numbers == list(range(1, len(numbers) + 1)), numbers
 
 
-def test_a_filled_site_passes(tmp_path, monkeypatch):
-    site = tmp_path / "website"
-    site.mkdir()
-    filled_index = INDEX
-    filled_eula = EULA
-    for token in build_site.PLACEHOLDERS:
-        filled_index = filled_index.replace(token, "filled")
-        filled_eula = filled_eula.replace(token, "filled")
-    (site / "index.html").write_text(filled_index, encoding="utf-8")
-    (site / "eula.html").write_text(filled_eula, encoding="utf-8")
-
-    monkeypatch.setattr(build_site, "SITE_DIR", site)
+def test_the_javascript_is_scanned_for_placeholders_too(tmp_path, monkeypatch):
+    # The endpoint lives in download.js, not in the HTML. Scanning only the
+    # pages would ship a Download button that silently does nothing.
+    _stage(tmp_path, monkeypatch, script=DOWNLOAD_JS)
     result = build_site.check()
-    assert result.ok, result.report()
+    assert not result.ok
+    assert any("example.invalid" in problem for problem in result.problems)
 
 
 def test_every_referenced_screenshot_exists():

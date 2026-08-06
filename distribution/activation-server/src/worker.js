@@ -104,6 +104,57 @@ async function handleActivate(request, env) {
   );
 }
 
+// Gate the installer download on a real code.
+//
+// Deliberately does NOT claim the code. Claiming happens once, at activation,
+// bound to a device. If downloading burned the code, a buyer whose disk died
+// mid-install would be locked out of the file they had paid for, and every
+// support request would cost a replacement code.
+//
+// Be honest about what this is: a funnel, not a security boundary. Anyone who
+// has downloaded the installer can pass the file to someone else — it is the
+// activation code that makes a copy usable, and that is enforced server-side
+// and re-checked on every launch. This stops the download being a public link,
+// nothing more.
+async function handleDownload(request, env) {
+  let payload;
+  try {
+    payload = await request.json();
+  } catch {
+    return err("bad_request", "Body must be JSON.", 400);
+  }
+
+  const codeId = normalizeCode(payload && payload.code);
+  if (!codeId) {
+    return err(
+      "code_not_found",
+      "That does not look like a Pit Wall activation code. It has the form PITW-XXXXX-XXXXX-XXXXX.",
+      404
+    );
+  }
+
+  const row = await env.DB.prepare("SELECT code_id FROM codes WHERE code_id = ?")
+    .bind(codeId)
+    .first();
+  if (!row) {
+    return err(
+      "code_not_found",
+      "That code was not recognized. Check it against your purchase email, or reply to it and I will sort it out.",
+      404
+    );
+  }
+
+  const target = env.DOWNLOAD_URL;
+  if (!target) {
+    return err(
+      "not_configured",
+      "The download is not available yet. Email vale.scott00@gmail.com and I will send it directly.",
+      503
+    );
+  }
+  return json({ url: target, filename: "PitWall-Setup.exe" });
+}
+
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
@@ -115,6 +166,13 @@ export default {
         return await handleActivate(request, env);
       } catch (e) {
         return err("server_error", "Activation failed. Try again.", 500);
+      }
+    }
+    if (request.method === "POST" && url.pathname === "/download") {
+      try {
+        return await handleDownload(request, env);
+      } catch (e) {
+        return err("server_error", "Could not check that code. Try again.", 500);
       }
     }
     return err("not_found", "Not found.", 404);

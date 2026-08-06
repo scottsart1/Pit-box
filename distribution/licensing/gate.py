@@ -21,6 +21,7 @@ The dev app never imports this module, so `python -m pitwall.main` is ungated.
 from __future__ import annotations
 
 import hashlib
+import sys
 import time
 from dataclasses import dataclass
 from enum import Enum
@@ -29,7 +30,13 @@ from pathlib import Path
 from .activation_client import ActivationError, activate
 from .device import device_hash
 from .entitlement import Entitlement
-from .license_store import License, LicenseInvalid, load_and_validate, save_license
+from .license_store import (
+    License,
+    LicenseForAnotherDevice,
+    LicenseInvalid,
+    load_and_validate,
+    save_license,
+)
 
 # Files whose bytes are hashed into the integrity manifest. Patching any of them
 # changes the hash. device.py is guarded because it computes the machine hash
@@ -60,6 +67,7 @@ TAMPER_MESSAGE = (
 class GateStatus(Enum):
     LICENSED = "licensed"
     NEEDS_ACTIVATION = "needs_activation"
+    WRONG_DEVICE = "wrong_device"
     TAMPERED = "tampered"
 
 
@@ -70,31 +78,78 @@ class GateResult:
     detail: str = ""
 
 
-def _module_digest() -> str:
+def is_frozen() -> bool:
+    return bool(getattr(sys, "frozen", False))
+
+
+def _digest_of(paths: list[Path]) -> str:
     digest = hashlib.sha256()
-    here = Path(__file__).parent
-    for name in _GUARDED:
-        digest.update((here / name).read_bytes())
+    for path in paths:
+        digest.update(path.name.encode("utf-8"))
+        digest.update(b"\x00")
+        digest.update(path.read_bytes())
     return digest.hexdigest()
 
 
-def write_integrity_manifest() -> str:
-    """Called at build time to bake in the expected hash of the license code."""
+def _module_digest() -> str:
+    """Hash whatever actually carries the licensing logic on this install.
+
+    A packaged build has no `.py` files: PyInstaller compiles them into an
+    archive inside the executable. Hashing source paths therefore crashed the
+    shipped app on every launch with FileNotFoundError, while working
+    perfectly in development where the files do exist. So the frozen build
+    hashes the executable, which is both what exists and what an attacker
+    would actually have to modify.
+    """
+    if is_frozen():
+        return _digest_of([Path(sys.executable).resolve()])
+    here = Path(__file__).parent
+    return _digest_of([here / name for name in _GUARDED])
+
+
+def digest_for_packaged_executable(executable: Path) -> str:
+    """The digest the shipped app will compute for itself at launch.
+
+    The build driver calls this on the freshly built executable so the
+    recorded value and the runtime check are produced by the same code and
+    cannot drift into permanently disagreeing.
+    """
+    return _digest_of([Path(executable).resolve()])
+
+
+MANIFEST_NAME = "integrity_manifest.txt"
+
+
+def write_integrity_manifest(destination: Path | None = None) -> str:
+    """Record the expected digest of this install.
+
+    For a frozen build this must be called *after* the executable exists — its
+    own hash cannot be inside it — so the build driver writes it beside the
+    packaged app once PyInstaller has finished.
+    """
     value = _module_digest()
-    _MANIFEST.write_text(value + "\n", encoding="ascii")
+    target = destination or _MANIFEST
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(value + "\n", encoding="ascii")
     return value
 
 
 def integrity_ok() -> bool:
-    """True unless the guarded modules differ from the build-time manifest.
+    """True unless this install differs from what the build recorded.
 
-    Absence of the manifest (a dev tree) is treated as OK: integrity is only
-    enforced in a build that shipped a manifest.
+    Absence of the manifest (a development checkout) is treated as OK:
+    integrity is only enforced in a build that shipped one.
     """
     if not _MANIFEST.exists():
         return True
-    expected = _MANIFEST.read_text(encoding="ascii").strip()
-    return _module_digest() == expected
+    try:
+        expected = _MANIFEST.read_text(encoding="ascii").strip()
+        return _module_digest() == expected
+    except OSError:
+        # A manifest we cannot read is a damaged install, not proof of
+        # tampering — but it is also not proof of integrity. Refusing to run
+        # is the safe answer, and the message tells the user to reinstall.
+        return False
 
 
 def check(config_dir: Path) -> GateResult:
@@ -109,6 +164,10 @@ def check(config_dir: Path) -> GateResult:
     try:
         lic = load_and_validate(config_dir)
         return GateResult(GateStatus.LICENSED, license=lic)
+    except LicenseForAnotherDevice as exc:
+        # Distinct from "no licence": the user needs telling why a working
+        # install stopped working after they copied it.
+        return GateResult(GateStatus.WRONG_DEVICE, detail=str(exc))
     except LicenseInvalid as exc:
         return GateResult(GateStatus.NEEDS_ACTIVATION, detail=str(exc))
 
@@ -151,13 +210,16 @@ def _utc_stamp() -> str:
 
 
 __all__ = [
-    "GateStatus",
-    "GateResult",
+    "MANIFEST_NAME",
     "TAMPER_MESSAGE",
-    "check",
-    "complete_activation",
-    "integrity_ok",
-    "write_integrity_manifest",
     "ActivationError",
     "Entitlement",
+    "GateResult",
+    "GateStatus",
+    "check",
+    "complete_activation",
+    "digest_for_packaged_executable",
+    "integrity_ok",
+    "is_frozen",
+    "write_integrity_manifest",
 ]

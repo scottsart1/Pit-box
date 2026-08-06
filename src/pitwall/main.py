@@ -63,8 +63,17 @@ def run() -> None:
                 local_dashboard_url(settings.web_host, settings.web_port)
             ),
         ).start()
+    # Pass the application object, not the "pitwall.app:app" import string.
+    # uvicorn resolves a string by importing it by name at startup, which a
+    # frozen build cannot satisfy: the packaged app fails with "Error loading
+    # ASGI app. Could not import module" and exits. Importing it here also
+    # surfaces a real traceback if the import genuinely fails, instead of
+    # uvicorn's single-line summary. Reload is off, so nothing needs the
+    # string form.
+    from .app import app
+
     uvicorn.run(
-        "pitwall.app:app",
+        app,
         host=settings.web_host,
         port=settings.web_port,
         reload=False,

@@ -17,18 +17,42 @@ not blocked on owning a Mac.
 from __future__ import annotations
 
 import argparse
+import os
 import platform
+import re
 import shutil
 import subprocess
 import sys
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
 DIST_ROOT = Path(__file__).resolve().parents[1]
 REPO_ROOT = DIST_ROOT.parent
 SPEC = Path(__file__).resolve().parent / "pitwall.spec"
-BUILD_DIR = DIST_ROOT / "build"
-OUTPUT_DIR = DIST_ROOT / "artifacts"
+
+
+def _build_root() -> Path:
+    """Where to build. Deliberately outside the repository.
+
+    This repo lives under OneDrive. Building into it meant OneDrive held
+    handles on the output while uploading, so PyInstaller intermittently died
+    with PermissionError trying to clear the previous build — and because the
+    failure left the *old* build in place, the next test run silently
+    exercised a stale executable and reported a bug that had already been
+    fixed. It also uploaded ~300 MB of build litter per run.
+
+    Override with PITWALL_BUILD_DIR if the default is unsuitable.
+    """
+    override = os.environ.get("PITWALL_BUILD_DIR")
+    if override:
+        return Path(override).resolve()
+    local = os.environ.get("LOCALAPPDATA") or tempfile.gettempdir()
+    return Path(local) / "PitWallBuild"
+
+
+BUILD_DIR = _build_root()
+OUTPUT_DIR = BUILD_DIR / "artifacts"
 
 APP_NAME = "Pit Wall"
 
@@ -99,15 +123,96 @@ def preflight() -> Preflight:
     return Preflight(not problems, tuple(problems), tuple(warnings))
 
 
-def _manifest_path() -> Path:
-    return DIST_ROOT / "licensing" / "integrity_manifest.txt"
+def write_eula(app_dir: Path) -> Path:
+    """Derive the installer's licence text from the website's EULA.
+
+    Generated rather than maintained separately: two copies of a licence drift,
+    and the one a buyer agrees to at install time disagreeing with the one on
+    the site is exactly the sort of thing that matters if it is ever disputed.
+    """
+    source = DIST_ROOT / "website" / "eula.html"
+    html = source.read_text(encoding="utf-8")
+
+    body = re.sub(r"<!--.*?-->", "", html, flags=re.DOTALL)
+    # <head> carries a <title> identical to the <h1>, which would appear twice.
+    body = re.sub(r"<head\b.*?</head>", "", body, flags=re.DOTALL | re.IGNORECASE)
+    body = re.sub(r"<(script|style|header|footer)\b.*?</\1>", "", body, flags=re.DOTALL | re.IGNORECASE)
+    body = re.sub(r"</(p|li|h1|h2|ul|div)>", "\n", body, flags=re.IGNORECASE)
+    body = re.sub(r"<li\b[^>]*>", "  - ", body, flags=re.IGNORECASE)
+    body = re.sub(r"<h2\b[^>]*>", "\n", body, flags=re.IGNORECASE)
+    body = re.sub(r"<[^>]+>", "", body)
+    for entity, plain in (
+        ("&nbsp;", " "), ("&amp;", "&"), ("&lt;", "<"), ("&gt;", ">"),
+        ("&quot;", '"'), ("&#39;", "'"), ("\u2014", "-"), ("\u2019", "'"),
+    ):
+        body = body.replace(entity, plain)
+    lines = [line.strip() for line in body.splitlines()]
+    text = "\n".join(lines)
+    text = re.sub(r"\n{3,}", "\n\n", text).strip()
+
+    target = app_dir / "EULA.txt"
+    target.write_text(text + "\n", encoding="utf-8")
+    return target
 
 
-def write_manifest() -> str:
-    """Bake the integrity hash of the licensing modules into the build."""
+def build_installer(app_dir: Path, version: str = "4.2.0") -> Path | None:
+    """Compile the one-click installer, if Inno Setup is available.
+
+    Returns None rather than failing the build when it is absent: the zip is
+    still a valid deliverable, and the compiler is a separate download that
+    only matters when cutting a release.
+    """
+    compiler = _inno_compiler()
+    if compiler is None:
+        print(
+            "\nInno Setup not found, so no PitWall-Setup.exe was produced.\n"
+            "  Install it with:  winget install JRSoftware.InnoSetup\n"
+            "  Then re-run this with --installer.\n"
+            "  The zip above is still usable; it just asks the buyer to "
+            "unzip and find the exe themselves."
+        )
+        return None
+
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    _run([
+        str(compiler),
+        f"/DAppVersion={version}",
+        f"/DSourceDir={app_dir}",
+        f"/DOutputDir={OUTPUT_DIR}",
+        str(Path(__file__).resolve().parent / "pitwall.iss"),
+    ])
+    produced = OUTPUT_DIR / "PitWall-Setup.exe"
+    return produced if produced.exists() else None
+
+
+def _inno_compiler() -> Path | None:
+    found = shutil.which("ISCC") or shutil.which("iscc")
+    if found:
+        return Path(found)
+    for candidate in (
+        Path(r"C:\Program Files (x86)\Inno Setup 6\ISCC.exe"),
+        Path(r"C:\Program Files\Inno Setup 6\ISCC.exe"),
+    ):
+        if candidate.exists():
+            return candidate
+    return None
+
+
+def stamp_manifest(app_dir: Path, executable: Path) -> str:
+    """Record the finished executable's digest inside the packaged app.
+
+    Must run after PyInstaller: a frozen build hashes its own executable, so
+    the expected value cannot exist until that executable does. The path
+    mirrors where the licensing package lands in the bundle, because gate.py
+    looks for the manifest beside itself.
+    """
     from ..licensing import gate
 
-    return gate.write_integrity_manifest()
+    value = gate.digest_for_packaged_executable(executable)
+    target = app_dir / "_internal" / "distribution" / "licensing" / gate.MANIFEST_NAME
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(value + "\n", encoding="ascii")
+    return value
 
 
 def _run(command: list[str]) -> None:
@@ -115,9 +220,35 @@ def _run(command: list[str]) -> None:
     subprocess.run(command, check=True, cwd=REPO_ROOT)
 
 
+def _pyinstaller() -> None:
+    """Freeze, with output paths pinned under distribution/build/.
+
+    PyInstaller defaults to `dist/` and `build/` in the working directory. The
+    repo root already gitignores `dist/` for a different reason, and leaving
+    build litter beside the source is how stale artifacts get shipped.
+    """
+    _run([
+        sys.executable, "-m", "PyInstaller", "--noconfirm",
+        "--distpath", str(BUILD_DIR / "dist"),
+        "--workpath", str(BUILD_DIR / "work"),
+        str(SPEC),
+    ])
+
+
 def build_windows() -> Path:
-    _run([sys.executable, "-m", "PyInstaller", "--noconfirm", str(SPEC)])
+    _pyinstaller()
     produced = BUILD_DIR / "dist" / APP_NAME
+    if not produced.is_dir():
+        raise SystemExit(f"expected a build at {produced}; PyInstaller did not make one")
+
+    executable = produced / f"{APP_NAME}.exe"
+    if not executable.exists():
+        raise SystemExit(f"expected an executable at {executable}")
+
+    write_eula(produced)
+    digest = stamp_manifest(produced, executable)
+    print(f"Integrity manifest stamped: {digest[:16]}…")
+
     archive = OUTPUT_DIR / f"{APP_NAME.replace(' ', '')}-windows"
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     return Path(shutil.make_archive(str(archive), "zip", root_dir=produced))
@@ -131,10 +262,19 @@ def build_macos() -> Path:
     unsigned build would look successful while being unopenable on any other
     Mac. `macos_release_steps()` prints exactly what to run.
     """
-    _run([sys.executable, "-m", "PyInstaller", "--noconfirm", str(SPEC)])
+    _pyinstaller()
     bundle = BUILD_DIR / "dist" / f"{APP_NAME}.app"
     if not bundle.exists():
         raise SystemExit(f"expected a bundle at {bundle}; PyInstaller did not make one")
+
+    # No integrity manifest on macOS, deliberately. codesign rewrites the
+    # executable, so a digest taken before signing would never match at
+    # runtime and the app would refuse to start on every Mac. Signing and
+    # notarization are themselves the platform's integrity guarantee, and a
+    # stronger one: Gatekeeper refuses a modified bundle before it ever runs.
+    # With no manifest present, integrity_ok() returns True and the licence
+    # checks proceed normally.
+    print("macOS: integrity is enforced by codesign/notarization, not a manifest.")
 
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     dmg = OUTPUT_DIR / f"{APP_NAME.replace(' ', '')}-macos.dmg"
@@ -178,6 +318,18 @@ def main(argv: list[str] | None = None) -> int:
         "--check", action="store_true",
         help="run preflight and write the manifest, but do not build",
     )
+    parser.add_argument(
+        "--installer", action="store_true",
+        help="also compile the one-click PitWall-Setup.exe (needs Inno Setup)",
+    )
+    parser.add_argument(
+        "--dev", action="store_true",
+        help=(
+            "build despite preflight failures, for testing the packaging "
+            "itself. The result is signed with the development key and must "
+            "never be sold or published."
+        ),
+    )
     args = parser.parse_args(argv)
 
     system = platform.system()
@@ -187,15 +339,15 @@ def main(argv: list[str] | None = None) -> int:
     print("Preflight:")
     print(checks.report())
 
-    manifest = write_manifest()
-    print(f"Integrity manifest: {manifest[:16]}… ({len(manifest)} hex chars)")
+    # An older build wrote a manifest into the source tree. A checkout that
+    # still has one enforces integrity against a stale hash and reads as
+    # tampered after any edit to a guarded module.
+    stray = DIST_ROOT / "licensing" / "integrity_manifest.txt"
+    if stray.exists():
+        stray.unlink()
+        print(f"Removed a stray manifest from the source tree: {stray}")
 
     if args.check:
-        # Leaving the manifest in a source tree would make every dev checkout
-        # start enforcing integrity, and fail the moment a guarded module is
-        # edited. A real build keeps it, because PyInstaller has to collect it.
-        _manifest_path().unlink(missing_ok=True)
-        print("Integrity manifest removed again (--check does not alter the tree).")
         print("\n--check: stopping before the build.")
         if system != "Darwin":
             print(
@@ -208,11 +360,20 @@ def main(argv: list[str] | None = None) -> int:
         return 0 if checks.ok else 1
 
     if not checks.ok:
-        print("\nRefusing to build: fix the BLOCKED items above.")
-        return 1
+        if not args.dev:
+            print("\nRefusing to build: fix the BLOCKED items above.")
+            return 1
+        print(
+            "\n--dev: building anyway. THIS BUILD IS NOT SELLABLE - it carries "
+            "the development key and/or a placeholder activation endpoint."
+        )
 
     if system == "Windows":
         artifact = build_windows()
+        if args.installer:
+            setup = build_installer(BUILD_DIR / "dist" / APP_NAME)
+            if setup is not None:
+                print(f"\nInstaller: {setup}")
     elif system == "Darwin":
         artifact = build_macos()
         print("\nNot yet signed or notarized. Remaining steps:\n")

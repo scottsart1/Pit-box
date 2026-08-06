@@ -13,7 +13,7 @@ from .verify import VerificationError, verify_entitlement
 
 __all__ = [
     "Entitlement",
-    "canonical_bytes",
     "VerificationError",
+    "canonical_bytes",
     "verify_entitlement",
 ]

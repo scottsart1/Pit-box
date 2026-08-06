@@ -15,8 +15,17 @@ import os
 import sys
 from pathlib import Path
 
-from . import first_run
-from .launcher import ACTIVATION_ENDPOINT, LaunchOutcome, LaunchResult, launch
+# Absolute, not relative. PyInstaller runs this file as __main__, which has no
+# parent package, so `from . import first_run` raises ImportError at startup in
+# the packaged build while working fine under `python -m distribution.main`.
+# Absolute imports work under both.
+from distribution import first_run
+from distribution.launcher import (
+    ACTIVATION_ENDPOINT,
+    LaunchOutcome,
+    LaunchResult,
+    launch,
+)
 
 
 def config_dir() -> Path:
@@ -39,10 +48,15 @@ def _save_api_key(key: str) -> None:
 
 
 def _start_app() -> None:
-    """Hand over to the ordinary Pit Wall server."""
-    from pitwall.main import main as pitwall_main
+    """Hand over to the ordinary Pit Wall server.
 
-    pitwall_main()
+    `run` configures logging, opens the dashboard in the default browser, and
+    serves until the process is closed — so from the buyer's side, launching
+    the app is the whole of it.
+    """
+    from pitwall.main import run
+
+    run()
 
 
 def main(argv: list[str] | None = None) -> int:

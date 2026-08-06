@@ -196,6 +196,73 @@ def test_a_failed_key_save_still_lets_the_app_start(tmp_path, bound_device, monk
     assert any("Connection tab" in message for message in recorder.errors)
 
 
+def test_a_copied_install_says_so_instead_of_silently_asking_for_a_code(tmp_path, monkeypatch):
+    # The licence is genuine and correctly signed; it just belongs to the
+    # machine it was activated on. Dropping the user on a bare activation form
+    # here is how someone burns a second code trying to fix a non-problem.
+    entitlement = _entitlement()
+    save_license(
+        tmp_path,
+        License(entitlement, _sign(entitlement), "a" * 64, "2026-08-06T00:00:00Z"),
+    )
+    monkeypatch.setattr(
+        "distribution.licensing.license_store.device_hash", lambda: "b" * 64
+    )
+    recorder = _Recorder([])
+
+    result = _launch(recorder, tmp_path)
+
+    assert recorder.errors, "the user was told nothing"
+    explanation = recorder.errors[0]
+    assert "one computer only" in explanation
+    assert "vale.scott00@gmail.com" in explanation, "no route to a replacement code"
+    # The form is still offered, so a replacement code works immediately.
+    assert recorder.prompts
+    assert result.outcome is launcher.LaunchOutcome.CANCELLED
+
+
+def test_a_copied_install_can_be_fixed_with_a_replacement_code(tmp_path, monkeypatch):
+    entitlement = _entitlement()
+    signature = _sign(entitlement)
+    save_license(
+        tmp_path,
+        License(entitlement, signature, "a" * 64, "2026-08-06T00:00:00Z"),
+    )
+    monkeypatch.setattr(
+        "distribution.licensing.license_store.device_hash", lambda: DEVICE
+    )
+    monkeypatch.setattr("distribution.licensing.gate.device_hash", lambda: DEVICE)
+
+    from distribution.licensing import gate as gate_module
+    from distribution.licensing.activation_client import ActivationResult
+
+    monkeypatch.setattr(
+        gate_module, "activate",
+        lambda endpoint, code, dev: ActivationResult(entitlement, signature),
+    )
+    recorder = _Recorder([launcher.FirstRunInput(CODE, "")])
+
+    result = _launch(recorder, tmp_path)
+
+    assert result.outcome is launcher.LaunchOutcome.ACTIVATED
+    assert recorder.started == 1
+
+
+def test_the_wrong_device_status_is_not_confused_with_no_licence(tmp_path, monkeypatch):
+    entitlement = _entitlement()
+    save_license(
+        tmp_path,
+        License(entitlement, _sign(entitlement), "a" * 64, "2026-08-06T00:00:00Z"),
+    )
+    monkeypatch.setattr(
+        "distribution.licensing.license_store.device_hash", lambda: "b" * 64
+    )
+    assert gate.check(tmp_path).status is gate.GateStatus.WRONG_DEVICE
+
+    (tmp_path / "license.json").unlink()
+    assert gate.check(tmp_path).status is gate.GateStatus.NEEDS_ACTIVATION
+
+
 def test_the_shipped_endpoint_placeholder_is_obviously_not_real():
     # A build that forgot to point at the deployed Worker must fail loudly at
     # activation rather than quietly talking to somewhere unintended.

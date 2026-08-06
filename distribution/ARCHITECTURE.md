@@ -230,14 +230,50 @@ gitignores `dist/` as a Python build directory.
   while the Venmo handle, contact email, or jurisdiction are unfilled, and
   tests pin the claims that would be dishonest if they went stale.
 
+- **A working Windows package**, built and run end to end on this machine: the
+  dashboard, static assets, every API and the overlay all respond from the
+  frozen exe. Four bugs only a real launch could find are fixed — a relative
+  import in the entry point, an integrity check hashing `.py` files a frozen
+  build does not have, uvicorn's import-string form being unresolvable when
+  frozen, and `static/` located by walking up from `__file__`.
+- **A one-click installer** (`packaging/pitwall.iss`): per-user, so no UAC
+  prompt; Start Menu and desktop shortcuts; launches at the end of setup so
+  activation happens while the buyer still has the code in front of them; and
+  it never touches `PitWallData` on uninstall.
+- **The activation-key tracker** (`tools/keys_workbook.py`), written in the
+  same run as the ledger and the D1 seed so the three cannot disagree about
+  which codes exist.
+- **Download gated on a code** (`/download` on the Worker, `website/download.js`).
+
+### Where integrity is enforced, and how much it is worth
+
+A frozen build hashes **its own executable**, not source files, and the digest
+is stamped beside the app after PyInstaller runs — its own hash cannot be
+inside it. Be clear-eyed about the strength: the expected value sits in a text
+file next to the executable, so a determined attacker edits both. It reliably
+catches a *corrupted* install, and deters casual patching. Real anti-tamper on
+Windows is Authenticode signing (a code-signing certificate, ~$100–400/yr),
+which is the honest upgrade path if it ever matters.
+
+macOS gets **no manifest at all**, deliberately: `codesign` rewrites the
+executable, so a digest taken before signing would never match and the app
+would refuse to start on every Mac. Signing and notarization are the platform's
+own integrity guarantee and a stronger one.
+
 **Pending — the parts that need something I do not have:**
 
-- **Produce the macOS artifact.** Everything except the build itself is done.
-  PyInstaller freezes the interpreter running it, so a `.app` must be built on
-  a Mac; signing and notarization additionally need an Apple Developer account
-  (~$99/yr). Without notarization Gatekeeper blocks the app as "damaged" on
-  every Mac but the one that built it. `build.py --check` prints the exact
-  `codesign` / `notarytool` / `stapler` commands.
+- **Produce the macOS artifact.** Everything except the build itself is done,
+  and the Windows build proved the packaging path. PyInstaller freezes the
+  interpreter running it, so a `.app` must be built on a Mac; signing and
+  notarization additionally need an Apple Developer account (~$99/yr). Without
+  notarization Gatekeeper blocks the app as "damaged" on every Mac but the one
+  that built it. `build.py --check` prints the exact `codesign` /
+  `notarytool` / `stapler` commands.
+- **Install Inno Setup** (`winget install JRSoftware.InnoSetup`) and run
+  `build.py --installer`. Without it the build still produces a working zip,
+  it just asks the buyer to unzip and find the exe themselves.
+- **Host the installer** somewhere the Worker can point at, and set
+  `DOWNLOAD_URL` on the Worker plus `ACTIVATION_API` in `website/download.js`.
 - **Mint the production key**: `python -m distribution.tools.keygen --force`,
   keep the private half offline, commit the new public key. Until then
   preflight blocks every build. Update `packaging/build.DEV_PUBLIC_KEY` or drop

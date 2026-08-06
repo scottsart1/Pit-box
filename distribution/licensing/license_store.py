@@ -23,6 +23,17 @@ class LicenseInvalid(Exception):
     """The cached license is missing, malformed, forged, or for another device."""
 
 
+class LicenseForAnotherDevice(LicenseInvalid):
+    """A genuine, correctly signed license that belongs to a different machine.
+
+    Kept distinct from the other failures because it is the one the user needs
+    explaining: the licence is real and they did nothing wrong, they have just
+    copied an activated install to a second computer. Treating it like "no
+    licence" would drop them on the activation form with no idea why, and they
+    would burn a second code trying to fix it.
+    """
+
+
 @dataclass(frozen=True, slots=True)
 class License:
     entitlement: Entitlement
@@ -90,7 +101,15 @@ def load_and_validate(config_dir: Path) -> License:
     except Exception as exc:  # noqa: BLE001 - device read is platform-specific
         raise LicenseInvalid(f"device id unavailable: {exc}") from exc
     if bound_device != current:
-        raise LicenseInvalid("license is bound to a different device")
+        raise LicenseForAnotherDevice(
+            "This copy of Pit Wall was activated on a different computer.\n\n"
+            "Each activation code works on one computer only. Copying an "
+            "activated installation to another machine does not carry the "
+            "licence with it.\n\n"
+            "If you have moved to a new PC, or this one was rebuilt, email "
+            "vale.scott00@gmail.com and a replacement code will be issued - "
+            "you will not be asked to buy it again."
+        )
 
     return License(
         entitlement=entitlement,
