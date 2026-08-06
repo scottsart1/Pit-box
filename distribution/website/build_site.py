@@ -24,6 +24,9 @@ from pathlib import Path
 SITE_DIR = Path(__file__).resolve().parent
 REPO_ROOT = SITE_DIR.parents[1]
 SCREENSHOT_DIR = REPO_ROOT / "docs" / "screenshots"
+# The demo video lives here rather than in docs/: it is a website asset, not
+# documentation, and it is far too large to copy twice.
+ASSET_DIR = SITE_DIR / "assets"
 OUTPUT_DIR = SITE_DIR / "_site"
 
 PAGES = ("index.html", "eula.html")
@@ -68,6 +71,18 @@ def _referenced_images() -> set[str]:
     for page in PAGES:
         html = (SITE_DIR / page).read_text(encoding="utf-8")
         found.update(re.findall(r'src="img/([^"]+)"', html))
+        # <video poster="img/..."> counts too: a missing poster is a black box
+        # where the demo should be.
+        found.update(re.findall(r'poster="img/([^"]+)"', html))
+    return found
+
+
+def _referenced_assets() -> set[str]:
+    """Files under assets/, chiefly the demo video."""
+    found: set[str] = set()
+    for page in PAGES:
+        html = (SITE_DIR / page).read_text(encoding="utf-8")
+        found.update(re.findall(r'(?:src|href)="assets/([^"]+)"', html))
     return found
 
 
@@ -96,6 +111,10 @@ def check() -> SiteCheck:
     for image in sorted(_referenced_images()):
         if not (SCREENSHOT_DIR / image).exists():
             problems.append(f"{image} is referenced but not in docs/screenshots/.")
+
+    for asset in sorted(_referenced_assets()):
+        if not (ASSET_DIR / asset).exists():
+            problems.append(f"{asset} is referenced but not in website/assets/.")
 
     return SiteCheck(not problems, tuple(problems))
 
@@ -136,6 +155,13 @@ def build() -> Path:
         shutil.copy2(SITE_DIR / name, OUTPUT_DIR / name)
     for image in sorted(_referenced_images()):
         shutil.copy2(SCREENSHOT_DIR / image, images / image)
+
+    referenced = sorted(_referenced_assets())
+    if referenced:
+        target = OUTPUT_DIR / "assets"
+        target.mkdir(parents=True, exist_ok=True)
+        for asset in referenced:
+            shutil.copy2(ASSET_DIR / asset, target / asset)
 
     return OUTPUT_DIR
 

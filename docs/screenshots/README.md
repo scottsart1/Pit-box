@@ -42,6 +42,33 @@ never reads or writes a real driver's saved sessions.
 | `05-session-review.png` | Session Review | 20 drivers, 220 laps, 100% trace coverage, per-lap comparability |
 | `06-field-lab.png` | Field Lab | All 20 cars with last, best and median clean pace |
 
+## The Hungaroring set
+
+`07`, `08` and `09` come from the second scenario, `tools/scenarios.py::HUNGARORING`,
+which exists for the demo video rather than for documentation. It is built
+around one deliberately balanced call: P4 on 22-lap-old hards, sixteen laps
+left, a quicker car 3.6 s behind on fresher mediums, at a circuit where
+overtaking is hard enough that track position is worth defending.
+
+| File | Screen | Notable |
+|---|---|---|
+| `07-hungaroring-decision.png` | Drive | The decision point; also the demo video's poster frame |
+| `08-hungaroring-radio.png` | Drive, full height | The engineer's spoken answers in the radio feed, beside the three ranked plans they came from |
+| `09-hungaroring-field.png` | Field | The field during the same moment |
+
+Reproduce them with:
+
+```bash
+python -m tools.demo_server
+python -m tools.demo_broadcast --scenario hungaroring --seconds 2400
+python -m tools.capture_demo_video --base http://127.0.0.1:8010 \
+    --out distribution/website/assets/pitwall-demo.mp4
+```
+
+The capture tool writes the stills as a by-product of recording the video, so
+they are frames of the same session the video came from rather than a separate
+run.
+
 An earlier set showing the pre-4.2 single-page dashboard has been removed, so
 every image here reflects the current build. The old files remain in git
 history if they are ever needed.

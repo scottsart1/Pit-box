@@ -13,6 +13,7 @@
   <div class="wrap">
     <a class="brand" href="#top"><span class="brand-mark" aria-hidden="true"></span> Pit Wall</a>
     <nav class="site-nav" aria-label="Sections">
+      <a href="#demo">Demo</a>
       <a href="#what">What it does</a>
       <a href="#how">How it works</a>
       <a href="#screens">Screens</a>
@@ -50,6 +51,35 @@
       </div>
       <figcaption>The Drive screen at Silverstone. The race shown is synthetic, but every screen on this page is the real application, not a mockup.</figcaption>
     </figure>
+  </div>
+</section>
+
+<section id="demo">
+  <div class="wrap">
+    <h2>Watch it make a real call</h2>
+    <p class="section-lede">
+      Hungaroring, sixteen laps left, running fourth on old hards with a
+      quicker car three seconds behind. Box and lose the position, or stay out
+      and defend? Everything below is the running application: telemetry
+      arriving over UDP, the strategy engine doing the maths, and the
+      engineer's own voice answering questions asked over the radio.
+      <strong>No dialogue was written for this video.</strong>
+    </p>
+    <div class="video-frame">
+      <video id="demoVideo" controls preload="metadata"
+             poster="img/07-hungaroring-decision.png"
+             aria-label="Pit Wall handling a pit stop decision at the Hungaroring">
+        <source src="assets/pitwall-demo.mp4" type="video/mp4">
+        Your browser cannot play this video.
+        <a href="assets/pitwall-demo.mp4">Download it instead</a>.
+      </video>
+    </div>
+    <p class="field-help video-note">
+      Turn the sound on — the engineer's answers are spoken by the app's own
+      voice. The race is synthetic, generated as genuine F1 2026 packet
+      structures and sent to the real receiver; the software reading them is
+      not.
+    </p>
   </div>
 </section>
 
@@ -141,8 +171,8 @@ Strategy / setup / what-if  → model, high reasoning
     <p class="section-lede">Real captures from a running build. The race is synthetic; the software is not.</p>
     <div class="gallery">
       <figure>
-        <div class="shot"><img src="img/02-drive-radio-feed.png" alt="The Drive screen at full height, showing the radio feed and voice controls beneath the live telemetry." loading="lazy"></div>
-        <figcaption>Drive — the radio feed and voice controls.</figcaption>
+        <div class="shot"><img src="img/08-hungaroring-radio.png" alt="The Drive screen at full height during the Hungaroring decision: all twenty cars with compound and tyre age, three ranked stop plans, and the engineer's spoken answers in the radio feed." loading="lazy"></div>
+        <figcaption>Drive, full height — the radio feed carrying the answers from the video above.</figcaption>
       </figure>
       <figure>
         <div class="shot"><img src="img/03-connection-center.png" alt="The Connection Center showing a receiving state, the recommended console IP address, and ranked network adapters with reasons." loading="lazy"></div>

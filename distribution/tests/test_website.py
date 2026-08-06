@@ -142,6 +142,34 @@ def test_the_javascript_is_scanned_for_placeholders_too(tmp_path, monkeypatch):
     assert any("example.invalid" in problem for problem in result.problems)
 
 
+def test_the_demo_video_is_referenced_and_present():
+    # A missing video is a black rectangle where the main pitch should be.
+    assert 'src="assets/pitwall-demo.mp4"' in INDEX
+    assert "pitwall-demo.mp4" in build_site._referenced_assets()
+    assert (build_site.ASSET_DIR / "pitwall-demo.mp4").exists()
+
+
+def test_the_video_poster_is_checked_like_any_other_image():
+    # A poster is referenced by `poster=`, not `src=`, so scanning only src
+    # would let a missing one through and show a black box until play.
+    posters = [i for i in build_site._referenced_images() if "hungaroring" in i]
+    assert posters, "the demo video has no poster frame"
+
+
+def test_the_demo_section_says_the_dialogue_is_not_scripted():
+    # The claim that carries the whole demo. If it stops being true, the
+    # sentence has to go with it.
+    assert "No dialogue was written for this video" in INDEX
+
+
+def test_every_referenced_asset_exists():
+    missing = [
+        name for name in build_site._referenced_assets()
+        if not (build_site.ASSET_DIR / name).exists()
+    ]
+    assert not missing, f"referenced but absent from website/assets/: {missing}"
+
+
 def test_every_referenced_screenshot_exists():
     missing = [
         name for name in build_site._referenced_images()
