@@ -158,3 +158,36 @@ def test_workspaces_module_is_guarded_outside_a_browser() -> None:
     assert 'typeof window !== "undefined"' in WORKSPACES
     assert 'typeof document !== "undefined"' in WORKSPACES
     assert "if (HAS_DOM)" in WORKSPACES
+
+
+def test_workspace_pages_never_scroll_horizontally() -> None:
+    """A workspace page must not become a left-right scroll surface.
+
+    `.workspace-page { overflow: auto }` made every analysis page a horizontal
+    scroller: one overflowing child - an unbreakable evidence id in a coaching
+    card, a long lap label - dragged the whole Lap Lab page sideways. Vertical
+    scrolling is kept; horizontal is clipped, and genuinely wide regions keep
+    their own overflow:auto containers.
+    """
+    block = CSS.split(".workspace-page {", 1)[1].split("}", 1)[0]
+    assert "overflow-y: auto" in block
+    assert "overflow-x: clip" in block
+    assert "overflow: auto" not in block, (
+        "overflow:auto on .workspace-page reintroduces the page-level "
+        "horizontal scroll"
+    )
+    # The field matrix must still scroll inside its own container.
+    assert ".matrix-scroll {" in CSS
+    matrix = CSS.split(".matrix-scroll {", 1)[1].split("}", 1)[0]
+    assert "overflow" in matrix
+
+
+def test_finding_cards_wrap_long_evidence_tokens() -> None:
+    """Evidence ids like cmp_01J...:brake_onset are long and unbreakable.
+
+    In the narrow coaching column they must wrap rather than spill out of the
+    card and force a scroll, the same way instrument values already wrap.
+    """
+    assert ".finding-facts li { overflow-wrap: anywhere; }" in CSS or (
+        "overflow-wrap: anywhere" in CSS.split(".finding-card,", 1)[1].split("}", 1)[0]
+    )

@@ -475,7 +475,15 @@ button:disabled,
 /* 4.2 saved-session workspaces. These extend the existing static shell and
    deliberately share the Connection Center tokens and controls. */
 .workspace-page {
-  overflow: auto;
+  /* Vertical scrolling for tall analysis pages, but never a page-level
+     horizontal scrollbar. A single overflowing child - an unbreakable
+     evidence id in a coaching card, a long lap label - otherwise turned the
+     whole page into a left-right scroller. Genuinely wide regions (the field
+     matrix, the trace-tab strip) keep their own overflow:auto containers, so
+     clipping here does not take their scrolling away. clip, not hidden, so it
+     does not disturb the sticky comparison header. */
+  overflow-y: auto;
+  overflow-x: clip;
   background: var(--bg-0);
 }
 
@@ -633,6 +641,15 @@ button:disabled,
 
 .finding-card[data-positive="true"] { box-shadow: inset 4px 0 var(--gain); }
 .finding-card[data-positive="false"] { box-shadow: inset 4px 0 var(--loss); }
+/* Findings cite evidence ids and lap ids - long unbreakable tokens like
+   cmp_01J...:brake_onset. In the narrow coaching column they must wrap, or
+   they spill out of the card and force a horizontal scroll. The instrument
+   values already wrap this way; findings did not. */
+.finding-card,
+.finding-card h3,
+.finding-card p,
+.finding-facts,
+.finding-facts li { overflow-wrap: anywhere; }
 .finding-card p { margin: 7px 0; color: var(--text-2); line-height: 1.45; }
 .finding-facts { margin: 7px 0; padding-left: 20px; color: var(--text-2); font-size: .8rem; }
 
