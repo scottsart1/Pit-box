@@ -35,3 +35,9 @@ __pycache__/
 activation-server/.wrangler/
 activation-server/node_modules/
 activation-server/.dev.vars
+
+# Build-time integrity manifest: generated per build, never source.
+# Committing it would make every dev checkout enforce integrity and fail as
+# soon as a guarded licensing module is edited.
+licensing/integrity_manifest.txt
+artifacts/
