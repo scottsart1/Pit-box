@@ -257,7 +257,8 @@ button:disabled,
 }
 
 .form-grid,
-.forwarder-form {
+.forwarder-form,
+.credential-form {
   display: grid;
   grid-template-columns: minmax(120px, .6fr) minmax(180px, 1.4fr);
   gap: 9px 12px;
@@ -266,9 +267,33 @@ button:disabled,
 }
 
 .form-grid label,
-.forwarder-form > label:not(.check-row) {
+.forwarder-form > label:not(.check-row),
+.credential-form > label:not(.check-row) {
   font-size: .82rem;
   font-weight: 700;
+}
+
+/* The key field and its reveal toggle share one grid cell. min-width:0 keeps
+   a long pasted key from widening the column past the panel. */
+.credential-entry {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  min-width: 0;
+}
+
+.credential-entry input {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-family: ui-monospace, "Cascadia Mono", "SFMono-Regular", Consolas, monospace;
+  letter-spacing: .02em;
+}
+
+.credential-entry .button { flex: 0 0 auto; min-width: 72px; }
+
+.credential-panel code {
+  font-family: ui-monospace, "Cascadia Mono", "SFMono-Regular", Consolas, monospace;
+  font-size: .92em;
 }
 
 .connection-page input,
@@ -435,9 +460,11 @@ button:disabled,
   .pace-strip,
   .latency-grid { grid-template-columns: 1fr; }
   .form-grid,
-  .forwarder-form { grid-template-columns: 1fr; }
+  .forwarder-form,
+  .credential-form { grid-template-columns: 1fr; }
   .form-grid > *,
   .forwarder-form > *,
+  .credential-form > *,
   .form-actions,
   .form-span { grid-column: 1; }
   .copy-row { align-items: stretch; flex-direction: column; }

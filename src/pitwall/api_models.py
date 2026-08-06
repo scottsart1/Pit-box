@@ -209,3 +209,26 @@ class ComparisonCreate(ApiModel):
     reference: ReferenceSelection
     segment_model: str = "default"
     allow_caveated_reference: bool = False
+
+
+class CredentialStatusResponse(VersionedResponse):
+    """What the dashboard may know about the stored API key.
+
+    Deliberately has no field carrying the key itself: the response is built
+    from a mask, so no future edit can accidentally start returning it.
+    """
+
+    configured: bool
+    masked: str | None = None
+    source: str | None = None
+    detail: str = ""
+
+
+class CredentialUpdateRequest(ApiModel):
+    api_key: Annotated[str, Field(min_length=1, max_length=512)]
+    verify: bool = True
+
+
+class CredentialTestResponse(VersionedResponse):
+    ok: bool
+    detail: str

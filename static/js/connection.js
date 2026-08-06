@@ -8,6 +8,7 @@ const uiState = {
   status: null,
   interfaces: null,
   forwarders: [],
+  credentials: null,
 };
 
 const byId = (id) => (HAS_DOM ? document.getElementById(id) : null);
@@ -418,6 +419,10 @@ async function refreshInterfaces() {
 
 export async function refreshConnectionCenter() {
   setNotice("connectionApiStatus", "Refreshing network status…");
+  // The credential check is deliberately outside the all-rejected test below:
+  // it is a different service, and its failure should not claim the whole
+  // Connection Center is unavailable.
+  void refreshCredentialStatus();
   const results = await Promise.allSettled([refreshInterfaces(), refreshStatus(), refreshForwarders()]);
   if (results.every((result) => result.status === "rejected")) {
     setNotice("connectionApiStatus", "Connection services are unavailable. Live, Review, and Setup remain available.", "error");
@@ -637,7 +642,147 @@ function initializeTabs() {
   syncTabs(location.hash.slice(1) || "live");
 }
 
+const CREDENTIAL_BASE = "/api/v1/credentials/openai";
+
+async function credentialRequest(path = "", options = {}) {
+  const headers = new Headers(options.headers || {});
+  if (options.body && !headers.has("Content-Type")) headers.set("Content-Type", "application/json");
+  let response;
+  try {
+    response = await fetch(`${CREDENTIAL_BASE}${path}`, { ...options, headers, credentials: "same-origin" });
+  } catch (error) {
+    throw new Error(`Could not reach Pit Wall: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  let payload = null;
+  try {
+    payload = await response.json();
+  } catch {
+    payload = null;
+  }
+  if (!response.ok) {
+    const error = new Error(apiErrorMessage(payload, `Request failed (${response.status}).`));
+    error.status = response.status;
+    throw error;
+  }
+  return payload;
+}
+
+export function credentialBadgeState(status) {
+  if (!status?.configured) return { state: "off", label: "No key set" };
+  if (status.source === "environment") return { state: "listening", label: "Set by environment" };
+  return { state: "receiving", label: `Key ${status.masked}` };
+}
+
+function renderCredentialStatus(status, message, tone = "info") {
+  const { state, label } = credentialBadgeState(status);
+  const badge = byId("credentialBadge");
+  if (badge) badge.dataset.state = state;
+  setText("credentialBadgeText", label, "Unavailable");
+
+  const remove = byId("credentialRemove");
+  const test = byId("credentialTest");
+  if (remove) remove.disabled = !status?.configured;
+  if (test) test.disabled = !status?.configured;
+
+  const detail = message || status?.detail || (status?.configured
+    ? "A key is saved. Paste a new one to replace it."
+    : "No key saved yet. The engineer radio stays offline until one is set.");
+  setNotice("credentialFormStatus", detail, tone);
+}
+
+async function refreshCredentialStatus() {
+  try {
+    const status = await credentialRequest();
+    uiState.credentials = status;
+    renderCredentialStatus(status, "", status?.source === "environment" ? "warn" : "info");
+  } catch (error) {
+    uiState.credentials = null;
+    setNotice("credentialFormStatus", error.message, "error");
+  }
+}
+
+function setCredentialBusy(busy) {
+  ["credentialSave", "credentialTest", "credentialRemove"].forEach((id) => {
+    const element = byId(id);
+    if (element) element.disabled = busy;
+  });
+}
+
+async function submitCredential(event) {
+  event.preventDefault();
+  const field = byId("credentialKey");
+  const apiKey = String(field?.value ?? "").trim();
+  if (!apiKey) {
+    setNotice("credentialFormStatus", "Paste an API key first.", "error");
+    field?.focus();
+    return;
+  }
+  const verify = Boolean(byId("credentialVerify")?.checked);
+  setCredentialBusy(true);
+  setNotice("credentialFormStatus", verify ? "Checking the key with OpenAI…" : "Saving…");
+  try {
+    const status = await credentialRequest("", {
+      method: "PUT",
+      body: JSON.stringify({ api_key: apiKey, verify }),
+    });
+    uiState.credentials = status;
+    // Clear the field on success: it is write-only, and leaving the key in the
+    // DOM would put it in any screenshot of the Connection Center.
+    if (field) field.value = "";
+    revealCredential(false);
+    renderCredentialStatus(status, "API key saved. The engineer radio is ready.", "success");
+  } catch (error) {
+    renderCredentialStatus(uiState.credentials, error.message, "error");
+  } finally {
+    setCredentialBusy(false);
+  }
+}
+
+async function testCredential() {
+  setCredentialBusy(true);
+  setNotice("credentialFormStatus", "Asking OpenAI to confirm the saved key…");
+  try {
+    const result = await credentialRequest("/test", { method: "POST" });
+    renderCredentialStatus(uiState.credentials, result?.detail || "", result?.ok ? "success" : "error");
+  } catch (error) {
+    renderCredentialStatus(uiState.credentials, error.message, "error");
+  } finally {
+    setCredentialBusy(false);
+  }
+}
+
+async function removeCredential() {
+  if (HAS_DOM && typeof window.confirm === "function") {
+    const confirmed = window.confirm("Remove the saved OpenAI API key? The engineer radio will stop answering until a new one is set.");
+    if (!confirmed) return;
+  }
+  setCredentialBusy(true);
+  try {
+    const status = await credentialRequest("", { method: "DELETE" });
+    uiState.credentials = status;
+    renderCredentialStatus(status, "API key removed.", "success");
+  } catch (error) {
+    renderCredentialStatus(uiState.credentials, error.message, "error");
+  } finally {
+    setCredentialBusy(false);
+  }
+}
+
+function revealCredential(next) {
+  const field = byId("credentialKey");
+  const toggle = byId("credentialReveal");
+  if (!field || !toggle) return;
+  const shown = next === undefined ? field.type === "password" : Boolean(next);
+  field.type = shown ? "text" : "password";
+  toggle.textContent = shown ? "Hide" : "Show";
+  toggle.setAttribute("aria-pressed", String(shown));
+}
+
 function bindEvents() {
+  byId("credentialForm")?.addEventListener("submit", submitCredential);
+  byId("credentialTest")?.addEventListener("click", testCredential);
+  byId("credentialRemove")?.addEventListener("click", removeCredential);
+  byId("credentialReveal")?.addEventListener("click", () => revealCredential());
   byId("listenerForm")?.addEventListener("submit", submitListener);
   byId("listenerStop")?.addEventListener("click", stopListener);
   byId("refreshNetwork")?.addEventListener("click", refreshConnectionCenter);

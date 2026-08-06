@@ -28,6 +28,7 @@ from pydantic import BaseModel
 from .analysis import AnalysisEngine
 from .analysis_jobs import AnalysisJobService
 from .api.analysis import create_analysis_router
+from .api.credentials import create_credentials_router
 from .api.field import create_field_router
 from .api.live import create_live_router
 from .api.network import create_network_router
@@ -519,6 +520,21 @@ app.add_middleware(
         else None
     ),
 )
+def _rebind_openai_clients() -> None:
+    """Re-read the API key into every client that cached it.
+
+    The audio service and the engineer's provider router both build an
+    OpenAI client once at construction, so a key saved from the Connection
+    Center would otherwise not apply until the next launch.
+    """
+    audio.rebind_client()
+    router = getattr(brain, "router", None)
+    rebind = getattr(router, "rebind_clients", None)
+    if callable(rebind):
+        rebind()
+
+
+app.include_router(create_credentials_router(on_change=_rebind_openai_clients))
 app.include_router(create_network_router(network_service))
 app.include_router(
     create_sessions_router(

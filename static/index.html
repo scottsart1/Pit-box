@@ -32,6 +32,29 @@
     </ol>
   </section>
 
+  <section class="panel-surface credential-panel" aria-labelledby="credentialHeading">
+    <div class="section-heading">
+      <div><div class="eyebrow">Race engineer</div><h2 id="credentialHeading">OpenAI API key</h2></div>
+      <div id="credentialBadge" class="connection-state" data-state="off"><span aria-hidden="true">●</span> <span id="credentialBadgeText">Checking…</span></div>
+    </div>
+    <p class="muted small">The radio, voice answers and strategy reasoning call OpenAI with your own key, billed to your OpenAI account. Telemetry capture, strategy maths and the dashboard all work without one.</p>
+    <form id="credentialForm" class="credential-form" novalidate>
+      <label for="credentialKey">API key<span class="field-help">Starts with <code>sk-</code>. Paste the whole value.</span></label>
+      <div class="credential-entry">
+        <input id="credentialKey" name="api_key" type="password" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="sk-…" aria-describedby="credentialFormStatus">
+        <button id="credentialReveal" class="button ghost icon-button" type="button" aria-pressed="false">Show</button>
+      </div>
+      <label class="check-row form-span"><input id="credentialVerify" type="checkbox" checked> Check the key with OpenAI before saving</label>
+      <div class="form-actions form-span">
+        <button id="credentialSave" class="button primary" type="submit">Save key</button>
+        <button id="credentialTest" class="button ghost" type="button">Test saved key</button>
+        <button id="credentialRemove" class="button ghost" type="button">Remove</button>
+      </div>
+      <div id="credentialFormStatus" class="inline-notice form-span" role="status" aria-live="polite">Checking for a saved key…</div>
+    </form>
+    <p class="field-help">Saved to the <code>.env</code> file next to Pit Wall in plain text, the same place it was set by hand before. It is never shown again after saving and never sent anywhere except OpenAI. For that reason it can only be changed from this PC, not from a phone on the network.</p>
+  </section>
+
   <section class="panel-surface" aria-labelledby="listenerHeading">
     <div class="section-heading"><div><div class="eyebrow">Receiver</div><h2 id="listenerHeading">Listener &amp; source</h2></div><button id="refreshNetwork" class="button ghost" type="button">Refresh</button></div>
     <form id="listenerForm" class="form-grid" novalidate>

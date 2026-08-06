@@ -260,13 +260,26 @@ class OpenAIResponsesProvider:
         client: AsyncOpenAI | None = None,
     ) -> None:
         self.config = config
-        self.client = client or (
+        self._client_injected = client is not None
+        self.client = client
+        if not self._client_injected:
+            self.rebind_client()
+
+    def rebind_client(self) -> None:
+        """Rebuild from the current config after an API key change.
+
+        An injected client (tests, offline diagnostics) is left alone; it was
+        supplied deliberately and does not come from settings.
+        """
+        if self._client_injected:
+            return
+        self.client = (
             AsyncOpenAI(
-                api_key=config.api_key,
-                timeout=config.openai_timeout_s,
+                api_key=self.config.api_key,
+                timeout=self.config.openai_timeout_s,
                 max_retries=0,
             )
-            if config.api_key
+            if self.config.api_key
             else None
         )
 
@@ -641,6 +654,19 @@ class ProviderRouter:
         self.last_result: ProviderResult | None = None
         self.last_shakedown: dict[str, Any] | None = None
         self._last_compare_at = 0.0
+
+    def rebind_clients(self) -> None:
+        """Re-read credentials after an API key change, and forgive the circuit.
+
+        A provider tripped by "no key configured" must not stay open once a
+        working key is supplied, or the first radio call after activation would
+        still fail.
+        """
+        for name, provider in self.providers.items():
+            rebind = getattr(provider, "rebind_client", None)
+            if callable(rebind):
+                rebind()
+            self.circuits[name] = _CircuitState()
 
     def _resolved_primary(self, explicit: str | None = None) -> str:
         del explicit

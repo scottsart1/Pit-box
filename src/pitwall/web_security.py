@@ -18,11 +18,20 @@ def _headers(scope: Scope) -> dict[str, str]:
     }
 
 
-def _loopback(host: str) -> bool:
+def is_loopback_host(host: str) -> bool:
+    """True when a client address belongs to this machine.
+
+    Used both by the LAN token gate and by endpoints that are restricted to
+    the machine running Pit Wall regardless of any token.
+    """
     try:
         return ipaddress.ip_address(host).is_loopback
     except ValueError:
         return host.casefold() in {"localhost", "testclient"}
+
+
+def _loopback(host: str) -> bool:
+    return is_loopback_host(host)
 
 
 def _web_scheme(scheme: str) -> str:
@@ -213,4 +222,4 @@ class LanAccessMiddleware:
         await self.app(scope, receive, secured_send)
 
 
-__all__ = ["LanAccessMiddleware"]
+__all__ = ["LanAccessMiddleware", "is_loopback_host"]
