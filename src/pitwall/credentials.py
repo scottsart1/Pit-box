@@ -17,6 +17,7 @@ Nothing here logs the key, and the value is not echoed in error messages.
 
 from __future__ import annotations
 
+import contextlib
 import os
 import re
 from collections.abc import Callable
@@ -198,10 +199,9 @@ async def verify_key(key: str | None = None) -> tuple[bool, str]:
     finally:
         with_close = getattr(client, "close", None)
         if callable(with_close):
-            try:
+            # Closing must never mask the verification result.
+            with contextlib.suppress(Exception):
                 await with_close()
-            except Exception:  # noqa: BLE001 - closing must never mask the result
-                pass
     return True, "Key accepted by OpenAI."
 
 

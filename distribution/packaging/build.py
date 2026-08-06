@@ -155,7 +155,7 @@ def macos_release_steps(identity: str = "Developer ID Application: YOUR NAME (TE
     bundle = BUILD_DIR / "dist" / f"{APP_NAME}.app"
     return "\n".join([
         "# 1. Sign the bundle (hardened runtime is required for notarization)",
-        f'codesign --deep --force --options runtime --timestamp \\',
+        "codesign --deep --force --options runtime --timestamp \\",
         f'  --sign "{identity}" "{bundle}"',
         "",
         "# 2. Build the .dmg (this script does that step for you)",
