@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pit Wall — licence terms</title>
+<meta name="description" content="The licence terms for Pit Wall: what you may do with it, what data leaves your machine, and what is not promised.">
+<link rel="stylesheet" href="styles.css">
+</head>
+<!--
+  PLAIN-LANGUAGE DRAFT, NOT LAWYER-REVIEWED.
+
+  This is written to be honest and readable rather than to be maximally
+  protective, and it has not been checked by a solicitor. Before selling at any
+  volume, or to buyers outside your own country, have someone qualified read
+  it — particularly the warranty, liability and consumer-rights sections, which
+  cannot override statutory rights in the UK or EU regardless of what they say.
+
+  Placeholders to fill in before publishing: YOUR NAME, YOUR-EMAIL@example.com,
+  and the governing-law jurisdiction in section 10.
+-->
+<body>
+
+<header class="site-header">
+  <div class="wrap">
+    <a class="brand" href="index.html"><span class="brand-mark" aria-hidden="true"></span> Pit Wall</a>
+    <a class="button ghost" href="index.html">Back to the site</a>
+  </div>
+</header>
+
+<main class="wrap legal">
+
+<h1>Licence terms</h1>
+<p class="updated">Last updated 6 August 2026. Plain English on purpose — if anything here is unclear, email <a href="mailto:YOUR-EMAIL@example.com">YOUR-EMAIL@example.com</a> and I will explain it.</p>
+
+<h2>1. What you are buying</h2>
+<p>A licence to use Pit Wall on <strong>one computer</strong>, for as long as you like, for your own personal use. You are not buying ownership of the software itself.</p>
+<p>Your activation code works once. Reinstalling Pit Wall on the same computer does not use it up. Moving to a different computer needs a new code — email me if a machine has died or been replaced and I will issue one rather than make you buy again.</p>
+
+<h2>2. What you may not do</h2>
+<ul>
+  <li>Share, resell, sublicense or publish your activation code.</li>
+  <li>Redistribute the software, in whole or in part, modified or not.</li>
+  <li>Remove or work around the licence check.</li>
+</ul>
+<p>You may take the software apart to understand it, and you may keep backups. Any rights you have under law to reverse-engineer for interoperability are unaffected by anything here.</p>
+
+<h2>3. The integrity check</h2>
+<p>Pit Wall checks at startup that its own licensing code has not been modified. If that check fails, <strong>the application refuses to start and shows a message explaining why</strong>.</p>
+<p>To be explicit about what that does <em>not</em> do: it never deletes, moves, encrypts or damages anything — not the application, not your telemetry, not your files. If the check ever fails on a legitimate copy, which a damaged install or an over-eager antivirus can cause, reinstalling fixes it and your activation code remains valid. Your recorded sessions in <code>PitWallData</code> are never touched.</p>
+
+<h2>4. You need your own OpenAI account</h2>
+<p>The spoken radio and the reasoning behind it run on OpenAI's service using an API key that you supply. That means:</p>
+<ul>
+  <li>Those calls are billed to <strong>your</strong> OpenAI account, separately from the $20 you paid me. I never see, hold or charge that money.</li>
+  <li>Your use of OpenAI is governed by OpenAI's own terms, not these.</li>
+  <li>If OpenAI changes its pricing, models or availability, the radio is affected and there is nothing I can do about it. Everything that runs locally — telemetry, strategy, analysis, the dashboard — keeps working regardless.</li>
+</ul>
+
+<h2>5. What data goes where</h2>
+<p>Your telemetry stays on your computer. The session database, the raw 60&nbsp;Hz trace files, your Windows username and full microphone recordings are never uploaded anywhere.</p>
+<p>When you ask a question that genuinely needs judgement, a compact summary of the situation and selected computed results are sent to OpenAI so it can answer. If you enable cloud voice, your recorded audio clips are sent to OpenAI for transcription. Nothing is sent to me, and there is no analytics or telemetry reporting back to the developer.</p>
+<p>Your activation is recorded on the licence server as a code, a one-way hash identifying the computer, and a timestamp. The hash cannot be reversed to identify your machine, and no name, email or address is stored with it.</p>
+
+<h2>6. Refunds</h2>
+<p>If Pit Wall does not work for you, email me within <strong>14 days</strong> of buying it and I will refund the $20 in full. You do not need to justify it, though I would genuinely like to know what went wrong.</p>
+
+<h2>7. No warranty</h2>
+<p>Pit Wall is provided as it is. I have tested it as thoroughly as one person can, but I cannot promise it is free of defects, that it will suit your particular setup, or that it will keep working after an update to the game, to Windows, or to OpenAI's service.</p>
+<p><strong>Do not use it as a safety-critical or financial decision-making tool.</strong> It is a companion for a racing game.</p>
+
+<h2>8. Limit of liability</h2>
+<p>My total liability to you for anything arising out of Pit Wall is limited to the amount you paid for it. I am not liable for lost time, lost races, lost data, or any indirect or consequential loss.</p>
+<p>Nothing here limits liability for death or personal injury caused by negligence, for fraud, or for anything else that cannot lawfully be limited. If you bought as a consumer, your statutory rights are unaffected by any part of this document.</p>
+
+<h2>9. Ending the licence</h2>
+<p>You can stop using Pit Wall and delete it at any time. I may end your licence if you redistribute the software or share your code, in which case you would not be entitled to a refund.</p>
+<p>If I stop supporting Pit Wall, your existing installation keeps working. It runs offline after activation, so it does not stop when a server does.</p>
+
+<h2>10. Law</h2>
+<p>These terms are governed by the laws of <strong>[JURISDICTION]</strong>, and its courts have non-exclusive jurisdiction. If you are a consumer elsewhere, you keep the protections of your own country's law.</p>
+
+<h2>11. Not affiliated with anyone</h2>
+<p>Pit Wall is an independent project. It is not affiliated with, endorsed by, sponsored by, or connected to Formula&nbsp;1, Formula One Management, the FIA, Electronic Arts, or Codemasters. All trademarks belong to their owners.</p>
+
+<p class="updated" style="margin-top:2.5rem">Questions about any of this: <a href="mailto:YOUR-EMAIL@example.com">YOUR-EMAIL@example.com</a></p>
+
+</main>
+
+<footer class="site-footer">
+  <div class="wrap footer-row">
+    <div><strong style="color:#fff">Pit Wall</strong> — an independent project.</div>
+    <div><a href="index.html">Back to the site</a></div>
+  </div>
+</footer>
+
+</body>
+</html>

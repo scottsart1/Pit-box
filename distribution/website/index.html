@@ -1,0 +1,335 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pit Wall — a real race engineer for F1 26</title>
+<meta name="description" content="Pit Wall turns F1 26 telemetry from your PS5 into a live race engineer: strategy calls, corner coaching and spoken radio, computed locally on your own PC.">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<header class="site-header">
+  <div class="wrap">
+    <a class="brand" href="#top"><span class="brand-mark" aria-hidden="true"></span> Pit Wall</a>
+    <nav class="site-nav" aria-label="Sections">
+      <a href="#what">What it does</a>
+      <a href="#how">How it works</a>
+      <a href="#screens">Screens</a>
+      <a href="#requirements">Requirements</a>
+      <a href="#buy">Get it</a>
+    </nav>
+    <a class="button primary" href="#buy">Get it — $20</a>
+  </div>
+</header>
+
+<main id="top">
+
+<section class="hero">
+  <div class="wrap hero-grid">
+    <div>
+      <div class="eyebrow">For F1 26 on PS5</div>
+      <h1>A race engineer that actually reads your telemetry.</h1>
+      <p class="lede">
+        Pit Wall listens to the UDP feed from your console, runs the strategy,
+        tyre and corner maths locally on your PC, and talks to you over the
+        radio while you drive. Every number it says is measured — never guessed
+        by a language model.
+      </p>
+      <div class="hero-actions">
+        <a class="button primary" href="#buy">Get it — $20</a>
+        <a class="button ghost" href="#how">How it works</a>
+      </div>
+      <p class="price-note">One-time payment. One computer. No subscription.</p>
+    </div>
+    <figure>
+      <div class="shot">
+        <img src="img/01-drive-live-command-center.png"
+             alt="The Drive screen mid-race: a 20-car timing tower with gaps and tyre age, live throttle and brake traces, per-corner tyre wear, and ranked pit stop plans."
+             width="1600" height="1080" fetchpriority="high">
+      </div>
+      <figcaption>The Drive screen at Silverstone. The race shown is synthetic, but every screen on this page is the real application, not a mockup.</figcaption>
+    </figure>
+  </div>
+</section>
+
+<section id="what" class="soft">
+  <div class="wrap">
+    <h2>What it does</h2>
+    <p class="section-lede">
+      Pit Wall reads all 24 cars from every packet, not just yours, so a question
+      about a rival is answered with that rival's data.
+    </p>
+    <div class="cards">
+      <article class="card">
+        <h3>Strategy that plays the result</h3>
+        <p>Plans are ranked by projected finishing position and championship points, not just elapsed time. Undercut maths accounts for cold-tyre out-laps, and it will not recommend a plan that finishes the race disqualified.</p>
+      </article>
+      <article class="card">
+        <h3>Radio you can talk to</h3>
+        <p>Ask for the gap, a rival's last two laps, or what changes the call. Say the wake word or use a button. It can be interrupted mid-sentence, and it remembers standing instructions across sessions.</p>
+      </article>
+      <article class="card">
+        <h3>Calls you didn't ask for</h3>
+        <p>Rival pit stops as they happen, a car behind closing over a rolling window, safety-car delta breaches, damage, and power-unit wear heading for a grid penalty.</p>
+      </article>
+      <article class="card">
+        <h3>Corner coaching with numbers</h3>
+        <p>Not "brake later" but "brake 8 metres later while protecting apex speed" — measured against your own personal best, with differences below the noise floor left unsaid.</p>
+      </article>
+      <article class="card">
+        <h3>Sessions you can reopen</h3>
+        <p>Recorded sessions replay without the game running. Compare two laps distance-aligned, see where the time actually went, and keep a permanent history of every stint.</p>
+      </article>
+      <article class="card">
+        <h3>A connection screen that tells the truth</h3>
+        <p>It separates "the socket is open" from "real telemetry is arriving", recommends the right LAN address for your console, and names the actual bind conflict when something else owns the port.</p>
+      </article>
+    </div>
+  </div>
+</section>
+
+<section id="how">
+  <div class="wrap">
+    <h2>The part that matters</h2>
+    <p class="section-lede">
+      Most "AI" tools hand your telemetry to a language model and hope. Pit Wall
+      does the opposite: deterministic code computes every number, and the model
+      is only allowed to say them out loud.
+    </p>
+    <div class="split">
+      <div>
+        <p>
+          That split is the whole design. A model that invents a lap time sounds
+          exactly as confident as one that read it, and mid-race you cannot tell
+          the difference. So the model never sees raw telemetry to interpret — it
+          receives computed results from an allow-listed set of tools and narrates
+          them.
+        </p>
+        <p>
+          Common questions never reach a model at all. Gaps, tyre temperatures,
+          damage and strategy status are answered locally, which is why they come
+          back instantly and cost nothing.
+        </p>
+        <p>
+          Your data stays on your PC. The database, the raw 60&nbsp;Hz traces and
+          your Windows username are never uploaded. Only compact situation
+          summaries go out, and only for questions that genuinely need judgement.
+        </p>
+      </div>
+      <div class="flow" role="img" aria-label="Routing diagram: exact telemetry questions and unsolicited calls are handled by local deterministic code; only interpretation and strategy reasoning reach the model.">
+<span class="dim"># where each request goes</span>
+
+Exact telemetry / commands  <span class="hl">→ local, deterministic</span>
+Unsolicited radio calls     <span class="hl">→ local, deterministic</span>
+Normal interpretation       → model, low reasoning
+Strategy / setup / what-if  → model, high reasoning
+
+<span class="dim"># the model can only call allow-listed
+# tools, with validated arguments and a
+# bounded number of rounds. it has no
+# filesystem, shell, network or database
+# access of any kind.</span>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="screens" class="soft">
+  <div class="wrap">
+    <h2>Every screen</h2>
+    <p class="section-lede">Real captures from a running build. The race is synthetic; the software is not.</p>
+    <div class="gallery">
+      <figure>
+        <div class="shot"><img src="img/02-drive-radio-feed.png" alt="The Drive screen at full height, showing the radio feed and voice controls beneath the live telemetry." loading="lazy"></div>
+        <figcaption>Drive — the radio feed and voice controls.</figcaption>
+      </figure>
+      <figure>
+        <div class="shot"><img src="img/03-connection-center.png" alt="The Connection Center showing a receiving state, the recommended console IP address, and ranked network adapters with reasons." loading="lazy"></div>
+        <figcaption>Connection — recommended console IP, ranked adapters, packet health.</figcaption>
+      </figure>
+      <figure>
+        <div class="shot"><img src="img/05-session-review.png" alt="Session Review listing 20 drivers and 220 laps with full trace coverage and per-lap comparability." loading="lazy"></div>
+        <figcaption>Session Review — every lap, with how comparable it is.</figcaption>
+      </figure>
+      <figure>
+        <div class="shot"><img src="img/06-field-lab.png" alt="Field Lab showing all 20 cars with last, best and median clean pace." loading="lazy"></div>
+        <figcaption>Field Lab — last, best and median clean pace for the field.</figcaption>
+      </figure>
+      <figure>
+        <div class="shot"><img src="img/04-library.png" alt="The Library listing saved sessions with size, trace state and per-session actions." loading="lazy"></div>
+        <figcaption>Library — reopen saved sessions without the game running.</figcaption>
+      </figure>
+    </div>
+  </div>
+</section>
+
+<section id="requirements">
+  <div class="wrap">
+    <h2>What you need</h2>
+    <div class="split">
+      <ul class="req-list">
+        <li><span class="tick" aria-hidden="true">✓</span> <span><strong>F1 26</strong> on PS5, with UDP telemetry set to format <strong>2026</strong>.</span></li>
+        <li><span class="tick" aria-hidden="true">✓</span> <span>A <strong>Windows 10 or 11 PC</strong> on the same home network as the console.</span></li>
+        <li><span class="tick" aria-hidden="true">✓</span> <span>An <strong>OpenAI API key</strong> of your own. You paste it once when the app first starts.</span></li>
+        <li><span class="tick" aria-hidden="true">✓</span> <span>A microphone and speakers, if you want to talk to it. Everything else works without them.</span></li>
+      </ul>
+      <div>
+        <div class="callout">
+          <h3>The API key is billed by OpenAI, not by me</h3>
+          <p>
+            Pit Wall costs $20 once. The engineer's voice and reasoning run on
+            your own OpenAI account, so those calls appear on your OpenAI bill.
+            Most questions are answered locally and cost nothing at all, but a
+            long race with heavy radio use will run up a small charge. You set
+            your own spending limits on the OpenAI dashboard.
+          </p>
+        </div>
+        <div class="callout">
+          <h3>macOS is not ready yet</h3>
+          <p>
+            Pit Wall is Windows-only today. The macOS build is in progress; it is
+            not sold or promised here until it exists and has been tested on real
+            hardware.
+          </p>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="soft">
+  <div class="wrap">
+    <h2>How it compares</h2>
+    <p class="section-lede">
+      Against the two things most drivers actually use instead. This describes
+      categories of tool, not any particular product.
+    </p>
+    <div class="table-scroll">
+      <table>
+        <caption class="sr-only">Feature comparison between the in-game display, a telemetry overlay, and Pit Wall</caption>
+        <thead>
+          <tr><th scope="col">&nbsp;</th><th scope="col">In-game display</th><th scope="col">A telemetry overlay</th><th scope="col">Pit Wall</th></tr>
+        </thead>
+        <tbody>
+          <tr><th scope="row">Shows live telemetry</th><td class="yes">Yes</td><td class="yes">Yes</td><td class="yes">Yes</td></tr>
+          <tr><th scope="row">Reads all 24 cars, not just yours</th><td class="no">Partly</td><td class="no">Varies</td><td class="yes">Yes</td></tr>
+          <tr><th scope="row">Ranks stop plans by finishing position</th><td class="no">No</td><td class="no">No</td><td class="yes">Yes</td></tr>
+          <tr><th scope="row">Answers spoken questions mid-lap</th><td class="no">No</td><td class="no">No</td><td class="yes">Yes</td></tr>
+          <tr><th scope="row">Calls rival stops as they happen</th><td class="no">No</td><td class="no">No</td><td class="yes">Yes</td></tr>
+          <tr><th scope="row">Corner coaching with measured deltas</th><td class="no">No</td><td class="no">Some</td><td class="yes">Yes</td></tr>
+          <tr><th scope="row">Keeps a permanent session history</th><td class="no">No</td><td class="no">Some</td><td class="yes">Yes</td></tr>
+          <tr><th scope="row">Runs without an internet connection</th><td class="yes">Yes</td><td class="yes">Yes</td><td class="no">Radio needs it</td></tr>
+          <tr><th scope="row">Ongoing cost</th><td class="yes">None</td><td class="yes">None</td><td class="no">Your OpenAI usage</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<section id="buy">
+  <div class="wrap">
+    <h2>Get Pit Wall</h2>
+    <p class="section-lede">Paid by Venmo, sent by hand. It is a one-person operation, so codes are emailed personally rather than issued by a robot.</p>
+    <div class="buy">
+      <div class="amount">$20</div>
+      <div class="once">once — not a subscription</div>
+      <ol class="steps">
+        <li>
+          <div>
+            <strong>Send $20 on Venmo</strong> to <span class="handle">@YOUR-VENMO-HANDLE</span>.
+            Put the email address you want the code sent to in the payment note.
+          </div>
+        </li>
+        <li>
+          <div>
+            <strong>Get your activation code by email.</strong> Usually within a
+            day — it is sent by a person, not automatically. If it has been
+            longer than that, email
+            <a href="mailto:YOUR-EMAIL@example.com">YOUR-EMAIL@example.com</a>.
+          </div>
+        </li>
+        <li>
+          <div>
+            <strong>Install and enter the code once.</strong> It activates on that
+            computer and then runs offline. You will also be asked for your OpenAI
+            API key on the same screen.
+          </div>
+        </li>
+      </ol>
+      <p class="price-note" style="margin-top:1.4rem">
+        One code activates one computer. Reinstalling on the same machine is
+        fine and does not use it up. Moving to a new PC needs a new code —
+        email me if a machine died and I will sort it out.
+      </p>
+    </div>
+  </div>
+</section>
+
+<section class="soft">
+  <div class="wrap">
+    <h2>Reviews</h2>
+    <div class="reviews-empty">
+      <strong>No reviews yet.</strong>
+      Pit Wall has just been released, so there is nothing honest to put here.
+      This space stays empty until real buyers have said something real.
+    </div>
+  </div>
+</section>
+
+<section id="faq">
+  <div class="wrap">
+    <h2>Questions</h2>
+
+    <details>
+      <summary>Does it work on PC F1 26, or only PS5?</summary>
+      <p>It is built and tested against a PS5 sending UDP telemetry in the 2026 format. The PC version of the game emits the same packets, so it will very likely work, but I have not tested it and will not claim it does. Ask me before buying if that is your setup.</p>
+    </details>
+
+    <details>
+      <summary>Will it get me banned, or count as cheating?</summary>
+      <p>No. It reads the telemetry stream the game is designed to broadcast, the same one used by overlays, sim dashboards and motion rigs. It never sends inputs to the game and never touches its files.</p>
+    </details>
+
+    <details>
+      <summary>How much will the OpenAI usage actually cost?</summary>
+      <p>Less than most people expect, because the common questions never reach a model. Gaps, tyre temperatures, damage and strategy status are computed locally and cost nothing. What costs money is open-ended conversation and deep strategy reasoning during a long race. You can cap your spend on the OpenAI dashboard, and Pit Wall keeps working without the radio if the key stops.</p>
+    </details>
+
+    <details>
+      <summary>What data leaves my computer?</summary>
+      <p>Compact situation summaries and selected computed results, only for questions that need model judgement, and only to OpenAI. The database, the raw 60&nbsp;Hz trace files, your Windows username and full microphone recordings are never uploaded. Audio clips do go to OpenAI for transcription when cloud voice is enabled.</p>
+    </details>
+
+    <details>
+      <summary>Do I need to be online?</summary>
+      <p>Once, to activate. After that the app runs offline — telemetry, strategy, analysis and the dashboard all work with no connection. Only the spoken radio needs internet, because that is the part that calls OpenAI.</p>
+    </details>
+
+    <details>
+      <summary>What happens if I reinstall Windows or change my hardware?</summary>
+      <p>Reinstalling Pit Wall on the same Windows install is fine. A fresh Windows install or a new PC will need a new activation — email me and I will issue one. I would rather do that by hand than build a system that gets it wrong.</p>
+    </details>
+
+    <details>
+      <summary>Is there a refund?</summary>
+      <p>Yes. If it does not work for you, email within 14 days and I will refund the $20. Please tell me what went wrong — for a one-person project that feedback is worth more than the money.</p>
+    </details>
+  </div>
+</section>
+
+</main>
+
+<footer class="site-footer">
+  <div class="wrap footer-row">
+    <div>
+      <strong style="color:#fff">Pit Wall</strong> — an independent project, not affiliated with, endorsed by, or connected to Formula&nbsp;1, the FIA, Electronic Arts, or Codemasters. All trademarks belong to their owners.
+    </div>
+    <div>
+      <a href="eula.html">Licence terms</a>
+    </div>
+  </div>
+</footer>
+
+</body>
+</html>

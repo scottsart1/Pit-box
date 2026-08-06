@@ -198,7 +198,7 @@ gitignores `dist/` as a Python build directory.
 
 ## 8. What is built vs pending
 
-**Built and tested (16 passing tests, `distribution/tests/test_licensing.py`):**
+**Built and tested (50 passing tests in `distribution/tests/`):**
 
 - Ed25519 sign/verify roundtrip; forged entitlement and garbage signature
   rejected.
@@ -212,24 +212,46 @@ gitignores `dist/` as a Python build directory.
 - Private keygen and code-gen tools (ledger + D1 seed, all gitignored).
 - Tamper response: `device.py` is guarded, a modified guarded module fails the
   check, and a TAMPERED result leaves the install byte-for-byte intact.
+- **Launcher** (`launcher.py`): licensed installs start silently; a bad code
+  returns to the form with the reason rather than exiting; closing the window
+  activates nothing; a failed API-key save cannot hold a paid activation
+  hostage. UI arrives as callables, so the tree is tested headlessly.
+- **First-run screen** (`first_run.py`): Tk, so no dependency and no server is
+  needed before the app starts. Collects the code and the OpenAI key.
+- **Build tooling** (`packaging/`): one PyInstaller spec for both platforms,
+  plus preflight that refuses to build with the development key, a placeholder
+  activation endpoint, or a missing `static/`.
+- **macOS code paths**, proven against captured `ioreg` output: UUID parsing,
+  hash stability, a clear error when the field is absent, and the OS family
+  folded into the hash so the two platforms cannot collide.
+- **Marketing site** (`website/`): light palette, real screenshots, honest
+  comparison including the two rows Pit Wall loses, empty reviews, and a EULA
+  matching the refuse-to-run behaviour. `build_site.py` refuses to publish
+  while the Venmo handle, contact email, or jurisdiction are unfilled, and
+  tests pin the claims that would be dishonest if they went stale.
 
-**Pending (design reviewed and approved):**
+**Pending — the parts that need something I do not have:**
 
-- Windows packaging (PyInstaller/Nuitka + installer) with the first-run screen
-  that collects the LLM API key and activation code, and wires the gate into
-  the packaged launcher.
-- macOS packaging of the same. Note this needs a Mac to build on and an Apple
-  Developer account (~$99/yr) to sign and notarize; without notarization
-  Gatekeeper blocks the app as "damaged".
-- Build-time integrity manifest generation (`gate.write_integrity_manifest`),
-  plus a build guard that refuses to package while
-  `embedded_public_key.txt` still holds the development key.
-- Marketing website (light palette, real screenshots, generic comparison, EULA,
-  empty reviews). Payment is **Venmo at $20 with manual fulfilment**: the buyer
-  pays, you mark the code `sold` in the ledger and email it. There is no
-  payment webhook, which is why the ledger lifecycle
-  (`unused → sold → redeemed_email`) is the system of record.
-- Deploying the Worker + D1 and pointing the app's activation endpoint at it.
+- **Produce the macOS artifact.** Everything except the build itself is done.
+  PyInstaller freezes the interpreter running it, so a `.app` must be built on
+  a Mac; signing and notarization additionally need an Apple Developer account
+  (~$99/yr). Without notarization Gatekeeper blocks the app as "damaged" on
+  every Mac but the one that built it. `build.py --check` prints the exact
+  `codesign` / `notarytool` / `stapler` commands.
+- **Mint the production key**: `python -m distribution.tools.keygen --force`,
+  keep the private half offline, commit the new public key. Until then
+  preflight blocks every build. Update `packaging/build.DEV_PUBLIC_KEY` or drop
+  that check once the committed key is a real one.
+- **Deploy the Worker + D1** and set `launcher.ACTIVATION_ENDPOINT` to it.
+- **Fill the site placeholders**: Venmo handle, contact email, jurisdiction.
+- **Have the EULA read by a solicitor** before selling at volume. It is written
+  to be honest and readable, not maximally protective, and consumer statutory
+  rights override it regardless of wording.
+
+Payment is **Venmo at $20 with manual fulfilment**: the buyer pays, you mark
+the code `sold` in the ledger and email it. There is no payment webhook, which
+is why the ledger lifecycle (`unused → sold → redeemed_email`) is the system of
+record.
 
 The activation endpoint's real backend footprint, for the hosting-cost note:
 **one Cloudflare Worker + one D1 database, both free tier** for this volume; a

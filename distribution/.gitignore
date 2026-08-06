@@ -41,3 +41,4 @@ activation-server/.dev.vars
 # soon as a guarded licensing module is edited.
 licensing/integrity_manifest.txt
 artifacts/
+website/_site/
