@@ -141,35 +141,85 @@ survived the openpyxl round-trip as a real list validation.
 
 ---
 
-## What is built but not yet live
+## What is live
 
-- **Download gating** (`/download` on the Worker, `website/download.js`) is
-  written and the form was tested in a browser: live code formatting, an
-  incomplete-code error, and a clean failure with a fallback contact when the
-  endpoint is unreachable. It has never talked to a deployed Worker.
-- **The marketing site** is complete and reviewed at desktop and mobile widths.
-  It is blocked from publishing until the activation endpoint is set.
+| Thing | Where |
+|---|---|
+| Activation Worker | `https://pitwall-activation.sarthakvij123450.workers.dev` |
+| D1 database | `pitwall-licenses` — `4360c3cd-4f56-4643-a908-85cbed0d2944` |
+| Marketing site | `https://pitwall-2k7.pages.dev` |
+| Codes seeded | 50, all unclaimed |
+
+The Worker was exercised against a local D1 first and then live. Verified by
+running it, not by reading it: health, the CORS preflight, download gating,
+first activation, re-activation on the same device (allowed), a second device
+(refused 409), malformed input, lowercase/unhyphenated/O-for-0 code
+normalisation, and **eight concurrent claims on one unused code, of which
+exactly one won**. The entitlement the Worker returns verifies against the
+embedded public key, and a tampered copy is rejected.
+
+The live smoke test activated a real code and then reset it in D1, so all 50
+remain sellable.
+
+### The CORS bug that would have broken every download
+
+`worker.js` had no `OPTIONS` route and set no `Access-Control-Allow-Origin`.
+The site's download form POSTs cross-origin with
+`Content-Type: application/json`, which is not a simple request, so the browser
+sends a preflight first and refuses to expose the response without those
+headers. Every buyer with a valid code would have landed in the form's "could
+not reach the server" branch.
+
+It survived review because the form had only ever been tested against an
+endpoint that did not exist yet — a CORS failure and an unreachable host look
+identical from the page. There were also no tests of any kind for the Worker.
+It is now confirmed fixed from the deployed site: a cross-origin POST returns
+503 and **the body is readable**, which is only possible with the header
+present.
+
+### Still not connected
+
+`DOWNLOAD_URL` is unset on the Worker, because R2 is not enabled on the
+account. Until it is, `/download` answers 503 with "email me and I will send it
+directly" — verified live, and it degrades gracefully rather than looking
+broken. Enable R2 in the dashboard, then:
+
+```
+wrangler r2 bucket create pitwall-downloads
+wrangler r2 object put pitwall-downloads/PitWall-Setup.exe --file <path>
+wrangler secret put DOWNLOAD_URL   # or a plain var, it is not secret
+```
 
 ---
 
-## To go live — in order
+## To go live
 
-1. **Mint a production key.**
-   `python -m distribution.tools.keygen --force`. Move the private key off this
-   machine (it is under OneDrive). Commit the new public key. Then update
-   `distribution/packaging/build.py::DEV_PUBLIC_KEY` to the old value, or drop
-   that check — `test_the_recorded_dev_key_matches_the_committed_one` will fail
-   until you do, on purpose.
-2. **Deploy the Worker + D1**, seed it with the generated SQL, and set
-   `DOWNLOAD_URL` on the Worker.
-3. **Point the app and site at it**: `launcher.ACTIVATION_ENDPOINT` and
-   `ACTIVATION_API` in `website/download.js`. Both are placeholders that block
-   their respective builds until changed.
-4. **Build the installer**: `build.py --installer`. Inno Setup 6.7.3 is already
-   installed on this machine.
-5. **Host the installer** somewhere the Worker's `DOWNLOAD_URL` can reach.
-6. **Publish the site**: `python -m distribution.website.build_site` then upload
-   `_site/`.
+Steps 1–4 and 6 are done. Preflight now reports "all checks passed" for the
+first time, so `build.py` no longer needs `--dev`.
+
+- [x] **Production key minted.** Public half `YJG3YB6HvNqah63bnMYd4yiehpL5kTsA2WGQY6ooFuE=`
+      is committed; the private half is in `distribution/.secrets/`, gitignored
+      and never committed. The old development key stays recorded in
+      `build.py::DEV_PUBLIC_KEY` as a blocklist entry, so a build that reverts
+      to it is still refused.
+- [x] **Worker + D1 deployed** and seeded with 50 codes.
+- [x] **App and site point at it.**
+- [x] **Installer builds** — `build.py --installer`.
+- [ ] **Host the installer.** Blocked on R2 being enabled (see above). This is
+      the only thing standing between the site and a working purchase.
+- [x] **Site published** to `pitwall-2k7.pages.dev`.
+
+Redeploy either side with:
+
+```
+cd distribution/activation-server && wrangler deploy
+python -m distribution.website.build_site
+cd distribution/website && wrangler pages deploy _site --project-name pitwall
+```
+
+**Do not share the site link yet.** The Download button correctly reports that
+the file is not available and points at your email, but nobody can complete a
+purchase until R2 is enabled and `DOWNLOAD_URL` is set.
 
 ### Still outstanding
 

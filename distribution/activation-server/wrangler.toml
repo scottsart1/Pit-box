@@ -9,7 +9,7 @@ compatibility_date = "2025-01-01"
 [[d1_databases]]
 binding = "DB"
 database_name = "pitwall-licenses"
-database_id = "REPLACE_WITH_D1_DATABASE_ID"
+database_id = "4360c3cd-4f56-4643-a908-85cbed0d2944"
 
 # No secrets are needed by the worker: it holds no key. The activation URL is
 # public; abuse is bounded because a code claims exactly once.

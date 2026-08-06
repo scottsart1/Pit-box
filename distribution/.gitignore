@@ -16,6 +16,11 @@ ledger/
 *.ledger.json
 codes_batch_*.json
 codes_batch_*.csv
+codes_batch_*.txt
+
+# The sales tracker lists every sellable code, so it is as sensitive as the
+# ledger it is generated beside.
+activation_keys_*.xlsx
 
 # D1 seed SQL contains the full code list — treat like the ledger.
 seed_codes_*.sql
@@ -31,10 +36,12 @@ __pycache__/
 *.pyc
 .venv-dist/
 
-# Cloudflare local state
-activation-server/.wrangler/
-activation-server/node_modules/
-activation-server/.dev.vars
+# Cloudflare local state. Unanchored: wrangler writes .wrangler/ into whatever
+# directory it is invoked from, so `wrangler pages deploy` run from website/
+# created a second one that the activation-server-only rule did not cover.
+.wrangler/
+node_modules/
+.dev.vars
 
 # Build-time integrity manifest: generated per build, never source.
 # Committing it would make every dev checkout enforce integrity and fail as

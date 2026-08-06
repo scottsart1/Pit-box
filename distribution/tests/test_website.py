@@ -25,6 +25,15 @@ DOWNLOAD_JS = (DIST / "website" / "download.js").read_text(encoding="utf-8")
 
 REAL_ENDPOINT = "https://activation.pitwall.app"
 
+# download.js now carries the deployed Worker's URL, so the placeholder has to
+# be reintroduced deliberately to test that the guard still catches it. Built
+# by substitution rather than hardcoded so it cannot drift from the real file.
+PLACEHOLDER_JS = re.sub(
+    r'const ACTIVATION_API = "[^"]+";',
+    'const ACTIVATION_API = "https://activation.example.invalid";',
+    DOWNLOAD_JS,
+)
+
 
 def _stage(tmp_path, monkeypatch, *, index=None, eula=None, script=None):
     """A site directory with every scanned file present and filled in.
@@ -36,9 +45,7 @@ def _stage(tmp_path, monkeypatch, *, index=None, eula=None, script=None):
     (site / "index.html").write_text(index if index is not None else INDEX, encoding="utf-8")
     (site / "eula.html").write_text(eula if eula is not None else EULA, encoding="utf-8")
     (site / "download.js").write_text(
-        script if script is not None
-        else DOWNLOAD_JS.replace("https://activation.example.invalid", REAL_ENDPOINT),
-        encoding="utf-8",
+        script if script is not None else DOWNLOAD_JS, encoding="utf-8"
     )
     monkeypatch.setattr(build_site, "SITE_DIR", site)
     return site
@@ -49,12 +56,20 @@ def _stage(tmp_path, monkeypatch, *, index=None, eula=None, script=None):
 # ---------------------------------------------------------------------------
 
 
-def test_the_site_is_blocked_until_the_worker_is_deployed():
-    # download.js still points at the placeholder host. Publishing now would
-    # give buyers a Download button that fails with a network error.
+def test_the_site_is_blocked_if_the_endpoint_regresses(tmp_path, monkeypatch):
+    # The Worker is deployed and download.js points at it. Reverting to a
+    # placeholder would ship a Download button that fails with a network error
+    # for every buyer, so the guard must still refuse to publish.
+    _stage(tmp_path, monkeypatch, script=PLACEHOLDER_JS)
     result = build_site.check()
     assert not result.ok
     assert any("example.invalid" in problem for problem in result.problems)
+
+
+def test_the_committed_site_points_at_a_real_endpoint():
+    endpoint = re.search(r'const ACTIVATION_API = "([^"]+)";', DOWNLOAD_JS).group(1)
+    assert endpoint.startswith("https://"), endpoint
+    assert "example" not in endpoint and ".invalid" not in endpoint, endpoint
 
 
 def test_the_site_passes_once_the_endpoint_is_set(tmp_path, monkeypatch):
@@ -121,7 +136,7 @@ def test_the_eula_sections_are_numbered_contiguously():
 def test_the_javascript_is_scanned_for_placeholders_too(tmp_path, monkeypatch):
     # The endpoint lives in download.js, not in the HTML. Scanning only the
     # pages would ship a Download button that silently does nothing.
-    _stage(tmp_path, monkeypatch, script=DOWNLOAD_JS)
+    _stage(tmp_path, monkeypatch, script=PLACEHOLDER_JS)
     result = build_site.check()
     assert not result.ok
     assert any("example.invalid" in problem for problem in result.problems)

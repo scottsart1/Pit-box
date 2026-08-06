@@ -59,14 +59,33 @@ def test_the_development_key_blocks_the_build(staged):
     assert any("DEVELOPMENT key" in problem for problem in checks.problems)
 
 
-def test_the_recorded_dev_key_matches_the_committed_one():
-    # If keygen is run, this must be updated or the guard silently stops
-    # matching and a dev-keyed build could ship.
+def test_the_shipped_key_is_not_the_development_one():
+    """The committed key is now a production key, and must stay one.
+
+    DEV_PUBLIC_KEY remains recorded verbatim so preflight can still recognise
+    and refuse the development key — its private half is in this repo's
+    history, so anything signed with it is forgeable by anyone who clones.
+    What has to hold from here on is that the key we actually ship is not that
+    one. Reverting embedded_public_key.txt would fail this test and, if it
+    somehow got past, preflight would block the build anyway.
+    """
     committed = (DIST / "licensing" / "embedded_public_key.txt").read_text().strip()
-    assert committed == build.DEV_PUBLIC_KEY, (
-        "embedded_public_key.txt changed; update build.DEV_PUBLIC_KEY to the "
-        "old value or drop the check if this is now a production key."
+    assert committed, "no public key is committed"
+    assert committed != build.DEV_PUBLIC_KEY, (
+        "embedded_public_key.txt has been reverted to the development key, "
+        "whose private half is public in this repo's history."
     )
+
+
+def test_the_development_key_is_still_recognised_and_blocked(staged):
+    # The blocklist entry only works while it matches the real dev key, and
+    # the guard is worthless the moment that string is edited or dropped.
+    (staged / "licensing" / "embedded_public_key.txt").write_text(
+        build.DEV_PUBLIC_KEY, encoding="ascii"
+    )
+    checks = build.preflight()
+    assert not checks.ok
+    assert any("DEVELOPMENT key" in problem for problem in checks.problems)
 
 
 def test_the_placeholder_activation_endpoint_blocks_the_build(staged, monkeypatch):

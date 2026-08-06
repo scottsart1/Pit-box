@@ -8,14 +8,37 @@
 // stored at seed time. The app verifies them against the embedded public key,
 // so this server cannot forge entitlements even if fully compromised.
 
-const JSON_HEADERS = { "content-type": "application/json" };
-
-function json(body, status = 200) {
-  return new Response(JSON.stringify(body), { status, headers: JSON_HEADERS });
+// The website calls /download from a different origin (the site is on Pages,
+// this is on workers.dev), and it sends Content-Type: application/json, which
+// makes it a non-simple request: the browser sends an OPTIONS preflight first
+// and refuses to expose the response without Access-Control-Allow-Origin.
+//
+// Without this the download form failed for every buyer holding a valid code,
+// landing in its "could not reach the server" branch — indistinguishable, when
+// testing against an endpoint that did not exist yet, from the expected error.
+//
+// Set ALLOWED_ORIGIN to the published site to narrow it. "*" is the default and
+// is safe here: both endpoints require a valid code to return anything, no
+// credentials are accepted, and nothing is readable that the caller did not
+// already supply.
+function corsHeaders(env) {
+  return {
+    "access-control-allow-origin": (env && env.ALLOWED_ORIGIN) || "*",
+    "access-control-allow-methods": "POST, GET, OPTIONS",
+    "access-control-allow-headers": "content-type",
+    "access-control-max-age": "86400",
+  };
 }
 
-function err(code, message, status) {
-  return json({ code, message }, status);
+function json(body, status = 200, env = null) {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { "content-type": "application/json", ...corsHeaders(env) },
+  });
+}
+
+function err(code, message, status, env = null) {
+  return json({ code, message }, status, env);
 }
 
 // A device hash is a 64-char lowercase hex SHA-256.
@@ -36,11 +59,15 @@ function normalizeCode(raw) {
   return `PITW-${body.slice(0, 5)}-${body.slice(5, 10)}-${body.slice(10, 15)}`;
 }
 
-function entitlementResponse(row) {
-  return json({
-    entitlement: JSON.parse(row.entitlement_json),
-    signature: row.signature,
-  });
+function entitlementResponse(row, env) {
+  return json(
+    {
+      entitlement: JSON.parse(row.entitlement_json),
+      signature: row.signature,
+    },
+    200,
+    env
+  );
 }
 
 async function handleActivate(request, env) {
@@ -48,14 +75,14 @@ async function handleActivate(request, env) {
   try {
     payload = await request.json();
   } catch {
-    return err("bad_request", "Body must be JSON.", 400);
+    return err("bad_request", "Body must be JSON.", 400, env);
   }
 
   const codeId = normalizeCode(payload && payload.code);
   const deviceHash = payload && payload.device_hash;
-  if (!codeId) return err("code_not_found", "Code not recognized.", 404);
+  if (!codeId) return err("code_not_found", "Code not recognized.", 404, env);
   if (!validDeviceHash(deviceHash)) {
-    return err("bad_request", "Missing or malformed device hash.", 400);
+    return err("bad_request", "Missing or malformed device hash.", 400, env);
   }
 
   const db = env.DB;
@@ -66,16 +93,17 @@ async function handleActivate(request, env) {
     .bind(codeId)
     .first();
 
-  if (!existing) return err("code_not_found", "Code not recognized.", 404);
+  if (!existing) return err("code_not_found", "Code not recognized.", 404, env);
 
   // Already claimed: same device is a re-install (allowed); any other device is
   // refused. This is the single-global-use rule.
   if (existing.claimed === 1) {
-    if (existing.claimed_device === deviceHash) return entitlementResponse(existing);
+    if (existing.claimed_device === deviceHash) return entitlementResponse(existing, env);
     return err(
       "code_already_claimed",
       "This code has already been activated on another device.",
-      409
+      409,
+      env
     );
   }
 
@@ -89,18 +117,19 @@ async function handleActivate(request, env) {
     .bind(deviceHash, claimedAt, codeId)
     .run();
 
-  if (result.meta.changes === 1) return entitlementResponse(existing);
+  if (result.meta.changes === 1) return entitlementResponse(existing, env);
 
   // Lost a race: re-read and honor an identical-device claim, else refuse.
   const now = await db
     .prepare("SELECT entitlement_json, signature, claimed_device FROM codes WHERE code_id = ?")
     .bind(codeId)
     .first();
-  if (now && now.claimed_device === deviceHash) return entitlementResponse(now);
+  if (now && now.claimed_device === deviceHash) return entitlementResponse(now, env);
   return err(
     "code_already_claimed",
     "This code has already been activated on another device.",
-    409
+    409,
+    env
   );
 }
 
@@ -121,7 +150,7 @@ async function handleDownload(request, env) {
   try {
     payload = await request.json();
   } catch {
-    return err("bad_request", "Body must be JSON.", 400);
+    return err("bad_request", "Body must be JSON.", 400, env);
   }
 
   const codeId = normalizeCode(payload && payload.code);
@@ -129,7 +158,8 @@ async function handleDownload(request, env) {
     return err(
       "code_not_found",
       "That does not look like a Pit Wall activation code. It has the form PITW-XXXXX-XXXXX-XXXXX.",
-      404
+      404,
+      env
     );
   }
 
@@ -140,7 +170,8 @@ async function handleDownload(request, env) {
     return err(
       "code_not_found",
       "That code was not recognized. Check it against your purchase email, or reply to it and I will sort it out.",
-      404
+      404,
+      env
     );
   }
 
@@ -149,32 +180,39 @@ async function handleDownload(request, env) {
     return err(
       "not_configured",
       "The download is not available yet. Email vale.scott00@gmail.com and I will send it directly.",
-      503
+      503,
+      env
     );
   }
-  return json({ url: target, filename: "PitWall-Setup.exe" });
+  return json({ url: target, filename: "PitWall-Setup.exe" }, 200, env);
 }
 
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
+
+    // Preflight. Must answer before any POST from the website is even sent.
+    if (request.method === "OPTIONS") {
+      return new Response(null, { status: 204, headers: corsHeaders(env) });
+    }
+
     if (request.method === "GET" && url.pathname === "/health") {
-      return json({ ok: true });
+      return json({ ok: true }, 200, env);
     }
     if (request.method === "POST" && url.pathname === "/activate") {
       try {
         return await handleActivate(request, env);
       } catch (e) {
-        return err("server_error", "Activation failed. Try again.", 500);
+        return err("server_error", "Activation failed. Try again.", 500, env);
       }
     }
     if (request.method === "POST" && url.pathname === "/download") {
       try {
         return await handleDownload(request, env);
       } catch (e) {
-        return err("server_error", "Could not check that code. Try again.", 500);
+        return err("server_error", "Could not check that code. Try again.", 500, env);
       }
     }
-    return err("not_found", "Not found.", 404);
+    return err("not_found", "Not found.", 404, env);
   },
 };

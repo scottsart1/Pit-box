@@ -4,10 +4,10 @@
 // answer. Nothing here decides whether a code is valid, so reading the source
 // tells an attacker nothing they could not learn by typing a wrong code.
 
-// Filled in when the Worker is deployed. Left as an obviously-fake host so the
-// site's publish check refuses to ship a page whose Download button silently
-// does nothing.
-const ACTIVATION_API = "https://activation.example.invalid";
+// The deployed activation Worker. It answers the CORS preflight this fetch
+// triggers (POST + Content-Type: application/json is not a simple request), so
+// the response is actually readable from the site's origin.
+const ACTIVATION_API = "https://pitwall-activation.sarthakvij123450.workers.dev";
 
 const form = document.getElementById("downloadForm");
 const field = document.getElementById("downloadCode");

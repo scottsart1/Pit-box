@@ -263,7 +263,14 @@ def test_the_wrong_device_status_is_not_confused_with_no_licence(tmp_path, monke
     assert gate.check(tmp_path).status is gate.GateStatus.NEEDS_ACTIVATION
 
 
-def test_the_shipped_endpoint_placeholder_is_obviously_not_real():
-    # A build that forgot to point at the deployed Worker must fail loudly at
-    # activation rather than quietly talking to somewhere unintended.
-    assert ".invalid" in launcher.ACTIVATION_ENDPOINT
+def test_the_endpoint_points_at_a_deployed_worker():
+    """The Worker is live, so this must be a real https URL, not a placeholder.
+
+    Preflight in build.py still refuses to build when it sees ".invalid" or
+    "example", which is what protects a future edit that reverts this. What
+    has to hold now is that the shipped app talks to somewhere real.
+    """
+    endpoint = launcher.ACTIVATION_ENDPOINT
+    assert endpoint.startswith("https://"), endpoint
+    assert ".invalid" not in endpoint and "example" not in endpoint, endpoint
+    assert endpoint.endswith("/activate"), endpoint

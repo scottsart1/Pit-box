@@ -32,10 +32,10 @@ from .licensing import gate
 from .licensing.activation_client import ActivationError
 from .licensing.license_store import LicenseInvalid
 
-# Overridden at build time to the deployed Worker. Left as a placeholder so a
-# packaged build that was never configured fails loudly at activation rather
-# than silently pointing somewhere wrong.
-ACTIVATION_ENDPOINT = "https://activation.example.invalid/activate"
+# The deployed activation Worker. Verified live end to end: a real code
+# activates, its entitlement verifies against the embedded public key, a second
+# device is refused, and the same device may re-activate after a reinstall.
+ACTIVATION_ENDPOINT = "https://pitwall-activation.sarthakvij123450.workers.dev/activate"
 
 
 class LaunchOutcome(Enum):
