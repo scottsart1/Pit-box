@@ -53,14 +53,48 @@ def test_plain_marc_alias_is_accepted_for_mark():
     assert phrase == "marc"
 
 
-def test_wake_transcription_prompt_names_mark_explicitly():
+def test_wake_transcription_prompt_names_mark_without_a_positional_hint():
+    # The name must still be steered, or one-word clips alternate between
+    # "Mark" and "Marc" (the 3.6.1 fix).
     prompt = AudioService.transcription_prompt(
         ["Verstappen", "Norris"],
         ["mark", "marc", "hey mark"],
     )
-    assert "Wake name: Mark" in prompt
-    assert "Mark or Marc" in prompt
+    assert "Mark" in prompt
+    assert "Marc" in prompt
     assert "Verstappen" in prompt
+
+    # But it must never claim where the name falls. The wake gate matches on
+    # exactly this token at position 0, so telling the transcriber that the
+    # opening word is probably "Mark" makes the steering self-fulfilling and
+    # turns noise into a genuine-looking wake call.
+    lowered = prompt.lower()
+    assert "opening word" not in lowered
+    assert "accepted openings" not in lowered
+    assert "never adding a name that was not said" in lowered
+
+
+def test_prompt_echo_guard_tracks_the_current_prompt_wording():
+    # The guard goes stale whenever transcription_prompt changes, so the
+    # current opening must be one it recognises.
+    prompt = AudioService.transcription_prompt(None, ["mark", "marc"])
+    assert AudioService._looks_like_prompt_echo(prompt, prompt) is True
+
+
+def test_silence_artifacts_are_not_treated_as_speech():
+    # What a transcriber returns for silence or room noise, not driver radio.
+    for artifact in ("Thank you.", "you", "Thanks for watching!", "Okay", "Um"):
+        assert AudioService._looks_like_silence_artifact(artifact) is True
+
+
+def test_real_radio_survives_the_silence_filter():
+    for utterance in (
+        "Mark, what is the gap to Norris",
+        "box this lap",
+        "okay box box",
+        "thanks, what is my target lap",
+    ):
+        assert AudioService._looks_like_silence_artifact(utterance) is False
 
 
 class _WakeBrain:

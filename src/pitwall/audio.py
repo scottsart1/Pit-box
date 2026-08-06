@@ -31,6 +31,37 @@ RACING_VOCAB = (
     "wets",
 )
 
+# What a transcriber returns when it was handed silence or room noise rather
+# than speech. These are subtitle-corpus artefacts, not driver radio, so a clip
+# that reduces to one of them carries no request and is dropped.
+_SILENCE_ARTIFACTS = frozenset(
+    {
+        "you",
+        "thank you",
+        "thanks",
+        "thank you very much",
+        "thanks for watching",
+        "thank you for watching",
+        "thanks for watching the video",
+        "please subscribe",
+        "subscribe",
+        "bye",
+        "goodbye",
+        "okay",
+        "ok",
+        "so",
+        "oh",
+        "ah",
+        "hmm",
+        "mm",
+        "mhm",
+        "uh",
+        "um",
+        "the",
+        "and",
+    }
+)
+
 FirstAudioCallback = Callable[[], Awaitable[None] | None]
 
 
@@ -43,6 +74,22 @@ class AudioService:
     """
 
     def __init__(self) -> None:
+        self.client: AsyncOpenAI | None = None
+        self.rebind_client()
+        self.output_lock = asyncio.Lock()
+        self._stop_requested = False
+        self._ack_paths = {
+            "copy": settings.data_dir / f"ack-copy-{settings.voice}.wav",
+            "standby": settings.data_dir / f"ack-standby-{settings.voice}.wav",
+        }
+
+    def rebind_client(self) -> None:
+        """Rebuild the OpenAI client from the current settings.
+
+        Called at construction and again whenever the API key is changed from
+        the Connection Center, so a driver who pastes a key mid-session gets a
+        working radio without restarting Pit Wall.
+        """
         self.client = (
             AsyncOpenAI(
                 api_key=settings.api_key,
@@ -52,12 +99,6 @@ class AudioService:
             if settings.api_key
             else None
         )
-        self.output_lock = asyncio.Lock()
-        self._stop_requested = False
-        self._ack_paths = {
-            "copy": settings.data_dir / f"ack-copy-{settings.voice}.wav",
-            "standby": settings.data_dir / f"ack-standby-{settings.voice}.wav",
-        }
 
     @staticmethod
     def _looks_like_prompt_echo(text: str, prompt: str | None = None) -> bool:
@@ -106,9 +147,23 @@ class AudioService:
             lowered.startswith("formula one race radio")
             or lowered.startswith("f1 race radio vocabulary")
             or lowered.startswith("wake name:")
+            or lowered.startswith("names in use:")
             or "accepted openings:" in lowered
             or (hits >= 8 and len(lowered) > 100 and "drivers:" in lowered)
         )
+
+    @staticmethod
+    def _looks_like_silence_artifact(text: str) -> bool:
+        """Detect the stock phrases a transcriber emits when handed no speech.
+
+        Whisper-family models do not return an empty string for silence or
+        room noise; they return a small, well-known set of filler and
+        sign-off phrases learned from subtitle data. None of them is
+        something a driver says to a race engineer, so discarding them costs
+        nothing and removes a common source of unrequested radio calls.
+        """
+        stripped = " ".join(re.sub(r"[^a-z\s]", " ", text.strip().lower()).split())
+        return bool(stripped) and stripped in _SILENCE_ARTIFACTS
 
     @staticmethod
     def extract_wake_command(
@@ -141,7 +196,17 @@ class AudioService:
         driver_names: list[str] | None = None,
         wake_phrases: list[str] | None = None,
     ) -> str:
-        """Build a short STT steering prompt without leaking prose into output."""
+        """Build a short STT steering prompt without leaking prose into output.
+
+        The wake name is supplied as vocabulary, never as a positional hint.
+        An earlier wording told the model that the *opening word* was likely
+        "Mark"; because ``extract_wake_command`` then matches on exactly that
+        token at position 0, the steering was self-fulfilling and clips of
+        noise or of speech not addressed to the engineer transcribed as a
+        genuine wake call. Naming the words without claiming where they fall
+        keeps the 3.6.1 fix (one-word clips alternating between Mark and Marc)
+        while removing the invitation to insert one.
+        """
         names = ", ".join(
             name
             for name in (driver_names or [])[:20]
@@ -151,8 +216,9 @@ class AudioService:
         if wake_phrases:
             variants = ", ".join(dict.fromkeys(p.title() for p in wake_phrases))
             parts.append(
-                "Wake name: Mark. The opening word may sound like Mark or Marc; "
-                f"transcribe it literally. Accepted openings: {variants}"
+                f"Names in use: {variants}. Transcribe only the words actually "
+                "spoken, never adding a name that was not said, and return "
+                "nothing at all for silence or background noise"
             )
         parts.append("Keywords: " + ", ".join(RACING_VOCAB))
         if names:
@@ -184,6 +250,8 @@ class AudioService:
             else str(getattr(result, "text", result)).strip()
         )
         if self._looks_like_prompt_echo(text, prompt):
+            return ""
+        if self._looks_like_silence_artifact(text):
             return ""
         return text
 
