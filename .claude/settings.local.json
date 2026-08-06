@@ -1,7 +1,39 @@
 {
   "permissions": {
     "allow": [
-      "Bash(ls -la \"C:/Users/Sarth/PitWallData\" 2>/dev/null || echo \"NO DATA DIR\")"
+      "Bash(ls -la \"C:/Users/Sarth/PitWallData\" 2>/dev/null || echo \"NO DATA DIR\")",
+      "Bash(git add *)",
+      "Bash(git --no-pager diff -- src/pitwall/__init__.py pyproject.toml README.md)",
+      "Bash(git diff *)",
+      "Read(//tmp/**)",
+      "Bash(git check-ignore *)",
+      "Bash(echo \"exit:$?\")",
+      "Bash(git restore *)",
+      "Bash(git commit -m ' *)",
+      "Bash(git push *)",
+      "Bash(python -c \"import platform; print\\(platform.platform\\(\\)\\)\")",
+      "Bash(git checkout *)",
+      "Bash(grep -v '^$')",
+      "Bash(ls -la \"$HOME/PitWallData\" 2>/dev/null || echo \"no PitWallData dir found at $HOME/PitWallData\")",
+      "Bash(mkdir -p \"/c/Users/Sarth/AppData/Local/Temp/claude/C--Users-Sarth-OneDrive-Documents-Pit-box-main-wake-fix-v4-1/cffe787f-1bcc-431b-8c34-98f78ccc41f9/scratchpad/pw_backup_test\")",
+      "Bash(python -c ' *)",
+      "Bash(netstat -ano)",
+      "Bash(ls -la \"C:\\\\Users\\\\Sarth\\\\OneDrive\\\\Documents\\\\\" 2>/dev/null | grep -iE \"pit\")",
+      "Bash(tasklist //FI \"IMAGENAME eq python.exe\")",
+      "Bash(./.venv/Scripts/python.exe -m pytest -q)",
+      "Bash(./.venv/Scripts/python.exe \"C:\\\\Users\\\\Sarth\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\C--Users-Sarth-OneDrive-Documents-Pit-box-main-wake-fix-v4-1\\\\cffe787f-1bcc-431b-8c34-98f78ccc41f9\\\\scratchpad\\\\audit_probe.py\")",
+      "Bash(./.venv/Scripts/python.exe -m pytest -q tests/test_engineer_review_v42.py)",
+      "Bash(./.venv/Scripts/python.exe -m pytest -q tests/test_telemetry_v42_coaching.py)",
+      "Bash(./.venv/Scripts/python.exe -m pytest -q tests/test_telemetry_v42_coaching.py tests/test_engineer_review_v42.py tests/test_dialogue_regressions.py tests/test_radio_guardrails.py tests/test_proactive.py tests/test_wake.py tests/test_question_routing.py tests/test_suppression.py)",
+      "Bash(./.venv/Scripts/python.exe -c ' *)",
+      "Bash(./.venv/Scripts/python.exe -m ruff check src/ tests/)",
+      "Bash(./.venv/Scripts/python.exe -m ruff check src/ tests/ --statistics)",
+      "Bash(./.venv/Scripts/python.exe -m ruff check src/)",
+      "Bash(git worktree *)",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\" http://127.0.0.1:8010/api/health)",
+      "Bash(curl -s http://127.0.0.1:8010/api/v1/network/interfaces)",
+      "Bash(./.venv/Scripts/python.exe -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\(json.dumps\\(d, indent=2\\)[:2500]\\)\")",
+      "Bash(./.venv/Scripts/python.exe -m pytest -q tests/test_networking_v42.py tests/test_network_service_v42.py tests/test_network_api_v42.py)"
     ]
   }
 }
