@@ -32,9 +32,11 @@ ASSETS = ("styles.css",)
 # Every value that must be replaced before the site is public. Each is paired
 # with what to do about it, because "placeholder found" alone is not actionable.
 PLACEHOLDERS: dict[str, str] = {
-    "@YOUR-VENMO-HANDLE": "Set your real Venmo handle in index.html.",
-    "YOUR-EMAIL@example.com": "Set the contact address in index.html and eula.html.",
-    "[JURISDICTION]": "Name the governing-law jurisdiction in eula.html section 10.",
+    "[STATE]": (
+        "Name the governing-law state in eula.html section 10. \"USA\" alone "
+        "does not work: US contract and consumer law is set at state level, so "
+        "the clause needs a named state (normally where you live)."
+    ),
 }
 
 
@@ -77,11 +79,37 @@ def check() -> SiteCheck:
     return SiteCheck(not problems, tuple(problems))
 
 
-def build() -> Path:
+def _reset_output() -> Path:
+    """Empty the output directory without requiring the directory itself to go.
+
+    `shutil.rmtree` fails on Windows if anything holds a handle to a folder
+    inside it — a preview server using it as its working directory, or an open
+    Explorer window. Deleting the *files* and leaving the directories achieves
+    the same result and cannot be blocked that way, because every file is
+    rewritten immediately afterwards.
+    """
     if OUTPUT_DIR.exists():
-        shutil.rmtree(OUTPUT_DIR)
+        stale = [path for path in OUTPUT_DIR.rglob("*") if path.is_file()]
+        undeletable = []
+        for path in stale:
+            try:
+                path.unlink()
+            except OSError:
+                undeletable.append(path.name)
+        if undeletable:
+            raise SystemExit(
+                "Could not replace "
+                + ", ".join(sorted(undeletable))
+                + f" in {OUTPUT_DIR}. Close whatever has the file open "
+                "(a preview server, an editor) and run this again."
+            )
     images = OUTPUT_DIR / "img"
-    images.mkdir(parents=True)
+    images.mkdir(parents=True, exist_ok=True)
+    return images
+
+
+def build() -> Path:
+    images = _reset_output()
 
     for name in (*PAGES, *ASSETS):
         shutil.copy2(SITE_DIR / name, OUTPUT_DIR / name)

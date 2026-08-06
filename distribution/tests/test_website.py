@@ -29,18 +29,39 @@ EULA = (DIST / "website" / "eula.html").read_text(encoding="utf-8")
 
 
 def test_the_unfilled_site_is_blocked_from_publishing():
-    # As committed, the placeholders are present, so the check must fail. If
-    # this ever passes, the real handle and email are committed to a public
-    # repo, which is its own problem.
+    # The governing-law state is still outstanding, so publishing must fail.
     result = build_site.check()
     assert not result.ok
-    assert any("YOUR-VENMO-HANDLE" in problem for problem in result.problems)
+    assert any("[STATE]" in problem for problem in result.problems)
 
 
 def test_every_placeholder_names_the_fix():
     for token, fix in build_site.PLACEHOLDERS.items():
         assert fix.endswith("."), f"{token} has no actionable fix message"
         assert len(fix) > 20
+
+
+def test_the_real_contact_details_are_in_place():
+    # These were the other two placeholders; they must not regress.
+    assert "@scott-v-sv" in INDEX
+    assert "vale.scott00@gmail.com" in INDEX
+    assert "vale.scott00@gmail.com" in EULA
+    assert "example.com" not in INDEX
+
+
+def test_the_buyer_is_told_to_put_their_email_in_the_venmo_note():
+    # Fulfilment is manual, so the payment note is the only channel carrying
+    # the address a code gets sent to. Losing it means a paid order with no
+    # way to deliver.
+    assert "payment note" in INDEX
+
+
+def test_the_governing_law_clause_is_state_level():
+    # A US governing-law clause naming only the country is not enforceable as
+    # written; state law is what applies.
+    assert "State of" in EULA
+    assert "United States" in EULA
+    assert "conflict-of-laws" in EULA
 
 
 def test_a_filled_site_passes(tmp_path, monkeypatch):
@@ -74,6 +95,43 @@ def test_the_build_copies_only_what_the_pages_use(tmp_path, monkeypatch):
     assert copied == build_site._referenced_images()
     assert (output / "index.html").exists()
     assert (output / "styles.css").exists()
+
+
+def test_rebuilding_over_an_existing_output_refreshes_it(tmp_path, monkeypatch):
+    # A rebuild once crashed here: rmtree cannot remove a directory that a
+    # preview server holds as its working directory, so the build died and
+    # left the previous version in place, looking published.
+    out = tmp_path / "_site"
+    monkeypatch.setattr(build_site, "OUTPUT_DIR", out)
+    build_site.build()
+
+    stale = out / "index.html"
+    stale.write_text("STALE", encoding="utf-8")
+    orphan = out / "img" / "removed-screenshot.png"
+    orphan.write_bytes(b"old")
+
+    build_site.build()
+
+    assert "STALE" not in stale.read_text(encoding="utf-8")
+    assert not orphan.exists(), "a screenshot no longer referenced was left behind"
+
+
+def test_a_locked_output_file_fails_loudly(tmp_path, monkeypatch):
+    out = tmp_path / "_site"
+    monkeypatch.setattr(build_site, "OUTPUT_DIR", out)
+    build_site.build()
+
+    real_unlink = Path.unlink
+
+    def refuse(self, *args, **kwargs):
+        if self.name == "index.html":
+            raise PermissionError("held open by another process")
+        return real_unlink(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "unlink", refuse)
+    # Silently publishing a stale page is the failure worth preventing.
+    with pytest.raises(SystemExit, match="index.html"):
+        build_site.build()
 
 
 # ---------------------------------------------------------------------------
