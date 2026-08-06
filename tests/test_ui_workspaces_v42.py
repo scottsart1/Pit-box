@@ -191,3 +191,20 @@ def test_finding_cards_wrap_long_evidence_tokens() -> None:
     assert ".finding-facts li { overflow-wrap: anywhere; }" in CSS or (
         "overflow-wrap: anywhere" in CSS.split(".finding-card,", 1)[1].split("}", 1)[0]
     )
+
+
+def test_lap_lab_has_its_own_session_selector() -> None:
+    """Lap Lab must let a user pick the session in place.
+
+    Previously only Session Review and Field carried a session selector, so
+    reaching a lap in Lap Lab meant going back to another tab to choose the
+    session first. The selector is wired to the same selectSession path and
+    kept in sync with the other two.
+    """
+    assert 'id="lapLabSessionSelect"' in INDEX
+    assert 'class="lab-session-bar' in INDEX
+    # populated by the shared refresh alongside review and field
+    assert 'replaceOptions(byId("lapLabSessionSelect")' in WORKSPACES
+    # driven by the same handler as the other selectors
+    assert 'byId("lapLabSessionSelect")?.addEventListener("change"' in WORKSPACES
+    assert "selectSession(event.target.value)" in WORKSPACES

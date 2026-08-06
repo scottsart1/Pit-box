@@ -503,12 +503,22 @@ button:disabled,
 
 .workspace-wide,
 .workspace-header,
+.lab-session-bar,
 .comparison-header,
 .lab-notice,
 .trace-pane,
 .segment-pane {
   grid-column: 1 / -1;
 }
+
+.lab-session-bar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+.lab-session-bar .field-label { margin-right: 2px; }
+.lab-session-bar select { flex: 1 1 260px; min-width: 0; max-width: 460px; }
 
 .workspace-header {
   display: flex;

@@ -153,6 +153,7 @@ function refreshSessionSelectors() {
   const options = state.sessions.map((session) => ({ value: session.id, label: `${sessionLabel(session)} · ${formatDate(session.started_at)}` }));
   replaceOptions(byId("reviewSessionSelect"), options, "Choose session", state.selectedSessionId);
   replaceOptions(byId("fieldSessionSelect"), options, "Choose session", state.selectedSessionId);
+  replaceOptions(byId("lapLabSessionSelect"), options, "Choose session", state.selectedSessionId);
 }
 
 function renderSessionRows() {
@@ -1165,6 +1166,7 @@ function bindEvents() {
   byId("libraryLoadMore")?.addEventListener("click", () => loadSessions({ append: true }));
   byId("reviewSessionSelect")?.addEventListener("change", (event) => selectSession(event.target.value));
   byId("fieldSessionSelect")?.addEventListener("change", (event) => selectSession(event.target.value));
+  byId("lapLabSessionSelect")?.addEventListener("change", (event) => selectSession(event.target.value));
   byId("reviewDriverFilter")?.addEventListener("change", renderReviewLaps);
   byId("reviewReprocess")?.addEventListener("click", requestReprocess);
   byId("reviewOpenField")?.addEventListener("click", () => navigate("field"));
