@@ -147,7 +147,7 @@ function renderPacketHealth(packets = []) {
   clearChildren(body);
   if (!packets.length) {
     const row = document.createElement("tr");
-    const cell = textElement("td", "empty", "No packet data available. Listening alone does not prove that the PS5 is sending.");
+    const cell = textElement("td", "empty", "No packet data available. Listening alone does not prove that the game is sending telemetry.");
     cell.colSpan = 8;
     row.append(cell);
     body.append(row);
@@ -258,7 +258,7 @@ function renderInterfaces(payload) {
     if (item.description && item.description !== item.name) card.append(textElement("div", "field-help", item.description));
     const tags = document.createElement("div");
     tags.className = "tag-row";
-    if (recommended) tags.append(textElement("span", "tag-chip recommended", "Recommended for PS5"));
+    if (recommended) tags.append(textElement("span", "tag-chip recommended", "Recommended for PS5 / second PC"));
     if (item.pinned) tags.append(textElement("span", "tag-chip pinned", "Pinned choice"));
     if (item.previously_worked) tags.append(textElement("span", "tag-chip", "Valid F1 traffic seen before"));
     if (item.default_gateway) tags.append(textElement("span", "tag-chip", "Default route"));
@@ -786,7 +786,7 @@ function bindEvents() {
   byId("listenerForm")?.addEventListener("submit", submitListener);
   byId("listenerStop")?.addEventListener("click", stopListener);
   byId("refreshNetwork")?.addEventListener("click", refreshConnectionCenter);
-  byId("copyRecommendedIp")?.addEventListener("click", () => copyText(byId("recommendedIpv4").textContent, "PS5 UDP IP address"));
+  byId("copyRecommendedIp")?.addEventListener("click", () => copyText(byId("recommendedIpv4").textContent, "PS5 / second PC UDP IP address"));
   byId("copyRecommendedPort")?.addEventListener("click", () => copyText(byId("recommendedPort").textContent, "UDP port"));
   byId("forwarderForm")?.addEventListener("submit", submitForwarder);
   byId("cancelForwarderEdit")?.addEventListener("click", resetForwarderForm);
