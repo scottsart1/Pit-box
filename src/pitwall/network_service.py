@@ -469,13 +469,22 @@ class NetworkService:
         if stored is None:
             return False
         host, port = _normalize_bind(stored.bind_host, stored.udp_port)
-        discovery = await self.interfaces()
         targets = {target.id: target for target in stored.targets}
+        # Same reasoning as start_listener below: the adapter list only exists
+        # to prove no forwarding target points back at this listener, and
+        # obtaining it costs a cold powershell.exe start of 9-17s.
+        #
+        # This path runs only when a saved profile exists — which is every
+        # launch after the very first, so it is the startup every buyer
+        # actually experiences. Measured here: 32.3s on a first launch against
+        # 46.9s on the second, entirely from this call. Skipping it when there
+        # is nothing to check makes the two the same.
+        discovery = await self.interfaces() if targets else None
         async with self._targets_lock:
             await self._forwarder.reconfigure(
                 tuple(targets.values()),
                 listen_endpoints=((host, port),),
-                local_interfaces=discovery.interfaces,
+                local_interfaces=discovery.interfaces if discovery else (),
             )
             self._targets = targets
         self._bind_host = host
@@ -508,6 +517,13 @@ class NetworkService:
                 if discovery.source == "stdlib-fallback":
                     return discovery
                 self._discovery = discovery
+                # Telemetry can arrive before the adapter list does, because
+                # binding the socket no longer waits for discovery. Resolve the
+                # source recorded so far now, so "valid F1 traffic seen before"
+                # is not lost purely because the packet won the race.
+                source = self._last_source
+                if source:
+                    self._remember_working_interface(str(source["ip"]))
             return self._discovery
 
     def _recommendation(self, discovery: DiscoveryResult) -> InterfaceRecommendation:
@@ -563,7 +579,22 @@ class NetworkService:
             ):
                 return self.listener_snapshot()
 
-            discovery = await self.interfaces()
+            # Adapter discovery is only needed to prove that no forwarding
+            # target points back at this listener. It costs a cold
+            # powershell.exe start — 9-17s on a measured Windows machine — and
+            # binding the socket used to wait for it unconditionally, so the
+            # dashboard took the better part of a minute to answer on a fresh
+            # install while the buyer stared at nothing and concluded the app
+            # was broken.
+            #
+            # With no targets configured, which is every install until someone
+            # adds one, there is no loop to rule out and the cost buys nothing.
+            # Reading _targets before taking the lock is safe here: the saved
+            # profile has already been loaded, and the HTTP API that could add
+            # a target is not accepting requests until this returns. The
+            # Connection Center still gets its adapter list from the warm task
+            # the lifespan starts in the background.
+            discovery = await self.interfaces() if self._targets else None
             async with self._targets_lock:
                 # Validate a prospective bind against every configured target
                 # before disrupting a healthy existing listener.  Reconfigure
@@ -571,7 +602,7 @@ class NetworkService:
                 await self._forwarder.reconfigure(
                     tuple(self._targets.values()),
                     listen_endpoints=((host, normalized_port),),
-                    local_interfaces=discovery.interfaces,
+                    local_interfaces=discovery.interfaces if discovery else (),
                 )
                 if self._transport is not None:
                     await self._stop_transport_locked()
@@ -984,7 +1015,7 @@ class NetworkService:
                 "id": "console_interface",
                 "status": "pass" if interface_ok else "fail",
                 "message": (
-                    "A likely console-reachable private IPv4 adapter is available."
+                    "A private IPv4 adapter reachable by a PS5 or second PC is available."
                     if interface_ok
                     else "No active private-LAN IPv4 adapter could be recommended."
                 ),
@@ -992,7 +1023,7 @@ class NetworkService:
         )
         if not interface_ok:
             actions.append(
-                "Connect the PC to the same LAN as the console and disable an unintended VPN route."
+                "Connect the PC to the same LAN as the PS5 or second PC and disable an unintended VPN route."
             )
 
         listener = snapshot.listener
@@ -1026,7 +1057,7 @@ class NetworkService:
                 "message": (
                     "Valid F1 2026 telemetry is arriving."
                     if receiving
-                    else "A listener or free port does not prove the console is sending telemetry."
+                    else "A listener or free port does not prove the game is sending telemetry."
                 ),
             }
         )
@@ -1036,7 +1067,7 @@ class NetworkService:
                 recommended.address if recommended else "the recommended PC IPv4"
             )
             actions.append(
-                f"Set the PS5 telemetry destination to {destination}:{listener.port}, "
+                f"Set the PS5 or second-PC telemetry destination to {destination}:{listener.port}, "
                 "select the 2026 packet format, and start an on-track session."
             )
 

@@ -11,6 +11,7 @@ development app is unaffected by all of it.
 
 from __future__ import annotations
 
+import io
 import os
 import sys
 from pathlib import Path
@@ -26,6 +27,66 @@ from distribution.launcher import (
     LaunchResult,
     launch,
 )
+
+
+class _NullStream(io.TextIOBase):
+    """A stream that discards writes and is honest about not being a terminal.
+
+    ``os.devnull`` is the obvious sink and the wrong one on Windows: NUL is a
+    character device, so ``open(os.devnull).isatty()`` returns **True**. Binding
+    the windowed build's streams to it would make every "am I attached to a
+    terminal?" test in every dependency answer yes, and colour codes, progress
+    bars and prompts would switch themselves on inside an app that has no
+    console at all — re-creating, more quietly, the class of bug this guard
+    exists to remove.
+    """
+
+    encoding = "utf-8"
+    errors = "replace"
+
+    def readable(self) -> bool:
+        return True
+
+    def writable(self) -> bool:
+        return True
+
+    def read(self, *args: object) -> str:
+        return ""
+
+    def readline(self, *args: object) -> str:  # type: ignore[override]
+        return ""
+
+    def write(self, text: str) -> int:
+        return len(text)
+
+    def flush(self) -> None:
+        return None
+
+    def isatty(self) -> bool:
+        return False
+
+
+def _ensure_standard_streams() -> None:
+    """Give the windowed build usable stdio objects.
+
+    PyInstaller's ``console=False`` build leaves stdout, stderr and stdin set
+    to None. `print` is safe (CPython drops it silently), but anything touching
+    a stream object is not: uvicorn's log formatter called
+    ``sys.stdout.isatty()`` and killed the app at startup, right after a
+    successful activation, with a traceback no buyer could act on.
+
+    Replacing them once, before anything else runs, closes that whole class of
+    failure rather than the single instance of it. Each stream gets its own
+    object so that closing one cannot take the others with it, and the
+    ``sys.__stdout__`` originals are filled in too because parts of the standard
+    library reach for those rather than the current values. Real diagnostics go
+    to pitwall.log, which depends on none of this.
+    """
+    for name in ("stdout", "stderr", "stdin"):
+        if getattr(sys, name, None) is None:
+            setattr(sys, name, _NullStream())
+        if getattr(sys, f"__{name}__", None) is None:
+            setattr(sys, f"__{name}__", getattr(sys, name))
 
 
 def config_dir() -> Path:
@@ -61,6 +122,7 @@ def _start_app() -> None:
 
 def main(argv: list[str] | None = None) -> int:
     del argv
+    _ensure_standard_streams()
     result: LaunchResult = launch(
         config_dir(),
         endpoint=os.environ.get("PITWALL_ACTIVATION_ENDPOINT", ACTIVATION_ENDPOINT),

@@ -2447,7 +2447,7 @@ class TelemetryTools:
                 "get_connection_health",
                 (
                     "Get measured UDP listener, packet loss/rate/freshness, "
-                    "forwarding, queue and recommended PS5 destination health."
+                    "forwarding, queue and recommended telemetry destination health."
                 ),
                 {},
             ),

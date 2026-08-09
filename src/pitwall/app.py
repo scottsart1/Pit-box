@@ -13,6 +13,7 @@ from fastapi import (
     File,
     HTTPException,
     Query,
+    Request,
     UploadFile,
     WebSocket,
     WebSocketDisconnect,
@@ -64,7 +65,7 @@ from .trace_store import RecoveryReport, TraceStore
 from .track_model_service import TrackModelService
 from .udp import TRACKS, F1DatagramProtocol, classify_session
 from .voice import NativeVoiceController
-from .web_security import LanAccessMiddleware
+from .web_security import LanAccessMiddleware, is_loopback_host
 
 log = logging.getLogger(__name__)
 
@@ -1057,6 +1058,37 @@ async def clear_strategy_override() -> dict[str, object]:
     )
     await store.update(strategy_override=override)
     return {"override": override, "strategy": await strategy.recompute()}
+
+
+@app.post("/api/shutdown")
+async def shutdown_pitwall(request: Request) -> dict[str, object]:
+    """Stop Pit Wall from the dashboard.
+
+    Restricted to the machine running Pit Wall, matching the API-key endpoints:
+    with LAN access enabled the dashboard is reachable from the console and any
+    other device on the network, and none of them should be able to end a
+    session that is being recorded.
+
+    Setting uvicorn's own exit flag rather than killing the process means the
+    lifespan teardown still runs, so the UDP listener closes before the parser,
+    the capture file is finalized and queued session events are drained. A hard
+    exit would corrupt the recording of whatever session was in progress, which
+    is the one thing a driver cannot get back.
+    """
+    client = request.client
+    host = client.host if client else ""
+    if not is_loopback_host(host):
+        raise HTTPException(
+            403, "Pit Wall can only be shut down from the computer running it."
+        )
+    server = getattr(request.app.state, "server", None)
+    if server is None:
+        raise HTTPException(
+            503, "Pit Wall is not running under its own server and cannot stop itself."
+        )
+    log.info("Shutdown requested from the dashboard")
+    server.should_exit = True
+    return {"stopping": True}
 
 
 @app.get("/api/preferences")
