@@ -1,4 +1,4 @@
-"""Generate the Ed25519 signing key pair for Pit Wall licensing.
+"""Generate the Ed25519 signing key pair for Your Pit Box licensing.
 
 The PRIVATE key is written to distribution/.secrets/ (gitignored) and must never leave
 this machine or enter git. Back it up somewhere offline; if it is lost, no new

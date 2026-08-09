@@ -54,7 +54,7 @@ def create_credentials_router(
     """Build the router.
 
     `on_change` rebinds the live OpenAI clients so a key saved mid-session
-    takes effect without restarting Pit Wall.
+    takes effect without restarting Your Pit Box.
     """
     router = APIRouter(prefix="/api/v1/credentials", tags=["credentials"])
 
@@ -66,7 +66,7 @@ def create_credentials_router(
             detail = (
                 "This key comes from a system environment variable. Saving a "
                 "new key here applies straight away, but the environment "
-                "variable takes priority again the next time Pit Wall starts. "
+                "variable takes priority again the next time Your Pit Box starts. "
                 "Remove OPENAI_API_KEY from your system environment to make a "
                 "saved key stick."
             )

@@ -167,7 +167,7 @@ def test_the_setup_guide_covers_the_customer_journey():
         "Activation code",
         "API billing is separate",
         "Create new secret key",
-        "Activate Pit Wall",
+        "Activate Your Pit Box",
         "Test saved key",
         "All configured providers ready",
         "UDP IP Address",
@@ -177,7 +177,7 @@ def test_the_setup_guide_covers_the_customer_journey():
         "Mark, what is the gap ahead?",
     ):
         assert required in GUIDE
-    assert "Pit Wall runs beside the game, not inside it" in GUIDE
+    assert "Your Pit Box runs beside the game, not inside it" in GUIDE
 
 
 def _executable_source(page: str) -> str:

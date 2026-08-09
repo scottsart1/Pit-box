@@ -884,7 +884,7 @@ class ProviderRouter:
                     result = await implementation.generate(
                         prompt=prompt,
                         instructions=(
-                            "This is a Pit Wall provider diagnostic. Follow the request "
+                            "This is a Your Pit Box provider diagnostic. Follow the request "
                             "exactly and keep the final answer to one word: READY."
                         ),
                         route=route,

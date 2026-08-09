@@ -16,12 +16,13 @@ from .intent import (
     has_phrase,
     normalize_text,
 )
+from .prerace import PreRacePlanner
 from .providers import ProviderResult, ProviderRouter
 from .state import StateStore
 from .tools import TelemetryTools
 
 PERSONA = """
-You are Pit Wall, a senior Formula 1 simulator race engineer.
+You are Your Pit Box, a senior Formula 1 simulator race engineer.
 
 Be calm, precise, proactive and brief. Lead with the answer, not the data.
 
@@ -57,7 +58,7 @@ a garage-only item.
 
 Pit calls must specify BOTH the lap and the tyre compound when the strategy tool supports it:
 "Box lap 18 for hards." Never repeat an expired game pit window as a current recommendation.
-The deterministic Pit Wall strategy plan is primary; the game's window is only a cross-check.
+The deterministic Your Pit Box strategy plan is primary; the game's window is only a cross-check.
 When strategy confidence is low, call the recommendation provisional and name the wear/deg
 assumption; do not present a track-default model as proven personal degradation.
 Respect the strategy tool's compound-rule legality. Never recommend finishing a dry Race
@@ -665,6 +666,10 @@ class EngineerBrain:
         }
         if is_start_plan and compounds:
             action["start_compound"] = compounds[0]
+            # Said out loud, so it is a decision rather than the fitted tyre
+            # echoed back by a plan. The caller records what was on the car at
+            # the time, so a later change in the garage still wins.
+            action["start_compound_explicit"] = True
             if len(compounds) > 1:
                 action["next_compound"] = compounds[-1]
         elif compounds:
@@ -787,14 +792,62 @@ class EngineerBrain:
             )
         )
 
+    # A stop is pointless if the driver is already on that compound and it is
+    # barely used. Anything at or below this age counts as "just fitted".
+    _JUST_FITTED_LAPS = 2
+
     @staticmethod
-    def _spoken_strategy_instruction(recommended: dict[str, Any], current_lap: int) -> str:
+    def _spoken_strategy_instruction(
+        recommended: dict[str, Any],
+        current_lap: int,
+        tyre: dict[str, Any] | None = None,
+    ) -> str:
         box_lap = recommended.get("box_lap")
         compound = recommended.get("fit_compound")
         if box_lap is None or not compound:
             return str(recommended.get("instruction") or "Stay out to the finish.")
+        # Never voice a stop the model itself says is not worth making.
+        #
+        # From a real race, lap 33 of 37, the driver running P7 on mediums at
+        # roughly half their wear limit. The payload behind the call read
+        # positions_gained_vs_stay_out 0, positions_lost_by_stopping 6,
+        # projected_finish_position 18 — and the call was "Box this lap for
+        # softs." He boxed, rejoined P20 and finished P20, last of the
+        # classified runners.
+        #
+        # Nothing here second-guesses the strategy engine: it is the engine's
+        # own arithmetic. The defect was that the recommendation reached speech
+        # without anyone reading it. When the numbers say a stop gains nothing
+        # and costs places, say that instead — the driver can still choose to
+        # box, but not because they were told to.
+        gained = recommended.get("positions_gained_vs_stay_out")
+        lost = recommended.get("positions_lost_by_stopping")
+        try:
+            if gained is not None and lost is not None and int(gained) <= 0 < int(lost):
+                places = int(lost)
+                return (
+                    f"Stay out — boxing costs you {places} "
+                    f"place{'s' if places != 1 else ''} and gains nothing."
+                )
+        except (TypeError, ValueError):
+            pass
+
         box_lap = int(box_lap)
         if box_lap <= current_lap:
+            # Never tell a driver to pit for the tyre they are already on and
+            # have only just fitted. In a real race this was said on lap 33 of
+            # 37, one lap after a stop, while the car was on softs at age 0 —
+            # and in the same lap the engineer also said "you're on fresh
+            # softs, stay out". Being told to throw away a new set, twice,
+            # contradicting itself, is worse than saying nothing at all.
+            current = str((tyre or {}).get("compound") or "").upper()
+            age = int((tyre or {}).get("age_laps") or (tyre or {}).get("age") or 0)
+            if (
+                current
+                and current == str(compound).upper()
+                and age <= EngineerBrain._JUST_FITTED_LAPS
+            ):
+                return "Stay out — you're on fresh " + str(compound).lower() + "s."
             return f"Box this lap for {str(compound).lower()}s."
         return f"Box lap {box_lap} for {str(compound).lower()}s."
 
@@ -1116,6 +1169,16 @@ class EngineerBrain:
                 return f"Session locked to {label}. {tyre_call}{qualifier}"
             return f"Session locked to {label}. I’ll use {profile.replace('_', ' ')} logic until you clear it."
 
+        # A pre-race plan discussion, if one is open, owns strategy talk until
+        # it is settled. It has to come before the single-stop override below:
+        # "make it a one-stop" during a plan discussion means reshape the whole
+        # race, not pin the next stop, and the narrow override would take it
+        # first and silently answer the smaller question.
+        planner = PreRacePlanner(self.store, self.tools.strategy)
+        plan_turn = await planner.try_respond(utterance)
+        if plan_turn is not None:
+            return str(plan_turn.get("spoken") or "")
+
         override_action = self._strategy_override_action(
             utterance, int(state.get("current_lap", 0))
         )
@@ -1124,6 +1187,8 @@ class EngineerBrain:
             if override_action.get("clear"):
                 current.update(
                     enabled=False, locked=False, start_compound=None,
+                    start_compound_explicit=False, start_compound_seen_fitted="",
+                    plan={}, plan_agreed=False,
                     next_box_lap=None, next_compound=None, preferred_stops=None,
                     source="driver_radio", note="cleared by driver", updated_at=time.time(),
                 )
@@ -1131,6 +1196,10 @@ class EngineerBrain:
                 await self.tools.strategy.recompute()
                 return "Strategy override cleared; automatic ranking restored."
             current.update({key: value for key, value in override_action.items() if key != "clear"})
+            if override_action.get("start_compound_explicit"):
+                current["start_compound_seen_fitted"] = str(
+                    state.get("tyre", {}).get("compound", "") or ""
+                ).upper()
             current["note"] = utterance
             await self.store.update(strategy_override=current)
             await self.tools.strategy.recompute()
@@ -1401,7 +1470,11 @@ class EngineerBrain:
             signature = self._strategy_signature(recommended)
             previous = str(state.get("strategy_spoken_signature", ""))
             await self.store.update(strategy_spoken_signature=signature)
-            instruction = self._spoken_strategy_instruction(recommended, int(state.get("current_lap", 0)))
+            instruction = self._spoken_strategy_instruction(
+                recommended,
+                int(state.get("current_lap", 0)),
+                state.get("tyre") or {},
+            )
             prefix = "Driver override active — " if active_override.get("enabled") else ""
             if telemetry_stale:
                 prefix = "Telemetry stale — last confirmed: " + prefix

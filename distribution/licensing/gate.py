@@ -55,7 +55,7 @@ _MANIFEST = Path(__file__).with_name("integrity_manifest.txt")
 # Shown to the user when the self-check fails. Written for the innocent case,
 # which is the far more likely one.
 TAMPER_MESSAGE = (
-    "Pit Wall could not verify its own program files, so it has not started.\n\n"
+    "Your Pit Box could not verify its own program files, so it has not started.\n\n"
     "This usually means the installation is damaged - an interrupted update, a "
     "disk error, or antivirus quarantining a file. Reinstalling from your "
     "original download normally fixes it.\n\n"
@@ -192,7 +192,7 @@ def complete_activation(
         this_device = device_hash()
     except Exception as exc:  # noqa: BLE001 - reported on the form, never fatal
         raise ActivationError(
-            "Pit Wall could not read this computer's hardware id, so it cannot "
+            "Your Pit Box could not read this computer's hardware id, so it cannot "
             "tie your activation to this machine. This usually means a damaged "
             "Windows install; reinstalling Windows components or contacting "
             "support will sort it out.",

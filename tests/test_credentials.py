@@ -95,13 +95,13 @@ def test_a_rejected_key_never_overwrites_a_working_one(client, env_file):
 
 def test_unrelated_settings_and_comments_survive():
     existing = (
-        "# Pit Wall settings\n"
+        "# Your Pit Box settings\n"
         "PITWALL_UDP_PORT=20777\n"
         "OPENAI_API_KEY=sk-old-value-that-is-long-enough\n"
         "PITWALL_VOICE=coral\n"
     )
     rendered = credentials._render_env(existing, REAL_KEY)
-    assert "# Pit Wall settings" in rendered
+    assert "# Your Pit Box settings" in rendered
     assert "PITWALL_UDP_PORT=20777" in rendered
     assert "PITWALL_VOICE=coral" in rendered
     assert f"OPENAI_API_KEY={REAL_KEY}" in rendered

@@ -120,7 +120,7 @@ STORYBOARD: tuple[Beat, ...] = (
     Beat(
         page="live", seconds=10.0,
         caption="Deterministic maths. The model only speaks it aloud.",
-        sub="Pit Wall — a race engineer for F1 26 on PS5.",
+        sub="Your Pit Box — a race engineer for F1 26 on PS5.",
     ),
 )
 
@@ -157,7 +157,7 @@ INSTALL_OVERLAY = """
   document.head.appendChild(style);
   const bar = document.createElement('div');
   bar.id = 'pw-demo-caption';
-  bar.innerHTML = '<i>Pit Wall</i><b></b><span></span>';
+  bar.innerHTML = '<i>Your Pit Box</i><b></b><span></span>';
   document.body.appendChild(bar);
   const radio = document.createElement('div');
   radio.id = 'pw-demo-radio';

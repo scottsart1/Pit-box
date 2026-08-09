@@ -3,15 +3,16 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Set up Pit Wall — illustrated customer guide</title>
-<meta name="description" content="Set up Pit Wall from your activation-code download and OpenAI API key through PS5 / PC telemetry and your first live race-engineer radio check.">
+<title>Set up Your Pit Box — illustrated customer guide</title>
+<meta name="description" content="Set up Your Pit Box from your activation-code download and OpenAI API key through PS5 / PC telemetry and your first live race-engineer radio check.">
+<link rel="canonical" href="https://yourpitbox.com/guide">
 <link rel="stylesheet" href="styles.css">
 </head>
 <body>
 
 <header class="site-header">
   <div class="wrap">
-    <a class="brand" href="index.html#top"><span class="brand-mark" aria-hidden="true"></span> Pit Wall</a>
+    <a class="brand" href="index.html#top"><span class="brand-mark" aria-hidden="true"></span> Your Pit Box</a>
     <nav class="site-nav" aria-label="Sections">
       <a href="index.html#demo">Demo</a>
       <a href="index.html#what">What it does</a>
@@ -19,7 +20,10 @@
       <a href="index.html#requirements">Requirements</a>
       <a href="index.html#buy">Get it</a>
     </nav>
-    <a class="button primary" href="index.html#download">Download</a>
+    <div class="header-actions">
+      <a class="site-promo" href="https://racewithme.net/" target="_blank" rel="noopener noreferrer"><span class="site-promo-label">Our racing partner:</span> racewithme.net <span aria-hidden="true">↗</span></a>
+      <a class="button primary" href="index.html#download">Download</a>
+    </div>
   </div>
 </header>
 
@@ -29,7 +33,7 @@
       <div>
         <div class="eyebrow">Customer setup</div>
         <h1>From activation code to your first radio check.</h1>
-        <p class="lede">Follow these seven steps in order. You will download and activate Pit Wall, create your own OpenAI API key, connect the Windows companion to your PS5 / PC, and confirm that live telemetry and radio are ready.</p>
+        <p class="lede">Follow these seven steps in order. You will download and activate Your Pit Box, create your own OpenAI API key, connect the Windows companion to your PS5 / PC, and confirm that live telemetry and radio are ready.</p>
         <div class="hero-actions">
           <a class="button primary" href="#step-1">Start with your code</a>
           <a class="button ghost" href="#troubleshooting">Troubleshooting</a>
@@ -47,11 +51,11 @@
     <div class="wrap">
       <div class="guide-companion-note">
         <div class="guide-companion-icon" aria-hidden="true">PC</div>
-        <div><strong>Pit Wall runs beside the game, not inside it.</strong> Keep Pit Wall open on your Windows PC while you drive on PS5 / PC. Telemetry travels over your home network (or, if the game runs on the same PC as Pit Wall, over that computer's own loopback address), and the engineer speaks through the PC's microphone and speakers.</div>
+        <div><strong>Your Pit Box runs beside the game, not inside it.</strong> Keep Your Pit Box open on your Windows PC while you drive on PS5 / PC. Telemetry travels over your home network (or, if the game runs on the same PC as Your Pit Box, over that computer's own loopback address), and the engineer speaks through the PC's microphone and speakers.</div>
       </div>
       <h2>Have these ready</h2>
       <div class="guide-checklist">
-        <div><span aria-hidden="true">✓</span><p><strong>Your activation code</strong><br>From the Pit Wall purchase email.</p></div>
+        <div><span aria-hidden="true">✓</span><p><strong>Your activation code</strong><br>From your purchase email.</p></div>
         <div><span aria-hidden="true">✓</span><p><strong>An OpenAI Platform account</strong><br>API billing is separate from a ChatGPT subscription.</p></div>
         <div><span aria-hidden="true">✓</span><p><strong>A Windows 10 or 11 PC</strong><br>On the same home network as a PS5 or second PC, or the one PC running the game.</p></div>
         <div><span aria-hidden="true">✓</span><p><strong>F1 25: 2026 Season Pack on PS5 / PC</strong><br>Updated and ready to start an on-track session.</p></div>
@@ -61,7 +65,7 @@
         <a href="#step-2"><span>2</span>API billing</a>
         <a href="#step-3"><span>3</span>Create key</a>
         <a href="#step-4"><span>4</span>Activate</a>
-        <a href="#step-5"><span>5</span>Check Pit Wall</a>
+        <a href="#step-5"><span>5</span>Check Your Pit Box</a>
         <a href="#step-6"><span>6</span>Connect game</a>
         <a href="#step-7"><span>7</span>Drive</a>
       </nav>
@@ -78,11 +82,11 @@
           <li>Paste the full code from your purchase email. It has the form <code>PITW-XXXXX-XXXXX-XXXXX</code>.</li>
           <li>Select <strong>Download</strong> and save <code>PitWall-Setup.exe</code>.</li>
         </ol>
-        <div class="guide-tip"><strong>Keep the email open.</strong> Downloading does not use the code. You enter the same code again when Pit Wall activates on this computer.</div>
+        <div class="guide-tip"><strong>Keep the email open.</strong> Downloading does not use the code. You enter the same code again when Your Pit Box activates on this computer.</div>
       </div>
       <figure class="guide-figure">
-        <div class="shot guide-shot"><img src="assets/guide-01-download.svg" alt="Illustration of the Pit Wall download form with a redacted activation code and the Download button highlighted." width="1200" height="700"></div>
-        <figcaption>Use the code only on the Pit Wall download page and in the Pit Wall activation window.</figcaption>
+        <div class="shot guide-shot"><img src="assets/guide-01-download.svg" alt="Illustration of the download form with a redacted activation code and the Download button highlighted." width="1200" height="700"></div>
+        <figcaption>Use the code only on the download page and in the activation window.</figcaption>
       </figure>
     </div>
   </section>
@@ -97,7 +101,7 @@
           <li>Open the <a href="https://platform.openai.com/settings/organization/billing/overview" target="_blank" rel="noopener noreferrer">API billing overview</a> and add payment details or buy API credits.</li>
           <li>Review the auto-recharge setting before confirming. Leave it off unless you want automatic top-ups; if you turn it on, set a monthly recharge limit you are comfortable with.</li>
         </ol>
-        <div class="guide-warning"><strong>ChatGPT Plus, Pro, or Business does not include API usage.</strong> Pit Wall's model-backed radio calls are charged to the API account connected to your key.</div>
+        <div class="guide-warning"><strong>ChatGPT Plus, Pro, or Business does not include API usage.</strong> Your Pit Box's model-backed radio calls are charged to the API account connected to your key.</div>
       </div>
       <figure class="guide-figure">
         <div class="shot guide-shot"><img src="assets/guide-02-openai-billing.svg" alt="Privacy-safe illustration of the OpenAI Platform billing overview with Add payment details, Buy credits, and auto-recharge controls called out." width="1200" height="700" loading="lazy"></div>
@@ -113,13 +117,13 @@
         <h2>Create and copy your API key</h2>
         <ol>
           <li>Open the <a href="https://platform.openai.com/api-keys" target="_blank" rel="noopener noreferrer">API keys page</a>.</li>
-          <li>Select <strong>Create new secret key</strong>, name it <strong>Pit Wall</strong>, choose <strong>All</strong> permissions for the simplest compatible setup, and create it.</li>
+          <li>Select <strong>Create new secret key</strong>, name it <strong>Your Pit Box</strong>, choose <strong>All</strong> permissions for the simplest compatible setup, and create it.</li>
           <li>Copy the complete secret immediately and keep it private. OpenAI only shows the full value when it is created.</li>
         </ol>
-        <div class="guide-tip"><strong>If you lose the key, create another one.</strong> Do not send it by email, put it in a screenshot, or share it with Pit Wall support.</div>
+        <div class="guide-tip"><strong>If you lose the key, create another one.</strong> Do not send it by email, put it in a screenshot, or share it with Your Pit Box support.</div>
       </div>
       <figure class="guide-figure">
-        <div class="shot guide-shot"><img src="assets/guide-03-openai-key.svg" alt="Privacy-safe illustration of creating an OpenAI secret key named Pit Wall and copying the redacted secret once." width="1200" height="700" loading="lazy"></div>
+        <div class="shot guide-shot"><img src="assets/guide-03-openai-key.svg" alt="Privacy-safe illustration of creating an OpenAI secret key named Your Pit Box and copying the redacted secret once." width="1200" height="700" loading="lazy"></div>
         <figcaption>The example key is deliberately redacted. Never use a real key in a screenshot.</figcaption>
       </figure>
     </div>
@@ -129,17 +133,17 @@
     <div class="wrap guide-step-grid guide-step-reverse">
       <div class="guide-copy">
         <div class="step-kicker"><span>4</span> Windows</div>
-        <h2>Install and activate Pit Wall</h2>
+        <h2>Install and activate Your Pit Box</h2>
         <ol>
           <li>Run <code>PitWall-Setup.exe</code> and follow the installer. It installs for your Windows account, so it does not need an administrator password.</li>
-          <li>Leave <strong>Launch Pit Wall</strong> selected at the end. The <strong>Activate Pit Wall</strong> window opens.</li>
-          <li>Paste your Pit Wall activation code and your OpenAI API key, then select <strong>Activate</strong>.</li>
+          <li>Leave <strong>Launch Your Pit Box</strong> selected at the end. The <strong>Activate Your Pit Box</strong> window opens.</li>
+          <li>Paste your activation code and your OpenAI API key, then select <strong>Activate</strong>.</li>
         </ol>
         <div class="guide-tip">The API key can be left blank and added later under <strong>Connection</strong>, but entering it here is the shortest path. Activation itself needs an internet connection.</div>
-        <div class="guide-tip"><strong>Pit Wall takes 20–30 seconds to start, every time.</strong> After you activate — and on every launch from then on — there is a pause before the dashboard opens while the strategy engine, telemetry socket and audio device come up. It opens the browser itself once it is ready, so there is nothing to click and nothing has gone wrong. Allow longer on the first start after installing, or if the PC is busy with something else.</div>
+        <div class="guide-tip"><strong>Your Pit Box takes 20–30 seconds to start, every time.</strong> After you activate — and on every launch from then on — there is a pause before the dashboard opens while the strategy engine, telemetry socket and audio device come up. It opens the browser itself once it is ready, so there is nothing to click and nothing has gone wrong. Allow longer on the first start after installing, or if the PC is busy with something else.</div>
       </div>
       <figure class="guide-figure">
-        <div class="shot guide-shot"><img src="assets/guide-04-activation.svg" alt="Illustration of the real Pit Wall first-run window with redacted activation-code and OpenAI API-key fields and the Activate button highlighted." width="1200" height="700" loading="lazy"></div>
+        <div class="shot guide-shot"><img src="assets/guide-04-activation.svg" alt="Illustration of the real Your Pit Box first-run window with redacted activation-code and OpenAI API-key fields and the Activate button highlighted." width="1200" height="700" loading="lazy"></div>
         <figcaption>The activation code becomes tied to this computer. The API key can be changed later.</figcaption>
       </figure>
     </div>
@@ -148,18 +152,18 @@
   <section id="step-5" class="guide-step">
     <div class="wrap guide-step-grid">
       <div class="guide-copy">
-        <div class="step-kicker"><span>5</span> Pit Wall</div>
+        <div class="step-kicker"><span>5</span> Your Pit Box</div>
         <h2>Confirm the key and copy the PC address</h2>
         <ol>
-          <li>Pit Wall starts its local server and opens the dashboard in your browser by itself. <strong>Give it 20–30 seconds</strong> — it loads the strategy engine, opens the telemetry socket and starts the audio device before the dashboard appears. Nothing is wrong during that wait. Then select the <strong>Connection</strong> tab.</li>
+          <li>Your Pit Box starts its local server and opens the dashboard in your browser by itself. <strong>Give it 20–30 seconds</strong> — it loads the strategy engine, opens the telemetry socket and starts the audio device before the dashboard appears. Nothing is wrong during that wait. Then select the <strong>Connection</strong> tab.</li>
           <li>Under <strong>OpenAI API key</strong>, select <strong>Test saved key</strong>. A successful test confirms that the saved key can authenticate with OpenAI.</li>
           <li>Copy the large address under <strong>Enter this UDP IP on PS5</strong> and note port <code>20777</code>. The screen is labelled for PS5, but the same address also works for a second PC running the game.</li>
         </ol>
-        <div class="guide-warning">Use the recommended private LAN address, usually beginning <code>192.168.</code> or <code>10.</code>, when the game runs on a PS5 or a second PC. Never enter <code>127.0.0.1</code> or <code>0.0.0.0</code> there. The one exception: if F1 25 runs on this same PC as Pit Wall, use <code>127.0.0.1</code> in the game instead of the address shown here.</div>
+        <div class="guide-warning">Use the recommended private LAN address, usually beginning <code>192.168.</code> or <code>10.</code>, when the game runs on a PS5 or a second PC. Never enter <code>127.0.0.1</code> or <code>0.0.0.0</code> there. The one exception: if F1 25 runs on this same PC as Your Pit Box, use <code>127.0.0.1</code> in the game instead of the address shown here.</div>
       </div>
       <figure class="guide-figure">
-        <div class="shot guide-shot"><img src="assets/guide-06-connection.svg" alt="Illustration of the current Pit Wall Connection tab with an OpenAI key marked Ready, the Test saved key button, a private LAN IP address, and UDP port 20777." width="1200" height="700" loading="lazy"></div>
-        <figcaption>Your address will be different. Copy the one Pit Wall recommends on your PC.</figcaption>
+        <div class="shot guide-shot"><img src="assets/guide-06-connection.svg" alt="Illustration of the current Your Pit Box Connection tab with an OpenAI key marked Ready, the Test saved key button, a private LAN IP address, and UDP port 20777." width="1200" height="700" loading="lazy"></div>
+        <figcaption>Your address will be different. Copy the one Your Pit Box recommends on your PC.</figcaption>
       </figure>
     </div>
   </section>
@@ -168,21 +172,21 @@
     <div class="wrap guide-step-grid guide-step-reverse">
       <div class="guide-copy">
         <div class="step-kicker"><span>6</span> Game settings — PS5 / PC</div>
-        <h2>Send 2026 telemetry to Pit Wall</h2>
+        <h2>Send 2026 telemetry to Your Pit Box</h2>
         <ol>
           <li>In <strong>F1 25: 2026 Season Pack</strong>, open <strong>Settings → Telemetry Settings</strong>. The menu is the same on PS5 and PC.</li>
           <li>Set <strong>UDP Telemetry</strong> to <strong>On</strong>.</li>
-          <li>Set the <strong>UDP IP Address</strong>: on a <strong>PS5</strong> or a <strong>second PC</strong>, enter the address Pit Wall recommended in the previous step; if the game runs on <strong>this same PC as Pit Wall</strong>, enter <code>127.0.0.1</code> instead. Set <strong>UDP Port</strong> to <code>20777</code>, and select UDP format <strong>2026</strong>.</li>
-          <li>Start or join an on-track session. Return to Pit Wall and wait for the badge to say <strong>Receiving telemetry</strong>.</li>
+          <li>Set the <strong>UDP IP Address</strong>: on a <strong>PS5</strong> or a <strong>second PC</strong>, enter the address Your Pit Box recommended in the previous step; if the game runs on <strong>this same PC as Your Pit Box</strong>, enter <code>127.0.0.1</code> instead. Set <strong>UDP Port</strong> to <code>20777</code>, and select UDP format <strong>2026</strong>.</li>
+          <li>Start or join an on-track session. Return to Your Pit Box and wait for the badge to say <strong>Receiving telemetry</strong>.</li>
         </ol>
         <div class="guide-warning"><strong>Listening is only halfway there.</strong> It means Windows opened the socket. Only <strong>Receiving telemetry</strong> proves that valid game packets have arrived.</div>
-        <div class="guide-tip"><strong>A second PC needs one firewall allowance.</strong> Windows Firewall prompts to allow Pit Wall on private networks the first time it listens; accept that prompt so a second PC's packets can reach it. Running the game on the same PC as Pit Wall skips this entirely — loopback traffic never crosses the firewall.</div>
+        <div class="guide-tip"><strong>A second PC needs one firewall allowance.</strong> Windows Firewall prompts to allow Your Pit Box on private networks the first time it listens; accept that prompt so a second PC's packets can reach it. Running the game on the same PC as Your Pit Box skips this entirely — loopback traffic never crosses the firewall.</div>
       </div>
       <figure class="guide-figure">
         <div class="shot guide-shot"><img src="assets/guide-05-ps5-udp.svg" alt="Illustration of the F1 telemetry settings with UDP Telemetry On, a private PC IP address, port 20777, and UDP format 2026 highlighted." width="1200" height="700" loading="lazy"></div>
-        <figcaption>PS5, or a second PC: enter the address Pit Wall recommended in step 5.</figcaption>
+        <figcaption>PS5, or a second PC: enter the address Your Pit Box recommended in step 5.</figcaption>
         <div class="shot guide-shot" style="margin-top:1rem"><img src="assets/guide-07-pc-udp.svg" alt="Illustration of F1 25 PC telemetry settings in a windowed settings panel, comparing the loopback address 127.0.0.1 for a same-computer setup against the recommended address for a second PC, with port 20777 and UDP format 2026." width="1200" height="700" loading="lazy"></div>
-        <figcaption>Same PC as Pit Wall: enter <code>127.0.0.1</code> instead.</figcaption>
+        <figcaption>Same PC as Your Pit Box: enter <code>127.0.0.1</code> instead.</figcaption>
       </figure>
     </div>
   </section>
@@ -193,15 +197,15 @@
         <div class="step-kicker"><span>7</span> First live check</div>
         <h2>Ask the engineer while you drive</h2>
         <ol>
-          <li>Open <strong>Drive</strong> in Pit Wall and select <strong>Test providers</strong>. Continue when it reports <strong>All configured providers ready</strong>; this live check uses a small amount of API credit.</li>
+          <li>Open <strong>Drive</strong> in Your Pit Box and select <strong>Test providers</strong>. Continue when it reports <strong>All configured providers ready</strong>; this live check uses a small amount of API credit.</li>
           <li>With the PC microphone and speakers ready, say <strong>“Mark, what is the gap ahead?”</strong> in one sentence. You can also say “Mark,” wait for the beep, and then ask.</li>
-          <li>For push-to-talk on <strong>PS5</strong>, first map <strong>L3</strong> to <strong>UDP Action 1</strong> in the game's control settings, then use the <strong>L3 → UDP Action 1 radio</strong> card in Pit Wall and select <strong>Calibrate</strong>. On <strong>PC</strong>, bind the equivalent action in the game's own control-bindings screen, then calibrate that same input in Pit Wall.</li>
+          <li>For push-to-talk on <strong>PS5</strong>, first map <strong>L3</strong> to <strong>UDP Action 1</strong> in the game's control settings, then use the <strong>L3 → UDP Action 1 radio</strong> card in Your Pit Box and select <strong>Calibrate</strong>. On <strong>PC</strong>, bind the equivalent action in the game's own control-bindings screen, then calibrate that same input in Your Pit Box.</li>
         </ol>
-        <div class="guide-tip"><strong>You are ready.</strong> Pit Wall continues receiving telemetry on the PC while the game stays full-screen on PS5 / PC. Exact gaps and car-state questions are answered locally; model-backed strategy and voice calls use your OpenAI API key.</div>
+        <div class="guide-tip"><strong>You are ready.</strong> Your Pit Box continues receiving telemetry on the PC while the game stays full-screen on PS5 / PC. Exact gaps and car-state questions are answered locally; model-backed strategy and voice calls use your OpenAI API key.</div>
       </div>
       <figure class="guide-figure">
-        <div class="shot"><img src="img/02-drive-radio-feed.png" alt="The real Pit Wall Drive screen with live race data, strategy panels, engineer radio feed, wake-word status, and push-to-talk controls." width="1600" height="1560" loading="lazy"></div>
-        <figcaption>The radio is heard through the PC. Pit Wall does not overlay or install anything in the game, on PS5 / PC.</figcaption>
+        <div class="shot"><img src="img/02-drive-radio-feed.png" alt="The real Your Pit Box Drive screen with live race data, strategy panels, engineer radio feed, wake-word status, and push-to-talk controls." width="1600" height="1560" loading="lazy"></div>
+        <figcaption>The radio is heard through the PC. Your Pit Box does not overlay or install anything in the game, on PS5 / PC.</figcaption>
       </figure>
     </div>
   </section>
@@ -216,18 +220,18 @@
           <p>Confirm that API billing is active, wait a few minutes after buying credits, and paste a newly created secret under <strong>Connection → OpenAI API key</strong>. Select <strong>Save key</strong>, then <strong>Test saved key</strong>. A ChatGPT subscription by itself is not API billing.</p>
         </details>
         <details>
-          <summary>Pit Wall says Listening</summary>
-          <p>Start an on-track session, recheck the address (the recommended PC address for a PS5 or second PC, or <code>127.0.0.1</code> for a same-PC setup), port <code>20777</code>, and format <code>2026</code>, then select <strong>Run diagnostics</strong>. For a second PC or a PS5, make sure it is on the same home network and that Windows Firewall allows Pit Wall on private networks.</p>
+          <summary>Your Pit Box says Listening</summary>
+          <p>Start an on-track session, recheck the address (the recommended PC address for a PS5 or second PC, or <code>127.0.0.1</code> for a same-PC setup), port <code>20777</code>, and format <code>2026</code>, then select <strong>Run diagnostics</strong>. For a second PC or a PS5, make sure it is on the same home network and that Windows Firewall allows Your Pit Box on private networks.</p>
         </details>
         <details>
           <summary>The dashboard did not open</summary>
-          <p>First, give it <strong>20–30 seconds</strong>. Pit Wall opens the browser itself, but only once the strategy engine, telemetry socket and audio device are up, so a launch that looks like nothing is happening is usually just a launch still in progress.</p>
-          <p>If it has been longer than that, leave Pit Wall running and open <a href="http://127.0.0.1:8000">http://127.0.0.1:8000</a> on that same PC. The address is local to the computer and is not a public website.</p>
+          <p>First, give it <strong>20–30 seconds</strong>. Your Pit Box opens the browser itself, but only once the strategy engine, telemetry socket and audio device are up, so a launch that looks like nothing is happening is usually just a launch still in progress.</p>
+          <p>If it has been longer than that, leave Your Pit Box running and open <a href="http://127.0.0.1:8000">http://127.0.0.1:8000</a> on that same PC. The address is local to the computer and is not a public website.</p>
         </details>
         <details>
-          <summary>Closing the browser did not stop Pit Wall</summary>
-          <p>That is deliberate. The dashboard is only a window onto Pit Wall; the app itself keeps running so it can carry on recording telemetry and answering on the radio while the browser is closed. There is no console window and no tray icon, so nothing visible tells you it is still there.</p>
-          <p>To stop it, open the dashboard and use <strong>Quit Pit Wall</strong> in the top-right corner. It finishes and saves any session being recorded first, then closes. Allow about <strong>20 seconds</strong> for it to shut down fully before starting it again.</p>
+          <summary>Closing the browser did not stop Your Pit Box</summary>
+          <p>That is deliberate. The dashboard is only a window onto Your Pit Box; the app itself keeps running so it can carry on recording telemetry and answering on the radio while the browser is closed. There is no console window and no tray icon, so nothing visible tells you it is still there.</p>
+          <p>To stop it, open the dashboard and use <strong>Quit Your Pit Box</strong> in the top-right corner. It finishes and saves any session being recorded first, then closes. Allow about <strong>20 seconds</strong> for it to shut down fully before starting it again.</p>
         </details>
         <details>
           <summary>The activation code is rejected</summary>
@@ -245,7 +249,7 @@
 
 <footer class="site-footer">
   <div class="wrap footer-row">
-    <div><strong style="color:#fff">Pit Wall</strong> — an independent Windows companion for F1 telemetry.</div>
+    <div><strong style="color:#fff">Your Pit Box</strong> — an independent Windows companion for F1 telemetry.</div>
     <div><a href="index.html">Home</a> · <a href="eula.html">Licence terms</a></div>
   </div>
 </footer>

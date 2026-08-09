@@ -1,11 +1,11 @@
 """`pitwall-app` — what the packaged executable actually runs.
 
     python -m distribution.main        (dev smoke test: gate is inert here)
-    PitWall.exe / Pit Wall.app         (the shipped build)
+    YourPitBox.exe / Your Pit Box.app         (the shipped build)
 
 Everything decision-shaped lives in `launcher.py`; this module only supplies
 the real implementations of the callbacks and then hands control to the normal
-Pit Wall server. `src/pitwall` never imports anything from this package, so the
+Your Pit Box server. `src/pitwall` never imports anything from this package, so the
 development app is unaffected by all of it.
 """
 
@@ -109,7 +109,7 @@ def _save_api_key(key: str) -> None:
 
 
 def _start_app() -> None:
-    """Hand over to the ordinary Pit Wall server.
+    """Hand over to the ordinary Your Pit Box server.
 
     `run` configures logging, opens the dashboard in the default browser, and
     serves until the process is closed — so from the buyer's side, launching

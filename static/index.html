@@ -2,16 +2,17 @@
 <html lang="en">
 <head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Pit Wall 4.2.0</title>
+<title>Your Pit Box 4.2.0</title>
 <style>
 :root{color-scheme:dark;font-family:Segoe UI,system-ui,sans-serif;--bg:#070b0f;--panel:#0c1218;--card:#121b24;--line:#263542;--muted:#91a6b8;--green:#49d17d;--blue:#3f86ff;--red:#ff6969;--amber:#ffc15c}*{box-sizing:border-box}body{margin:0;background:var(--bg);color:#eef4f8;overflow:hidden}.app{height:100vh;display:grid;grid-template-rows:50px 44px 1fr 34px}.top,.tabs,.bottom{display:flex;align-items:center;gap:18px;background:#111820;border-bottom:1px solid var(--line);padding:0 16px}.bottom{border-top:1px solid var(--line);border-bottom:0;color:#9eb2c2;font-size:12px}.brand{font-weight:900;letter-spacing:.09em}.dot{width:9px;height:9px;border-radius:50%;display:inline-block;background:var(--red)}.dot.on{background:var(--green)}.dot.pause{background:var(--amber)}.status{margin-left:auto}.pill,.tag{background:#263542;border-radius:14px;padding:5px 10px}.tabs{gap:5px;padding:5px 12px}.tab{border:0;background:transparent;color:var(--muted);font-weight:800;padding:8px 15px;border-radius:8px;cursor:pointer}.tab.active{background:#233545;color:white}.page{display:none;min-height:0}.page.active{display:block}.live-grid{display:grid;grid-template-columns:23% 54% 23%;height:100%;min-height:0}.review-grid,.setup-grid{display:grid;grid-template-columns:44% 56%;height:100%;min-height:0}.panel{padding:14px;overflow:auto;border-right:1px solid var(--line)}.panel:last-child{border:0}.label{font-size:11px;letter-spacing:.12em;color:#8fa4b7;text-transform:uppercase}.big{font-size:38px;font-weight:900}.hero{font-size:22px;font-weight:850}.card{background:var(--card);border:1px solid var(--line);border-radius:11px;padding:12px;margin:10px 0}.row{display:flex;justify-content:space-between;gap:12px;align-items:center}.muted{color:var(--muted)}.small{font-size:12px}.good{color:var(--green)}.warn{color:var(--amber)}.error{color:#ff8080}.timing{display:grid;grid-template-columns:42px 1fr auto;gap:8px;align-items:center;padding:9px 7px;border-bottom:1px solid #202b35}.timing.me{background:#1b303e;border-radius:7px}.tyre{font-size:11px;background:#263542;border-radius:10px;padding:2px 6px}.canvas{width:100%;background:#0b1117;border:1px solid #202d38;border-radius:10px}.trace{height:180px}.map{height:250px}.grid2{display:grid;grid-template-columns:1fr 1fr;gap:10px}.grid3{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}.metric{background:#0c131a;padding:9px;border-radius:8px}.radio{height:150px;overflow:auto;white-space:pre-wrap;line-height:1.42}.controls{display:flex;gap:8px}.controls input,.select{flex:1;min-width:0;background:#0a1016;color:white;border:1px solid #3a4a58;border-radius:8px;padding:10px}.button{border:0;border-radius:8px;padding:10px 14px;font-weight:800;cursor:pointer;background:#e7eef4;color:#081018}.button.primary{background:var(--blue);color:white}.button.ghost{background:#263542;color:white}.quad{display:grid;grid-template-columns:1fr 1fr;gap:8px}.strategy-main{font-size:17px;font-weight:850}.strategy-plan{padding:7px 0;border-bottom:1px solid var(--line)}.table{width:100%;border-collapse:collapse;font-size:13px}.table th,.table td{padding:8px;text-align:left;border-bottom:1px solid var(--line)}.change{display:grid;grid-template-columns:1fr auto auto;gap:10px;padding:7px;border-bottom:1px solid var(--line)}.empty{text-align:center;padding:22px;color:var(--muted)}pre{white-space:pre-wrap}.setup-fields{columns:2;column-gap:20px}.setup-fields .row{break-inside:avoid;border-bottom:1px solid #202c36;padding:4px 0}.diag{font-family:Consolas,monospace;font-size:11px}.nowrap{white-space:nowrap}.radio-rail{position:fixed;left:0;top:0;bottom:0;width:4px;background:transparent;z-index:1000;transition:background .12s ease,box-shadow .12s ease}.radio-rail.listening{background:#ffd21f;box-shadow:0 0 10px rgba(255,210,31,.55)}.radio-rail.processing{background:#49d17d;box-shadow:0 0 10px rgba(73,209,125,.55)}.radio-rail.speaking{background:#3f86ff;box-shadow:0 0 10px rgba(63,134,255,.55)}.radio-rail.error{background:#ff6969}.latency-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:6px}.latency-grid .metric{font-size:11px}@media(max-width:1150px){.live-grid{grid-template-columns:25% 50% 25%}.panel{padding:10px}.big{font-size:31px}.setup-fields{columns:1}}
 .spark{height:55px}.sector-strip{display:grid;grid-template-columns:repeat(3,1fr);gap:4px;margin-top:6px}.sector{padding:5px;text-align:center;border-radius:5px;background:#263542}.pace-strip{display:grid;grid-template-columns:2fr 1fr 1fr;gap:10px;align-items:center}.condition-row{border-top:1px solid var(--line);padding-top:8px;margin-top:8px}.brief-text{white-space:pre-wrap;line-height:1.45}details summary{cursor:pointer;font-weight:800}.hold{border-color:var(--amber);box-shadow:inset 3px 0 var(--amber)}@media(max-width:1150px){.pace-strip{grid-template-columns:1fr 1fr}.pace-strip canvas{grid-column:1/-1}}
+.plan-card{border-color:var(--blue)}.plan-card[data-phase=agreed]{border-color:var(--green)}.plan-card summary{display:flex;align-items:center;gap:8px}.plan-stint{display:grid;grid-template-columns:64px 1fr 1fr;gap:8px;align-items:center;padding:6px 0;border-bottom:1px solid #202b35}.plan-stint:last-child{border-bottom:0}.plan-stint .leg{font-size:11px;color:#8fa4b7;text-transform:uppercase;letter-spacing:.08em}.plan-stint select,.plan-stint input{background:#0a1016;color:white;border:1px solid #3a4a58;border-radius:8px;padding:8px;min-width:0;width:100%}.plan-shape{display:flex;justify-content:space-between;gap:10px;align-items:center;padding:7px 0;border-bottom:1px solid #202b35}.plan-shape:last-child{border-bottom:0}.plan-shape button{border:0;border-radius:8px;padding:7px 11px;font-weight:800;cursor:pointer;background:#263542;color:white}.plan-shape.blocked{opacity:.68}@media(max-width:1150px){.plan-stint{grid-template-columns:56px 1fr 1fr}}
 </style>
 <link rel="stylesheet" href="/static/css/v42.css">
 </head>
 <body><div id="radioRail" class="radio-rail"></div><div class="app">
-<header class="top"><span class="brand">PIT WALL 4.2.0</span><span><i id="udpDot" class="dot"></i> <span id="udp">Waiting for UDP</span></span><span id="session">—</span><span id="track">—</span><span id="eng" class="status pill">standing by</span><button id="quitApp" class="button ghost" style="margin-left:10px;padding:6px 12px" title="Pit Wall keeps running after you close this tab. Use this to stop it.">Quit Pit Wall</button></header>
-<nav class="tabs" role="tablist" aria-label="Pit Wall workspaces"><button id="tab-live" class="tab active" type="button" role="tab" aria-controls="live" aria-selected="true" tabindex="0" data-page="live">DRIVE</button><button id="tab-connection" class="tab" type="button" role="tab" aria-controls="connection" aria-selected="false" tabindex="-1" data-page="connection">CONNECTION</button><button id="tab-library" class="tab" type="button" role="tab" aria-controls="library" aria-selected="false" tabindex="-1" data-page="library">LIBRARY</button><button id="tab-session-review" class="tab" type="button" role="tab" aria-controls="session-review" aria-selected="false" tabindex="-1" data-page="session-review">SESSION REVIEW</button><button id="tab-lap-lab" class="tab" type="button" role="tab" aria-controls="lap-lab" aria-selected="false" tabindex="-1" data-page="lap-lab">LAP LAB</button><button id="tab-field" class="tab" type="button" role="tab" aria-controls="field" aria-selected="false" tabindex="-1" data-page="field">FIELD</button><button id="tab-review" class="tab" type="button" role="tab" aria-controls="review" aria-selected="false" tabindex="-1" data-page="review">HISTORY</button><button id="tab-setup" class="tab" type="button" role="tab" aria-controls="setup" aria-selected="false" tabindex="-1" data-page="setup">SETUP LAB</button></nav>
+<header class="top"><span class="brand">YOUR PIT BOX 4.2.0</span><span><i id="udpDot" class="dot"></i> <span id="udp">Waiting for UDP</span></span><span id="session">—</span><span id="track">—</span><span id="eng" class="status pill">standing by</span><button id="quitApp" class="button ghost" style="margin-left:10px;padding:6px 12px" title="Your Pit Box keeps running after you close this tab. Use this to stop it.">Quit Your Pit Box</button></header>
+<nav class="tabs" role="tablist" aria-label="Your Pit Box workspaces"><button id="tab-live" class="tab active" type="button" role="tab" aria-controls="live" aria-selected="true" tabindex="0" data-page="live">DRIVE</button><button id="tab-connection" class="tab" type="button" role="tab" aria-controls="connection" aria-selected="false" tabindex="-1" data-page="connection">CONNECTION</button><button id="tab-library" class="tab" type="button" role="tab" aria-controls="library" aria-selected="false" tabindex="-1" data-page="library">LIBRARY</button><button id="tab-session-review" class="tab" type="button" role="tab" aria-controls="session-review" aria-selected="false" tabindex="-1" data-page="session-review">SESSION REVIEW</button><button id="tab-lap-lab" class="tab" type="button" role="tab" aria-controls="lap-lab" aria-selected="false" tabindex="-1" data-page="lap-lab">LAP LAB</button><button id="tab-field" class="tab" type="button" role="tab" aria-controls="field" aria-selected="false" tabindex="-1" data-page="field">FIELD</button><button id="tab-review" class="tab" type="button" role="tab" aria-controls="review" aria-selected="false" tabindex="-1" data-page="review">HISTORY</button><button id="tab-setup" class="tab" type="button" role="tab" aria-controls="setup" aria-selected="false" tabindex="-1" data-page="setup">SETUP LAB</button></nav>
 <main id="connection" class="page connection-page" role="tabpanel" aria-labelledby="tab-connection" tabindex="0" hidden>
 <div class="connection-shell">
   <section class="connection-hero panel-surface" aria-labelledby="connectionHeading">
@@ -52,7 +53,7 @@
       </div>
       <div id="credentialFormStatus" class="inline-notice form-span" role="status" aria-live="polite">Checking for a saved key…</div>
     </form>
-    <p class="field-help">Saved to the <code>.env</code> file next to Pit Wall in plain text, the same place it was set by hand before. It is never shown again after saving and never sent anywhere except OpenAI. For that reason it can only be changed from this PC, not from a phone on the network.</p>
+    <p class="field-help">Saved to the <code>.env</code> file next to Your Pit Box in plain text, the same place it was set by hand before. It is never shown again after saving and never sent anywhere except OpenAI. For that reason it can only be changed from this PC, not from a phone on the network.</p>
   </section>
 
   <section class="panel-surface" aria-labelledby="listenerHeading">
@@ -82,13 +83,13 @@
 
   <section class="panel-surface" aria-labelledby="interfacesHeading">
     <div class="section-heading"><div><div class="eyebrow">This PC</div><h2 id="interfacesHeading">IPv4 adapters</h2></div></div>
-    <p class="field-help">Pit Wall ranks active private Ethernet and Wi-Fi addresses first. A pinned marker reflects the saved adapter choice; it is never replaced silently.</p>
+    <p class="field-help">Your Pit Box ranks active private Ethernet and Wi-Fi addresses first. A pinned marker reflects the saved adapter choice; it is never replaced silently.</p>
     <div id="networkInterfaces" class="interface-list" aria-live="polite"><div class="empty">No adapter information available.</div></div>
   </section>
 
   <section class="panel-surface forwarder-panel" aria-labelledby="forwardingHeading">
     <div class="section-heading"><div><div class="eyebrow">Optional fan-out</div><h2 id="forwardingHeading">UDP forwarding</h2></div></div>
-    <p class="muted small">Each enabled target receives a byte-identical best-effort copy. Pit Wall cannot confirm that another UDP app accepted it.</p>
+    <p class="muted small">Each enabled target receives a byte-identical best-effort copy. Your Pit Box cannot confirm that another UDP app accepted it.</p>
     <form id="forwarderForm" class="forwarder-form" novalidate>
       <input id="forwarderId" name="id" type="hidden">
       <label for="forwarderLabel">Label</label><input id="forwarderLabel" name="label" required maxlength="80" placeholder="Local overlay">
@@ -128,7 +129,7 @@
       <div class="section-heading"><div><div class="eyebrow">Catalog</div><h2 id="libraryTableHeading">Recorded sessions</h2></div><div id="libraryCount" class="state-chip" data-state="neutral">0 sessions</div></div>
       <div id="libraryStatus" class="inline-notice" role="status" aria-live="polite">Open Library to load saved sessions.</div>
       <div class="table-scroll" tabindex="0" aria-label="Scrollable saved sessions table">
-        <table class="table workspace-table"><caption class="sr-only">Saved Pit Wall telemetry sessions</caption><thead><tr><th scope="col">Session</th><th scope="col">When</th><th scope="col">Type</th><th scope="col">Drivers / laps</th><th scope="col">Quality</th><th scope="col">Storage</th><th scope="col">Actions</th></tr></thead><tbody id="libraryRows"><tr><td colspan="7" class="empty">No saved sessions loaded.</td></tr></tbody></table>
+        <table class="table workspace-table"><caption class="sr-only">Saved Your Pit Box telemetry sessions</caption><thead><tr><th scope="col">Session</th><th scope="col">When</th><th scope="col">Type</th><th scope="col">Drivers / laps</th><th scope="col">Quality</th><th scope="col">Storage</th><th scope="col">Actions</th></tr></thead><tbody id="libraryRows"><tr><td colspan="7" class="empty">No saved sessions loaded.</td></tr></tbody></table>
       </div>
       <div class="load-more-row"><button id="libraryLoadMore" class="button ghost" type="button" hidden>Load more sessions</button></div>
     </section>
@@ -226,6 +227,21 @@
 <div class="grid2"><div class="card"><div class="row"><div><div class="label">Objective</div><div id="objectiveHero" class="hero">P10</div></div><div class="controls"><button id="objectiveDown" class="button ghost">-</button><b id="objectiveTarget">10</b><button id="objectiveUp" class="button ghost">+</button></div></div><div id="objectiveBody" class="small muted">Waiting for a classified position.</div></div><div class="card"><div class="label">Race flow</div><div id="raceFlow" class="small muted">Waiting for the running order.</div></div></div>
 <div class="card"><div class="row"><div><div class="label">Racing line / lap map</div><div id="lineScore" class="hero">Learning reference</div></div><div id="lineStats" class="small muted"></div></div><canvas id="lineMap" class="canvas map" width="1000" height="250"></canvas><div id="lineOpportunity" class="small muted">A personal-best map is created from stored world-coordinate traces.</div></div>
 <div id="qualiBriefCard" class="card" style="display:none"><div class="label">Qualifying lap brief</div><div id="qualiBrief" class="brief-text small"></div></div>
+<details id="preRaceCard" class="card plan-card" style="display:none" open><summary><span class="label">Race plan</span> <span id="planPhase" class="tag">not started</span></summary>
+<div id="planWaiting" class="small muted" style="margin-top:8px">Waiting for the session.</div>
+<div id="planBody" style="display:none">
+<div id="planSummary" class="strategy-main" style="margin-top:8px">—</div>
+<div id="planRationale" class="small muted" style="margin-top:4px"></div>
+<div class="label" style="margin-top:12px">Stints</div>
+<div id="planStints" class="plan-stints"></div>
+<div class="controls" style="margin-top:8px"><button id="planAddStop" class="button ghost" type="button">Add a stop</button><button id="planRemoveStop" class="button ghost" type="button">Remove a stop</button></div>
+<div class="label" style="margin-top:12px">Or take one of these</div>
+<div id="planShapes" class="plan-shapes"></div>
+<div class="controls" style="margin-top:10px"><input id="planReply" placeholder="Talk it through — &quot;make it a one stop&quot;"><button id="planSend" class="button ghost" type="button">Send</button></div>
+<div id="planSpoken" class="small" style="margin-top:6px"></div>
+<div class="controls" style="margin-top:10px"><button id="planCommit" class="button primary" type="button">Agree plan</button><button id="planDiscard" class="button ghost" type="button">Automatic</button></div>
+<div id="planStatus" class="small muted" style="margin-top:6px"></div>
+</div></details>
 <div id="radio" class="card radio">Engineer standing by.</div>
 <div class="card"><div class="row"><div><div class="label">Last radio latency</div><div id="latencyRoute" class="small muted">No completed call yet</div></div><div id="latencyStage" class="tag">idle</div></div><div class="latency-grid" style="margin-top:8px"><div class="metric">Transcript final <b id="latStt">—</b></div><div class="metric">Brain done <b id="latBrain">—</b></div><div class="metric">First audio <b id="latAudio">—</b></div><div class="metric">Total <b id="latTotal">—</b></div></div></div>
 <div class="card"><div class="row"><div><div class="label">LLM provider readiness</div><div id="providerStatus" class="small muted">Not tested this launch</div></div><button id="shakedownBtn" class="button ghost">Test providers</button></div><div id="providerDiag" class="diag muted" style="margin-top:8px">Live shakedown checks text, non-thinking tools, and thinking tool continuation. It uses a small amount of API credit.</div></div>
@@ -266,7 +282,134 @@ const st=s.strategy||{},rec=st.recommended||{};$('strategyMain').textContent=rec
 for(const[id,key]of Object.entries(PREF_FIELDS)){const el=$(id);if(!el||el===document.activeElement||el.dataset.dirty==='1')continue;el.value=String(prefs[key]||0)}$('wingPit').textContent=s.setup_recommendation?.pit_adjustment?.instruction||'Generate a setup in Setup Lab.';
 $('wakeEnabled').checked=!!s.wake_enabled;$('wakeStatus').textContent=s.wake_status||'disabled';$('wakeDiag').textContent=`phrase ${s.wake_phrase||'mark'} · mic ${Number(s.wake_input_rms||0).toFixed(0)} / trigger ${Number(s.wake_threshold_rms||0).toFixed(0)} RMS · ${s.wake_config_source||'default'} · accepted ${s.wake_trigger_count||0} · rejected ${s.wake_rejected_count||0} · ${s.wake_last_reason||'waiting'}`;$('wakeFooter').textContent=s.wake_armed?'WAKE ARMED':(s.wake_enabled?'MARK READY':'WAKE OFF');$('ptt').textContent=s.ptt_pressed?'RADIO OPEN':s.ptt_status;$('pttHelp').textContent=s.ptt_pressed?'Listening; release the button normally. Long natural pauses are protected.':s.ptt_status;$('pttDiag').textContent=`mode ${s.ptt_release_mode||'—'} · mask events ${s.ptt_mask_events||0} · last release ${s.ptt_release_reason||'—'}`;$('rate').textContent=`${Number(s.packet_rate_hz||0).toFixed(1)} pkt/s · UDP queue ${s.packet_queue_depth||0}/${s.packet_queue_capacity||0}`;$('llmFooter').textContent=s.llm_provider?`${s.llm_provider} · ${s.llm_model||'model pending'}`:'LLM pending';const p=s.proactive||{};$('queue').textContent=`${p.queued||0} proactive queued`;$('proactiveEnabled').checked=!!p.enabled;$('cadence').value=String(p.cadence_laps||2);$('proactiveState').textContent=`Every ${p.cadence_laps||2} analyzed lap(s); next due lap ${p.next_due_lap||'—'}.`;$('proactiveDiag').textContent=`${p.delivery_state||'idle'} · oldest wait ${p.oldest_wait_s||0}s · last spoken lap ${p.last_spoken_lap||0}`;$('error').textContent=s.last_error||'';if((s.radio_log||[]).length!==lastRadio){lastRadio=(s.radio_log||[]).length;$('radio').textContent=(s.radio_log||[]).map(x=>`${x.role==='driver'?'DRIVER':'ENGINEER'}: ${x.text}`).join('\n\n');$('radio').scrollTop=$('radio').scrollHeight}$('currentSetup').innerHTML=setupFields(s.car_setup||{})}
 function renderStrategy38(s){const st=s.strategy||{},rec=st.recommended||{},dist=rec.outcome_distribution||{};if(!st.available)return;$('strategyMeta').textContent=`Confidence ${st.confidence||'low'} · projected finish P${rec.projected_finish_position??'—'} · ${rec.projected_points??0} pts · rejoin P${rec.projected_rejoin_position??'—'} · loses ${rec.positions_lost_by_stopping??0} place(s) by stopping`;$('strategyRationale').textContent=rec.rationale||rec.stop_required_reason||rec.tyre_reason||'';$('strategyChange').textContent=rec.change_condition?`Changes if: ${rec.change_condition}`:`Outcome bands: ${Object.entries(dist).map(([k,v])=>`${k} ${Math.round(Number(v)*100)}%`).join(' · ')}`;$('strategyPlans').innerHTML=(st.plans||[]).slice(0,4).map((p,i)=>`<div class="strategy-plan"><b>${i+1}. ${p.stops_remaining} stop${p.stops_remaining===1?'':'s'} · ${(p.compounds||[]).join(' → ')}</b><div class="small muted">finish P${p.projected_finish_position??'—'} · ${p.projected_points??0} pts · rejoin P${p.projected_rejoin_position??'—'} · recover ${Number(p.expected_positions_recovered||0).toFixed(1)} · max wear ${p.projected_max_wear_pct}%</div></div>`).join('')}
-const renderLegacy=render;render=function(s){renderLegacy(s);render38(s);renderStrategy38(s)};
+/* ---- Pre-race plan panel -------------------------------------------------
+The driver settles the race before the lights: a compound per stint, a lap per
+stop, either edited directly or talked through. Two rules govern it.
+
+One dirty flag for the WHOLE panel, not per control. A plan is a single
+multi-field document; guarding on document.activeElement (as the in-race
+override inputs do) protects only the control under the cursor, so setting
+stint 1's tyre and tabbing to stint 2 would see stint 1 stomped 250 ms later by
+the next websocket frame.
+
+The rows are built only when the number of stops changes. render() runs about
+four times a second, and regenerating this DOM from innerHTML on every frame
+would destroy a <select> the moment it was opened. */
+const PLAN_COMPOUNDS=['SOFT','MEDIUM','HARD','INTER','WET'];
+let planDraft=null,planBuiltStops=-1,planAutoAsked='',planPending=false;
+const planCard=()=>$('preRaceCard');
+const planDirty=()=>planCard().dataset.dirty==='1';
+const planTouch=()=>{planCard().dataset.dirty='1'};
+const planClean=()=>{delete planCard().dataset.dirty};
+function planReadDraft(){/* what the controls currently say */
+  if(!planDraft)return null;
+  const stops=planDraft.box_laps.length,compounds=[],box_laps=[];
+  for(let i=0;i<=stops;i++){const c=$('planC'+i);compounds.push(c?c.value:planDraft.compounds[i])}
+  for(let i=0;i<stops;i++){const l=$('planL'+i);box_laps.push(l&&l.value?Number(l.value):planDraft.box_laps[i])}
+  return{compounds,box_laps};
+}
+function planBuildStints(){
+  const host=$('planStints'),stops=planDraft.box_laps.length;
+  host.textContent='';
+  for(let i=0;i<=stops;i++){
+    const row=document.createElement('div');row.className='plan-stint';
+    const leg=document.createElement('div');leg.className='leg';
+    leg.textContent=i===0?'Start':'Stop '+i;row.appendChild(leg);
+    const sel=document.createElement('select');sel.id='planC'+i;
+    PLAN_COMPOUNDS.forEach(c=>{const o=document.createElement('option');o.value=c;o.textContent=c[0]+c.slice(1).toLowerCase();sel.appendChild(o)});
+    sel.value=planDraft.compounds[i]||'MEDIUM';sel.onchange=planTouch;row.appendChild(sel);
+    if(i===0){const note=document.createElement('div');note.className='small muted';note.textContent='tyre you line up on';row.appendChild(note)}
+    else{const lap=document.createElement('input');lap.type='number';lap.min='1';lap.id='planL'+(i-1);
+      lap.value=planDraft.box_laps[i-1]??'';lap.placeholder='box lap';lap.oninput=planTouch;row.appendChild(lap)}
+    host.appendChild(row);
+  }
+  planBuiltStops=stops;
+}
+function planRenderShapes(shapes){
+  const host=$('planShapes');host.textContent='';
+  if(!shapes||!shapes.length){host.innerHTML='<div class="empty small">No alternatives yet.</div>';return}
+  shapes.forEach(sh=>{
+    const row=document.createElement('div');row.className='plan-shape'+(sh.feasible?'':' blocked');
+    const text=document.createElement('div');
+    const cost=sh.cost_vs_best_s;
+    /* An unachievable plan never gets a time. It always models quicker because
+       it skips a stop, and "57 seconds faster" is what talks a driver into
+       ruining their race on tyres that will not last. */
+    const tail=sh.feasible?(cost?`+${Number(cost).toFixed(0)}s`:'best on time'):sh.verdict;
+    text.innerHTML=`<b>${esc(sh.stops)}-stop</b> <span class="small muted">${esc((sh.compounds||[]).join(' → '))}</span><div class="small ${sh.feasible?'muted':'warn'}">laps ${esc((sh.box_laps||[]).join(', ')||'none')} · ${esc(tail)}</div>`;
+    row.appendChild(text);
+    const pick=document.createElement('button');pick.type='button';pick.textContent='Use';
+    pick.onclick=()=>{planDraft={compounds:sh.compounds.slice(),box_laps:sh.box_laps.slice()};planBuildStints();planTouch();$('planStatus').textContent='Not agreed yet — press Agree plan.'};
+    row.appendChild(pick);host.appendChild(row);
+  });
+}
+function renderPreRace(s){
+  const card=planCard(),b=s.prerace_briefing||{},phase=b.phase||'idle';
+  const racing=['race','sprint'].includes(s.mode_profile);
+  /* completed_laps is blanked in the live payload; recent_laps is the one that
+     survives, so it is what tells us whether the race is actually under way. */
+  const started=Number(s.current_lap||0)>1||(s.recent_laps||[]).length>0;
+  /* On the grid the session packet often has not landed yet, so mode_profile is
+     still 'idle' and total_laps 0. Treating that as "not a race" would hide the
+     panel for most of the window it exists for, so idle counts as maybe-a-race;
+     practice and qualifying do not. */
+  const couldBeRace=racing||s.mode_profile==='idle';
+  const visible=!!s.connected&&(phase==='agreed'||(couldBeRace&&!started));
+  if(!visible){card.style.display='none';return}
+  card.style.display='';
+  card.dataset.phase=phase;
+  /* Once the race is running an agreed plan is reference, not a control. Fold
+     it away once, then leave it to the driver. */
+  if(started&&phase==='agreed'&&card.dataset.folded!=='1'){card.open=false;card.dataset.folded='1'}
+  /* Before the session packet lands the app does not yet know it is in a race
+     at all. Say so, rather than showing an empty plan that looks broken. */
+  const ready=racing&&Number(s.total_laps||0)>0;
+  $('planWaiting').style.display=ready?'none':'';
+  $('planBody').style.display=ready?'':'none';
+  $('planPhase').textContent={idle:'not set',proposed:'proposed',negotiating:'discussing',agreed:'agreed'}[phase]||phase;
+  if(!ready){$('planWaiting').textContent=s.connected?'Waiting for race distance from the game.':'Waiting for telemetry.';return}
+  /* Ask once per session, but only latch when a proposal actually came back.
+     The first frames carry race distance without a tyre compound, and a
+     proposal is refused until that arrives; latching on the attempt would leave
+     the driver looking at an empty panel for the rest of the session. */
+  if(phase==='idle'&&!planPending&&planAutoAsked!==String(s.session_uid||''))planPropose(String(s.session_uid||''));
+  if(planDirty())return;/* the driver is mid-edit; do not overwrite them */
+  const p=b.proposal||{};
+  if(p.compounds&&p.compounds.length){
+    planDraft={compounds:p.compounds.slice(),box_laps:(p.box_laps||[]).slice()};
+    if(planBuiltStops!==planDraft.box_laps.length)planBuildStints();
+    else{planDraft.compounds.forEach((c,i)=>{const el=$('planC'+i);if(el&&el!==document.activeElement)el.value=c});
+      planDraft.box_laps.forEach((l,i)=>{const el=$('planL'+i);if(el&&el!==document.activeElement)el.value=l})}
+    $('planSummary').textContent=planDescribe(planDraft);
+  }else $('planSummary').textContent='No plan yet.';
+  $('planRationale').textContent=b.rationale||'';
+  $('planSpoken').textContent=b.spoken||'';
+  planRenderShapes(b.alternatives);
+  $('planCommit').textContent=phase==='agreed'?'Update plan':'Agree plan';
+  if(phase==='agreed'&&!$('planStatus').textContent)$('planStatus').textContent='Running your plan.';
+}
+function planDescribe(p){
+  if(!p||!p.compounds||!p.compounds.length)return 'No plan yet.';
+  const c=p.compounds.map(x=>String(x).toLowerCase());
+  if(!p.box_laps.length)return `No stop, ${c[0]}s to the flag.`;
+  return `${p.box_laps.length}-stop: start on ${c[0]}s, `+p.box_laps.map((l,i)=>`box lap ${l} for ${c[i+1]}s`).join(', ')+'.';
+}
+async function planPost(url,body,method){
+  const r=await fetch(url,Object.assign({method:method||'POST',headers:{'Content-Type':'application/json'}},body?{body:JSON.stringify(body)}:{}));
+  const j=await r.json().catch(()=>({}));
+  if(!r.ok)throw new Error(j.detail||'Request failed');
+  return j;
+}
+async function planPropose(uid){
+  planPending=true;
+  try{const j=await planPost('/api/prerace/propose');
+    const b=j.briefing||{};
+    if(b.phase==='proposed')planAutoAsked=uid==null?planAutoAsked:uid;
+    else $('planStatus').textContent=b.spoken||''}
+  catch(e){$('planStatus').textContent=String(e.message||e)}
+  finally{planPending=false}
+}
+const renderLegacy=render;render=function(s){renderLegacy(s);render38(s);renderStrategy38(s);renderPreRace(s)};
 async function loadTracks(){const j=await (await fetch('/api/tracks')).json();$('setupTrack').innerHTML=(j.tracks||[]).map(t=>`<option value="${t.id}">${esc(t.name)}</option>`).join('');if(lastState?.track_id>=0)$('setupTrack').value=String(lastState.track_id)}
 async function loadHistory(){const scope=$('historyScope').value,j=await (await fetch(`/api/history?scope=${scope}&limit=80`)).json();$('reviewTrack').textContent=scope.replaceAll('_',' ');$('reviewLaps').innerHTML=(j.laps||[]).length?`<table class="table"><tr><th>Track</th><th>Lap</th><th>Time</th><th>Tyre</th></tr>${j.laps.map(l=>`<tr><td>${esc(l.track_name)}</td><td>${l.lap_num}</td><td>${fmt(l.lap_time_ms)}</td><td>${esc(l.compound)}</td></tr>`).join('')}</table>`:'<div class="empty">No stored laps.</div>';$('historyRadio').textContent=(j.radio||[]).slice().reverse().map(r=>`${r.role.toUpperCase()} L${r.lap_num}: ${r.text}`).join('\n\n')||'No stored radio.';$('historyStrategies').innerHTML=(j.strategies||[]).map(x=>`<div class="card"><b>Lap ${x.lap_num}: ${esc(x.recommended?.instruction||'snapshot')}</b><div class="small muted">${x.race_control_phase} · ${x.model?.confidence||'—'} confidence</div></div>`).join('')||'<div class="empty">No strategy snapshots.</div>';$('historyLines').innerHTML=(j.line_metrics||[]).map(x=>`<div class="card"><b>Lap ${x.lap_num}</b><div class="small muted">score ${x.metrics?.line_score??'—'} · mean deviation ${x.metrics?.mean_abs_deviation_m??'—'}m · ${esc(typeof x.metrics?.top_opportunity==='string'?x.metrics.top_opportunity:(x.metrics?.top_opportunity?.instruction||''))}</div></div>`).join('')||'<div class="empty">No racing-line history.</div>';$('historyEvents').innerHTML=(j.session_events||[]).map(x=>`<div class="card"><b>Lap ${x.lap_num??'—'} · ${esc(x.event_type||'event')}</b><div class="small muted">${esc(JSON.stringify(x.payload||{}))}</div></div>`).join('')||'<div class="empty">No stored session events.</div>';const review=await (await fetch('/api/review')).json();$('reviewCorners').innerHTML=(review.corner_opportunities||[]).map(c=>`<div class="card"><b>${esc(c.name)}</b><div class="small muted">avg loss ${Number(c.avg_loss_s||0).toFixed(3)}s · ${c.samples} samples</div></div>`).join('')||'<div class="empty">No recurring corners yet.</div>'}
 const loadHistoryLegacy=loadHistory;loadHistory=async function(){await loadHistoryLegacy();try{const scope=$('historyScope').value,j=await (await fetch(`/api/history?scope=${scope}&limit=80`)).json();$('historyBriefings').innerHTML=(j.briefings||[]).map(b=>`<div class="card"><div class="label">${esc((b.kind||'brief').replaceAll('_',' '))}</div><div class="brief-text small">${esc(b.text||'')}</div></div>`).join('')||'<div class="empty">No stored briefings.</div>'}catch(e){$('historyBriefings').textContent=String(e)}};
@@ -275,12 +418,38 @@ function providerText(status){const resolved=status.resolved_provider||status.se
 async function loadProviderStatus(){try{const s=await (await fetch('/api/llm/providers')).json();$('providerStatus').textContent=providerText(s);const shake=s.last_shakedown;if(shake){$('providerDiag').textContent=Object.entries(shake.providers||{}).map(([name,v])=>`${name}: ${v.ready?'READY':'CHECK FAILED'}`).join(' · ')||'No configured providers.'}}catch(e){$('providerDiag').textContent=`Provider status unavailable: ${e}`}}
 let ws,wsRetryTimer;
 async function bootstrapLiveState(){try{const response=await fetch('/api/state',{headers:{Accept:'application/json'}});if(response.ok)render(await response.json())}catch(error){$('error').textContent=`Live state unavailable: ${error}`}}
-function connect(){const protocol=location.protocol==='https:'?'wss:':'ws:';try{ws=new WebSocket(`${protocol}//${location.host}/ws`)}catch(error){bootstrapLiveState();wsRetryTimer=setTimeout(connect,1000);return}ws.onopen=()=>{clearTimeout(wsRetryTimer)};ws.onmessage=e=>{try{render(JSON.parse(e.data))}catch(error){$('error').textContent=`Live update unavailable: ${error}`}};ws.onerror=()=>ws.close();ws.onclose=()=>{bootstrapLiveState();wsRetryTimer=setTimeout(connect,1000)}}
+function connect(){const protocol=location.protocol==='https:'?'wss:':'ws:';try{ws=new WebSocket(`${protocol}//${location.host}/ws`)}catch(error){bootstrapLiveState();wsRetryTimer=setTimeout(connect,1000);return}ws.onopen=()=>{clearTimeout(wsRetryTimer)};ws.onmessage=e=>{try{render(JSON.parse(e.data))}catch(error){$('error').textContent=`Live update unavailable: ${error}`}finally{/* Acknowledge AFTER rendering, so the server only sends the next frame once this one is on screen. Without this the server queued frames faster than a loaded browser could draw them and the buffer grew until the process ran out of memory. Sent in finally so a render error still lets state flow. */try{ws.send('.')}catch(ignored){}}};ws.onerror=()=>ws.close();ws.onclose=()=>{bootstrapLiveState();wsRetryTimer=setTimeout(connect,1000)}}
 bootstrapLiveState();connect();loadTracks();loadProviderStatus();
 function selectPage(name){var btn=document.querySelector('.tab[data-page="'+name+'"]');if(!btn)return;document.querySelectorAll('.tab').forEach(x=>{const selected=x===btn;x.classList.toggle('active',selected);x.setAttribute('aria-selected',String(selected));x.tabIndex=selected?0:-1});document.querySelectorAll('.page').forEach(x=>{const selected=x.id===name;x.classList.toggle('active',selected);x.hidden=!selected;x.setAttribute('aria-hidden',String(!selected))});if(name==='review')loadHistory();if(name==='setup')loadTracks();window.dispatchEvent(new CustomEvent('pitwall:pagechange',{detail:{page:name}}))}
 document.querySelectorAll('.tab').forEach(b=>b.onclick=()=>{const hash='#'+b.dataset.page;if(location.hash!==hash)history.pushState(null,'',hash);selectPage(b.dataset.page)});window.addEventListener('popstate',()=>selectPage(location.hash.slice(1)||'live'));window.addEventListener('hashchange',()=>selectPage(location.hash.slice(1)||'live'));if(location.hash)selectPage(location.hash.slice(1));
-$('askBtn').onclick=async()=>{const text=$('q').value.trim();if(!text)return;$('q').value='';const r=await fetch('/api/ask',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text})});if(!r.ok)alert((await r.json()).detail||'Radio failed')};$('q').onkeydown=e=>{if(e.key==='Enter')$('askBtn').click()};$('calBtn').onclick=async()=>alert((await (await fetch('/api/ptt/calibrate',{method:'POST'})).json()).message);$('wakeEnabled').onchange=()=>fetch('/api/wake/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({enabled:$('wakeEnabled').checked})});$('saveProactive').onclick=()=>fetch('/api/proactive/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({enabled:$('proactiveEnabled').checked,cadence_laps:Number($('cadence').value)})});$('testProactive').onclick=async()=>{const r=await fetch('/api/proactive/test',{method:'POST'}),j=await r.json();if(!r.ok)alert(j.detail||'Test call unavailable');else alert(j.message)};$('refreshReview').onclick=loadHistory;$('recompute').onclick=()=>fetch('/api/strategy/recompute',{method:'POST'});$('sessionMode').onchange=()=>fetch('/api/session/mode',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({mode:$('sessionMode').value})});$('saveOverride').onclick=async()=>{const body={enabled:true,locked:true,next_box_lap:$('overrideLap').value?Number($('overrideLap').value):null,next_compound:$('overrideCompound').value||null,preferred_stops:$('overrideStops').value?Number($('overrideStops').value):null};const r=await fetch('/api/strategy/override',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});if(!r.ok)alert((await r.json()).detail||'Could not lock strategy')};$('clearOverride').onclick=()=>fetch('/api/strategy/override',{method:'DELETE'});/* Closing the browser tab only closes the dashboard: the server keeps running, and in the packaged build there is no console and no window, so Task Manager was the only way to stop it. Confirm first, because quitting mid-session ends the recording. */
-$('quitApp').onclick=async()=>{if(!confirm('Stop Pit Wall?\n\nTelemetry recording and the race engineer will stop. Any session in progress is finalised and saved first.\n\nClosing this tab on its own does NOT stop Pit Wall.'))return;const btn=$('quitApp');btn.disabled=true;btn.textContent='Stopping…';try{const r=await fetch('/api/shutdown',{method:'POST'});if(!r.ok)throw new Error((await r.json().catch(()=>({}))).detail||'Could not stop Pit Wall');document.body.innerHTML='<div style="padding:40px;font:16px Segoe UI,system-ui,sans-serif;color:#eef4f8"><h2>Pit Wall is stopping.</h2><p class="muted">Recording has been finalised and saved. You can close this tab.</p><p class="muted">It takes about <b>20 seconds</b> to close down fully. If you want to start it again, wait until then &mdash; launching while the old one still holds the telemetry port fails quietly.</p></div>'}catch(e){btn.disabled=false;btn.textContent='Quit Pit Wall';alert(String(e.message||e))}};
+$('askBtn').onclick=async()=>{const text=$('q').value.trim();if(!text)return;$('q').value='';const r=await fetch('/api/ask',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text})});if(!r.ok)alert((await r.json()).detail||'Radio failed')};$('q').onkeydown=e=>{if(e.key==='Enter')$('askBtn').click()};$('calBtn').onclick=async()=>alert((await (await fetch('/api/ptt/calibrate',{method:'POST'})).json()).message);$('wakeEnabled').onchange=()=>fetch('/api/wake/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({enabled:$('wakeEnabled').checked})});$('saveProactive').onclick=()=>fetch('/api/proactive/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({enabled:$('proactiveEnabled').checked,cadence_laps:Number($('cadence').value)})});$('testProactive').onclick=async()=>{const r=await fetch('/api/proactive/test',{method:'POST'}),j=await r.json();if(!r.ok)alert(j.detail||'Test call unavailable');else alert(j.message)};$('refreshReview').onclick=loadHistory;$('recompute').onclick=()=>fetch('/api/strategy/recompute',{method:'POST'});$('sessionMode').onchange=()=>fetch('/api/session/mode',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({mode:$('sessionMode').value})});$('saveOverride').onclick=async()=>{const body={enabled:true,locked:true,next_box_lap:$('overrideLap').value?Number($('overrideLap').value):null,next_compound:$('overrideCompound').value||null,preferred_stops:$('overrideStops').value?Number($('overrideStops').value):null};const r=await fetch('/api/strategy/override',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});if(!r.ok)alert((await r.json()).detail||'Could not lock strategy')};$('clearOverride').onclick=()=>fetch('/api/strategy/override',{method:'DELETE'});
+/* Pre-race plan handlers. The dirty flag is cleared only when the server has
+   confirmed, so a failed commit leaves the driver's edits on screen instead of
+   silently reverting to whatever the engine last proposed. */
+$('planAddStop').onclick=()=>{const d=planReadDraft()||planDraft;if(!d||d.box_laps.length>=3)return;
+  const total=Number(lastState?.total_laps||50),stops=d.box_laps.length+1;
+  const used=d.compounds[d.compounds.length-1];
+  d.compounds.push(['MEDIUM','HARD','SOFT'].find(c=>c!==used)||'HARD');
+  d.box_laps=Array.from({length:stops},(_,i)=>Math.max(1,Math.round(total*(i+1)/(stops+1))));
+  planDraft=d;planBuildStints();planTouch();$('planSummary').textContent=planDescribe(d)};
+$('planRemoveStop').onclick=()=>{const d=planReadDraft()||planDraft;if(!d||!d.box_laps.length)return;
+  d.compounds.pop();d.box_laps.pop();planDraft=d;planBuildStints();planTouch();$('planSummary').textContent=planDescribe(d)};
+$('planSend').onclick=async()=>{const text=$('planReply').value.trim();if(!text)return;
+  $('planReply').value='';$('planStatus').textContent='…';
+  try{const j=await planPost('/api/prerace/respond',{text});planClean();
+    $('planStatus').textContent='';$('planSpoken').textContent=(j.briefing||{}).spoken||''}
+  catch(e){$('planStatus').textContent=String(e.message||e)}};
+$('planReply').onkeydown=e=>{if(e.key==='Enter')$('planSend').click()};
+$('planCommit').onclick=async()=>{const btn=$('planCommit'),label=btn.textContent,d=planReadDraft()||planDraft;
+  if(!d){$('planStatus').textContent='Nothing to agree yet.';return}
+  btn.disabled=true;
+  try{const j=await planPost('/api/prerace/commit',{compounds:d.compounds,box_laps:d.box_laps,lap_tolerance:2});
+    planClean();btn.textContent='Agreed';$('planStatus').textContent=(j.briefing||{}).spoken||'Running your plan.'}
+  catch(e){btn.textContent='Not agreed';$('planStatus').textContent=String(e.message||e)}
+  finally{btn.disabled=false;setTimeout(()=>{btn.textContent=label},2000)}};
+$('planDiscard').onclick=async()=>{try{await planPost('/api/prerace',null,'DELETE');planClean();planBuiltStops=-1;
+  $('planStatus').textContent='Back to automatic strategy.'}catch(e){$('planStatus').textContent=String(e.message||e)}};/* Closing the browser tab only closes the dashboard: the server keeps running, and in the packaged build there is no console and no window, so Task Manager was the only way to stop it. Confirm first, because quitting mid-session ends the recording. */
+$('quitApp').onclick=async()=>{if(!confirm('Stop Your Pit Box?\n\nTelemetry recording and the race engineer will stop. Any session in progress is finalised and saved first.\n\nClosing this tab on its own does NOT stop Your Pit Box.'))return;const btn=$('quitApp');btn.disabled=true;btn.textContent='Stopping…';try{const r=await fetch('/api/shutdown',{method:'POST'});if(!r.ok)throw new Error((await r.json().catch(()=>({}))).detail||'Could not stop Your Pit Box');document.body.innerHTML='<div style="padding:40px;font:16px Segoe UI,system-ui,sans-serif;color:#eef4f8"><h2>Your Pit Box is stopping.</h2><p class="muted">Recording has been finalised and saved. You can close this tab.</p><p class="muted">It takes about <b>20 seconds</b> to close down fully. If you want to start it again, wait until then &mdash; launching while the old one still holds the telemetry port fails quietly.</p></div>'}catch(e){btn.disabled=false;btn.textContent='Quit Your Pit Box';alert(String(e.message||e))}};
 /* Mark a preference as edited so the incoming state stops overwriting it, and keep it marked until the save is actually confirmed. Clearing on click instead would let a failed save silently revert to the stored value. */
 Object.keys(PREF_FIELDS).forEach(id=>$(id).addEventListener('change',()=>{$(id).dataset.dirty='1'}));
 $('savePrefs').onclick=async()=>{const btn=$('savePrefs'),label=btn.textContent;btn.disabled=true;const body={};for(const[id,key]of Object.entries(PREF_FIELDS))body[key]=Number($(id).value);try{const r=await fetch('/api/preferences',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});if(!r.ok)throw new Error((await r.json().catch(()=>({}))).detail||'Save failed');Object.keys(PREF_FIELDS).forEach(id=>delete $(id).dataset.dirty);btn.textContent='Saved';}catch(e){btn.textContent='Save failed';}finally{btn.disabled=false;setTimeout(()=>{btn.textContent=label},2000)}};document.querySelectorAll('.setupProfile').forEach(b=>b.onclick=()=>generateSetup(b.dataset.profile));$('shakedownBtn').onclick=async()=>{$('shakedownBtn').disabled=true;$('providerStatus').textContent='Testing live provider contracts…';$('providerDiag').textContent='This may take several seconds and uses a small amount of API credit.';try{const r=await fetch('/api/llm/shakedown',{method:'POST'}),j=await r.json();if(!r.ok)throw new Error(j.detail||'Shakedown failed');$('providerStatus').textContent=j.ready?'All configured providers ready':'One or more provider checks failed';$('providerDiag').textContent=Object.entries(j.providers||{}).map(([name,v])=>`${name}: ${v.ready?'READY':'FAILED'} · ${Object.entries(v.stages||{}).map(([stage,x])=>`${stage} ${x.ok?'ok':'fail'} ${x.latency_ms||0}ms`).join(', ')}`).join(' | ')}catch(e){$('providerStatus').textContent='Provider shakedown failed';$('providerDiag').textContent=String(e)}finally{$('shakedownBtn').disabled=false;loadProviderStatus()}};

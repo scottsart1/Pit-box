@@ -1,4 +1,4 @@
-"""Best-effort, byte-identical UDP fan-out for Pit Wall.
+"""Best-effort, byte-identical UDP fan-out for Your Pit Box.
 
 Configuration and DNS resolution happen asynchronously outside the receiver
 path.  ``submit`` performs only header inspection, immutable tuple reads, and a
@@ -249,7 +249,7 @@ def validate_resolved_targets(
                 if exact or wildcard_local:
                     raise ForwardValidationError(
                         "self_loop",
-                        f"{address}:{target.port} is the local Pit Wall listener",
+                        f"{address}:{target.port} is the local Your Pit Box listener",
                         target.id,
                     )
 

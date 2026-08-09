@@ -1,6 +1,6 @@
 """Synthetic F1 26 telemetry generator.
 
-Drives a complete 20-car race into a running Pit Wall over UDP, using the real
+Drives a complete 20-car race into a running Your Pit Box over UDP, using the real
 ``f1-packets`` structures, so the dashboard, strategy engine and radio can be
 exercised without a PS5 and without a wheel.
 

@@ -1,4 +1,4 @@
-"""Network discovery and F1 UDP health primitives for Pit Wall 4.2.
+"""Network discovery and F1 UDP health primitives for Your Pit Box 4.2.
 
 This module is deliberately independent of FastAPI, the UDP receiver, and the
 database.  The receiver can use the header and health types on its hot path;

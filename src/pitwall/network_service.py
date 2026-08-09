@@ -202,7 +202,7 @@ def _bind_error_message(code: str, host: str, port: int) -> str:
         )
     if code == "invalid_bind_host":
         return "The UDP bind host must be a valid local IPv4 address."
-    return f"Pit Wall could not listen on UDP {endpoint}."
+    return f"Your Pit Box could not listen on UDP {endpoint}."
 
 
 def _normalize_bind(host: str, port: int) -> tuple[str, int]:
@@ -981,7 +981,7 @@ class NetworkService:
             warnings.append(listener.error)
         if listener.state is ListenerState.LISTENING:
             warnings.append(
-                "Pit Wall is listening, but no valid F1 2026 telemetry has arrived."
+                "Your Pit Box is listening, but no valid F1 2026 telemetry has arrived."
             )
         elif listener.state is ListenerState.STALE:
             warnings.append("F1 telemetry was received but is now stale.")
@@ -1032,7 +1032,7 @@ class NetworkService:
             bind_message = listener.error or "The UDP listener failed."
         elif self._transport is not None:
             bind_status = "pass"
-            bind_message = f"Pit Wall owns UDP {listener.bind_host}:{listener.port}."
+            bind_message = f"Your Pit Box owns UDP {listener.bind_host}:{listener.port}."
         else:
             bind_code = await asyncio.to_thread(
                 self._bind_probe, listener.bind_host, listener.port

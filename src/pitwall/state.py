@@ -21,7 +21,7 @@ class TyreState:
     compound: str = "UNKNOWN"
     actual_compound: int = 0
     age_laps: int = 0
-    # All wheel arrays in Pit Wall are normalized to FL, FR, RL, RR.
+    # All wheel arrays in Your Pit Box are normalized to FL, FR, RL, RR.
     wear: list[float] = field(default_factory=lambda: [0.0] * 4)
     damage: list[int] = field(default_factory=lambda: [0] * 4)
     blisters: list[int] = field(default_factory=lambda: [0] * 4)
@@ -332,9 +332,38 @@ class SessionState:
             "next_box_lap": None,
             "next_compound": None,
             "preferred_stops": None,
+            # A whole-race plan, agreed before the lights or set by hand: a
+            # compound per stint and a lap per stop. When present it supersedes
+            # the single-stop fields above, which only ever constrained the next
+            # stop and left the shape of the race to the engine.
+            "plan": {},
+            "plan_agreed": False,
+            # Whether the driver deliberately asked to start on something other
+            # than the tyre already on the car. Every committed plan carries a
+            # first compound, but it is usually just the fitted tyre echoed
+            # back; treating that as a choice would pin the engine to a stale
+            # compound the moment the driver changed their mind in the garage.
+            "start_compound_explicit": False,
+            # What was fitted when that choice was made. If the car is on
+            # something else now, the driver has acted since and the car wins.
+            "start_compound_seen_fitted": "",
             "priority": "balanced",
             "source": "",
             "note": "",
+            "updated_at": 0.0,
+        }
+    )
+    # The pre-race conversation that produces the plan above. Kept out of the
+    # override itself so an abandoned discussion never constrains a race.
+    prerace_briefing: dict[str, Any] = field(
+        default_factory=lambda: {
+            "phase": "idle",  # idle | proposed | negotiating | agreed
+            "proposal": {},
+            "alternatives": [],
+            "rationale": "",
+            "spoken": "",
+            "transcript": [],
+            "committed": False,
             "updated_at": 0.0,
         }
     )

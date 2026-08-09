@@ -188,7 +188,7 @@ class TraceManifest:
 
     def to_dict(self) -> dict[str, Any]:
         return {
-            "format": "Pit Wall trace manifest",
+            "format": "Your Pit Box trace manifest",
             "schema_version": self.schema_version,
             "id": self.id,
             "lap_id": self.lap_id,
@@ -625,7 +625,7 @@ class TraceStore:
         if len(raw_bytes) > _MAX_RAW_BYTES:
             raise TraceStoreError("trace chunk exceeds the maximum uncompressed size")
         metadata = {
-            "format": "Pit Wall typed trace chunk",
+            "format": "Your Pit Box typed trace chunk",
             "format_version": TRACE_FORMAT_VERSION,
             "manifest_id": manifest_id,
             "lap_id": lap_id,
@@ -850,7 +850,7 @@ class TraceStore:
             raw_crc,
         ) = _TRACE_HEADER.unpack_from(value)
         if magic != TRACE_MAGIC:
-            raise TraceFormatError("not a Pit Wall trace chunk")
+            raise TraceFormatError("not a Your Pit Box trace chunk")
         if version != TRACE_FORMAT_VERSION:
             raise TraceFormatError(f"unsupported trace chunk version: {version}")
         if metadata_length > _MAX_METADATA_BYTES or raw_length > _MAX_RAW_BYTES:

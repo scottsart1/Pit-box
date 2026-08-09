@@ -4,6 +4,7 @@ import asyncio
 import logging
 import sys
 import tempfile
+import time as _time
 from contextlib import asynccontextmanager
 from dataclasses import asdict
 from pathlib import Path
@@ -52,7 +53,14 @@ from .full_field_archive import FullFieldArchiveService
 from .network_profiles import NetworkProfileRepository
 from .network_service import ListenerBindError, NetworkService
 from .networking import PacketHealthTracker
+from .prerace import PreRacePlanner
 from .proactive import ProactiveEngineer
+from .race_plan import (
+    PlanError,
+    compound_rule_ok,
+    describe_plan,
+    normalise_plan,
+)
 from .realtime import RealtimeRadio
 from .session_assembler import SessionAssembler
 from .setup_advisor import SetupAdvisor
@@ -137,6 +145,7 @@ tools = TelemetryTools(
 )
 brain = EngineerBrain(store, tools, database)
 briefing = BriefingEngine(store, database, analysis, setup_advisor, tools)
+prerace = PreRacePlanner(store, strategy)
 audio = AudioService()
 voice: NativeVoiceController | None = None
 proactive: ProactiveEngineer | None = None
@@ -176,7 +185,7 @@ async def _connection_watchdog() -> None:
         if current_catalog_session_id is not None:
             previous_catalog_session_id = current_catalog_session_id
         # A finished session must be recorded immediately: waiting for the next
-        # periodic write risks losing the result if Pit Wall is closed straight
+        # periodic write risks losing the result if Your Pit Box is closed straight
         # after the chequered flag.
         classification = snapshot.get("final_classification") or {}
         newly_classified = bool(
@@ -512,7 +521,7 @@ async def lifespan(app: FastAPI):
         )
 
 
-app = FastAPI(title="Pit Wall", version="4.2.0", lifespan=lifespan)
+app = FastAPI(title="Your Pit Box", version="4.2.0", lifespan=lifespan)
 app.add_middleware(
     LanAccessMiddleware,
     enabled=settings.web_lan_access,
@@ -606,6 +615,27 @@ class StrategyOverrideRequest(BaseModel):
     preferred_stops: int | None = None
     priority: str = "balanced"
     note: str = "dashboard override"
+
+
+class RacePlanRequest(BaseModel):
+    """A whole-race plan: one compound per stint, one lap per stop.
+
+    ``compounds`` is one longer than ``box_laps`` - the first entry is the tyre
+    the stint starts on, and every entry after it is what a stop fits.
+    """
+
+    compounds: list[str]
+    box_laps: list[int]
+    lap_tolerance: int = 2
+    wet_race: bool = False
+    note: str = "driver plan"
+    source: str = "dashboard"
+
+
+class PreRaceReplyRequest(BaseModel):
+    """One driver turn in the pre-race strategy discussion."""
+
+    text: str
 
 
 class DriverPreferencesRequest(BaseModel):
@@ -844,13 +874,49 @@ async def export_session_json(
     )
 
 
+# How often live state is offered to the dashboard, and how long a dashboard
+# may go without acknowledging before it is dropped. The timeout is generous:
+# a browser busy rendering a 24-car timing tower on a loaded machine can be
+# slow without being gone, and dropping a working dashboard mid-race would be
+# its own defect.
+WEBSOCKET_PUSH_INTERVAL_S = 0.25
+WEBSOCKET_ACK_TIMEOUT_S = 15.0
+
+
 @app.websocket("/ws")
 async def websocket_state(websocket: WebSocket) -> None:
+    """Push live state, but never faster than the dashboard can take it.
+
+    This used to send a full snapshot every 250 ms unconditionally. send_json
+    returns once the frame is handed to the transport, not once the browser has
+    it, so a client that renders slower than 4 Hz never applied backpressure:
+    frames queued in the transport and the queue grew for as long as the
+    session lasted. On an 8 GB machine also running the game, an hour into a
+    race that ended in ten MemoryErrors in 83 seconds, each one killing the
+    dashboard while the engine behind it carried on fine.
+
+    The client now acknowledges each frame, so at most one is ever in flight. A
+    dashboard that stops acknowledging is dropped rather than buffered for: it
+    reconnects on its own, and a reconnect is far cheaper than exhausting
+    memory mid-race.
+    """
     await websocket.accept()
     try:
         while True:
             await websocket.send_json(await store.snapshot_live())
-            await asyncio.sleep(0.25)
+            try:
+                await asyncio.wait_for(
+                    websocket.receive_text(), timeout=WEBSOCKET_ACK_TIMEOUT_S
+                )
+            except TimeoutError:
+                log.warning(
+                    "Dashboard stopped acknowledging live state after %.0fs; "
+                    "closing the socket so frames cannot queue without bound",
+                    WEBSOCKET_ACK_TIMEOUT_S,
+                )
+                await websocket.close(code=1013)
+                return
+            await asyncio.sleep(WEBSOCKET_PUSH_INTERVAL_S)
     except WebSocketDisconnect:
         pass
 
@@ -1009,6 +1075,13 @@ async def session_mode(request: SessionModeRequest) -> dict[str, object]:
     }
 
 
+def _fitted_compound(snapshot: dict[str, object]) -> str:
+    tyre = snapshot.get("tyre") or {}
+    if not isinstance(tyre, dict):
+        return ""
+    return str(tyre.get("compound", "") or "").upper()
+
+
 @app.get("/api/strategy/override")
 async def get_strategy_override() -> dict[str, object]:
     return dict((await store.snapshot_analysis()).get("strategy_override", {}))
@@ -1032,8 +1105,6 @@ async def set_strategy_override(request: StrategyOverrideRequest) -> dict[str, o
         raise HTTPException(400, "next_box_lap must be positive")
     override.update(payload)
     override["source"] = "dashboard"
-    import time as _time
-
     override["updated_at"] = _time.time()
     await store.update(strategy_override=override)
     plan = await strategy.recompute()
@@ -1049,9 +1120,13 @@ async def clear_strategy_override() -> dict[str, object]:
             "enabled": False,
             "locked": False,
             "start_compound": None,
+            "start_compound_explicit": False,
+            "start_compound_seen_fitted": "",
             "next_box_lap": None,
             "next_compound": None,
             "preferred_stops": None,
+            "plan": {},
+            "plan_agreed": False,
             "note": "cleared from dashboard",
             "source": "dashboard",
         }
@@ -1060,11 +1135,124 @@ async def clear_strategy_override() -> dict[str, object]:
     return {"override": override, "strategy": await strategy.recompute()}
 
 
+@app.post("/api/strategy/plan")
+async def set_race_plan(request: RacePlanRequest) -> dict[str, object]:
+    """Commit a whole-race plan: a compound per stint, a lap per stop."""
+    snapshot = await store.snapshot_analysis()
+    try:
+        plan = normalise_plan(
+            {
+                "compounds": request.compounds,
+                "box_laps": request.box_laps,
+                "lap_tolerance": request.lap_tolerance,
+            },
+            total_laps=int(snapshot.get("total_laps", 0) or 0),
+        )
+    except PlanError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    if not compound_rule_ok(plan, wet_race=bool(request.wet_race)):
+        raise HTTPException(
+            400,
+            "That plan uses one dry compound all race, which is a "
+            "disqualification. Two different dry compounds are required.",
+        )
+
+    override = dict(snapshot.get("strategy_override", {}))
+    override.update(
+        {
+            "enabled": True,
+            "locked": True,
+            "plan": plan,
+            "plan_agreed": True,
+            # The single-stop fields only ever constrained the next stop. Leaving
+            # a stale one set alongside a whole-race plan would have two
+            # constraints disagreeing with no rule for which wins.
+            "next_box_lap": None,
+            "next_compound": None,
+            "preferred_stops": plan["stops"],
+            "start_compound": plan["compounds"][0],
+            # See PreRacePlanner.commit: only a start tyre that differs from the
+            # one on the car counts as a choice, so a plan that simply echoed
+            # the fitted tyre never stops the engine following a later change.
+            "start_compound_explicit": bool(
+                _fitted_compound(snapshot)
+                and str(plan["compounds"][0]).upper() != _fitted_compound(snapshot)
+            ),
+            "start_compound_seen_fitted": _fitted_compound(snapshot),
+            "note": request.note,
+            "source": request.source,
+            "updated_at": _time.time(),
+        }
+    )
+    await store.update(strategy_override=override)
+    return {
+        "override": override,
+        "spoken": describe_plan(plan),
+        "strategy": await strategy.recompute(),
+    }
+
+
+# --- Pre-race planning ------------------------------------------------------
+# The engineer proposes a race before the lights, the driver pushes back, and
+# only agreement commits it. Nothing here constrains the race until /commit.
+
+
+@app.get("/api/prerace")
+async def get_prerace_briefing() -> dict[str, object]:
+    state = await store.snapshot_analysis()
+    return {
+        "briefing": await prerace.snapshot(),
+        "available": PreRacePlanner.is_prerace(state),
+        "total_laps": int(state.get("total_laps", 0) or 0),
+        "current_lap": int(state.get("current_lap", 0) or 0),
+    }
+
+
+@app.post("/api/prerace/propose")
+async def propose_prerace_plan() -> dict[str, object]:
+    state = await store.snapshot_analysis()
+    if not PreRacePlanner.is_prerace(state):
+        raise HTTPException(
+            409,
+            "Pre-race planning needs a race session that has not started yet.",
+        )
+    return {"briefing": await prerace.propose()}
+
+
+@app.post("/api/prerace/respond")
+async def respond_to_prerace_plan(request: PreRaceReplyRequest) -> dict[str, object]:
+    text = request.text.strip()
+    if not text:
+        raise HTTPException(400, "Say something to respond to.")
+    return {"briefing": await prerace.respond(text)}
+
+
+@app.post("/api/prerace/commit")
+async def commit_prerace_plan(request: RacePlanRequest | None = None) -> dict[str, object]:
+    """Agree the plan. With no body, commits whatever is on the table."""
+    plan = None
+    if request is not None and request.compounds:
+        plan = {
+            "compounds": request.compounds,
+            "box_laps": request.box_laps,
+            "lap_tolerance": request.lap_tolerance,
+        }
+    briefing = await prerace.commit(plan)
+    if not briefing.get("committed"):
+        raise HTTPException(400, briefing.get("spoken", "That plan cannot be raced."))
+    return {"briefing": briefing, "strategy": await strategy.get_plan()}
+
+
+@app.delete("/api/prerace")
+async def discard_prerace_plan() -> dict[str, object]:
+    return {"briefing": await prerace.discard()}
+
+
 @app.post("/api/shutdown")
 async def shutdown_pitwall(request: Request) -> dict[str, object]:
-    """Stop Pit Wall from the dashboard.
+    """Stop Your Pit Box from the dashboard.
 
-    Restricted to the machine running Pit Wall, matching the API-key endpoints:
+    Restricted to the machine running Your Pit Box, matching the API-key endpoints:
     with LAN access enabled the dashboard is reachable from the console and any
     other device on the network, and none of them should be able to end a
     session that is being recorded.
@@ -1079,12 +1267,12 @@ async def shutdown_pitwall(request: Request) -> dict[str, object]:
     host = client.host if client else ""
     if not is_loopback_host(host):
         raise HTTPException(
-            403, "Pit Wall can only be shut down from the computer running it."
+            403, "Your Pit Box can only be shut down from the computer running it."
         )
     server = getattr(request.app.state, "server", None)
     if server is None:
         raise HTTPException(
-            503, "Pit Wall is not running under its own server and cannot stop itself."
+            503, "Your Pit Box is not running under its own server and cannot stop itself."
         )
     log.info("Shutdown requested from the dashboard")
     server.should_exit = True

@@ -88,7 +88,7 @@ class AudioService:
 
         Called at construction and again whenever the API key is changed from
         the Connection Center, so a driver who pastes a key mid-session gets a
-        working radio without restarting Pit Wall.
+        working radio without restarting Your Pit Box.
         """
         self.client = (
             AsyncOpenAI(
@@ -419,6 +419,27 @@ class AudioService:
             duration_s=0.10,
             volume=0.11,
         )
+
+    async def play_listening_cue(self) -> None:
+        """The "I'm listening" ping, after the wake phrase with no command.
+
+        Deliberately not the default tone. That is 80 ms at 10% volume, which
+        is inaudible next to a racing game through headphones, so a driver who
+        said the wake phrase and paused got no usable confirmation and had no
+        idea whether to start talking.
+
+        A rising pair reads as a question — "yes?" — and is distinguishable
+        from the falling/flat acks used for "copy" and "standby" without having
+        to be loud enough to be annoying.
+        """
+        if not settings.voice_ack_enabled:
+            return
+        for frequency in (660.0, 990.0):
+            await self.play_tone(
+                frequency_hz=frequency,
+                duration_s=settings.wake_cue_tone_s,
+                volume=settings.wake_cue_volume,
+            )
 
     async def play_tone(
         self,

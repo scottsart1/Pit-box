@@ -18,6 +18,21 @@ from .voice import NativeVoiceController
 
 log = logging.getLogger(__name__)
 
+# How often the race is looked at, and how often the queue is drained.
+#
+# Detection is deliberately faster than the old shared 0.35s loop: session
+# packets carrying marshal zones and safety-car status arrive at 2 Hz, so
+# 0.15s samples every one of them without burning CPU on duplicates. Delivery
+# can be lazier because it blocks on speech anyway, and a tighter loop would
+# only spin while the engineer talks.
+DETECT_INTERVAL_S = 0.15
+DELIVER_INTERVAL_S = 0.10
+
+# How far ahead a marshal-zone yellow is worth calling. Roughly six seconds at
+# racing speed: far enough to lift or move, near enough that it is still true
+# when the driver arrives.
+YELLOW_LOOKAHEAD_M = 600.0
+
 # Reliability damage matters as much as aero damage, but gearbox, engine and
 # DRS/ERS faults were previously invisible to the radio: they are captured in
 # state yet were excluded from both the change signature and the severity test,
@@ -82,7 +97,31 @@ NEVER_SUPPRESSED = frozenset(
     }
 )
 
-CRITICAL, IMPORTANT, ROUTINE = 0, 1, 2
+FLASH, CRITICAL, IMPORTANT, ROUTINE = -1, 0, 1, 2
+
+# Calls that must reach the driver while the fact is still true, and that are
+# therefore never sent to the model for wording.
+#
+# Narration costs an LLM round trip (up to proactive_narration_timeout_s) before
+# a single word is spoken. Measured over a real race, queue-to-spoken averaged
+# 31.6s and peaked at 46.6s: a 45s virtual safety car was announced 4.5s after
+# it had already ended. Worse than late, it was sometimes wrong — the model was
+# handed a payload describing a return to green and announced "Red flag
+# confirmed - stay out of the pit lane."
+#
+# For these events the deterministic template is not a fallback, it is the
+# better answer: every fact is already in the payload, the wording is fixed and
+# correct, and it can be spoken immediately. Interpretation still happens, as a
+# normal CRITICAL call a few seconds later, where being slower costs nothing.
+FLASH_EVENTS = frozenset(
+    {
+        "race_control",
+        "sc_restart",
+        "yellow_ahead",
+        "blue_flag",
+        "safety_car_delta",
+    }
+)
 EVENT_PRIORITY = {
     "race_control": CRITICAL,
     "safety_car_delta": CRITICAL,
@@ -143,12 +182,16 @@ class ProactiveEngineer:
         self.pending: deque[dict[str, Any]] = deque(maxlen=24)
         self._discarded: deque[dict[str, Any]] = deque(maxlen=64)
         self._task: asyncio.Task[None] | None = None
+        self._deliver_task: asyncio.Task[None] | None = None
         self._session_uid = 0
         self._last_spoken_at = 0.0
         self._last_lap_queued = 0
         self._last_learning_lap = 0
         self._last_safety_car = "none"
         self._last_race_control_phase = "green"
+        # (lap, zone) pairs already called, so a persisting yellow is
+        # announced once rather than on every detection pass.
+        self._yellow_called: set[tuple[int, int]] = set()
         self._last_weather_alert = False
         self._last_penalties = 0
         self._last_warnings = 0
@@ -180,17 +223,28 @@ class ProactiveEngineer:
         self._standing_instructions: list[Any] = []
 
     async def start(self) -> None:
+        # Two tasks, deliberately. Detection must keep running while the
+        # engineer is mid-sentence; see _run_detect for why.
         if self._task is None or self._task.done():
-            self._task = asyncio.create_task(self._run(), name="pitwall-proactive")
+            self._task = asyncio.create_task(
+                self._run_detect(), name="pitwall-proactive-detect"
+            )
+        if self._deliver_task is None or self._deliver_task.done():
+            self._deliver_task = asyncio.create_task(
+                self._run_deliver(), name="pitwall-proactive-deliver"
+            )
 
     async def stop(self) -> None:
-        if self._task:
-            self._task.cancel()
+        for name in ("_task", "_deliver_task"):
+            task = getattr(self, name)
+            if task is None:
+                continue
+            task.cancel()
             try:
-                await self._task
+                await task
             except asyncio.CancelledError:
                 pass
-            self._task = None
+            setattr(self, name, None)
 
     async def configure(self, enabled: bool, cadence_laps: int) -> dict[str, Any]:
         cadence = max(1, min(10, int(cadence_laps)))
@@ -373,10 +427,19 @@ class ProactiveEngineer:
         if self.is_suppressed(event_type, self._standing_instructions):
             return
         self._cooldowns[event_type] = now_mono
+        # Race control is deliberately NOT coalesced. Every other call here
+        # reports a level that a later reading replaces, so the newest is the
+        # only one worth speaking. A flag change is not a level, it is an
+        # event: "safety car deployed" and "safety car ending" are two separate
+        # things the driver must hear, in order. Coalescing them discarded the
+        # deployment and spoke only the ending, so twice in one race the driver
+        # was told the safety car had finished without ever being told it
+        # started. Blue flags are the same: each one is a different car
+        # arriving, not a restatement of the last.
         coalesced = {
-            "progress_update", "corner_coaching", "race_control", "weather_crossover",
+            "progress_update", "corner_coaching", "weather_crossover",
             "fuel_warning", "tyre_wear", "damage", "strategy_change", "compound_requirement",
-            "quali_clear_air", "blue_flag", "penalty_service", "undercut_threat",
+            "quali_clear_air", "penalty_service", "undercut_threat",
             "safety_car_delta", "sc_restart", "energy_low", "component_wear",
             # A rival stop that has been superseded by a later one is no longer
             # news. Leaving these uncoalesced filled the queue with stale stops
@@ -395,10 +458,18 @@ class ProactiveEngineer:
                     kept.append(item)
             self.pending = deque(kept, maxlen=24)
         now = time.time()
-        priority = CRITICAL if critical else EVENT_PRIORITY.get(event_type, ROUTINE)
+        is_flash = event_type in FLASH_EVENTS
+        priority = (
+            FLASH
+            if is_flash
+            else CRITICAL
+            if critical
+            else EVENT_PRIORITY.get(event_type, ROUTINE)
+        )
         event = {
             "type": event_type,
-            "critical": critical,
+            "critical": critical or is_flash,
+            "flash": is_flash,
             "priority": priority,
             "payload": payload,
             "queued_at": now,
@@ -423,6 +494,9 @@ class ProactiveEngineer:
         self._last_learning_lap = 0
         self._last_safety_car = "none"
         self._last_race_control_phase = "green"
+        # (lap, zone) pairs already called, so a persisting yellow is
+        # announced once rather than on every detection pass.
+        self._yellow_called: set[tuple[int, int]] = set()
         self._last_weather_alert = False
         self._last_penalties = self._last_warnings = 0
         self._last_damage_signature = self._last_strategy_signature = ""
@@ -453,6 +527,72 @@ class ProactiveEngineer:
         return ":".join(
             str(damage.get(key, 0))
             for key in (*DAMAGE_KEYS, *DAMAGE_FAULT_KEYS)
+        )
+
+    def _detect_marshal_yellow(self, state: dict[str, Any]) -> None:
+        """Call a yellow in a zone the driver is about to reach.
+
+        Marshal zones have always been parsed and stored, and were read by
+        exactly two things: the dashboard, and a tool the model could ask for
+        on request. Nothing ever volunteered one, so in the product's whole
+        history it has never once told a driver about a yellow flag — on a race
+        where 164 of 717 recorded laps carried a flag context.
+
+        Only zones AHEAD of the car matter, and only within a braking-and-
+        reacting distance: a yellow on the far side of the lap is not news yet,
+        and by the time the driver gets there it may be green again. The zone
+        start is a fraction of the lap converted to metres upstream, so the
+        wrap-around is handled the same way the on-demand tool already does it.
+        """
+        if str(state.get("race_control_phase", "green")) != "green":
+            # Under a safety car or VSC the whole track is neutralised and the
+            # driver has already been told. Zone-by-zone yellows would be noise.
+            return
+        zones = list(state.get("marshal_zones", []) or [])
+        if not zones:
+            return
+        track_length = float(state.get("track_length_m", 0) or 0)
+        lap_distance = float(state.get("lap_distance_m", 0) or 0)
+        current_lap = int(state.get("current_lap", 0))
+
+        nearest: dict[str, Any] | None = None
+        for zone in zones:
+            flag = str(zone.get("flag", "none"))
+            if flag not in {"yellow", "red"}:
+                continue
+            ahead = float(zone.get("start_m", 0.0)) - lap_distance
+            if ahead < 0 and track_length:
+                ahead += track_length
+            if 0.0 <= ahead <= YELLOW_LOOKAHEAD_M and (
+                nearest is None or ahead < nearest["distance_ahead_m"]
+            ):
+                nearest = {
+                    "zone": int(zone.get("index", -1)),
+                    "flag": flag,
+                    "distance_ahead_m": round(ahead, 1),
+                }
+
+        if nearest is None:
+            return
+        # One call per zone per lap. A yellow that persists is still the same
+        # yellow, and repeating it every 0.15s pass would be unusable.
+        key = (current_lap, nearest["zone"])
+        if key in self._yellow_called:
+            return
+        self._yellow_called.add(key)
+        self._enqueue(
+            "yellow_ahead",
+            {
+                "flag": nearest["flag"],
+                "zone": nearest["zone"],
+                "distance_ahead_m": nearest["distance_ahead_m"],
+                "lap": current_lap,
+            },
+            critical=True,
+            cooldown_s=0.0,
+            # Short-lived by design: a yellow the driver has already driven
+            # through is not worth saying.
+            expires_s=12.0,
         )
 
     def _detect_race_start(self, state: dict[str, Any]) -> None:
@@ -890,7 +1030,21 @@ class ProactiveEngineer:
         if phase != self._last_race_control_phase or safety != self._last_safety_car:
             previous = self._last_race_control_phase
             self._last_race_control_phase, self._last_safety_car = phase, safety
-            self._enqueue("race_control", {"from": previous, "to": phase, "strategy": state.get("strategy", {}).get("recommended", {}), "neutralisation": state.get("strategy", {}).get("neutralisation", {})}, critical=True, cooldown_s=0.0)
+            # The flag itself is never suppressible — a driver may silence
+            # gearbox reminders, not a safety car. The pit recommendation
+            # riding along with it is a different matter: it is ordinary
+            # strategy advice, and the driver can decline it.
+            #
+            # Because the two were welded into one payload, a driver who said
+            # "I'm not going to box" and was told "understood, we'll stay out"
+            # was then told "Box this lap for softs" one lap later, inside a
+            # race-control call that suppression could never reach. The
+            # agreement evaporating is a worse failure than the advice being
+            # wrong: it teaches the driver that nothing they say is retained.
+            strategy_advice = state.get("strategy", {}).get("recommended", {})
+            if self.is_suppressed("strategy_change", self._standing_instructions):
+                strategy_advice = {}
+            self._enqueue("race_control", {"from": previous, "to": phase, "strategy": strategy_advice, "neutralisation": state.get("strategy", {}).get("neutralisation", {})}, critical=True, cooldown_s=0.0)
             # A transition into an "ending" phase means the restart is imminent:
             # prep battery, temperatures and the expected go point.
             if phase in {"safety_car_ending", "vsc_ending"}:
@@ -997,6 +1151,7 @@ class ProactiveEngineer:
                     expires_s=10.0,
                 )
 
+        self._detect_marshal_yellow(state)
         self._detect_race_start(state)
         self._detect_component_wear(state)
         self._detect_energy(state)
@@ -1162,7 +1317,21 @@ class ProactiveEngineer:
                 return f"Lap {payload.get('lap')}: target {pace}. {action}"
             return f"Lap {payload.get('lap')}: target {pace}. {opportunity}."
         if kind == "race_control":
-            return f"Race control: {payload.get('to', 'change')}. {payload.get('strategy', {}).get('instruction', 'Stand by for the revised plan.')}"
+            # Lead with the flag: it is the only part that is always true and
+            # always urgent, and this template is now spoken verbatim for FLASH
+            # calls rather than being reworded by the model. Advice is appended
+            # only when there is some, so a driver who has declined pit advice
+            # hears the flag alone instead of a hollow "stand by for the
+            # revised plan".
+            phase = str(payload.get("to", "change")).replace("_", " ")
+            advice = str((payload.get("strategy") or {}).get("instruction") or "").strip()
+            return f"Race control: {phase}." + (f" {advice}" if advice else "")
+        if kind == "yellow_ahead":
+            # Short on purpose. This is spoken while the driver is arriving at
+            # the incident, so it leads with the instruction, not the detail.
+            colour = "Red flag" if payload.get("flag") == "red" else "Yellow"
+            metres = int(float(payload.get("distance_ahead_m", 0)))
+            return f"{colour} flag, sector ahead, {metres} metres. Lift and no overtaking."
         if kind == "strategy_change":
             changed = payload.get("hold_released_reason")
             prefix = f"Your strategy hold is released because {changed}. " if changed else ""
@@ -1361,6 +1530,12 @@ class ProactiveEngineer:
         fallback = self._fallback_text(event, state)
         if not settings.proactive_narration_enabled:
             return fallback
+        if event.get("flash"):
+            # See FLASH_EVENTS: for these the template is the better answer,
+            # not the safety net. Waiting on the model made a flag call arrive
+            # after the flag had cleared, and once made it say the opposite of
+            # what the payload contained.
+            return fallback
         try:
             spoken = await asyncio.wait_for(
                 self.brain.proactive(event),
@@ -1449,9 +1624,24 @@ class ProactiveEngineer:
                 "queued": len(self.pending), "delivery_state": "delivered",
             }))
 
-    async def _run(self) -> None:
+    async def _run_detect(self) -> None:
+        """Watch the race. Never waits for anything being said.
+
+        Detection and delivery used to share one task, so nothing was watched
+        while the engineer spoke. Delivery blocks for the length of an
+        utterance — narration plus playback, measured at 10-16 seconds for a
+        race-control call — and every trigger here is edge-based, comparing
+        the current reading against the last one seen. An edge that both
+        opened and closed inside an utterance was therefore not announced late;
+        it was never seen at all. A real race replayed through this code
+        contained a safety car lasting 7.7 seconds, comfortably inside one
+        sentence.
+
+        Splitting the loops means the only cost of speaking is a delayed
+        announcement, never a missed event.
+        """
         while True:
-            await asyncio.sleep(0.35)
+            await asyncio.sleep(DETECT_INTERVAL_S)
             try:
                 state = await self.store.snapshot_analysis()
                 session_uid = int(state.get("session_uid", 0))
@@ -1464,6 +1654,20 @@ class ProactiveEngineer:
                     "queued": len(self.pending), "oldest_wait_s": round(wait, 1),
                     "delivery_state": "queued" if self.pending else "waiting",
                 }))
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                await self.store.update(last_error=f"Proactive engineer recovered from: {exc}")
+
+    async def _run_deliver(self) -> None:
+        """Speak what detection has queued, one call at a time.
+
+        Owns narration and playback, so it is the loop that blocks. Kept
+        separate from detection for that exact reason.
+        """
+        while True:
+            await asyncio.sleep(DELIVER_INTERVAL_S)
+            try:
                 await self._deliver(await self.store.snapshot_analysis())
             except asyncio.CancelledError:
                 raise

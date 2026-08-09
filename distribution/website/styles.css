@@ -1,4 +1,4 @@
-/* Pit Wall marketing site — light palette, no external assets.
+/* Your Pit Box marketing site — light palette, no external assets.
    System font stack only: no webfont request, so the page renders instantly
    and works offline for local review. */
 
@@ -70,6 +70,28 @@ code { font-family: var(--mono); font-size: .92em; background: var(--bg-sunken);
 .brand { display: flex; align-items: center; gap: .6rem; font-weight: 800; letter-spacing: -.01em; text-decoration: none; color: var(--ink); }
 .brand-mark { width: 12px; height: 22px; background: var(--accent); border-radius: 2px; }
 
+/* Grouped so the header keeps three flex children. Adding the promo as a
+   fourth would have redistributed space-between and pulled the nav out of
+   position on every page. */
+.header-actions { display: flex; align-items: center; gap: .7rem; }
+.site-promo {
+  display: inline-flex;
+  align-items: center;
+  gap: .3rem;
+  padding: .34rem .66rem;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--ink-2);
+  text-decoration: none;
+  font-size: .78rem;
+  font-weight: 700;
+  white-space: nowrap;
+}
+.site-promo:hover { border-color: var(--accent); color: var(--accent-ink); }
+.site-promo-label { color: var(--muted); font-weight: 600; }
+/* The full label is too wide for a phone header beside the call to action.
+   The domain alone still carries the link, so only the wording is dropped. */
+@media (max-width: 900px) { .site-promo-label { display: none; } }
 .site-nav { display: flex; gap: 1.4rem; align-items: center; }
 .site-nav a { color: var(--ink-2); text-decoration: none; font-size: .93rem; font-weight: 600; }
 .site-nav a:hover { color: var(--accent-ink); }

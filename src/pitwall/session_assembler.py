@@ -959,8 +959,27 @@ class SessionAssembler:
         if group is None:
             self._counters.samples_dropped += 1
             return finalized
+        # Whether this is the driver's own car is decided by the index the
+        # session currently reports, not by a label attached to the identity
+        # when it was first seen.
+        #
+        # The header carries a player_car_index before the participants packet
+        # names anyone, so the first identity registered can be flagged as the
+        # player and keep that flag after the real car is known. A real race
+        # recorded exactly that: car 0 held the flag and the driver's actual
+        # car 6 did not, so the driver was treated as just another car and
+        # decimated to field_trace_hz while the phantom was retained in full.
+        # The result was 403 samples per lap for the human against 1736 for the
+        # phantom and up to 3213 for the AI cars — the driver's own laps were
+        # the worst-sampled in the field, which is precisely the data corner
+        # coaching and lap comparison are built on.
+        is_player_now = (
+            self._player_car_index is not None
+            and event.car_index == self._player_car_index
+        )
         retain_all = (
-            identity.is_player
+            is_player_now
+            or identity.is_player
             or event.retain_all
             or event.sample_group.lower() in _EVENT_SAMPLE_GROUPS
         )
@@ -969,7 +988,7 @@ class SessionAssembler:
             interval_ns = max(1, round(1_000_000_000 / self.field_trace_hz))
         max_samples = (
             self.player_max_samples_per_group
-            if identity.is_player
+            if (is_player_now or identity.is_player)
             else self.max_samples_per_group
         )
         previous_drops = group.dropped

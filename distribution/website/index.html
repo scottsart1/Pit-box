@@ -3,15 +3,16 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Pit Wall — a real race engineer for F1 25: 2026 Season Pack</title>
-<meta name="description" content="Pit Wall turns F1 25: 2026 Season Pack telemetry from your PS5 / PC into a live race engineer: strategy calls, corner coaching and spoken radio, computed locally on your own PC.">
+<title>Your Pit Box — a real race engineer for F1 25: 2026 Season Pack</title>
+<meta name="description" content="Your Pit Box turns F1 25: 2026 Season Pack telemetry from your PS5 / PC into a live race engineer: strategy calls, corner coaching and spoken radio, computed locally on your own PC.">
+<link rel="canonical" href="https://yourpitbox.com/">
 <link rel="stylesheet" href="styles.css">
 </head>
 <body>
 
 <header class="site-header">
   <div class="wrap">
-    <a class="brand" href="#top"><span class="brand-mark" aria-hidden="true"></span> Pit Wall</a>
+    <a class="brand" href="#top"><span class="brand-mark" aria-hidden="true"></span> Your Pit Box</a>
     <nav class="site-nav" aria-label="Sections">
       <a href="#demo">Demo</a>
       <a href="#what">What it does</a>
@@ -21,7 +22,10 @@
       <a href="#requirements">Requirements</a>
       <a href="#buy">Get it</a>
     </nav>
-    <a class="button primary" href="#buy">Get it — $20</a>
+    <div class="header-actions">
+      <a class="site-promo" href="https://racewithme.net/" target="_blank" rel="noopener noreferrer"><span class="site-promo-label">Our racing partner:</span> racewithme.net <span aria-hidden="true">↗</span></a>
+      <a class="button primary" href="#buy">Get it — $20</a>
+    </div>
   </div>
 </header>
 
@@ -33,7 +37,7 @@
       <div class="eyebrow">For F1 25: 2026 Season Pack on PS5 / PC</div>
       <h1>A race engineer that actually reads your telemetry.</h1>
       <p class="lede">
-        Pit Wall listens to the UDP feed from your PS5 / PC, runs the
+        Your Pit Box listens to the UDP feed from your PS5 / PC, runs the
         strategy, tyre and corner maths locally on your PC, and talks to you
         over the radio while you drive. Every number is computed from telemetry
         by deterministic code — never invented by a language model.
@@ -69,7 +73,7 @@
     <div class="video-frame">
       <video id="demoVideo" controls preload="metadata"
              poster="img/07-hungaroring-decision.png"
-             aria-label="Pit Wall handling a pit stop decision at the Hungaroring">
+             aria-label="Your Pit Box handling a pit stop decision at the Hungaroring">
         <source src="assets/pitwall-demo.mp4" type="video/mp4">
         Your browser cannot play this video.
         <a href="assets/pitwall-demo.mp4">Download it instead</a>.
@@ -88,7 +92,7 @@
   <div class="wrap">
     <h2>What it does</h2>
     <p class="section-lede">
-      Pit Wall reads all 24 cars from every packet, not just yours, so a question
+      Your Pit Box reads all 24 cars from every packet, not just yours, so a question
       about a rival is answered with that rival's data.
     </p>
     <div class="cards">
@@ -124,7 +128,7 @@
   <div class="wrap">
     <h2>The part that matters</h2>
     <p class="section-lede">
-      Most "AI" tools hand your telemetry to a language model and hope. Pit Wall
+      Most "AI" tools hand your telemetry to a language model and hope. Your Pit Box
       does the opposite: deterministic code computes every number, and the model
       is only allowed to say them out loud.
     </p>
@@ -209,7 +213,7 @@ Strategy / setup / what-if  → model, high reasoning
         <div class="callout">
           <h3>The API key is billed by OpenAI, not by me</h3>
           <p>
-            Pit Wall costs $20 once. The engineer's voice and reasoning run on
+            Your Pit Box costs $20 once. The engineer's voice and reasoning run on
             your own OpenAI account, so those calls appear on your OpenAI bill.
             Most questions are answered locally and cost nothing at all, but a
             long race with heavy radio use will run up a small charge. You set
@@ -219,7 +223,7 @@ Strategy / setup / what-if  → model, high reasoning
         <div class="callout">
           <h3>macOS is not ready yet</h3>
           <p>
-            Pit Wall is Windows-only today. The macOS build is in progress; it is
+            Your Pit Box is Windows-only today. The macOS build is in progress; it is
             not sold or promised here until it exists and has been tested on real
             hardware.
           </p>
@@ -238,9 +242,9 @@ Strategy / setup / what-if  → model, high reasoning
     </p>
     <div class="table-scroll">
       <table>
-        <caption class="sr-only">Feature comparison between the in-game display, a telemetry overlay, and Pit Wall</caption>
+        <caption class="sr-only">Feature comparison between the in-game display, a telemetry overlay, and Your Pit Box</caption>
         <thead>
-          <tr><th scope="col">&nbsp;</th><th scope="col">In-game display</th><th scope="col">A telemetry overlay</th><th scope="col">Pit Wall</th></tr>
+          <tr><th scope="col">&nbsp;</th><th scope="col">In-game display</th><th scope="col">A telemetry overlay</th><th scope="col">Your Pit Box</th></tr>
         </thead>
         <tbody>
           <tr><th scope="row">Shows live telemetry</th><td class="yes">Yes</td><td class="yes">Yes</td><td class="yes">Yes</td></tr>
@@ -260,7 +264,7 @@ Strategy / setup / what-if  → model, high reasoning
 
 <section id="buy">
   <div class="wrap">
-    <h2>Get Pit Wall</h2>
+    <h2>Get Your Pit Box</h2>
     <p class="section-lede">Paid by Venmo, sent by hand. It is a one-person operation, so codes are emailed personally rather than issued by a robot.</p>
     <div class="buy">
       <div class="amount">$20</div>
@@ -322,7 +326,7 @@ Strategy / setup / what-if  → model, high reasoning
 
     <ol class="steps" style="margin-top:2rem;max-width:640px">
       <li><div><strong>Download and run the installer.</strong> It installs for you only, so Windows will not ask for an administrator password.</div></li>
-      <li><div><strong>Pit Wall starts by itself</strong> at the end of the installer and asks for your activation code and your OpenAI API key. Then follow the setup guide to connect your PS5 / PC.</div></li>
+      <li><div><strong>Your Pit Box starts by itself</strong> at the end of the installer and asks for your activation code and your OpenAI API key. Then follow the setup guide to connect your PS5 / PC.</div></li>
       <li><div><strong>After setup, just open it</strong> from the Start Menu or the desktop icon. It goes straight to the dashboard without asking for the activation code again. Allow <strong>20–30 seconds</strong> for it to start, and a little longer on a busy PC — it opens your browser itself once it is ready.</div></li>
     </ol>
     <p class="guide-prompt"><strong>Setting up for the first time?</strong> Follow the <a href="guide.html">illustrated setup guide</a> from download through your first live radio check.</p>
@@ -335,7 +339,7 @@ Strategy / setup / what-if  → model, high reasoning
     <h2>Reviews</h2>
     <div class="reviews-empty">
       <strong>No reviews yet.</strong>
-      Pit Wall has just been released, so there is nothing honest to put here.
+      Your Pit Box has just been released, so there is nothing honest to put here.
       This space stays empty until real buyers have said something real.
     </div>
   </div>
@@ -347,7 +351,7 @@ Strategy / setup / what-if  → model, high reasoning
 
     <details>
       <summary>Does it work on PS5 / PC, or only one platform?</summary>
-      <p>Both. Pit Wall's telemetry receiver has no platform-specific code — it reads standard F1 2026 UDP packets the same way regardless of whether they come from a PS5 or the PC version of the game, and licensing is tied to your Windows PC, not to a console. The <a href="guide.html#step-6">setup guide</a> covers both: PS5 / PC on your home network, or the game and Pit Wall sharing one PC. This is based on the packet format and receiver code rather than a dedicated PC hardware test; if you hit anything unexpected, email me and I will help sort it out.</p>
+      <p>Both. Your Pit Box's telemetry receiver has no platform-specific code — it reads standard F1 2026 UDP packets the same way regardless of whether they come from a PS5 or the PC version of the game, and licensing is tied to your Windows PC, not to a console. The <a href="guide.html#step-6">setup guide</a> covers both: PS5 / PC on your home network, or the game and Your Pit Box sharing one PC. This is based on the packet format and receiver code rather than a dedicated PC hardware test; if you hit anything unexpected, email me and I will help sort it out.</p>
     </details>
 
     <details>
@@ -357,7 +361,7 @@ Strategy / setup / what-if  → model, high reasoning
 
     <details>
       <summary>How much will the OpenAI usage actually cost?</summary>
-      <p>Less than most people expect, because the common questions never reach a model. Gaps, tyre temperatures, damage and strategy status are computed locally and cost nothing. What costs money is open-ended conversation and deep strategy reasoning during a long race. You can monitor API usage, use prepaid credits and configure billing alerts on the OpenAI dashboard; Pit Wall keeps working without the radio if the key stops.</p>
+      <p>Less than most people expect, because the common questions never reach a model. Gaps, tyre temperatures, damage and strategy status are computed locally and cost nothing. What costs money is open-ended conversation and deep strategy reasoning during a long race. You can monitor API usage, use prepaid credits and configure billing alerts on the OpenAI dashboard; Your Pit Box keeps working without the radio if the key stops.</p>
     </details>
 
     <details>
@@ -372,7 +376,7 @@ Strategy / setup / what-if  → model, high reasoning
 
     <details>
       <summary>What happens if I reinstall Windows or change my hardware?</summary>
-      <p>Reinstalling Pit Wall on the same Windows install is fine. A fresh Windows install or a new PC will need a new activation — email me and I will issue one. I would rather do that by hand than build a system that gets it wrong.</p>
+      <p>Reinstalling Your Pit Box on the same Windows install is fine. A fresh Windows install or a new PC will need a new activation — email me and I will issue one. I would rather do that by hand than build a system that gets it wrong.</p>
     </details>
 
     <details>
@@ -387,7 +391,7 @@ Strategy / setup / what-if  → model, high reasoning
 <footer class="site-footer">
   <div class="wrap footer-row">
     <div>
-      <strong style="color:#fff">Pit Wall</strong> — an independent project, not affiliated with, endorsed by, or connected to Formula&nbsp;1, the FIA, Electronic Arts, or Codemasters. All trademarks belong to their owners.
+      <strong style="color:#fff">Your Pit Box</strong> — an independent project, not affiliated with, endorsed by, or connected to Formula&nbsp;1, the FIA, Electronic Arts, or Codemasters. All trademarks belong to their owners.
     </div>
     <div>
       <a href="guide.html">Setup guide</a> · <a href="diagnostics.html">Diagnostics</a> · <a href="eula.html">Licence terms</a>

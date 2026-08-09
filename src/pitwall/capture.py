@@ -1,4 +1,4 @@
-"""Versioned, recoverable raw UDP capture storage for Pit Wall.
+"""Versioned, recoverable raw UDP capture storage for Your Pit Box.
 
 The capture format deliberately stores the datagram bytes before parsing.  Files
 are made from independently compressed blocks so a damaged or incomplete tail
@@ -82,7 +82,7 @@ def _decompress_block(compressed: bytes, expected_length: int) -> bytes:
 
 @dataclass(frozen=True, slots=True)
 class CapturedDatagram:
-    """One received UDP datagram and the clocks/source observed by Pit Wall."""
+    """One received UDP datagram and the clocks/source observed by Your Pit Box."""
 
     monotonic_ns: int
     wall_ns: int

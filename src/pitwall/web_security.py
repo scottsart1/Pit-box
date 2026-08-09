@@ -22,7 +22,7 @@ def is_loopback_host(host: str) -> bool:
     """True when a client address belongs to this machine.
 
     Used both by the LAN token gate and by endpoints that are restricted to
-    the machine running Pit Wall regardless of any token.
+    the machine running Your Pit Box regardless of any token.
     """
     try:
         return ipaddress.ip_address(host).is_loopback
@@ -172,12 +172,12 @@ class LanAccessMiddleware:
         headers = _headers(scope)
         if headers.get("sec-fetch-site", "").casefold() == "cross-site":
             await self._reject(
-                scope, send, 403, "Cross-site requests are not allowed by Pit Wall"
+                scope, send, 403, "Cross-site requests are not allowed by Your Pit Box"
             )
             return
         if not _same_origin(headers, scope):
             await self._reject(
-                scope, send, 403, "Origin is not allowed for Pit Wall LAN access"
+                scope, send, 403, "Origin is not allowed for Your Pit Box LAN access"
             )
             return
         client = scope.get("client")
@@ -187,7 +187,7 @@ class LanAccessMiddleware:
             return
         credential, source = self._credential(scope, headers)
         if not credential or not hmac.compare_digest(credential, self.token):
-            await self._reject(scope, send, 401, "Pit Wall LAN access token required")
+            await self._reject(scope, send, 401, "Your Pit Box LAN access token required")
             return
         if (
             source == "cookie"

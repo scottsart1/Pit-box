@@ -80,7 +80,7 @@ async def test_rival_damage_and_tyre_wear_are_captured():
 
     assert verstappen["damage"]["front_left_wing"] == 32
     assert verstappen["damage"]["engine"] == 11
-    # Normalised to Pit Wall's FL, FR, RL, RR order.
+    # Normalised to Your Pit Box's FL, FR, RL, RR order.
     assert verstappen["tyre_wear"] == [44.0, 43.0, 61.0, 58.0]
     assert verstappen["component_wear"]["ice"] == 74.0
     # The player's own damage is still reported separately and is unaffected.

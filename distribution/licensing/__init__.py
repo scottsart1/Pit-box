@@ -1,4 +1,4 @@
-"""Pit Wall distribution licensing.
+"""Your Pit Box distribution licensing.
 
 Isolated from the core application: nothing under src/pitwall imports this
 package, and this package's license gate runs only in the packaged build. The

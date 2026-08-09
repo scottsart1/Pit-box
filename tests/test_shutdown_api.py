@@ -1,4 +1,4 @@
-"""Quitting Pit Wall from the dashboard.
+"""Quitting Your Pit Box from the dashboard.
 
 Closing the browser tab only closes the dashboard; the server keeps running.
 The packaged build is windowed, so there is no console to interrupt and no

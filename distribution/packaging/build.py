@@ -1,4 +1,4 @@
-"""Build a shippable Pit Wall for the platform this runs on.
+"""Build a shippable Your Pit Box for the platform this runs on.
 
     python -m distribution.packaging.build --check     # no build, just verify
     python -m distribution.packaging.build             # build for this OS
@@ -55,7 +55,7 @@ def _build_root() -> Path:
 BUILD_DIR = _build_root()
 OUTPUT_DIR = BUILD_DIR / "artifacts"
 
-APP_NAME = "Pit Wall"
+APP_NAME = "Your Pit Box"
 
 # The committed development public key, recorded verbatim so preflight can
 # recognise it. Comparing against the literal value is the only check that
@@ -368,7 +368,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     system = platform.system()
-    print(f"Pit Wall packaging — host platform: {system}")
+    print(f"Your Pit Box packaging — host platform: {system}")
 
     checks = preflight()
     print("Preflight:")
@@ -414,7 +414,7 @@ def main(argv: list[str] | None = None) -> int:
         print("\nNot yet signed or notarized. Remaining steps:\n")
         print(macos_release_steps())
     else:
-        print(f"\nUnsupported build host: {system}. Pit Wall ships for Windows and macOS.")
+        print(f"\nUnsupported build host: {system}. Your Pit Box ships for Windows and macOS.")
         return 1
 
     print(f"\nBuilt: {artifact}")

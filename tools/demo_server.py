@@ -1,4 +1,4 @@
-"""Run Pit Wall against an isolated demo data root.
+"""Run Your Pit Box against an isolated demo data root.
 
 Documentation screenshots must not contain a real driver's saved sessions,
 so the demo runs on its own database and capture directory rather than the

@@ -136,7 +136,7 @@ def _build_instructions_sheet(sheet, batch_label: str) -> None:
     sheet.column_dimensions["A"].width = 108
     sheet.sheet_view.showGridLines = False
 
-    _title(sheet, "Pit Wall — activation key tracker", size=16)
+    _title(sheet, "Your Pit Box — activation key tracker", size=16)
     row = 3
     row = _para(sheet, row, f"Batch: {batch_label}", bold=True)
     row += 1

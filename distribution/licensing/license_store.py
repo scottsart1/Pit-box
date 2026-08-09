@@ -102,7 +102,7 @@ def load_and_validate(config_dir: Path) -> License:
         raise LicenseInvalid(f"device id unavailable: {exc}") from exc
     if bound_device != current:
         raise LicenseForAnotherDevice(
-            "This copy of Pit Wall was activated on a different computer.\n\n"
+            "This copy of Your Pit Box was activated on a different computer.\n\n"
             "Each activation code works on one computer only. Copying an "
             "activated installation to another machine does not carry the "
             "licence with it.\n\n"

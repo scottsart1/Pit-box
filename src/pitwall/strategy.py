@@ -10,6 +10,7 @@ import numpy as np
 
 from .config import settings
 from .database import PitWallDatabase
+from .race_plan import plan_matches, remaining_plan
 from .setup_model import setup_effects
 from .state import StateStore
 
@@ -204,6 +205,351 @@ class StrategyEngine:
         if player and player.get("best_lap_ms"):
             return float(player["best_lap_ms"]) / 1000
         return 95.0
+
+    @staticmethod
+    def _planned_start_compound(
+        state: dict[str, Any],
+        fitted: str,
+        age: int,
+    ) -> str | None:
+        """A starting tyre the driver chose that is not yet on the car.
+
+        Deliberately narrow. It applies only before the race is running, on a
+        set with no laps on it, and only when the driver actually asked for a
+        different compound. Once a lap has been run - or a stop has been made -
+        the tyre on the car is a fact, and a plan that argued with it would have
+        the engine modelling a race nobody is driving.
+        """
+        override = state.get("strategy_override", {}) or {}
+        if not override.get("enabled"):
+            return None
+        # Only a deliberate choice counts. A plan's first compound is normally
+        # the fitted tyre echoed back, and honouring that would mean a driver
+        # who agreed a plan on mediums and then fitted softs got a race modelled
+        # on mediums - the engine arguing with the car over a preference nobody
+        # expressed.
+        if not override.get("start_compound_explicit"):
+            return None
+        requested = str(override.get("start_compound") or "").upper()
+        if not requested or requested == str(fitted).upper():
+            return None
+        if requested not in DRY_COMPOUNDS | WET_COMPOUNDS:
+            return None
+        # The driver has changed the car since asking. That is them acting on
+        # the decision, and what they actually bolted on beats what they said.
+        seen = str(override.get("start_compound_seen_fitted") or "").upper()
+        if seen and seen != str(fitted).upper():
+            return None
+        if int(state.get("current_lap", 0) or 0) > 1 or int(age or 0) > 0:
+            return None
+        player_idx = int(state.get("player_car_index", 0))
+        player = next(
+            (
+                driver
+                for driver in state.get("drivers", [])
+                if int(driver.get("car_idx", -1)) == player_idx
+            ),
+            None,
+        )
+        if player and int(player.get("pit_stops", 0) or 0) > 0:
+            return None
+        return requested
+
+    # How much a plan has to gain before it is worth moving a stop away from the
+    # lap the driver actually named. Below this the difference is model noise,
+    # and answering "box lap 16" to a driver who said 14 just sounds like not
+    # listening.
+    _PLAN_LAP_DRIFT_TOLERANCE_S = 1.5
+
+    @classmethod
+    def _closest_to_plan(
+        cls,
+        candidates: list[dict[str, Any]],
+        tail: dict[str, Any],
+        ranking_key: Any,
+    ) -> tuple[dict[str, Any], str]:
+        """The driver's own laps, unless moving genuinely buys something.
+
+        The lap tolerance exists so the engine can adapt - dodge traffic, take a
+        safety car - not so it can quietly shift every call to the edge of the
+        window. A driver who agreed laps 14 and 34 and is then told 16 and 36
+        has been overruled by rounding.
+
+        Returns the chosen plan and, when a stop did move, a sentence saying so.
+        Substituting a better lap in silence is how a driver stops believing the
+        plan is theirs.
+        """
+        best = min(candidates, key=ranking_key)
+        wanted = [int(lap) for lap in tail.get("box_laps") or []]
+        if not wanted:
+            return best, ""
+
+        def drift(plan: dict[str, Any]) -> int:
+            laps = [int(lap) for lap in plan.get("box_laps") or []]
+            if len(laps) != len(wanted):
+                return 10_000
+            return sum(abs(a - b) for a, b in zip(laps, wanted))
+
+        if drift(best) == 0:
+            return best, ""
+
+        best_time = float(best.get("risk_adjusted_time_s", 0.0))
+        closer = [
+            plan
+            for plan in candidates
+            if drift(plan) < drift(best)
+            and float(plan.get("risk_adjusted_time_s", 0.0)) - best_time
+            <= cls._PLAN_LAP_DRIFT_TOLERANCE_S
+        ]
+        if closer:
+            picked = min(closer, key=lambda plan: (drift(plan), ranking_key(plan)))
+            if drift(picked) == 0:
+                return picked, ""
+            best = picked
+
+        # Still not on the driver's laps, so say what the move is worth. The gain
+        # is measured against the closest thing to what they actually asked for.
+        exact = min(candidates, key=lambda plan: (drift(plan), ranking_key(plan)))
+        gain = float(exact.get("risk_adjusted_time_s", 0.0)) - float(
+            best.get("risk_adjusted_time_s", 0.0)
+        )
+        moved = next(
+            (
+                f"{asked} to {got}"
+                for asked, got in zip(wanted, best.get("box_laps") or [])
+                if int(asked) != int(got)
+            ),
+            "",
+        )
+        if not moved:
+            return best, ""
+        return best, f"Moved your stop from lap {moved}; it projects {gain:.0f}s better."
+
+    @staticmethod
+    def _best_per_shape(all_plans: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """The strongest legal plan at each stop count, from the whole enumeration.
+
+        Forced into the shortlist so every shape gets the same Monte Carlo
+        treatment as the favourite and can be compared on equal numbers. Taking
+        them from the shortlist instead would show only the shapes that already
+        survived a pace cut - on the grid that was two- and three-stop, with no
+        one-stop at all, which is the first thing a driver asks for.
+
+        A shape whose best plan is infeasible is still carried. "A one-stop
+        leaves you at 104% wear by the flag" is an answer; showing nothing is
+        not, and the driver reads the silence as the option not existing.
+        """
+        best: dict[int, dict[str, Any]] = {}
+        for plan in all_plans:
+            if not plan.get("legal", True):
+                continue
+            stops = int(plan.get("stops_remaining", -1))
+            if stops < 0:
+                continue
+            incumbent = best.get(stops)
+            key = (
+                not plan.get("feasible", False),
+                float(plan.get("risk_adjusted_time_s", 0.0)),
+            )
+            if incumbent is None or key < (
+                not incumbent.get("feasible", False),
+                float(incumbent.get("risk_adjusted_time_s", 0.0)),
+            ):
+                best[stops] = plan
+        return [best[stops] for stops in sorted(best)]
+
+    @staticmethod
+    def _race_shapes(
+        candidates: list[dict[str, Any]],
+        ranking_key: Any,
+        allow_wet: bool = True,
+    ) -> list[dict[str, Any]]:
+        """The best plan at each stop count, cheapest shape first.
+
+        A driver deciding a race before the lights is choosing between shapes -
+        one stop or two - not between five variants of the shape the model
+        already likes. Each entry carries the cost of choosing it so the choice
+        is informed rather than a preference stated into the dark.
+        """
+        by_stops: dict[int, dict[str, Any]] = {}
+        for plan in candidates:
+            if not plan.get("legal", True):
+                # An illegal shape is a disqualification, not a trade-off, so it
+                # is never offered as something to choose.
+                continue
+            if not allow_wet and any(
+                str(item).upper() in WET_COMPOUNDS
+                for item in (plan.get("compounds") or [])[1:]
+            ):
+                # Fitting inters in the dry waives the two-dry-compound rule, so
+                # such a plan reads as "legal" and can be the only legal shape at
+                # some stop counts. It is a rules loophole, not a race anyone
+                # should be offered as a strategy while the track is dry.
+                continue
+            stops = int(plan.get("stops_remaining", -1))
+            if stops < 0:
+                continue
+            incumbent = by_stops.get(stops)
+            if incumbent is None or ranking_key(plan) < ranking_key(incumbent):
+                by_stops[stops] = plan
+
+        # Achievable shapes first, then by rank. A shape the tyres cannot serve
+        # is never the recommendation however good its modelled time looks.
+        ordered = sorted(
+            by_stops.values(),
+            key=lambda plan: (not plan.get("feasible", False), ranking_key(plan)),
+        )
+        if not ordered:
+            return []
+
+        feasible = [plan for plan in ordered if plan.get("feasible")]
+        reference = (
+            float(feasible[0].get("risk_adjusted_time_s", 0.0)) if feasible else None
+        )
+
+        shapes = []
+        for plan in ordered:
+            achievable = bool(plan.get("feasible"))
+            wear = plan.get("projected_max_wear_pct")
+            # Only compare times between plans that can actually be driven.
+            # A one-stop "saves" a pit stop and so always models quicker, which
+            # on the grid read as 57 seconds faster while projecting 91% wear:
+            # exactly the number that talks a driver into ruining their race.
+            cost = (
+                round(float(plan.get("risk_adjusted_time_s", 0.0)) - reference, 2)
+                if achievable and reference is not None
+                else None
+            )
+            shapes.append(
+                {
+                    "stops": int(plan.get("stops_remaining", 0)),
+                    "compounds": list(plan.get("compounds", [])),
+                    "box_laps": list(plan.get("box_laps", [])),
+                    # How long each stint runs. The panel shows it, and it is
+                    # the only way to check from outside that a plan accounts
+                    # for exactly the laps that are left.
+                    "stint_laps": [
+                        int(stint.get("laps", 0))
+                        for stint in plan.get("stint_models", [])
+                    ],
+                    "projected_finish_position": plan.get(
+                        "projected_finish_position"
+                    ),
+                    "projected_max_wear_pct": wear,
+                    "risk_adjusted_time_s": plan.get("risk_adjusted_time_s"),
+                    "cost_vs_best_s": cost,
+                    "feasible": achievable,
+                    "verdict": (
+                        "achievable"
+                        if achievable
+                        else f"runs out of tyre - {wear:.0f}% wear at the flag"
+                        if isinstance(wear, (int, float))
+                        else "runs out of tyre"
+                    ),
+                    "reason": plan.get("reason", ""),
+                }
+            )
+        return shapes
+
+    @classmethod
+    def _driver_requested_plans(
+        cls,
+        all_plans: list[dict[str, Any]],
+        driver_override: dict[str, Any],
+        state: dict[str, Any],
+        current_lap: int,
+        limit: int = 6,
+    ) -> list[dict[str, Any]]:
+        """Candidates matching what the driver asked for, best first.
+
+        These are pulled from the full enumeration so they can be forced into
+        the shortlist. The shortlist is a pace cut, and a driver's plan is not
+        chosen on pace - it is chosen on track position, tyre confidence, or
+        simply wanting to know what happens if they commit. Judging the request
+        by the cut that exists to discard slow plans throws the request away
+        before anyone gets to see what it costs.
+
+        ``all_plans`` is the *whole* enumeration, including plans the wear model
+        rejects. A request the model calls infeasible is still worth carrying:
+        the driver is then told their plan runs out of tyre, which they can act
+        on, rather than being handed a different lap under a warning that the
+        one they asked for was unavailable.
+        """
+        if not driver_override.get("enabled") or not driver_override.get("locked"):
+            return []
+
+        # Legality first, then whether the wear model accepts it, then pace.
+        # This mirrors the deterministic ordering used for the shortlist, which
+        # cannot be reused directly because it runs before Monte Carlo has
+        # filled in the position fields it also reads.
+        def preference(plan: dict[str, Any]) -> tuple[Any, ...]:
+            return (
+                not plan.get("legal", True),
+                not plan.get("feasible", False),
+                float(plan.get("risk_adjusted_time_s", 0.0)),
+            )
+
+        full_plan = driver_override.get("plan") or {}
+        if full_plan.get("compounds"):
+            tail = remaining_plan(
+                full_plan, cls._completed_stops(state), current_lap
+            )
+            matches = [plan for plan in all_plans if plan_matches(plan, tail)]
+            return sorted(matches, key=preference)[:limit]
+
+        requested_lap = driver_override.get("next_box_lap")
+        requested_compound = str(driver_override.get("next_compound") or "").upper()
+        requested_stops = driver_override.get("preferred_stops")
+        if requested_lap is None and not requested_compound and requested_stops is None:
+            return []
+
+        target_lap = (
+            max(current_lap, int(requested_lap)) if requested_lap is not None else None
+        )
+        matches = []
+        for plan in all_plans:
+            compounds = plan.get("compounds") or []
+            if requested_compound:
+                if len(compounds) < 2:
+                    continue
+                if str(compounds[1]).upper() != requested_compound:
+                    continue
+            if requested_stops is not None and int(
+                plan.get("stops_remaining", -1)
+            ) != int(requested_stops):
+                continue
+            if target_lap is not None:
+                box_laps = plan.get("box_laps") or []
+                if not box_laps or int(box_laps[0]) != target_lap:
+                    continue
+            matches.append(plan)
+        return sorted(matches, key=preference)[:limit]
+
+    @staticmethod
+    def _completed_stops(state: dict[str, Any]) -> int:
+        """How many stops the driver has actually made, per telemetry.
+
+        A driver plan is re-based on this rather than on the plan's own laps:
+        stops happen early, late, and for reasons the plan never mentioned.
+        """
+        # Nobody has pitted before the race starts. Saying otherwise is always a
+        # stale reading - a previous session, or a flashback to the grid - and
+        # believing it silently deletes the driver's first stop from the plan
+        # they just agreed, then reports that the race moved past it.
+        if int(state.get("current_lap", 0) or 0) <= 1:
+            return 0
+        player_idx = int(state.get("player_car_index", 0))
+        player = next(
+            (
+                driver
+                for driver in state.get("drivers", [])
+                if int(driver.get("car_idx", -1)) == player_idx
+            ),
+            None,
+        )
+        if not player:
+            return 0
+        return max(0, int(player.get("pit_stops", 0) or 0))
 
     @staticmethod
     def _used_compounds(state: dict[str, Any]) -> list[str]:
@@ -1199,6 +1545,10 @@ class StrategyEngine:
         # "projects 102%" in the engineer's mouth.
         finish_wear = max(wear)
         return {
+            # How long this stint runs. Implicit in lap_times_s until now, which
+            # made it impossible to check that a plan's stints add up to the
+            # race - the arithmetic a pre-race panel lives or dies on.
+            "laps": max(0, int(laps)),
             "expected_time_s": expected,
             "conservative_time_s": conservative,
             "projected_finish_wear_pct": min(100.0, finish_wear),
@@ -1461,6 +1811,15 @@ class StrategyEngine:
         current_compound = str(state.get("tyre", {}).get("compound", "UNKNOWN")).upper()
         current_age = int(state.get("tyre", {}).get("age_laps", 0))
         current_wear = list(state.get("tyre", {}).get("wear", [0.0, 0.0, 0.0, 0.0]) or [0.0, 0.0, 0.0, 0.0])
+        planned_start = self._planned_start_compound(state, current_compound, current_age)
+        if planned_start:
+            # Before the lights, the starting tyre is still the driver's to
+            # choose - they fit it in the garage. Modelling the race they intend
+            # to drive is the only way to answer "what does starting on softs
+            # cost me", which is the whole point of planning beforehand.
+            current_compound = planned_start
+            current_age = 0
+            current_wear = [0.0, 0.0, 0.0, 0.0]
         game = state.get("strategy", {})
         game_ideal = int(game.get("game_ideal_lap", game.get("ideal_lap", 0)) or 0)
         game_latest = int(game.get("game_latest_lap", game.get("latest_lap", 0)) or 0)
@@ -1749,7 +2108,13 @@ class StrategyEngine:
                 first_laps = first_box_lap - current_lap + 1
                 for second_box_lap in range(first_box_lap + 5, total_laps, 3):
                     middle_laps = second_box_lap - first_box_lap
-                    final_laps = total_laps - second_box_lap
+                    # Derived from what is left to run, as the one-stop branch
+                    # does, rather than from total_laps. Counting down from the
+                    # race distance assumes the current lap is in progress; on
+                    # the grid it has not started, so the stints summed to
+                    # total_laps + 1 and every multi-stop plan carried a phantom
+                    # lap. Same state at lap 0 and lap 1 projected P20 and P5.
+                    final_laps = remaining - first_laps - middle_laps
                     if final_laps <= 0:
                         continue
                     for middle in compounds:
@@ -1813,7 +2178,9 @@ class StrategyEngine:
                     middle1_laps = second_box_lap - first_box_lap
                     for third_box_lap in range(second_box_lap + 6, total_laps, 5):
                         middle2_laps = third_box_lap - second_box_lap
-                        final_laps = total_laps - third_box_lap
+                        # From what remains, not from the race distance - see
+                        # the two-stop branch above for why.
+                        final_laps = remaining - first_laps - middle1_laps - middle2_laps
                         if min(first_laps, middle1_laps, middle2_laps, final_laps) <= 0:
                             continue
                         for compound1 in compounds:
@@ -1964,6 +2331,26 @@ class StrategyEngine:
         for required in (plans[0], weather_plan):
             if required is not None and all(required is not item for item in shortlisted):
                 shortlisted.append(required)
+        # So must whatever the driver actually asked for. The shortlist is the
+        # fastest 48 of an enumeration that runs into the thousands, and a
+        # specific request - "box lap 30 for hards", or a committed two-stop -
+        # is chosen for reasons the ranking key does not model, so it is almost
+        # never in that 48. Without this the override matched nothing and fell
+        # back to the nearest shortlisted plan, which is how asking for lap 30
+        # produced lap 27 and a warning that the lap was unavailable when it
+        # existed all along.
+        driver_override = dict(state.get("strategy_override", {}) or {})
+        for required in self._driver_requested_plans(
+            plans, driver_override, state, current_lap
+        ):
+            if all(required is not item for item in shortlisted):
+                shortlisted.append(required)
+        # One representative of every race shape, so a driver choosing between a
+        # one-stop and a two-stop is comparing like with like rather than one
+        # modelled plan against an absence.
+        for required in self._best_per_shape(plans):
+            if all(required is not item for item in shortlisted):
+                shortlisted.append(required)
         for plan in shortlisted:
             plan["monte_carlo"] = self._monte_carlo_profile(
                 plan,
@@ -2032,10 +2419,54 @@ class StrategyEngine:
             and int(weather_plan.get("weather_crossover", {}).get("time_offset_min", 99)) <= 1
         )
         automatic_best = ranked[0]
-        driver_override = dict(state.get("strategy_override", {}) or {})
         override_match: dict[str, Any] | None = None
         override_warning = ""
+        plan_tail: dict[str, Any] | None = None
         if driver_override.get("enabled") and driver_override.get("locked") and not force_weather:
+            full_plan = driver_override.get("plan") or {}
+            if full_plan.get("compounds"):
+                # A whole-race plan constrains every stop that is left, not just
+                # the next one. It is re-based onto the remaining race first, or
+                # it would stop matching anything the moment the first stop is
+                # made and the driver would be told their plan is running while
+                # the engine ranked freely.
+                plan_tail = remaining_plan(
+                    full_plan,
+                    self._completed_stops(state),
+                    current_lap,
+                )
+                plan_candidates = [
+                    plan for plan in shortlisted if plan_matches(plan, plan_tail)
+                ]
+                safe_plan = [
+                    plan
+                    for plan in plan_candidates
+                    if plan.get("legal") and plan.get("feasible")
+                ]
+                if safe_plan:
+                    override_match, override_warning = self._closest_to_plan(
+                        safe_plan, plan_tail, ranking_key
+                    )
+                elif plan_candidates:
+                    legal_plan = [plan for plan in plan_candidates if plan.get("legal")]
+                    override_match = min(legal_plan or plan_candidates, key=ranking_key)
+                    override_warning = (
+                        "Your plan is outside the operational wear margin."
+                        if legal_plan
+                        else "Your plan does not serve the mandatory compound change."
+                    )
+                else:
+                    override_warning = (
+                        "The race has moved past your plan; running the best "
+                        "available strategy instead."
+                    )
+
+        if (
+            driver_override.get("enabled")
+            and driver_override.get("locked")
+            and not force_weather
+            and plan_tail is None
+        ):
             requested_lap = driver_override.get("next_box_lap")
             requested_compound = str(driver_override.get("next_compound") or "").upper()
             requested_stops = driver_override.get("preferred_stops")
@@ -2087,6 +2518,14 @@ class StrategyEngine:
                     - float(automatic_best.get("risk_adjusted_time_s", 0.0)), 2
                 ),
             }
+            if plan_tail is not None:
+                # What is left of the plan, and whether it is actually driving
+                # the recommendation. "Plan active" on the dashboard has to mean
+                # the plan won, not merely that one was entered.
+                best["driver_override"]["plan_remaining"] = plan_tail
+                best["driver_override"]["following_plan"] = bool(
+                    override_match is not None
+                )
         best["delta_to_next_s"] = round(
             float(second["risk_adjusted_time_s"]) - float(best["risk_adjusted_time_s"]),
             2,
@@ -2284,6 +2723,21 @@ class StrategyEngine:
                 "defence": defence if not best.get("stops_remaining") else {},
             },
             "plans": ranked[:5],
+            # The best plan of each shape - one stop, two, three - so a driver
+            # can see what a different race costs them. "plans" alone cannot
+            # answer that: it is the top five by rank, and on the grid all five
+            # were flavours of the same two-stop, which leaves nothing to
+            # actually discuss.
+            "shapes": self._race_shapes(
+                shortlisted,
+                ranking_key,
+                allow_wet=(
+                    str(state.get("weather", "Unknown"))
+                    in {"Light rain", "Heavy rain", "Storm"}
+                    or int(state.get("rain_next_15_pct", 0) or 0) >= 40
+                    or current_compound in WET_COMPOUNDS
+                ),
+            ),
             "confidence": confidence,
             "strategy_risk_appetite": risk_appetite,
             "rival_finish_projections": rival_projections,

@@ -29,7 +29,7 @@ def local_dashboard_url(host: str, port: int) -> str:
 
 
 def configure_logging() -> None:
-    """Send Pit Wall logs to a rotating file as well as the console.
+    """Send Your Pit Box logs to a rotating file as well as the console.
 
     Without this, output only ever reaches the console window that
     ``start_pitwall.bat`` opens, so nothing survives once it is closed and a
@@ -87,7 +87,7 @@ def open_dashboard_when_ready(
     This used to fire on a fixed 1.5 second timer. Application startup takes
     considerably longer than that — the database, capture recovery and the
     audio device all have to come up first — so the browser reliably arrived
-    before the server did and the buyer's first sight of Pit Wall was their
+    before the server did and the buyer's first sight of Your Pit Box was their
     browser's own "cannot reach this page". The dashboard was fine; it only
     appeared if they happened to refresh.
 
@@ -133,7 +133,7 @@ def run() -> None:
     # reached again: there is no other way to ask it to stop from inside a
     # request, and the packaged build is windowed, so there is no console to
     # press Ctrl+C in and no window to close. Without this the only way to quit
-    # Pit Wall was Task Manager.
+    # Your Pit Box was Task Manager.
     config = uvicorn.Config(
         app,
         host=settings.web_host,

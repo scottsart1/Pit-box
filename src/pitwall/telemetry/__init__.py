@@ -1,4 +1,4 @@
-"""Pure, deterministic telemetry analysis primitives for Pit Wall 4.2.
+"""Pure, deterministic telemetry analysis primitives for Your Pit Box 4.2.
 
 The package deliberately has no knowledge of sockets, databases, FastAPI, or
 language models.  Callers provide arrays and typed context and receive immutable

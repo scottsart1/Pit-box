@@ -122,7 +122,7 @@ class Settings(BaseSettings):
     ptt_min_hold_ms: int = 200
     ptt_debounce_ms: int = 150
     ptt_max_recording_s: float = 15.0
-    # UDP Action packets are edge-like on some controller/game paths. Pit Wall
+    # UDP Action packets are edge-like on some controller/game paths. Your Pit Box
     # therefore never treats unrelated button packets as a release. A recording
     # ends on a trustworthy explicit release, post-speech silence, or the hard cap.
     ptt_release_mode: str = "explicit_or_silence"
@@ -145,7 +145,7 @@ class Settings(BaseSettings):
     wake_aliases: str = "marc,hey mark,mark radio,hey marc"
     wake_preroll_s: float = 0.80
     wake_speech_rms: float = 180.0
-    # The configured RMS is a ceiling, not a hard floor. Pit Wall continuously
+    # The configured RMS is a ceiling, not a hard floor. Your Pit Box continuously
     # estimates room/microphone noise and lowers the speech threshold in quiet
     # conditions so a soft-spoken "Mark" is still captured.
     wake_min_speech_rms: float = 75.0
@@ -157,6 +157,12 @@ class Settings(BaseSettings):
     wake_min_utterance_s: float = 0.35
     wake_max_utterance_s: float = 15.0
     wake_arm_timeout_s: float = 6.0
+    # The "I'm listening" ping after the wake phrase with no command. Louder
+    # and longer than the ordinary acks on purpose: it competes with engine
+    # noise through headphones, and a cue the driver cannot hear is the same
+    # as no cue at all. Tunable because speaker setups differ wildly.
+    wake_cue_volume: float = 0.34
+    wake_cue_tone_s: float = 0.11
     wake_tts_cooldown_s: float = 1.50
     wake_block_ms: int = 30
 

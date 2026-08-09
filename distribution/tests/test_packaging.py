@@ -162,7 +162,7 @@ def test_a_frozen_build_hashes_its_executable_not_its_source(tmp_path, monkeypat
     """
     from distribution.licensing import gate
 
-    fake_exe = tmp_path / "Pit Wall.exe"
+    fake_exe = tmp_path / "Your Pit Box.exe"
     fake_exe.write_bytes(b"MZ-pretend-executable")
     monkeypatch.setattr(gate.sys, "frozen", True, raising=False)
     monkeypatch.setattr(gate.sys, "executable", str(fake_exe))
@@ -184,9 +184,9 @@ def test_the_build_stamp_matches_what_the_app_will_compute(tmp_path):
     """
     from distribution.licensing import gate
 
-    app_dir = tmp_path / "Pit Wall"
+    app_dir = tmp_path / "Your Pit Box"
     app_dir.mkdir()
-    executable = app_dir / "Pit Wall.exe"
+    executable = app_dir / "Your Pit Box.exe"
     executable.write_bytes(b"MZ-pretend-executable")
 
     stamped = build.stamp_manifest(app_dir, executable)

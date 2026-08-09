@@ -1,4 +1,4 @@
-; Inno Setup script for the Pit Wall Windows installer.
+; Inno Setup script for the Your Pit Box Windows installer.
 ;
 ; Produces a single PitWall-Setup.exe: the buyer downloads it, double-clicks,
 ; clicks through, and the app starts. Afterwards it is a Start Menu entry and
@@ -21,15 +21,15 @@
   #define AppVersion "4.2.0"
 #endif
 #ifndef SourceDir
-  #define SourceDir "..\..\build\dist\Pit Wall"
+  #define SourceDir "..\..\build\dist\Your Pit Box"
 #endif
 #ifndef OutputDir
   #define OutputDir "..\..\build\artifacts"
 #endif
 
-#define AppName "Pit Wall"
-#define AppPublisher "Pit Wall"
-#define AppExeName "Pit Wall.exe"
+#define AppName "Your Pit Box"
+#define AppPublisher "Your Pit Box"
+#define AppExeName "Your Pit Box.exe"
 
 [Setup]
 AppId={{8C4B1E77-2A5D-4F3E-9B61-0D7A2F5C8E14}
@@ -54,7 +54,7 @@ ArchitecturesInstallIn64BitMode=x64compatible
 LicenseFile={#SourceDir}\EULA.txt
 UninstallDisplayName={#AppName}
 UninstallDisplayIcon={app}\{#AppExeName}
-; Upgrading while Pit Wall is running would leave a half-written install: the
+; Upgrading while Your Pit Box is running would leave a half-written install: the
 ; executable is locked by the live process. Restart Manager detects which files
 ; are in use and offers to close them, which is the guard a buyer actually
 ; sees. RestartApplications is off because [Run] already relaunches the app at
@@ -88,7 +88,7 @@ Filename: "{app}\{#AppExeName}"; Description: "Start {#AppName} now"; Flags: now
 Type: filesandordirs; Name: "{app}\_internal"
 
 [Messages]
-WelcomeLabel2=This will install [name/ver] on your computer.%n%nYou will need your activation code and an OpenAI API key the first time it runs. Pit Wall will ask for both.
+WelcomeLabel2=This will install [name/ver] on your computer.%n%nYou will need your activation code and an OpenAI API key the first time it runs. Your Pit Box will ask for both.
 FinishedLabelNoIcons=Setup has finished installing [name].
 FinishedLabel=Setup has finished installing [name].%n%nThe first time it starts, enter your activation code and your OpenAI API key. After that it opens straight to the dashboard.
 
@@ -102,7 +102,7 @@ begin
   // Silent uninstalls must stay silent: a modal box with no one to click it
   // hangs the uninstaller until the process is killed.
   if (CurUninstallStep = usPostUninstall) and not UninstallSilent then
-    MsgBox('Pit Wall has been removed.' + #13#10 + #13#10 +
+    MsgBox('Your Pit Box has been removed.' + #13#10 + #13#10 +
            'Your recorded sessions and licence in PitWallData have been left ' +
            'in place, so reinstalling will not ask you to activate again.',
            mbInformation, MB_OK);

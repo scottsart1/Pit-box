@@ -851,9 +851,18 @@ class NativeVoiceController:
                 return
 
             if matched and not command:
+                cued = False
+                if self.realtime is not None:
+                    # Speech-to-speech opens a session instead of arming, so
+                    # the ping has to happen here — and before the session is
+                    # open, or the tone streams into it as if the driver had
+                    # made the sound themselves.
+                    with contextlib.suppress(Exception):
+                        await self.audio.play_listening_cue()
+                    cued = True
                 if await self._start_realtime(data, "wake phrase"):
                     return
-                await self._arm_wake(phrase)
+                await self._arm_wake(phrase, cue=not cued)
                 return
 
             if matched:
@@ -918,7 +927,7 @@ class NativeVoiceController:
             await realtime.send_audio(data, settings.audio_sample_rate)
         return True
 
-    async def _arm_wake(self, phrase: str) -> None:
+    async def _arm_wake(self, phrase: str, cue: bool = True) -> None:
         self._wake_armed_until = time.monotonic() + settings.wake_arm_timeout_s
         snapshot = await self.store.snapshot_live()
         count = int(snapshot.get("wake_trigger_count", 0)) + 1
@@ -931,8 +940,14 @@ class NativeVoiceController:
             engineer_status="listening",
         )
         self._wake_cooldown_until = time.monotonic() + 0.20
-        with contextlib.suppress(Exception):
-            await self.audio.play_tone()
+        if cue:
+            with contextlib.suppress(Exception):
+                # Audible confirmation that the phrase landed and the command
+                # is awaited. Saying the phrase and pausing is the harder half
+                # of the interaction: with "Mark, what's the gap" the answer
+                # itself confirms it heard, but after a bare "Mark" the driver
+                # has nothing to go on and will repeat themselves or give up.
+                await self.audio.play_listening_cue()
         if self._wake_arm_task and not self._wake_arm_task.done():
             self._wake_arm_task.cancel()
         self._wake_arm_task = self.loop.create_task(

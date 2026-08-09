@@ -25,6 +25,25 @@ def session_id(game_session_uid: int | str, restart_epoch: int = 0) -> str:
     return opaque_id("ses", str(game_session_uid), int(restart_epoch))
 
 
+def _legacy_session_uid(game_session_uid: int | str) -> int | None:
+    """The same uid as the legacy store writes it, for joining the two.
+
+    The catalog keeps the game's unsigned 64-bit uid as text; the legacy store
+    puts it in a SQLite INTEGER column, which is signed, so anything above
+    2**63-1 is held as its two's-complement equivalent. Joining the two needs
+    the legacy form, and computing it in Python rather than SQL keeps the
+    conversion in one place and out of query text.
+    """
+    try:
+        uid = int(game_session_uid)
+    except (TypeError, ValueError):
+        return None
+    if uid < 0:
+        # Already the signed form.
+        return uid
+    return uid - (1 << 64) if uid > (1 << 63) - 1 else uid
+
+
 def session_car_id(
     session_key: str,
     car_index: int,
@@ -396,7 +415,7 @@ class SessionCatalog:
                     track_id, track_layout_signature, session_type, mode_profile,
                     started_at, ended_at, status, packet_format, capture_mode,
                     quality_score, created_at, updated_at
-                ) VALUES (?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)
                 ON CONFLICT(id) DO UPDATE SET
                     track_id=excluded.track_id,
                     track_layout_signature=excluded.track_layout_signature,
@@ -413,6 +432,16 @@ class SessionCatalog:
                 """,
                 (
                     key,
+                    # The pointer back to everything recorded under the legacy
+                    # uid: session events, proactive calls, radio messages and
+                    # strategy snapshots. It used to be hardcoded NULL here, so
+                    # a live-recorded session had no link to its own history
+                    # and Session Review looked empty for a race that was in
+                    # fact fully captured — 198 events and 207 calls in the one
+                    # that prompted this. Stored in the legacy store's signed
+                    # form so the two agree: SQLite INTEGER is signed, and the
+                    # game's uid is unsigned 64-bit.
+                    _legacy_session_uid(game_uid),
                     str(game_uid),
                     restart_epoch,
                     track_id,

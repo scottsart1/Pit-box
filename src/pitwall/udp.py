@@ -87,7 +87,16 @@ WEATHER = {
     5: "Storm",
 }
 SAFETY_CAR = {0: "none", 1: "full", 2: "virtual", 3: "formation"}
-EVENT_SAFETY_CAR = {0: "full", 1: "virtual", 2: "formation"}
+# The SAME enum as SAFETY_CAR above, and it must stay identical. It was
+# previously written without the "none" member, which shifted every value by
+# one: a full safety car was announced to the driver as "virtual" and a virtual
+# one as "formation". It also silently broke the restart call, because the
+# ending-phase guard compares this event-derived label against the
+# session-derived one and the two could never agree, so sc_restart had never
+# once fired. Every SCAR payload recorded on this machine corroborates the
+# shift: safety_car_type 0 only ever appears alongside "resume race", and
+# type 3 never appears at all.
+EVENT_SAFETY_CAR = dict(SAFETY_CAR)
 SAFETY_CAR_EVENTS = {0: "deployed", 1: "returning", 2: "returned", 3: "resume"}
 VISUAL_COMPOUNDS = {
     16: "SOFT",
@@ -126,7 +135,7 @@ UNLOGGED_EVENTS = frozenset({"BUTN"})
 
 
 def normalize_wheels(values: Iterable[Any]) -> list[Any]:
-    """EA packets use RL, RR, FL, FR; Pit Wall stores FL, FR, RL, RR."""
+    """EA packets use RL, RR, FL, FR; Your Pit Box stores FL, FR, RL, RR."""
     raw = list(values)
     if len(raw) != 4:
         return raw
@@ -1664,7 +1673,7 @@ class F1DatagramProtocol(asyncio.DatagramProtocol):
 
     @staticmethod
     def _damage_fields(damage: Any) -> dict[str, Any]:
-        """Decode one car's damage entry into Pit Wall's wheel order and keys."""
+        """Decode one car's damage entry into Your Pit Box's wheel order and keys."""
         blisters = [int(value) for value in normalize_wheels(damage.tyre_blisters)]
         return {
             "wear": [float(value) for value in normalize_wheels(damage.tyres_wear)],
@@ -1922,7 +1931,7 @@ class F1DatagramProtocol(asyncio.DatagramProtocol):
         """Time Trial personal best, session best and rival splits.
 
         This packet had no handler, so Time Trial sessions had no reference to
-        compare against beyond Pit Wall's own stored history.
+        compare against beyond Your Pit Box's own stored history.
         """
 
         def decode(data: Any) -> dict[str, Any] | None:
@@ -2050,7 +2059,11 @@ class F1DatagramProtocol(asyncio.DatagramProtocol):
             def apply_safety_car(state):  # type: ignore[no-untyped-def]
                 state.last_safety_car_event_type = event_type_id
                 state.race_control_changed_at = time.time()
-                if event_type_id == 0:
+                if event_type_id == 0 and safety_name not in {"none", "unknown"}:
+                    # "none" is a real value of this enum now that the map is
+                    # correct, and a deployment of nothing is not a deployment:
+                    # without this guard it would set the phase to "formation"
+                    # and announce a neutralisation that is not happening.
                     state.safety_car = safety_name
                     state.red_flag_active = False
                     state.race_control_phase = (

@@ -1,4 +1,4 @@
-"""Entry point for the packaged, licensed build of Pit Wall.
+"""Entry point for the packaged, licensed build of Your Pit Box.
 
 The dev app is started with `python -m pitwall.main` and never comes through
 here, so nothing in this file affects development. Only the frozen build runs
@@ -68,7 +68,7 @@ def launch(
     start_app: Callable[[], None],
     save_api_key: Callable[[str], None] | None = None,
 ) -> LaunchResult:
-    """Run the launch gate and, if allowed, start Pit Wall.
+    """Run the launch gate and, if allowed, start Your Pit Box.
 
     `prompt` receives a message to display above the form (empty on the first
     attempt, an error on a retry) and returns the entered values, or None if
@@ -110,7 +110,7 @@ def launch(
                 # The key can be set later from the Connection Center, so a
                 # failure here is reported but not fatal.
                 show_error(
-                    "Pit Wall is activated, but the OpenAI key could not be "
+                    "Your Pit Box is activated, but the OpenAI key could not be "
                     f"saved: {exc}. Add it from the Connection tab."
                 )
         start_app()

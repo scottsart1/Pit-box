@@ -97,7 +97,7 @@ class PitWallDatabase:
                 except OSError as exc:
                     if time.monotonic() >= deadline:
                         raise RuntimeError(
-                            "Timed out waiting for another Pit Wall database "
+                            "Timed out waiting for another Your Pit Box database "
                             "migration to finish"
                         ) from exc
                     time.sleep(0.05)
@@ -169,7 +169,7 @@ class PitWallDatabase:
         required = max(size * 2 + 8 * 1024 * 1024, 16 * 1024 * 1024)
         if free < required:
             raise RuntimeError(
-                "Not enough free disk space to back up and migrate Pit Wall "
+                "Not enough free disk space to back up and migrate Your Pit Box "
                 f"(need {required} bytes, have {free} bytes)"
             )
 
@@ -248,7 +248,7 @@ class PitWallDatabase:
         try:
             resolved.relative_to(backup_root)
         except ValueError as exc:
-            raise ValueError("backup path must be inside the Pit Wall backup directory") from exc
+            raise ValueError("backup path must be inside the Your Pit Box backup directory") from exc
         if not resolved.is_file():
             raise FileNotFoundError(resolved)
         source = sqlite3.connect(resolved, timeout=30)
@@ -304,7 +304,7 @@ class PitWallDatabase:
         current_version = self._current_schema_version_sync()
         if current_version > LATEST_SCHEMA_VERSION:
             raise RuntimeError(
-                "Pit Wall database schema is newer than this application "
+                "Your Pit Box database schema is newer than this application "
                 f"({current_version} > {LATEST_SCHEMA_VERSION}); refusing a downgrade"
             )
         pending_migration = current_version < LATEST_SCHEMA_VERSION
@@ -313,7 +313,7 @@ class PitWallDatabase:
             if checks != ["ok"]:
                 deep_checks = self._integrity_check_sync(quick=False)
                 raise RuntimeError(
-                    "Pit Wall database failed its pre-migration integrity check: "
+                    "Your Pit Box database failed its pre-migration integrity check: "
                     f"{deep_checks}"
                 )
             self._check_migration_space_sync()
@@ -552,7 +552,7 @@ class PitWallDatabase:
         post_checks = self._integrity_check_sync(quick=True)
         if post_checks != ["ok"]:
             raise RuntimeError(
-                "Pit Wall database failed its post-migration integrity check; "
+                "Your Pit Box database failed its post-migration integrity check; "
                 f"backup retained at {self.last_backup_path}: {post_checks}"
             )
 

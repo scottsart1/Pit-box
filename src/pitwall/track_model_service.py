@@ -139,7 +139,7 @@ def _geometry_checksum(model: TrackModel) -> str:
 
 def _model_payload(model: TrackModel) -> bytes:
     value = {
-        "format": "Pit Wall track model",
+        "format": "Your Pit Box track model",
         "schema_version": _MODEL_FORMAT_VERSION,
         "id": model.id,
         "track_key": model.track_key,
@@ -173,7 +173,7 @@ def _decode_model(data: bytes) -> TrackModel:
         raise TrackModelCorruptError("track model header is truncated")
     magic, version, compressed_size, raw_size, digest = _MODEL_HEADER.unpack_from(data)
     if magic != _MODEL_MAGIC or version != _MODEL_FORMAT_VERSION:
-        raise TrackModelCorruptError("unsupported Pit Wall track model format")
+        raise TrackModelCorruptError("unsupported Your Pit Box track model format")
     if raw_size > _MAX_MODEL_BYTES or compressed_size > _MAX_MODEL_BYTES:
         raise TrackModelCorruptError("track model declares an unsafe size")
     compressed = data[_MODEL_HEADER.size :]

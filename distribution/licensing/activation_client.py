@@ -27,7 +27,7 @@ DEFAULT_TIMEOUT_S = 15.0
 # Any non-urllib value clears the ban, so this is not a fragile spoof of a
 # browser — it is the app saying what it actually is. Keep it in step with the
 # installer version in packaging/build.py.
-USER_AGENT = "PitWall/4.2.0"
+USER_AGENT = "YourPitBox/4.2.0"
 
 
 class ActivationError(Exception):

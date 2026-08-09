@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from .launcher import FirstRunInput
 
-WINDOW_TITLE = "Pit Wall — activation"
+WINDOW_TITLE = "Your Pit Box — activation"
 
 _INTRO = (
     "Enter the activation code from your purchase email, and an OpenAI API "
@@ -39,7 +39,7 @@ def prompt_first_run(message: str = "") -> FirstRunInput | None:
     frame = ttk.Frame(root, padding=20)
     frame.grid(sticky="nsew")
 
-    ttk.Label(frame, text="Activate Pit Wall", font=("Segoe UI", 15, "bold")).grid(
+    ttk.Label(frame, text="Activate Your Pit Box", font=("Segoe UI", 15, "bold")).grid(
         column=0, row=0, columnspan=2, sticky="w"
     )
     ttk.Label(frame, text=_INTRO, wraplength=460, justify="left").grid(

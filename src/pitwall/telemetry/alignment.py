@@ -33,21 +33,41 @@ class GapRule:
             raise ValueError("min_coverage must be between zero and one")
 
 
+# Bridging limits, in metres of track, above which a value is treated as
+# missing rather than interpolated.
+#
+# These were set for a sample every few metres and are wrong for what the game
+# actually delivers. Telemetry arrives at a fixed ~30 Hz in TIME, so the
+# spacing in DISTANCE is a function of speed: at 300 km/h a 30 Hz stream is
+# 2.8 m apart, but the same stream is 13.5 m apart when the capture is
+# decimated, which is what a real race on this machine produced. Every gap then
+# exceeded the 5 m ceiling, so almost nothing could be interpolated and
+# coverage on a full-fidelity lap collapsed to 5.8-9.9 percent, shown to the
+# driver as "1%".
+#
+# 20 m is a little over one car length at racing speed and still refuses to
+# invent a value across a genuine dropout, which is the property that matters:
+# a bridged brake trace that never happened would be worse than no trace.
+# Ratios between the signals are preserved: steering and pedals stay tighter
+# than speed, and the racing line stays loosest.
+_BRIDGE_SCALE = 4.0
+
+
 @dataclass(frozen=True, slots=True)
 class SignalSpec:
     kind: SignalKind = SignalKind.CONTINUOUS
-    gap_rule: GapRule = GapRule(5.0)
+    gap_rule: GapRule = GapRule(5.0 * _BRIDGE_SCALE)
 
 
 DEFAULT_SIGNAL_SPECS: Mapping[str, SignalSpec] = MappingProxyType(
     {
-        "time_s": SignalSpec(SignalKind.CONTINUOUS, GapRule(5.0, 0.95)),
-        "speed": SignalSpec(SignalKind.CONTINUOUS, GapRule(6.0, 0.90)),
-        "brake": SignalSpec(SignalKind.CONTINUOUS, GapRule(3.0, 0.95)),
-        "throttle": SignalSpec(SignalKind.CONTINUOUS, GapRule(3.0, 0.95)),
-        "steering": SignalSpec(SignalKind.CONTINUOUS, GapRule(3.0, 0.95)),
-        "gear": SignalSpec(SignalKind.STEP, GapRule(4.0, 0.90)),
-        "line_n": SignalSpec(SignalKind.CONTINUOUS, GapRule(8.0, 0.90)),
+        "time_s": SignalSpec(SignalKind.CONTINUOUS, GapRule(5.0 * _BRIDGE_SCALE, 0.95)),
+        "speed": SignalSpec(SignalKind.CONTINUOUS, GapRule(6.0 * _BRIDGE_SCALE, 0.90)),
+        "brake": SignalSpec(SignalKind.CONTINUOUS, GapRule(3.0 * _BRIDGE_SCALE, 0.95)),
+        "throttle": SignalSpec(SignalKind.CONTINUOUS, GapRule(3.0 * _BRIDGE_SCALE, 0.95)),
+        "steering": SignalSpec(SignalKind.CONTINUOUS, GapRule(3.0 * _BRIDGE_SCALE, 0.95)),
+        "gear": SignalSpec(SignalKind.STEP, GapRule(4.0 * _BRIDGE_SCALE, 0.90)),
+        "line_n": SignalSpec(SignalKind.CONTINUOUS, GapRule(8.0 * _BRIDGE_SCALE, 0.90)),
     }
 )
 

@@ -14,6 +14,12 @@
       "port": 8010
     },
     {
+      "name": "pitwall-sandbox",
+      "runtimeExecutable": ".venv/Scripts/python.exe",
+      "runtimeArgs": ["-m", "tools.sandbox_server"],
+      "port": 8011
+    },
+    {
       "name": "pitwall-site",
       "runtimeExecutable": ".venv/Scripts/python.exe",
       "runtimeArgs": ["-m", "http.server", "8020", "--directory", "distribution/website/_site"],

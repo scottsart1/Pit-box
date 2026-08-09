@@ -95,7 +95,7 @@ class AnalysisJobService:
                 UPDATE analysis_jobs
                 SET state='queued', started_at=NULL,
                     error_code='interrupted',
-                    error_detail='Pit Wall stopped while this job was running.'
+                    error_detail='Your Pit Box stopped while this job was running.'
                 WHERE state='running'
                 """
             )

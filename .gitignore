@@ -11,6 +11,9 @@ PitWallData/
 
 # Scratch data roots produced by local UI/integration runs
 .codex-ui-test-data/
+# Cloudflare Wrangler's local cache and state. Machine-local, never shared.
+.wrangler/
+.codex-remote-attachments/
 # Isolated data root used when capturing documentation screenshots
 .demo-data/
 
