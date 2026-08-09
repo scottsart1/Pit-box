@@ -178,6 +178,72 @@ def test_activation_rejects_a_server_entitlement_that_does_not_verify(tmp_path, 
         gate.complete_activation(tmp_path, "https://x/activate", ent.code_id)
 
 
+def test_activation_reports_an_unreadable_device_id_instead_of_crashing(tmp_path, monkeypatch):
+    # launch() catches only (ActivationError, LicenseInvalid), so a DeviceIdError
+    # escaping complete_activation took down the whole app on the activation
+    # screen. The license-read path already guarded this; activation did not.
+    from distribution.licensing import gate as gate_module
+    from distribution.licensing.activation_client import ActivationError
+    from distribution.licensing.device import DeviceIdError
+
+    def unreadable():
+        raise DeviceIdError("MachineGuid was empty")
+
+    monkeypatch.setattr(gate_module, "device_hash", unreadable)
+
+    with pytest.raises(ActivationError) as caught:
+        gate.complete_activation(tmp_path, "https://x/activate", _entitlement().code_id)
+    assert caught.value.code == "device_unavailable"
+
+
+def test_activation_identifies_itself_instead_of_sending_the_urllib_default():
+    """The header that keeps activation from being blocked at the edge.
+
+    Cloudflare's bot protection bans the literal "Python-urllib/<ver>" default
+    signature: the POST is refused with a 403 carrying neither `code` nor
+    `message`, so _error_detail falls through and every buyer sees
+    "Activation failed. Please try again." with no way to tell a blocked
+    request from a mistyped code. Dropping this header breaks activation for
+    every customer at once, and nothing else in the suite would notice —
+    the other activation tests stub the network out entirely.
+    """
+    import json as _json
+
+    from distribution.licensing import activation_client
+
+    ent = _entitlement()
+    # activate() does not verify the signature (gate does, afterwards), so an
+    # unsigned stand-in is enough to get through the response parsing.
+    body = _json.dumps(
+        {"entitlement": ent.to_dict(), "signature": "unchecked-at-this-layer"}
+    ).encode()
+    captured: dict[str, object] = {}
+
+    class _Response:
+        def read(self) -> bytes:
+            return body
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc) -> bool:
+            return False
+
+    class _Opener:
+        def open(self, request, timeout=None):
+            captured["request"] = request
+            return _Response()
+
+    activation_client.activate(
+        "https://x/activate", ent.code_id, "d" * 64, opener=_Opener()
+    )
+
+    # urllib title-cases header keys, so it is stored as "User-agent".
+    agent = captured["request"].get_header("User-agent")
+    assert agent, "activation must send a User-Agent or Cloudflare blocks it"
+    assert not agent.startswith("Python-urllib"), agent
+
+
 # --------------------------------------------------------------------------
 # Integrity / tamper
 # --------------------------------------------------------------------------

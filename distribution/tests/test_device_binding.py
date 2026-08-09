@@ -88,3 +88,28 @@ def test_an_unsupported_platform_is_refused_rather_than_guessed(monkeypatch):
     monkeypatch.setattr(device.platform, "system", lambda: "Linux")
     with pytest.raises(device.DeviceIdError, match="unsupported platform"):
         device.raw_device_id()
+
+
+def test_an_unreadable_windows_registry_is_reported_as_a_device_id_error(monkeypatch):
+    # A damaged install can make the MachineGuid key unreadable. That used to
+    # escape as a bare FileNotFoundError — a type no caller catches — so it
+    # crashed the activation screen with a traceback instead of being reported.
+    monkeypatch.setattr(device.platform, "system", lambda: "Windows")
+
+    def unreadable():
+        raise FileNotFoundError(2, "The system cannot find the file specified")
+
+    monkeypatch.setattr(device, "_windows_machine_guid", unreadable)
+    with pytest.raises(device.DeviceIdError, match="could not read the Windows device id"):
+        device.raw_device_id()
+
+
+def test_a_missing_ioreg_binary_is_reported_as_a_device_id_error(on_macos):
+    # Same contract on the other platform: subprocess raises OSError, not
+    # DeviceIdError, if the binary is absent.
+    def missing(*args, **kwargs):
+        raise FileNotFoundError(2, "ioreg not found")
+
+    on_macos.setattr(subprocess, "run", missing)
+    with pytest.raises(device.DeviceIdError, match="could not read the Darwin device id"):
+        device.raw_device_id()

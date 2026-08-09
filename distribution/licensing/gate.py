@@ -179,10 +179,25 @@ def complete_activation(
 ) -> License:
     """Perform first activation and persist a device-bound license.
 
-    Raises ActivationError (network/claim problems) or LicenseInvalid (the
-    server returned something that does not verify against the public key).
+    Raises ActivationError (network/claim problems, or an unreadable machine
+    id) or LicenseInvalid (the server returned something that does not verify
+    against the public key).
     """
-    this_device = device_hash()
+    # The license-read path already treats an unreadable machine id as a
+    # recoverable, reportable condition; activation did not, and `launch()`
+    # catches only ActivationError/LicenseInvalid. So a machine whose id could
+    # not be read crashed the app on the activation screen with a traceback
+    # instead of saying what was wrong.
+    try:
+        this_device = device_hash()
+    except Exception as exc:  # noqa: BLE001 - reported on the form, never fatal
+        raise ActivationError(
+            "Pit Wall could not read this computer's hardware id, so it cannot "
+            "tie your activation to this machine. This usually means a damaged "
+            "Windows install; reinstalling Windows components or contacting "
+            "support will sort it out.",
+            "device_unavailable",
+        ) from exc
     result = activate(endpoint, code, this_device)
 
     # Trust nothing the server said until the signature verifies locally.

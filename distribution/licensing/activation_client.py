@@ -16,6 +16,19 @@ from .entitlement import Entitlement
 
 DEFAULT_TIMEOUT_S = 15.0
 
+# Identify the app explicitly, because urllib's default does not survive the
+# edge. Left unset, urllib sends "Python-urllib/3.12", and Cloudflare's bot
+# protection bans that exact signature: the activation POST is refused at the
+# edge with 403 "error code: 1010" before the Worker runs at all. That reply
+# carries neither `code` nor `message`, so _error_detail below fell through to
+# its last-resort text and every buyer saw "Activation failed. Please try
+# again." with no way to tell a blocked request from a bad code.
+#
+# Any non-urllib value clears the ban, so this is not a fragile spoof of a
+# browser — it is the app saying what it actually is. Keep it in step with the
+# installer version in packaging/build.py.
+USER_AGENT = "PitWall/4.2.0"
+
 
 class ActivationError(Exception):
     """Activation could not complete. Carries a user-facing reason and a code."""
@@ -50,7 +63,11 @@ def activate(
     request = urllib.request.Request(
         endpoint,
         data=body,
-        headers={"Content-Type": "application/json", "Accept": "application/json"},
+        headers={
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+            "User-Agent": USER_AGENT,
+        },
         method="POST",
     )
     _open = (opener or urllib.request).open if opener else urllib.request.urlopen

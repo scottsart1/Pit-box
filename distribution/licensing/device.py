@@ -61,10 +61,24 @@ def _mac_platform_uuid() -> str:
 def raw_device_id() -> str:
     system = platform.system()
     if system == "Windows":
-        return _windows_machine_guid()
-    if system == "Darwin":
-        return _mac_platform_uuid()
-    raise DeviceIdError(f"unsupported platform for device binding: {system}")
+        read = _windows_machine_guid
+    elif system == "Darwin":
+        read = _mac_platform_uuid
+    else:
+        raise DeviceIdError(f"unsupported platform for device binding: {system}")
+
+    # Every way a reader can fail means one thing to callers: the id could not
+    # be read. Left unconverted, a missing registry key escaped as a bare
+    # FileNotFoundError and a missing `ioreg` as OSError — neither is what this
+    # module documents, and neither is what callers catch, so the activation
+    # path turned an unreadable machine id into an unhandled crash instead of a
+    # message the buyer could act on.
+    try:
+        return read()
+    except DeviceIdError:
+        raise
+    except Exception as exc:  # noqa: BLE001 - reader failures are all equivalent
+        raise DeviceIdError(f"could not read the {system} device id: {exc}") from exc
 
 
 def device_hash() -> str:
