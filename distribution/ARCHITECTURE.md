@@ -1,6 +1,6 @@
-# Pit Wall distribution & licensing — architecture
+# Your Pit Box distribution & licensing — architecture
 
-This folder builds a sellable, licensed copy of Pit Wall. It is **fully
+This folder builds a sellable, licensed copy of Your Pit Box. It is **fully
 isolated** from the core app: nothing under `src/pitwall` imports anything here,
 and the license gate runs **only** in the packaged distribution build. Running
 the dev app (`python -m pitwall.main`) is never gated and never changed.
@@ -225,7 +225,7 @@ gitignores `dist/` as a Python build directory.
   hash stability, a clear error when the field is absent, and the OS family
   folded into the hash so the two platforms cannot collide.
 - **Marketing site** (`website/`): light palette, real screenshots, honest
-  comparison including the two rows Pit Wall loses, empty reviews, and a EULA
+  comparison including the two rows Your Pit Box loses, empty reviews, and a EULA
   matching the refuse-to-run behaviour. `build_site.py` refuses to publish
   while the Venmo handle, contact email, or jurisdiction are unfilled, and
   tests pin the claims that would be dishonest if they went stale.

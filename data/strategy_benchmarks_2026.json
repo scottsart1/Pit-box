@@ -35,7 +35,7 @@
       "race": "High-degradation 35-lap regression",
       "public_observation": "A strategy model must not force a lazy one-stop when measured personal per-wheel wear makes the long final stint infeasible.",
       "expected_invariant": "At sufficiently high measured wear, a two-stop plan outranks every feasible one-stop plan despite the extra pit loss.",
-      "source_note": "Synthetic stress case calibrated from Pit Wall personal telemetry fields."
+      "source_note": "Synthetic stress case calibrated from Your Pit Box personal telemetry fields."
     }
   ]
 }

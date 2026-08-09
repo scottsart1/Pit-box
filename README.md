@@ -1,6 +1,6 @@
-# Pit Wall 4.2.0 — OpenAI race engineer for PS5 and Windows
+# Your Pit Box 4.2.0 — OpenAI race engineer for PS5 and Windows
 
-Pit Wall receives **F1 26** telemetry (UDP format **2026**) from a PS5, runs deterministic
+Your Pit Box receives **F1 26** telemetry (UDP format **2026**) from a PS5, runs deterministic
 strategy/corner/setup analysis locally, keeps persistent SQLite history, answers spoken questions,
 makes proactive radio calls, and serves a live dashboard at `http://127.0.0.1:8000`.
 
@@ -12,7 +12,7 @@ per-corner wear, and the ranked stop plans behind the call. More in
 every screen is the real application, not a mockup.*
 
 For PS5 setup, forwarding, LAN access, capture/replay, offline review, recovery,
-and rollback procedures, see the [Pit Wall 4.2 operator and developer guide](docs/PIT_WALL_4_2.md).
+and rollback procedures, see the [Your Pit Box 4.2 operator and developer guide](docs/PIT_WALL_4_2.md).
 
 Before trusting a fresh install with a real race weekend, work through the
 [hardware shakedown checklist](docs/SHAKEDOWN_4_2.md). It covers what the
@@ -24,10 +24,10 @@ a session long enough to matter.
 
 ## Connect a PS5: IP, port, UDP, and forwarding
 
-Open **Connection** in Pit Wall first. It lists the PC's active IPv4 adapters
+Open **Connection** in Your Pit Box first. It lists the PC's active IPv4 adapters
 and puts the recommended console destination in large copyable text. Enter that
 LAN address and port `20777` in the game's telemetry settings, then start a
-session. **Listening** means Windows gave Pit Wall the socket; **Receiving** is
+session. **Listening** means Windows gave Your Pit Box the socket; **Receiving** is
 shown only after a valid F1 packet actually arrives.
 
 - `127.0.0.1` means this PC talking to itself. It is valid for the local browser
@@ -44,7 +44,7 @@ shown only after a valid F1 packet actually arrives.
   conflict rather than claiming telemetry is connected.
 
 UDP sends independent datagrams without a handshake or delivery guarantee.
-Packets can be lost, duplicated, or reordered, so Pit Wall reports health by
+Packets can be lost, duplicated, or reordered, so Your Pit Box reports health by
 packet type using frame identifiers, observed rate, age, provisional gaps,
 confirmed loss, duplicates, and reordering. A bound socket by itself cannot
 prove that the PS5 is configured correctly.
@@ -52,7 +52,7 @@ prove that the PS5 is configured correctly.
 Optional **Forwarding** sends a byte-identical copy of each sane datagram to
 other local/LAN telemetry tools. This is application fan-out, not router port
 forwarding or public internet exposure. Forward targets run on a separate
-bounded queue; a slow or unavailable target cannot hold up Pit Wall ingestion.
+bounded queue; a slow or unavailable target cannot hold up Your Pit Box ingestion.
 Self-loops, duplicate destinations, broadcast/multicast, and unconfirmed public
 addresses are rejected.
 
@@ -67,7 +67,7 @@ PITWALL_WEB_PORT=8000
 
 Only enable `PITWALL_WEB_LAN_ACCESS=true` when a phone/tablet needs the
 dashboard. Bind the web host to `0.0.0.0`, set a long
-`PITWALL_WEB_ACCESS_TOKEN`, and keep it on a trusted LAN. Pit Wall never opens a
+`PITWALL_WEB_ACCESS_TOKEN`, and keep it on a trusted LAN. Your Pit Box never opens a
 router or firewall to the public internet automatically.
 
 ## What changed in 4.2.0
@@ -323,7 +323,7 @@ writes preserve the first `ended_at` timestamp rather than moving it forward.
 
 The 2026 packet enum names IDs 15, 16 and 17 as Race, Race 2 and Race 3; those
 are sequence slots, not permanent "Sprint" labels. On a sprint weekend the
-Sprint can be Race (15) and the Grand Prix Race 2 (16). Pit Wall now reads
+Sprint can be Race (15) and the Grand Prix Race 2 (16). Your Pit Box now reads
 `weekend_structure`: when Race (15) is followed by Race 2 or Race 3, the first
 slot is treated as the Sprint and the later slot remains the Grand Prix. Without
 that evidence, every race slot defaults to Grand Prix rules so the mandatory
@@ -421,7 +421,7 @@ answers before any model call.
 
 Use 64-bit Python 3.11 or 3.12.
 
-1. Stop every existing Pit Wall process.
+1. Stop every existing Your Pit Box process.
 2. Extract this ZIP into a fresh writable folder.
 3. Copy only your existing `.env` into the new folder. `update_windows.ps1` migrates its engineer settings to OpenAI while preserving keys and unrelated preferences.
 4. Do not copy or delete `%USERPROFILE%\PitWallData`; it contains your database and saved PTT/wake configuration.
@@ -520,7 +520,7 @@ OpenAI unavailable              -> explicit radio error; no silent model switch
 
 The model never receives direct filesystem, shell, network, or database-write access. It can only request the allow-listed telemetry tools defined in `TelemetryTools.schemas()`.
 
-Before execution, Pit Wall:
+Before execution, Your Pit Box:
 
 1. Confirms the tool name is allow-listed.
 2. Parses arguments as JSON.
@@ -537,7 +537,7 @@ Runtime data remains under:
 %USERPROFILE%\PitWallData
 ```
 
-Pit Wall sends compact situation summaries and selected tool results to OpenAI
+Your Pit Box sends compact situation summaries and selected tool results to OpenAI
 only for questions that require model judgement. Exact live telemetry questions
 and unsolicited proactive calls are handled locally and deterministically. It
 does not upload the SQLite database, raw 60 Hz trace files, Windows username, or
@@ -551,7 +551,7 @@ Never commit or share `.env`.
 ### Engineer model fails
 
 Check `/api/llm/providers` and `/api/health`. Verify `OPENAI_API_KEY`, API billing,
-network access and `PITWALL_MODEL=gpt-5.6-sol`, then restart Pit Wall.
+network access and `PITWALL_MODEL=gpt-5.6-sol`, then restart Your Pit Box.
 
 ### Strategy call changes unexpectedly
 

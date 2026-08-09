@@ -16,7 +16,7 @@ SPEC_DIR = Path(SPECPATH).resolve()
 DIST_ROOT = SPEC_DIR.parent
 REPO_ROOT = DIST_ROOT.parent
 
-APP_NAME = "Pit Wall"
+APP_NAME = "Your Pit Box"
 
 datas = [
     # The dashboard is served from disk at runtime.
@@ -94,11 +94,11 @@ if sys.platform == "darwin":
             "CFBundleDisplayName": APP_NAME,
             "CFBundleShortVersionString": "4.2.0",
             "NSHighResolutionCapable": True,
-            # Pit Wall listens for UDP telemetry on the local network, which
+            # Your Pit Box listens for UDP telemetry on the local network, which
             # macOS gates behind a user prompt. Without this key the prompt
             # never appears and the socket silently receives nothing.
             "NSLocalNetworkUsageDescription":
-                "Pit Wall receives F1 telemetry from your console over the "
+                "Your Pit Box receives F1 telemetry from your console over the "
                 "local network.",
             # No microphone entitlement is requested here: voice is optional
             # and the OS prompts on first use.

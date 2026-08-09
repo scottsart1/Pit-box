@@ -1,4 +1,4 @@
-# Pit Wall activation server
+# Your Pit Box activation server
 
 A single Cloudflare Worker + D1 database. Its only job is to atomically claim a
 code for a device at first activation and return the code's pre-signed

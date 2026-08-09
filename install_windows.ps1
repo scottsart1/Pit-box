@@ -37,7 +37,7 @@ if (-not (Test-Path .env)) {
 # Migrate older DeepSeek-era settings while preserving keys and unrelated values.
 $envPath = (Resolve-Path .env)
 $envText = [System.IO.File]::ReadAllText($envPath)
-function Set-PitWallEnvValue([string]$Text, [string]$Name, [string]$Value) {
+function Set-YourPitBoxEnvValue([string]$Text, [string]$Name, [string]$Value) {
   $pattern = "(?m)^[ \t]*" + [regex]::Escape($Name) + "[ \t]*=.*$"
   $replacement = "$Name=$Value"
   if ([regex]::IsMatch($Text, $pattern)) {
@@ -46,7 +46,7 @@ function Set-PitWallEnvValue([string]$Text, [string]$Name, [string]$Value) {
   if ($Text.Length -gt 0 -and -not $Text.EndsWith("`n")) { $Text += "`r`n" }
   return $Text + $replacement + "`r`n"
 }
-function Migrate-PitWallEnvValue([string]$Text, [string]$Name, [string]$OldValue, [string]$NewValue) {
+function Migrate-YourPitBoxEnvValue([string]$Text, [string]$Name, [string]$OldValue, [string]$NewValue) {
   $pattern = "(?m)^[ \t]*" + [regex]::Escape($Name) + "[ \t]*=[ \t]*" + [regex]::Escape($OldValue) + "[ \t]*$"
   if ([regex]::IsMatch($Text, $pattern)) {
     return [regex]::Replace($Text, $pattern, "$Name=$NewValue")
@@ -58,14 +58,14 @@ function Migrate-PitWallEnvValue([string]$Text, [string]$Name, [string]$OldValue
   }
   return $Text
 }
-$updatedEnvText = Set-PitWallEnvValue $envText "PITWALL_LLM_PROVIDER" "openai"
-$updatedEnvText = Set-PitWallEnvValue $updatedEnvText "PITWALL_LLM_FALLBACK_PROVIDER" "none"
-$updatedEnvText = Set-PitWallEnvValue $updatedEnvText "PITWALL_MODEL" "gpt-5.6"
-$updatedEnvText = Migrate-PitWallEnvValue $updatedEnvText "PITWALL_PTT_RELEASE_MODE" "silence" "explicit_or_silence"
-$updatedEnvText = Migrate-PitWallEnvValue $updatedEnvText "PITWALL_PTT_RELEASE_IGNORE_MS" "450" "120"
-$updatedEnvText = Migrate-PitWallEnvValue $updatedEnvText "PITWALL_PTT_SILENCE_RELEASE_S" "1.15" "2.20"
-$updatedEnvText = Migrate-PitWallEnvValue $updatedEnvText "PITWALL_PTT_SPEECH_RMS" "220" "150"
-$updatedEnvText = Migrate-PitWallEnvValue $updatedEnvText "PITWALL_PTT_RELEASE_TAIL_S" "" "0.20"
+$updatedEnvText = Set-YourPitBoxEnvValue $envText "PITWALL_LLM_PROVIDER" "openai"
+$updatedEnvText = Set-YourPitBoxEnvValue $updatedEnvText "PITWALL_LLM_FALLBACK_PROVIDER" "none"
+$updatedEnvText = Set-YourPitBoxEnvValue $updatedEnvText "PITWALL_MODEL" "gpt-5.6"
+$updatedEnvText = Migrate-YourPitBoxEnvValue $updatedEnvText "PITWALL_PTT_RELEASE_MODE" "silence" "explicit_or_silence"
+$updatedEnvText = Migrate-YourPitBoxEnvValue $updatedEnvText "PITWALL_PTT_RELEASE_IGNORE_MS" "450" "120"
+$updatedEnvText = Migrate-YourPitBoxEnvValue $updatedEnvText "PITWALL_PTT_SILENCE_RELEASE_S" "1.15" "2.20"
+$updatedEnvText = Migrate-YourPitBoxEnvValue $updatedEnvText "PITWALL_PTT_SPEECH_RMS" "220" "150"
+$updatedEnvText = Migrate-YourPitBoxEnvValue $updatedEnvText "PITWALL_PTT_RELEASE_TAIL_S" "" "0.20"
 if ($updatedEnvText -ne $envText) {
   $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
   [System.IO.File]::WriteAllText($envPath, $updatedEnvText, $utf8NoBom)
@@ -87,6 +87,6 @@ if ($LASTEXITCODE -ne 0) {
   exit 1
 }
 
-Write-Host "Pit Wall 3.6.1 installed and tested successfully." -ForegroundColor Green
+Write-Host "Your Pit Box 3.6.1 installed and tested successfully." -ForegroundColor Green
 Write-Host "Next: edit .env, run the firewall script as Administrator, then start_pitwall.bat." -ForegroundColor Green
 Read-Host "Press Enter to close"

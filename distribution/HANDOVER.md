@@ -1,4 +1,4 @@
-# Handover — Pit Wall distribution work
+# Handover — Your Pit Box distribution work
 
 State as of **6 August 2026** on `main`, pushed and in sync with `origin/main`.
 Working tree clean.
