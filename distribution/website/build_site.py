@@ -29,7 +29,7 @@ SCREENSHOT_DIR = REPO_ROOT / "docs" / "screenshots"
 ASSET_DIR = SITE_DIR / "assets"
 OUTPUT_DIR = SITE_DIR / "_site"
 
-PAGES = ("index.html", "eula.html")
+PAGES = ("index.html", "guide.html", "diagnostics.html", "eula.html")
 ASSETS = ("styles.css", "download.js")
 
 # Scanned for placeholders alongside the pages. download.js carries the

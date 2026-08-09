@@ -3,8 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Pit Wall — a real race engineer for F1 26</title>
-<meta name="description" content="Pit Wall turns F1 26 telemetry from your PS5 into a live race engineer: strategy calls, corner coaching and spoken radio, computed locally on your own PC.">
+<title>Pit Wall — a real race engineer for F1 25: 2026 Season Pack</title>
+<meta name="description" content="Pit Wall turns F1 25: 2026 Season Pack telemetry from your PS5 / PC into a live race engineer: strategy calls, corner coaching and spoken radio, computed locally on your own PC.">
 <link rel="stylesheet" href="styles.css">
 </head>
 <body>
@@ -17,6 +17,7 @@
       <a href="#what">What it does</a>
       <a href="#how">How it works</a>
       <a href="#screens">Screens</a>
+      <a href="guide.html">Setup guide</a>
       <a href="#requirements">Requirements</a>
       <a href="#buy">Get it</a>
     </nav>
@@ -29,13 +30,13 @@
 <section class="hero">
   <div class="wrap hero-grid">
     <div>
-      <div class="eyebrow">For F1 26 on PS5</div>
+      <div class="eyebrow">For F1 25: 2026 Season Pack on PS5 / PC</div>
       <h1>A race engineer that actually reads your telemetry.</h1>
       <p class="lede">
-        Pit Wall listens to the UDP feed from your console, runs the strategy,
-        tyre and corner maths locally on your PC, and talks to you over the
-        radio while you drive. Every number it says is measured — never guessed
-        by a language model.
+        Pit Wall listens to the UDP feed from your PS5 / PC, runs the
+        strategy, tyre and corner maths locally on your PC, and talks to you
+        over the radio while you drive. Every number is computed from telemetry
+        by deterministic code — never invented by a language model.
       </p>
       <div class="hero-actions">
         <a class="button primary" href="#buy">Get it — $20</a>
@@ -63,7 +64,7 @@
       and defend? Everything below is the running application: telemetry
       arriving over UDP, the strategy engine doing the maths, and the
       engineer's own voice answering questions asked over the radio.
-      <strong>No dialogue was written for this video.</strong>
+      <strong>No engineer response was written for this video.</strong>
     </p>
     <div class="video-frame">
       <video id="demoVideo" controls preload="metadata"
@@ -113,7 +114,7 @@
       </article>
       <article class="card">
         <h3>A connection screen that tells the truth</h3>
-        <p>It separates "the socket is open" from "real telemetry is arriving", recommends the right LAN address for your console, and names the actual bind conflict when something else owns the port.</p>
+        <p>It separates "the socket is open" from "real telemetry is arriving", recommends the right LAN address for your PS5 / PC, and names the actual bind conflict when something else owns the port.</p>
       </article>
     </div>
   </div>
@@ -175,8 +176,8 @@ Strategy / setup / what-if  → model, high reasoning
         <figcaption>Drive, full height — the radio feed carrying the answers from the video above.</figcaption>
       </figure>
       <figure>
-        <div class="shot"><img src="img/03-connection-center.png" alt="The Connection Center showing a receiving state, the recommended console IP address, and ranked network adapters with reasons." loading="lazy"></div>
-        <figcaption>Connection — recommended console IP, ranked adapters, packet health.</figcaption>
+        <div class="shot"><img src="img/03-connection-center.png" alt="The Connection Center showing a receiving state, the recommended PS5 / PC IP address, and ranked network adapters with reasons." loading="lazy"></div>
+        <figcaption>Connection — recommended PS5 / PC IP, ranked adapters, packet health.</figcaption>
       </figure>
       <figure>
         <div class="shot"><img src="img/05-session-review.png" alt="Session Review listing 20 drivers and 220 laps with full trace coverage and per-lap comparability." loading="lazy"></div>
@@ -199,8 +200,8 @@ Strategy / setup / what-if  → model, high reasoning
     <h2>What you need</h2>
     <div class="split">
       <ul class="req-list">
-        <li><span class="tick" aria-hidden="true">✓</span> <span><strong>F1 26</strong> on PS5, with UDP telemetry set to format <strong>2026</strong>.</span></li>
-        <li><span class="tick" aria-hidden="true">✓</span> <span>A <strong>Windows 10 or 11 PC</strong> on the same home network as the console.</span></li>
+        <li><span class="tick" aria-hidden="true">✓</span> <span><strong>F1 25: 2026 Season Pack</strong> on PS5 / PC, with UDP telemetry set to format <strong>2026</strong>.</span></li>
+        <li><span class="tick" aria-hidden="true">✓</span> <span>A <strong>Windows 10 or 11 PC</strong> on the same home network as a PS5 or second PC running the game — or just the one PC running both.</span></li>
         <li><span class="tick" aria-hidden="true">✓</span> <span>An <strong>OpenAI API key</strong> of your own. You paste it once when the app first starts.</span></li>
         <li><span class="tick" aria-hidden="true">✓</span> <span>A microphone and speakers, if you want to talk to it. Everything else works without them.</span></li>
       </ul>
@@ -212,7 +213,7 @@ Strategy / setup / what-if  → model, high reasoning
             your own OpenAI account, so those calls appear on your OpenAI bill.
             Most questions are answered locally and cost nothing at all, but a
             long race with heavy radio use will run up a small charge. You set
-            your own spending limits on the OpenAI dashboard.
+            API usage and billing controls on the OpenAI dashboard.
           </p>
         </div>
         <div class="callout">
@@ -321,9 +322,11 @@ Strategy / setup / what-if  → model, high reasoning
 
     <ol class="steps" style="margin-top:2rem;max-width:640px">
       <li><div><strong>Download and run the installer.</strong> It installs for you only, so Windows will not ask for an administrator password.</div></li>
-      <li><div><strong>Pit Wall starts by itself</strong> at the end of the installer and asks for your activation code and your OpenAI API key. That is the whole setup.</div></li>
-      <li><div><strong>After that, just open it</strong> from the Start Menu or the desktop icon. It goes straight to the dashboard — no code, no setup, ever again.</div></li>
+      <li><div><strong>Pit Wall starts by itself</strong> at the end of the installer and asks for your activation code and your OpenAI API key. Then follow the setup guide to connect your PS5 / PC.</div></li>
+      <li><div><strong>After setup, just open it</strong> from the Start Menu or the desktop icon. It goes straight to the dashboard without asking for the activation code again. Allow <strong>20–30 seconds</strong> for it to start, and a little longer on a busy PC — it opens your browser itself once it is ready.</div></li>
     </ol>
+    <p class="guide-prompt"><strong>Setting up for the first time?</strong> Follow the <a href="guide.html">illustrated setup guide</a> from download through your first live radio check.</p>
+    <p class="guide-prompt"><strong>Code not activating?</strong> Run the <a href="diagnostics.html">activation diagnostics</a> — it checks the server and your code without using the code up.</p>
   </div>
 </section>
 
@@ -343,8 +346,8 @@ Strategy / setup / what-if  → model, high reasoning
     <h2>Questions</h2>
 
     <details>
-      <summary>Does it work on PC F1 26, or only PS5?</summary>
-      <p>It is built and tested against a PS5 sending UDP telemetry in the 2026 format. The PC version of the game emits the same packets, so it will very likely work, but I have not tested it and will not claim it does. Ask me before buying if that is your setup.</p>
+      <summary>Does it work on PS5 / PC, or only one platform?</summary>
+      <p>Both. Pit Wall's telemetry receiver has no platform-specific code — it reads standard F1 2026 UDP packets the same way regardless of whether they come from a PS5 or the PC version of the game, and licensing is tied to your Windows PC, not to a console. The <a href="guide.html#step-6">setup guide</a> covers both: PS5 / PC on your home network, or the game and Pit Wall sharing one PC. This is based on the packet format and receiver code rather than a dedicated PC hardware test; if you hit anything unexpected, email me and I will help sort it out.</p>
     </details>
 
     <details>
@@ -354,12 +357,12 @@ Strategy / setup / what-if  → model, high reasoning
 
     <details>
       <summary>How much will the OpenAI usage actually cost?</summary>
-      <p>Less than most people expect, because the common questions never reach a model. Gaps, tyre temperatures, damage and strategy status are computed locally and cost nothing. What costs money is open-ended conversation and deep strategy reasoning during a long race. You can cap your spend on the OpenAI dashboard, and Pit Wall keeps working without the radio if the key stops.</p>
+      <p>Less than most people expect, because the common questions never reach a model. Gaps, tyre temperatures, damage and strategy status are computed locally and cost nothing. What costs money is open-ended conversation and deep strategy reasoning during a long race. You can monitor API usage, use prepaid credits and configure billing alerts on the OpenAI dashboard; Pit Wall keeps working without the radio if the key stops.</p>
     </details>
 
     <details>
       <summary>What data leaves my computer?</summary>
-      <p>Compact situation summaries and selected computed results, only for questions that need model judgement, and only to OpenAI. The database, the raw 60&nbsp;Hz trace files, your Windows username and full microphone recordings are never uploaded. Audio clips do go to OpenAI for transcription when cloud voice is enabled.</p>
+      <p>Compact situation summaries and selected computed results, only for questions that need model judgement, and only to OpenAI. The database, the raw 60&nbsp;Hz trace files and your Windows username are never uploaded. Cloud transcription sends recorded audio clips to OpenAI; optional Realtime voice streams microphone audio to OpenAI while a radio session is active.</p>
     </details>
 
     <details>
@@ -387,7 +390,7 @@ Strategy / setup / what-if  → model, high reasoning
       <strong style="color:#fff">Pit Wall</strong> — an independent project, not affiliated with, endorsed by, or connected to Formula&nbsp;1, the FIA, Electronic Arts, or Codemasters. All trademarks belong to their owners.
     </div>
     <div>
-      <a href="eula.html">Licence terms</a>
+      <a href="guide.html">Setup guide</a> · <a href="diagnostics.html">Diagnostics</a> · <a href="eula.html">Licence terms</a>
     </div>
   </div>
 </footer>

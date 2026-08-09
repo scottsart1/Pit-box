@@ -20,7 +20,9 @@ sys.path.insert(0, str(DIST.parent))
 from distribution.website import build_site  # noqa: E402
 
 INDEX = (DIST / "website" / "index.html").read_text(encoding="utf-8")
+GUIDE = (DIST / "website" / "guide.html").read_text(encoding="utf-8")
 EULA = (DIST / "website" / "eula.html").read_text(encoding="utf-8")
+DIAGNOSTICS = (DIST / "website" / "diagnostics.html").read_text(encoding="utf-8")
 DOWNLOAD_JS = (DIST / "website" / "download.js").read_text(encoding="utf-8")
 
 REAL_ENDPOINT = "https://activation.pitwall.app"
@@ -35,7 +37,8 @@ PLACEHOLDER_JS = re.sub(
 )
 
 
-def _stage(tmp_path, monkeypatch, *, index=None, eula=None, script=None):
+def _stage(tmp_path, monkeypatch, *, index=None, guide=None, eula=None, script=None,
+           diagnostics=None):
     """A site directory with every scanned file present and filled in.
 
     Each test then breaks exactly one thing, so a failure names its own cause.
@@ -43,6 +46,10 @@ def _stage(tmp_path, monkeypatch, *, index=None, eula=None, script=None):
     site = tmp_path / "website"
     site.mkdir(exist_ok=True)
     (site / "index.html").write_text(index if index is not None else INDEX, encoding="utf-8")
+    (site / "guide.html").write_text(guide if guide is not None else GUIDE, encoding="utf-8")
+    (site / "diagnostics.html").write_text(
+        diagnostics if diagnostics is not None else DIAGNOSTICS, encoding="utf-8"
+    )
     (site / "eula.html").write_text(eula if eula is not None else EULA, encoding="utf-8")
     (site / "download.js").write_text(
         script if script is not None else DOWNLOAD_JS, encoding="utf-8"
@@ -149,6 +156,81 @@ def test_the_demo_video_is_referenced_and_present():
     assert (build_site.ASSET_DIR / "pitwall-demo.mp4").exists()
 
 
+def test_the_setup_guide_is_published_and_linked():
+    assert "guide.html" in build_site.PAGES
+    assert 'href="guide.html"' in INDEX
+    assert "illustrated setup guide" in INDEX
+
+
+def test_the_setup_guide_covers_the_customer_journey():
+    for required in (
+        "Activation code",
+        "API billing is separate",
+        "Create new secret key",
+        "Activate Pit Wall",
+        "Test saved key",
+        "All configured providers ready",
+        "UDP IP Address",
+        "20777",
+        "format <strong>2026</strong>",
+        "Receiving telemetry",
+        "Mark, what is the gap ahead?",
+    ):
+        assert required in GUIDE
+    assert "Pit Wall runs beside the game, not inside it" in GUIDE
+
+
+def _executable_source(page: str) -> str:
+    """The page with commentary removed.
+
+    The diagnostics page explains in a comment *why* it must never call
+    /activate, and that sentence would otherwise trip the very check the
+    comment describes. Only what actually runs is scanned, for the same
+    reason build_site.check() strips comments before hunting placeholders.
+    """
+    without_html_comments = re.sub(r"<!--.*?-->", "", page, flags=re.DOTALL)
+    return re.sub(r"^\s*//.*$", "", without_html_comments, flags=re.MULTILINE)
+
+
+def test_the_diagnostics_page_never_claims_a_code():
+    # The safety property this page exists under. /activate atomically claims a
+    # code and binds it to the caller's device hash; a browser cannot produce
+    # the buyer's real PC hash, so "testing activation" here would permanently
+    # bind a paid code to a value that PC can never present again. There is no
+    # un-claim endpoint, so this must never regress into a convenience feature.
+    runnable = _executable_source(DIAGNOSTICS)
+    assert "/activate" not in runnable
+    # Only the two endpoints that cannot mutate anything are permitted.
+    called = set(re.findall(r'ACTIVATION_API \+ "(/[a-z]+)"', runnable))
+    assert called == {"/health", "/download"}, called
+
+
+def test_the_diagnostics_page_is_published_and_linked():
+    assert "diagnostics.html" in build_site.PAGES
+    assert 'href="diagnostics.html"' in INDEX
+    assert 'href="diagnostics.html"' in GUIDE
+
+
+def test_the_diagnostics_page_says_it_cannot_check_claim_state():
+    # Overstating what the checks prove would send buyers away believing their
+    # code is fine when the claim step is exactly what failed.
+    assert "cannot tell" in DIAGNOSTICS
+
+
+def test_the_setup_guide_links_to_official_openai_account_pages():
+    assert "https://platform.openai.com/api-keys" in GUIDE
+    assert "https://platform.openai.com/settings/organization/billing/overview" in GUIDE
+    assert "ChatGPT Plus, Pro, or Business does not include API usage" in GUIDE
+
+
+def test_guide_examples_do_not_expose_reusable_secrets():
+    assert not re.search(r"sk-[A-Za-z0-9_-]{16,}", GUIDE)
+    code_like = re.findall(
+        r"PITW-[0-9A-HJKMNP-TV-Z]{5}(?:-[0-9A-HJKMNP-TV-Z]{5}){2}", GUIDE
+    )
+    assert set(code_like) <= {"PITW-XXXXX-XXXXX-XXXXX"}
+
+
 def test_the_video_poster_is_checked_like_any_other_image():
     # A poster is referenced by `poster=`, not `src=`, so scanning only src
     # would let a missing one through and show a black box until play.
@@ -156,10 +238,10 @@ def test_the_video_poster_is_checked_like_any_other_image():
     assert posters, "the demo video has no poster frame"
 
 
-def test_the_demo_section_says_the_dialogue_is_not_scripted():
+def test_the_demo_section_says_the_engineer_responses_are_not_scripted():
     # The claim that carries the whole demo. If it stops being true, the
     # sentence has to go with it.
-    assert "No dialogue was written for this video" in INDEX
+    assert "No engineer response was written for this video" in INDEX
 
 
 def test_every_referenced_asset_exists():
@@ -184,6 +266,7 @@ def test_the_build_copies_only_what_the_pages_use(tmp_path, monkeypatch):
     copied = {path.name for path in (output / "img").iterdir()}
     assert copied == build_site._referenced_images()
     assert (output / "index.html").exists()
+    assert (output / "guide.html").exists()
     assert (output / "styles.css").exists()
 
 
@@ -236,6 +319,18 @@ def test_the_buyer_is_told_they_need_their_own_openai_key():
     assert "your own OpenAI account" in EULA
 
 
+def test_realtime_voice_audio_is_disclosed():
+    assert "Realtime voice streams microphone audio to OpenAI" in INDEX
+    assert "microphone audio is streamed to OpenAI" in EULA
+
+
+def test_the_site_uses_the_official_2026_game_name():
+    assert "F1 25: 2026 Season Pack" in INDEX
+    assert "F1 25: 2026 Season Pack" in GUIDE
+    assert "F1 26" not in INDEX
+    assert "UDP telemetry set to format <strong>2026</strong>" in INDEX
+
+
 def test_macos_is_not_advertised_as_available():
     # There is no macOS build yet. Selling one would be a lie.
     assert "macOS is not ready yet" in INDEX
@@ -271,7 +366,7 @@ def test_the_comparison_admits_where_pit_wall_loses():
     assert "Your OpenAI usage" in INDEX
 
 
-@pytest.mark.parametrize("page", [INDEX, EULA])
+@pytest.mark.parametrize("page", [INDEX, GUIDE, DIAGNOSTICS, EULA])
 def test_pages_are_accessible_and_responsive(page):
     assert 'lang="en"' in page
     assert 'name="viewport"' in page

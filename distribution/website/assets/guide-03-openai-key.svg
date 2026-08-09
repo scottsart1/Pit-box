@@ -1,0 +1,98 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="700" viewBox="0 0 1200 700" role="img" aria-labelledby="title desc">
+  <title id="title">Create and copy an OpenAI API key</title>
+  <desc id="desc">Illustrated setup guide showing creation of a masked OpenAI API key and a reminder to copy the secret once without exposing any real credential.</desc>
+  <defs>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="160%">
+      <feDropShadow dx="0" dy="14" stdDeviation="18" flood-color="#101720" flood-opacity="0.14"/>
+    </filter>
+    <style>
+      .ui { font-family: system-ui, -apple-system, "Segoe UI", Arial, sans-serif; }
+      .ink { fill: #12171f; }
+      .copy { fill: #3d4756; }
+      .muted { fill: #667081; }
+      .small { font-size: 18px; }
+      .body { font-size: 21px; }
+      .strong { font-weight: 760; }
+    </style>
+  </defs>
+  <rect width="1200" height="700" fill="#f5f7fa"/>
+  <circle cx="1095" cy="610" r="166" fill="#eceff4"/>
+  <path d="M0 0H1200V88H0Z" fill="#101720"/>
+  <g class="ui">
+    <rect x="58" y="31" width="13" height="28" rx="2" fill="#c8102e"/>
+    <text x="88" y="53" fill="#ffffff" font-size="23" font-weight="820" letter-spacing="1.8">PIT WALL</text>
+    <text x="1018" y="52" fill="#aab4c2" font-size="15" font-weight="700" letter-spacing="1.6">ILLUSTRATED GUIDE</text>
+
+    <rect x="66" y="126" width="171" height="34" rx="17" fill="#f7dfe3"/>
+    <text x="151.5" y="149" text-anchor="middle" fill="#9c0c23" font-size="15" font-weight="800" letter-spacing="1.1">STEP 3 · API KEY</text>
+    <text x="66" y="205" class="ink" font-size="42" font-weight="820" letter-spacing="-1.2">Create your OpenAI API key</text>
+    <text x="66" y="240" class="copy body">Copy the whole secret when it appears. Keep it private.</text>
+
+    <g transform="translate(66 282)">
+      <rect width="330" height="326" rx="18" fill="#ffffff" stroke="#dde2e9"/>
+      <text x="25" y="43" class="ink" font-size="20" font-weight="800">Safe key handling</text>
+      <g transform="translate(25 72)">
+        <rect width="280" height="55" rx="11" fill="#e7f4ed"/>
+        <circle cx="25" cy="27.5" r="10" fill="#17714b"/>
+        <path d="M20 28L24 32L31 23" fill="none" stroke="#fff" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"/>
+        <text x="47" y="25" class="ink" font-size="17" font-weight="750">Copy once</text>
+        <text x="47" y="45" class="muted" font-size="15">The full secret is shown once.</text>
+      </g>
+      <g transform="translate(25 141)">
+        <rect width="280" height="55" rx="11" fill="#f5f7fa"/>
+        <path d="M19 28H31M25 22V34" stroke="#c8102e" stroke-width="2.5" stroke-linecap="round"/>
+        <text x="47" y="25" class="ink" font-size="17" font-weight="750">Paste only into Pit Wall</text>
+        <text x="47" y="45" class="muted" font-size="15">Never email or post the key.</text>
+      </g>
+      <g transform="translate(25 210)">
+        <rect width="280" height="55" rx="11" fill="#f5f7fa"/>
+        <path d="M19 25L25 19L31 25V34H19Z" fill="none" stroke="#c8102e" stroke-width="2.2" stroke-linejoin="round"/>
+        <text x="47" y="25" class="ink" font-size="17" font-weight="750">Store it locally</text>
+        <text x="47" y="45" class="muted" font-size="15">Pit Wall keeps it on this PC.</text>
+      </g>
+      <text x="25" y="300" fill="#9c0c23" font-size="16" font-weight="760">Do not use a key shown in a guide image.</text>
+    </g>
+
+    <g transform="translate(436 127)" filter="url(#shadow)">
+      <rect width="698" height="493" rx="20" fill="#ffffff" stroke="#dde2e9"/>
+      <path d="M0 20Q0 0 20 0H678Q698 0 698 20V66H0Z" fill="#101720"/>
+      <circle cx="28" cy="33" r="7" fill="#c8102e"/>
+      <circle cx="52" cy="33" r="7" fill="#667081"/>
+      <circle cx="76" cy="33" r="7" fill="#667081"/>
+      <rect x="108" y="18" width="549" height="30" rx="8" fill="#27313d"/>
+      <text x="128" y="39" fill="#d8dee9" font-size="15">OpenAI Platform · API keys</text>
+
+      <text x="40" y="116" class="ink" font-size="29" font-weight="820">API keys</text>
+      <text x="40" y="147" class="muted" font-size="17">Create a secret key for the Pit Wall race engineer.</text>
+      <rect x="470" y="96" width="188" height="47" rx="10" fill="#c8102e"/>
+      <text x="564" y="126" text-anchor="middle" fill="#ffffff" font-size="16" font-weight="800">Create new secret key</text>
+
+      <rect x="40" y="178" width="618" height="228" rx="16" fill="#f5f7fa" stroke="#dde2e9"/>
+      <text x="62" y="213" class="muted" font-size="14" font-weight="700">Name</text>
+      <rect x="108" y="190" width="117" height="34" rx="8" fill="#ffffff" stroke="#aeb7c3"/>
+      <text x="166.5" y="212" text-anchor="middle" class="ink" font-size="15" font-weight="770">Pit Wall</text>
+      <text x="260" y="213" class="muted" font-size="14" font-weight="700">Permissions</text>
+      <rect x="349" y="190" width="72" height="34" rx="8" fill="#ffffff" stroke="#aeb7c3"/>
+      <text x="385" y="212" text-anchor="middle" class="ink" font-size="15" font-weight="770">All</text>
+
+      <rect x="62" y="237" width="574" height="43" rx="9" fill="#fff7e6" stroke="#efd59b"/>
+      <circle cx="84" cy="258.5" r="10" fill="#ffc15c"/>
+      <text x="84" y="264.5" text-anchor="middle" fill="#5f4513" font-size="15" font-weight="850">!</text>
+      <text x="104" y="264" class="ink" font-size="16" font-weight="740">Copy this key now. You will not see it again.</text>
+
+      <text x="62" y="311" class="ink" font-size="16" font-weight="750">Secret key</text>
+      <rect x="62" y="322" width="441" height="58" rx="10" fill="#ffffff" stroke="#aeb7c3" stroke-width="2"/>
+      <text x="83" y="358" class="ink" font-size="20" font-family="ui-monospace, Consolas, monospace" letter-spacing="1">sk-proj-••••••••••••••••</text>
+      <rect x="518" y="322" width="118" height="58" rx="10" fill="#101720"/>
+      <rect x="546" y="338" width="18" height="20" rx="3" fill="none" stroke="#fff" stroke-width="2"/>
+      <rect x="554" y="344" width="18" height="20" rx="3" fill="#101720" stroke="#fff" stroke-width="2"/>
+      <text x="594" y="358" text-anchor="middle" fill="#ffffff" font-size="16" font-weight="780">Copy</text>
+
+      <text x="62" y="401" class="muted" font-size="15">Privacy-safe example · no usable credential is displayed</text>
+
+      <path d="M209 443H453" stroke="#c8102e" stroke-width="3" stroke-linecap="round"/>
+      <path d="M443 434L453 443L443 452" fill="none" stroke="#c8102e" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+      <text x="331" y="476" text-anchor="middle" class="ink" font-size="18" font-weight="740">Next: paste it into Activate Pit Wall</text>
+    </g>
+  </g>
+</svg>

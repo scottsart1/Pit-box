@@ -1,0 +1,277 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Activation diagnostics — Pit Wall</title>
+<meta name="description" content="Check whether the Pit Wall activation server is reachable and whether your activation code is recognised. These checks never activate or use up your code.">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<header class="site-header">
+  <div class="wrap">
+    <a class="brand" href="index.html#top"><span class="brand-mark" aria-hidden="true"></span> Pit Wall</a>
+    <nav class="site-nav" aria-label="Sections">
+      <a href="index.html#demo">Demo</a>
+      <a href="index.html#what">What it does</a>
+      <a href="guide.html">Setup guide</a>
+      <a href="diagnostics.html" aria-current="page">Diagnostics</a>
+      <a href="index.html#buy">Get it</a>
+    </nav>
+    <a class="button primary" href="index.html#download">Download</a>
+  </div>
+</header>
+
+<main id="top">
+  <section class="guide-hero">
+    <div class="wrap guide-hero-grid">
+      <div>
+        <div class="eyebrow">Support tool</div>
+        <h1>Activation diagnostics.</h1>
+        <p class="lede">If Pit Wall would not activate on your PC, run these two checks. They narrow the problem down to the server, your network, or the code itself — and tell you exactly what to send me if it is still stuck.</p>
+        <div class="hero-actions">
+          <a class="button primary" href="#checks">Run the checks</a>
+          <a class="button ghost" href="guide.html#troubleshooting">Setup troubleshooting</a>
+        </div>
+      </div>
+      <aside class="guide-status" aria-label="What these checks do">
+        <div><strong>Safe</strong><span>never activates or uses up your code</span></div>
+        <div><strong>2</strong><span>checks, a few seconds each</span></div>
+        <div><strong>Read only</strong><span>nothing on your account changes</span></div>
+      </aside>
+    </div>
+  </section>
+
+  <section class="guide-intro soft">
+    <div class="wrap">
+      <div class="guide-companion-note">
+        <div class="guide-companion-icon" aria-hidden="true">i</div>
+        <div><strong>These checks cannot use up your activation code.</strong> Checking a code asks the server only whether it exists. Claiming a code to a computer happens solely inside the Pit Wall app on that computer, and this page never does it.</div>
+      </div>
+    </div>
+  </section>
+
+  <section id="checks" class="guide-step">
+    <div class="wrap">
+      <div class="step-kicker"><span>1</span> Server</div>
+      <h2>Is the activation server reachable?</h2>
+      <p class="section-lede">This asks the activation server whether it is running, from your browser on this network.</p>
+      <p><button id="healthButton" class="button primary" type="button">Check the server</button></p>
+      <p id="healthStatus" class="download-status" role="status" aria-live="polite"></p>
+      <div class="guide-tip"><strong>What this tells you.</strong> If this fails but ordinary websites load, something between you and the server is blocking it — most often a VPN, a company or school network, or antivirus that inspects secure connections.</div>
+    </div>
+  </section>
+
+  <section id="code-check" class="guide-step soft">
+    <div class="wrap">
+      <div class="step-kicker"><span>2</span> Code</div>
+      <h2>Does the server recognise your code?</h2>
+      <p class="section-lede">Enter the code from your purchase email. The server answers only whether it exists; it is not activated, claimed or used up by this check.</p>
+      <div class="buy">
+        <form id="codeForm" novalidate>
+          <label for="diagCode" class="field-label">Activation code</label>
+          <div class="code-entry">
+            <input id="diagCode" name="code" type="text" inputmode="latin"
+                   autocomplete="off" autocapitalize="characters" spellcheck="false"
+                   placeholder="PITW-XXXXX-XXXXX-XXXXX" maxlength="24"
+                   aria-describedby="codeStatus">
+            <button class="button primary" type="submit">Check the code</button>
+          </div>
+          <p id="codeStatus" class="download-status" role="status" aria-live="polite"></p>
+        </form>
+      </div>
+      <div class="guide-warning"><strong>What this cannot tell you.</strong> It cannot tell whether the code has already been claimed by a computer. That is only decided during activation inside the app, and testing it here would permanently tie your code to this browser instead of your PC — so this page deliberately does not do it.</div>
+    </div>
+  </section>
+
+  <section class="guide-help">
+    <div class="wrap">
+      <div class="eyebrow">Reading the result</div>
+      <h2>What each outcome means</h2>
+      <div class="guide-help-grid">
+        <details open>
+          <summary>Server reachable, code recognised</summary>
+          <p>The server, your network and your code are all fine. The failure is happening at the moment the app claims the code for your computer. The most likely causes are that the code was already activated on another computer, or that something on this PC is interfering with the app's connection. Email me the exact wording shown in the app and I will check the code's status at my end.</p>
+        </details>
+        <details>
+          <summary>Server reachable, code not recognised</summary>
+          <p>The code did not match anything in the database. Check it character by character against your purchase email, watching for a missing character or a letter typed in place of a digit. If it still fails, reply to your purchase email and I will confirm the right code.</p>
+        </details>
+        <details>
+          <summary>Server not reachable</summary>
+          <p>Your browser could not reach the activation server at all. Try again on a different network, such as a phone hotspot, and turn off any VPN. If a hotspot works and your usual network does not, the network is blocking it. If the app fails but this page works, suspect antivirus or firewall software inspecting the app's connection specifically.</p>
+        </details>
+        <details>
+          <summary>Both checks pass but the app still fails</summary>
+          <p>This is the most useful result to report, and it does not mean your code is bad. These checks run in your browser; the app makes its own request, and the two can be treated differently both by security software on your PC and by the protection sitting in front of the server. A request can be refused before it ever reaches the activation server, and the app then has nothing specific to show you — which is why it falls back to wording as vague as “Activation failed. Please try again.”</p>
+          <p>If you see exactly that wording, email me: it identifies the problem precisely, and there is a fixed installer for it. Please do not keep retrying, as it will not clear on its own.</p>
+        </details>
+      </div>
+      <div class="guide-finish">
+        <div><strong>Still stuck?</strong><span>Email the result shown above and the exact message from the app. Never include your OpenAI API key.</span></div>
+        <a class="button primary" href="mailto:vale.scott00@gmail.com">Email support</a>
+      </div>
+    </div>
+  </section>
+</main>
+
+<footer class="site-footer">
+  <div class="wrap footer-row">
+    <div><strong style="color:#fff">Pit Wall</strong> — an independent Windows companion for F1 telemetry.</div>
+    <div><a href="index.html">Home</a> · <a href="guide.html">Setup guide</a> · <a href="eula.html">Licence terms</a></div>
+  </div>
+</footer>
+
+<script>
+// Diagnostics for buyers whose activation failed.
+//
+// This page is deliberately limited to the two endpoints that cannot change
+// anything: /health, and /download which the Worker documents as explicitly
+// NOT claiming a code. It must never call /activate: that endpoint atomically
+// claims a code and binds it to the caller's device hash, which a browser
+// cannot produce correctly, so "testing" activation here would permanently
+// bind a paid code to a value the buyer's PC can never present again.
+const ACTIVATION_API = "https://pitwall-activation.sarthakvij123450.workers.dev";
+const REQUEST_TIMEOUT_MS = 15000;
+
+function say(id, message, tone) {
+  const target = document.getElementById(id);
+  if (!target) return;
+  target.textContent = message;
+  target.dataset.tone = tone || "info";
+}
+
+// Match the download form: upper-case and regroup as PITW-XXXXX-XXXXX-XXXXX so
+// a code pasted without hyphens still reads correctly.
+function tidy(raw) {
+  let text = raw.toUpperCase().replace(/[^A-Z0-9]/g, "");
+  text = text.replace(/^PITW/, "");
+  const groups = [text.slice(0, 5), text.slice(5, 10), text.slice(10, 15)].filter(Boolean);
+  return groups.length ? "PITW-" + groups.join("-") : text ? "PITW-" + text : "";
+}
+
+async function fetchWithTimeout(url, options) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  try {
+    return await fetch(url, Object.assign({}, options, { signal: controller.signal }));
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+const healthButton = document.getElementById("healthButton");
+if (healthButton) {
+  healthButton.addEventListener("click", async () => {
+    healthButton.disabled = true;
+    say("healthStatus", "Contacting the activation server…");
+    try {
+      const response = await fetchWithTimeout(ACTIVATION_API + "/health", { method: "GET" });
+      const payload = await response.json().catch(() => null);
+      if (response.ok && payload && payload.ok === true) {
+        say("healthStatus", "Server reachable — it answered normally (HTTP " + response.status + ").", "success");
+      } else {
+        say(
+          "healthStatus",
+          "The server answered, but not in the expected way (HTTP " + response.status +
+            "). That usually means something between you and it is rewriting the response.",
+          "error"
+        );
+      }
+    } catch (error) {
+      const aborted = error && error.name === "AbortError";
+      say(
+        "healthStatus",
+        aborted
+          ? "The server did not answer within 15 seconds. Try a different network, such as a phone hotspot."
+          : "Could not reach the server at all. Check your connection, turn off any VPN, and try again.",
+        "error"
+      );
+    } finally {
+      healthButton.disabled = false;
+    }
+  });
+}
+
+const codeForm = document.getElementById("codeForm");
+const codeField = document.getElementById("diagCode");
+
+if (codeField) {
+  codeField.addEventListener("input", () => {
+    const caretAtEnd = codeField.selectionStart === codeField.value.length;
+    const tidied = tidy(codeField.value);
+    if (tidied !== codeField.value) {
+      codeField.value = tidied;
+      if (caretAtEnd) codeField.setSelectionRange(tidied.length, tidied.length);
+    }
+  });
+}
+
+if (codeForm) {
+  codeForm.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const code = tidy(codeField.value);
+    if (code.replace(/[^A-Z0-9]/g, "").length !== 19) {
+      say("codeStatus", "That code looks incomplete. It has 15 characters after PITW.", "error");
+      codeField.focus();
+      return;
+    }
+
+    const button = codeForm.querySelector("button[type=submit]");
+    button.disabled = true;
+    say("codeStatus", "Asking the server whether this code exists…");
+
+    try {
+      const response = await fetchWithTimeout(ACTIVATION_API + "/download", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ code }),
+      });
+      const payload = await response.json().catch(() => null);
+
+      if (response.ok) {
+        // Deliberately ignore payload.url. Recognising the code is the whole
+        // answer here; starting a download is the job of the main page.
+        say(
+          "codeStatus",
+          "Code recognised. The server knows this code and it was not used up by this check. " +
+            "If the app still refuses, the problem is at the claim step — send me the app's exact message.",
+          "success"
+        );
+        return;
+      }
+
+      const serverCode = (payload && payload.code) || "unknown";
+      if (serverCode === "code_not_found") {
+        say(
+          "codeStatus",
+          "Not recognised (HTTP " + response.status + "). Check it against your purchase email, " +
+            "character by character, then try again.",
+          "error"
+        );
+      } else {
+        say(
+          "codeStatus",
+          "The server refused the check (HTTP " + response.status + ", " + serverCode + "). " +
+            ((payload && payload.message) || "Try again in a moment."),
+          "error"
+        );
+      }
+    } catch (error) {
+      const aborted = error && error.name === "AbortError";
+      say(
+        "codeStatus",
+        aborted
+          ? "The server did not answer within 15 seconds. Try a different network, such as a phone hotspot."
+          : "Could not reach the server. If the first check passed but this one did not, try again in a moment.",
+        "error"
+      );
+    } finally {
+      button.disabled = false;
+    }
+  });
+}
+</script>
+</body>
+</html>

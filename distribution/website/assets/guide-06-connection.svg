@@ -1,0 +1,91 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="700" viewBox="0 0 1200 700" role="img" aria-labelledby="title desc">
+  <title id="title">Verify the OpenAI key and PS5 connection in Pit Wall</title>
+  <desc id="desc">Illustrated Pit Wall Connection workspace showing a ready, redacted OpenAI API key, the Test saved key button, a privacy-safe recommended local IPv4 address, and UDP port 20777.</desc>
+  <defs>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="160%">
+      <feDropShadow dx="0" dy="14" stdDeviation="18" flood-color="#101720" flood-opacity="0.16"/>
+    </filter>
+    <style>
+      .ui { font-family: system-ui, -apple-system, "Segoe UI", Arial, sans-serif; }
+      .ink { fill: #12171f; }
+      .copy { fill: #3d4756; }
+      .muted { fill: #667081; }
+      .app-copy { fill: #91a6b8; }
+      .app-ink { fill: #eef4f8; }
+    </style>
+  </defs>
+  <rect width="1200" height="700" fill="#f5f7fa"/>
+  <circle cx="1095" cy="613" r="164" fill="#eceff4"/>
+  <path d="M0 0H1200V88H0Z" fill="#101720"/>
+  <g class="ui">
+    <rect x="58" y="31" width="13" height="28" rx="2" fill="#c8102e"/>
+    <text x="88" y="53" fill="#ffffff" font-size="23" font-weight="820" letter-spacing="1.8">PIT WALL</text>
+    <text x="1018" y="52" fill="#aab4c2" font-size="15" font-weight="700" letter-spacing="1.6">ILLUSTRATED GUIDE</text>
+
+    <rect x="66" y="126" width="194" height="34" rx="17" fill="#f7dfe3"/>
+    <text x="163" y="149" text-anchor="middle" fill="#9c0c23" font-size="15" font-weight="800" letter-spacing="1.05">STEP 6 · CONFIRM</text>
+    <text x="66" y="205" class="ink" font-size="42" font-weight="820" letter-spacing="-1.2">Confirm the key and connection</text>
+    <text x="66" y="240" class="copy" font-size="21">Open Connection, test the saved key, and copy the recommended PS5 destination.</text>
+
+    <g transform="translate(66 275)" filter="url(#shadow)">
+      <rect width="1068" height="380" rx="18" fill="#070b0f"/>
+      <path d="M0 18Q0 0 18 0H1050Q1068 0 1068 18V49H0Z" fill="#111820"/>
+      <text x="22" y="31" class="app-ink" font-size="14" font-weight="900" letter-spacing="1.2">PIT WALL 4.2.0</text>
+      <circle cx="198" cy="25" r="5" fill="#49d17d"/>
+      <text x="211" y="30" class="app-copy" font-size="12">Receiving telemetry</text>
+      <text x="1014" y="30" text-anchor="end" class="app-copy" font-size="12">engineer ready</text>
+
+      <rect x="0" y="49" width="1068" height="42" fill="#111820"/>
+      <text x="26" y="75" class="app-copy" font-size="12" font-weight="800">DRIVE</text>
+      <rect x="84" y="56" width="108" height="29" rx="7" fill="#233545"/>
+      <text x="138" y="75" text-anchor="middle" class="app-ink" font-size="12" font-weight="850">CONNECTION</text>
+      <text x="214" y="75" class="app-copy" font-size="12" font-weight="800">LIBRARY</text>
+      <text x="286" y="75" class="app-copy" font-size="12" font-weight="800">SESSION REVIEW</text>
+      <text x="410" y="75" class="app-copy" font-size="12" font-weight="800">LAP LAB</text>
+      <text x="475" y="75" class="app-copy" font-size="12" font-weight="800">FIELD</text>
+
+      <g transform="translate(18 108)">
+        <rect width="594" height="244" rx="12" fill="#0c1218" stroke="#263542"/>
+        <text x="22" y="28" fill="#8fa4b7" font-size="10" font-weight="800" letter-spacing="1.2">PS5 TELEMETRY SETUP</text>
+        <text x="22" y="61" class="app-ink" font-size="24" font-weight="840">Connection Center</text>
+        <rect x="455" y="25" width="116" height="31" rx="15.5" fill="#183b2a" stroke="#49d17d"/>
+        <circle cx="475" cy="40.5" r="6" fill="#49d17d"/>
+        <text x="490" y="46" fill="#79e39e" font-size="12" font-weight="800">Receiving</text>
+        <text x="22" y="88" class="app-copy" font-size="13">Use the recommended PC address below as the UDP destination on your PS5.</text>
+
+        <rect x="22" y="108" width="346" height="107" rx="10" fill="#121b24" stroke="#263542"/>
+        <text x="39" y="132" fill="#8fa4b7" font-size="10" font-weight="800" letter-spacing=".8">ENTER THIS UDP IP ON PS5</text>
+        <text x="39" y="170" class="app-ink" font-size="25" font-family="ui-monospace, Consolas, monospace" font-weight="820">192.168.x.x</text>
+        <text x="39" y="195" class="app-copy" font-size="11">Private LAN example · use the value shown on your PC</text>
+        <rect x="264" y="145" width="82" height="37" rx="7" fill="#263542"/>
+        <text x="305" y="168" text-anchor="middle" class="app-ink" font-size="12" font-weight="800">Copy IP</text>
+
+        <rect x="384" y="108" width="187" height="107" rx="10" fill="#121b24" stroke="#263542"/>
+        <text x="401" y="132" fill="#8fa4b7" font-size="10" font-weight="800" letter-spacing=".8">UDP PORT</text>
+        <text x="401" y="170" class="app-ink" font-size="25" font-weight="850">20777</text>
+        <text x="401" y="195" class="app-copy" font-size="11">UDP format 2026</text>
+      </g>
+
+      <g transform="translate(630 108)">
+        <rect width="420" height="244" rx="12" fill="#0c1218" stroke="#263542"/>
+        <text x="20" y="28" fill="#8fa4b7" font-size="10" font-weight="800" letter-spacing="1.2">RACE ENGINEER</text>
+        <text x="20" y="60" class="app-ink" font-size="22" font-weight="840">OpenAI API key</text>
+        <rect x="324" y="25" width="76" height="31" rx="15.5" fill="#183b2a" stroke="#49d17d"/>
+        <circle cx="343" cy="40.5" r="6" fill="#49d17d"/>
+        <text x="357" y="46" fill="#79e39e" font-size="12" font-weight="800">Ready</text>
+        <text x="20" y="88" class="app-copy" font-size="13">A key is saved. It is never shown again after saving.</text>
+
+        <rect x="20" y="105" width="380" height="47" rx="8" fill="#121b24" stroke="#3a4a58"/>
+        <text x="36" y="134" class="app-copy" font-size="15" font-family="ui-monospace, Consolas, monospace">Key sk-...••••</text>
+
+        <rect x="20" y="169" width="144" height="42" rx="8" fill="#263542"/>
+        <text x="92" y="195" text-anchor="middle" class="app-ink" font-size="13" font-weight="820">Test saved key</text>
+        <rect x="178" y="169" width="80" height="42" rx="8" fill="#263542"/>
+        <text x="218" y="195" text-anchor="middle" class="app-ink" font-size="13" font-weight="820">Remove</text>
+        <circle cx="282" cy="190" r="9" fill="#49d17d"/>
+        <path d="M277 190L281 194L288 186" fill="none" stroke="#07100a" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+        <text x="299" y="195" fill="#79e39e" font-size="12" font-weight="760">Key accepted by OpenAI.</text>
+      </g>
+    </g>
+  </g>
+</svg>
