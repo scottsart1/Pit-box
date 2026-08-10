@@ -258,3 +258,48 @@ async def test_production_silence_mode_latches_across_brake_and_throttle_packets
     assert snapshot["ptt_pressed"] is False
     assert snapshot["ptt_release_reason"] == "speech_silence"
     assert voice.mask == 0x2000
+
+
+@pytest.mark.asyncio
+async def test_quiet_game_with_a_known_session_stands_by_instead_of_vanishing():
+    """The pre-start grid must not read as a broken connection.
+
+    Measured from a real pre-race phase: 250 packets in 118 seconds with gaps
+    up to 49 seconds, so the 3-second disconnect rule alone showed "Waiting
+    for UDP" for 104 of those 118 seconds while the driver sat on the grid.
+    A quiet stream with a known session is the game standing by, not gone.
+    """
+    store = StateStore()
+    await store.mark_packet(2026, 25, 123)
+    snapshot = await store.snapshot()
+    assert snapshot["game_presence"] == "receiving"
+
+    # 10 s of silence: past the disconnect rule, inside the grace window.
+    await store.update(last_packet_at=time.time() - 10)
+    await store.mark_disconnected_if_stale(3, presence_grace_s=120)
+    snapshot = await store.snapshot()
+    assert snapshot["connected"] is False
+    assert snapshot["game_presence"] == "standing_by"
+
+    # Silence beyond the grace window: the game really is gone.
+    await store.update(last_packet_at=time.time() - 500)
+    await store.mark_disconnected_if_stale(3, presence_grace_s=120)
+    snapshot = await store.snapshot()
+    assert snapshot["game_presence"] == "none"
+
+    # The next packet restores the live state directly.
+    await store.mark_packet(2026, 25, 123)
+    snapshot = await store.snapshot()
+    assert snapshot["connected"] is True
+    assert snapshot["game_presence"] == "receiving"
+
+
+@pytest.mark.asyncio
+async def test_silence_with_no_session_identity_never_stands_by():
+    """Before any session packet there is nothing to stand by for."""
+    store = StateStore()
+    await store.update(last_packet_at=time.time() - 10, connected=True)
+    await store.mark_disconnected_if_stale(3, presence_grace_s=120)
+    snapshot = await store.snapshot()
+    assert snapshot["connected"] is False
+    assert snapshot["game_presence"] == "none"

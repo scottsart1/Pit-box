@@ -127,9 +127,54 @@ class DriverState:
     history_updated_at: float = 0.0
 
 
+# Fields omitted from the 4 Hz live snapshot. Tools and briefings read them
+# through the full/analysis profiles instead.
+_LIVE_DRIVER_EXCLUDED_FIELDS = frozenset(
+    {
+        "lap_history",
+        "tyre_stints",
+        "position_history",
+        "gap_history",
+        "energy_lap_history",
+        "pit_stop_history",
+    }
+)
+_DRIVER_FIELDS = fields(DriverState)
+
+
+def _serialize_live_driver(driver: DriverState) -> dict[str, Any]:
+    """Serialize one car for the live profile without touching its histories.
+
+    ``asdict`` deep copies every field before the heavy ones can be dropped,
+    which at 4 Hz across 24 cars allocated (and immediately discarded) every
+    lap/gap/position history entry of the whole race on every frame — real
+    memory pressure on a machine also running the game.
+    """
+    serialized: dict[str, Any] = {}
+    for item in _DRIVER_FIELDS:
+        if item.name in _LIVE_DRIVER_EXCLUDED_FIELDS:
+            continue
+        value = getattr(driver, item.name)
+        if isinstance(value, (list, dict)):
+            value = copy.deepcopy(value)
+        serialized[item.name] = value
+    return serialized
+
+
 @dataclass(slots=True)
 class SessionState:
     connected: bool = False
+    # Whether the game itself is still there, independent of the live stream.
+    # ``receiving`` — packets inside the disconnect window (normal running).
+    # ``standing_by`` — the stream has gone quiet but a session identity is
+    #   known and a packet arrived within the presence grace window. This is
+    #   the pre-start grid, the strategy/setup screens and the pause menu,
+    #   where F1 25 trickles a handful of packets a minute: during a real
+    #   pre-race phase 250 packets arrived in 118 s with gaps up to 49 s, so a
+    #   3-second disconnect rule alone showed "Waiting for UDP" for 104 of
+    #   those 118 seconds while the driver sat on the grid.
+    # ``none`` — never received, or quiet for longer than the grace window.
+    game_presence: str = "none"
     packet_format: int = 0
     game_year: int = 0
     session_uid: int = 0
@@ -633,14 +678,10 @@ class StateStore:
                     # first Lap Data packet arrives.
                     if not is_player and not driver.active:
                         continue
-                    serialized = asdict(driver)
                     if profile == "live":
-                        serialized.pop("lap_history", None)
-                        serialized.pop("tyre_stints", None)
-                        serialized.pop("position_history", None)
-                        serialized.pop("gap_history", None)
-                        serialized.pop("energy_lap_history", None)
-                        serialized.pop("pit_stop_history", None)
+                        serialized = _serialize_live_driver(driver)
+                    else:
+                        serialized = asdict(driver)
                     drivers.append(serialized)
                 data[name] = drivers
             elif name == "traces":
@@ -763,6 +804,7 @@ class StateStore:
             while self._packet_times and self._packet_times[0] < cutoff:
                 self._packet_times.popleft()
             self.state.connected = True
+            self.state.game_presence = "receiving"
             self.state.packet_format = int(packet_format)
             self.state.game_year = int(game_year)
             self.state.session_uid = int(session_uid)
@@ -779,9 +821,14 @@ class StateStore:
             self.state.packet_rate_hz = round(len(self._packet_times) / 2.0, 1)
             self.state.state_revision += 1
 
-    async def mark_disconnected_if_stale(self, stale_after_s: float) -> bool:
+    async def mark_disconnected_if_stale(
+        self,
+        stale_after_s: float,
+        presence_grace_s: float = 120.0,
+    ) -> bool:
         now = time.time()
         async with self._lock:
+            changed = False
             if (
                 self.state.connected
                 and self.state.last_packet_at
@@ -789,8 +836,24 @@ class StateStore:
             ):
                 self.state.connected = False
                 self.state.packet_rate_hz = 0.0
-                return True
-            return False
+                changed = True
+            if not self.state.connected:
+                # Presence is re-evaluated on every watchdog tick, not only at
+                # the moment of disconnection, so standing_by decays to none
+                # once the grace window passes without another packet.
+                presence = (
+                    "standing_by"
+                    if (
+                        self.state.session_uid
+                        and self.state.last_packet_at
+                        and now - self.state.last_packet_at <= presence_grace_s
+                    )
+                    else "none"
+                )
+                if presence != self.state.game_presence:
+                    self.state.game_presence = presence
+                    self.state.state_revision += 1
+            return changed
 
     async def set_packet_queue_stats(self, depth: int, capacity: int) -> None:
         async with self._lock:

@@ -48,3 +48,46 @@ def test_a_dashboard_that_stops_acknowledging_is_dropped_not_buffered_for(monkey
             # hand back an endless backlog.
             for _ in range(50):
                 ws.receive_json()
+
+
+def test_memory_exhaustion_drops_the_connection_instead_of_crashing(monkeypatch) -> None:
+    """A MemoryError while serializing a frame must cost one closed socket.
+
+    Seen in a real race: two MemoryErrors in json.dumps of the live snapshot,
+    each surfacing as an unhandled ASGI exception. The engine survived, but the
+    handler must treat it as a droppable frame, not a crash.
+    """
+
+    async def exhausted() -> dict:
+        raise MemoryError
+
+    monkeypatch.setattr(app_module.store, "snapshot_live", exhausted)
+
+    import pytest
+
+    with pytest.raises(Exception) as excinfo, TestClient(app).websocket_connect("/ws") as ws:
+        ws.receive_json()
+    # The socket closing is expected; the MemoryError leaking out is not.
+    assert not isinstance(excinfo.value, MemoryError)
+
+
+def test_send_racing_a_client_close_ends_quietly(monkeypatch) -> None:
+    """uvicorn raises RuntimeError when a send races the client's close.
+
+    That is a disconnect, not a server fault: it must not surface as an
+    ASGI exception.
+    """
+    from starlette.websockets import WebSocket
+
+    async def send_after_close(self, data) -> None:
+        raise RuntimeError(
+            "Unexpected ASGI message 'websocket.send', after sending 'websocket.close'."
+        )
+
+    monkeypatch.setattr(WebSocket, "send_json", send_after_close)
+
+    import pytest
+
+    with pytest.raises(Exception) as excinfo, TestClient(app).websocket_connect("/ws") as ws:
+        ws.receive_json()
+    assert not isinstance(excinfo.value, RuntimeError)

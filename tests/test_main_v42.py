@@ -66,3 +66,51 @@ def test_a_server_that_never_starts_opens_nothing(monkeypatch) -> None:
 
     assert opened == []
     assert elapsed < 8.0, "the wait is not bounded by timeout_s"
+
+
+def _serve_json_once(payload: bytes, status: str = "200 OK") -> int:
+    """Serve one HTTP response on an ephemeral loopback port; return the port."""
+    listener = socket.create_server(("127.0.0.1", 0))
+    port = listener.getsockname()[1]
+
+    def serve() -> None:
+        with listener:
+            connection, _ = listener.accept()
+            with connection:
+                connection.recv(65536)
+                body = payload
+                head = (
+                    f"HTTP/1.1 {status}\r\n"
+                    "Content-Type: application/json\r\n"
+                    f"Content-Length: {len(body)}\r\n"
+                    "Connection: close\r\n\r\n"
+                ).encode()
+                connection.sendall(head + body)
+
+    threading.Thread(target=serve, daemon=True).start()
+    return port
+
+
+def test_second_launch_detects_a_healthy_running_instance() -> None:
+    """A relaunch must hand over to the running copy, not half-start.
+
+    The old behavior ran startup far enough to leave a dead capture stub,
+    failed the port bind with WinError 10048, and died while its browser
+    thread opened the old instance's dashboard.
+    """
+    port = _serve_json_once(b'{"ok": true, "version": "4.2.0"}')
+    assert main_module.another_instance_is_serving("127.0.0.1", port) is True
+
+
+def test_a_non_pitwall_listener_is_not_mistaken_for_a_running_instance() -> None:
+    # Something else squatting the port must not be treated as "already
+    # running": startup proceeds and the bind failure reports honestly.
+    port = _serve_json_once(b"<html>not pit box</html>")
+    assert main_module.another_instance_is_serving("127.0.0.1", port) is False
+
+
+def test_nothing_listening_means_no_running_instance() -> None:
+    probe = socket.create_server(("127.0.0.1", 0))
+    port = probe.getsockname()[1]
+    probe.close()
+    assert main_module.another_instance_is_serving("127.0.0.1", port, timeout_s=0.5) is False

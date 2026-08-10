@@ -185,3 +185,61 @@ async def test_quiet_wake_audio_crosses_adaptive_start_gate(
     assert controller._wake_speaking is True
     assert controller._wake_effective_threshold == 75.0
     await controller.shutdown()
+
+
+class _FailingBrain:
+    """Brain whose model call fails the way a provider deadline does."""
+
+    @staticmethod
+    def classify_request(text: str) -> str:
+        return "normal"
+
+    async def ask(self, command: str) -> str:
+        raise RuntimeError("No LLM provider completed the request.")
+
+
+class _AckAudio:
+    def __init__(self) -> None:
+        self.acks: list[str] = []
+
+    def stop_playback(self) -> None:
+        pass
+
+    async def play_ack(self, kind: str = "copy") -> None:
+        self.acks.append(kind)
+
+
+@pytest.mark.asyncio
+async def test_brain_failure_is_spoken_not_silent(monkeypatch, tmp_path) -> None:
+    """When the model call fails after the ack, the driver must hear it.
+
+    In a real race the provider deadline expired twice and the driver got
+    "Copy" followed by dead air; the failure lived only in the log. The
+    fallback line goes out over the same TTS path, which is independent of
+    the failed model call.
+    """
+    monkeypatch.setattr(settings, "data_dir", tmp_path)
+    store = StateStore()
+    controller = NativeVoiceController(
+        store,
+        _FailingBrain(),  # type: ignore[arg-type]
+        _AckAudio(),  # type: ignore[arg-type]
+    )
+    spoken: list[str] = []
+
+    async def capture_speech(text: str) -> bool:
+        spoken.append(text)
+        return True
+
+    monkeypatch.setattr(controller, "speak_text", capture_speech)
+    from pitwall.voice import BRAIN_FALLBACK_LINE
+
+    # Must not raise: the failure is handled, spoken, and recorded as state.
+    await controller._run_command("what's the gap ahead", "wake")
+
+    assert spoken == [BRAIN_FALLBACK_LINE]
+    snapshot = await store.snapshot_live()
+    assert snapshot["engineer_status"] == "error"
+    assert "Engineer error" in snapshot["last_error"]
+    assert snapshot["radio_latency"]["stage"] == "error"
+    await controller.shutdown()

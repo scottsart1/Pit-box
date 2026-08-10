@@ -59,6 +59,9 @@ a garage-only item.
 Pit calls must specify BOTH the lap and the tyre compound when the strategy tool supports it:
 "Box lap 18 for hards." Never repeat an expired game pit window as a current recommendation.
 The deterministic Your Pit Box strategy plan is primary; the game's window is only a cross-check.
+Quote stop laps and compounds from the recommended plan exactly as supplied. If you cite a
+different ranked plan, name it as an alternative in the same sentence — never present two plans'
+laps as if they were one plan.
 When strategy confidence is low, call the recommendation provisional and name the wear/deg
 assumption; do not present a track-default model as proven personal degradation.
 Respect the strategy tool's compound-rule legality. Never recommend finishing a dry Race
@@ -723,24 +726,18 @@ class EngineerBrain:
     @classmethod
     def _strategy_refusal(cls, utterance: str) -> bool:
         text = cls._normalize_text(utterance)
-        # ``has_negation`` deliberately treats the verb "stop" as a general
-        # cancellation signal.  In strategy language, however, "one-stop" and
-        # "pit stop" are nouns, so refusal detection must use an explicit
-        # negation set instead of that broad helper.
-        if has_any_phrase(
-            text,
-            (
-                "should i", "should we", "why not", "are we not", "do you want",
-                "does it mean", "does that mean", "are you sure",
-                "does not make sense", "doesn t make sense", "makes no sense",
-            ),
-        ):
-            return False
+        # A sentence that opens as a question is never a refusal, whatever
+        # phrases it contains: "should we stay out" is asking, not deciding.
         if re.match(
             r"^(?:how|what|when|where|why|would|could|can|is|are|do|does|should)\b",
             text,
         ):
             return False
+        # An explicit first-person refusal decides the matter even when the
+        # driver also editorialises. In a real race, "No, I am not boxing, it
+        # does not make sense" was classified as a question because the hedge
+        # check ran first — so no hold was set and the very next reply was the
+        # same pit call again, which the driver heard as being ignored.
         explicit = has_any_phrase(
             text,
             (
@@ -750,6 +747,21 @@ class EngineerBrain:
                 "no pit stop", "no more stops", "not in the mood for a box",
             ),
         )
+        if explicit:
+            return True
+        if has_any_phrase(
+            text,
+            (
+                "should i", "should we", "why not", "are we not", "do you want",
+                "does it mean", "does that mean", "are you sure",
+                "does not make sense", "doesn t make sense", "makes no sense",
+            ),
+        ):
+            return False
+        # ``has_negation`` deliberately treats the verb "stop" as a general
+        # cancellation signal.  In strategy language, however, "one-stop" and
+        # "pit stop" are nouns, so refusal detection must use an explicit
+        # negation set instead of that broad helper.
         actual_negation = has_any_phrase(
             text,
             (
@@ -758,9 +770,8 @@ class EngineerBrain:
                 "skip", "cancel", "forget", "disregard", "ignore",
             ),
         )
-        return explicit or (
-            actual_negation
-            and has_any_phrase(text, ("box", "boxing", "pit", "pitting", "stop"))
+        return actual_negation and has_any_phrase(
+            text, ("box", "boxing", "pit", "pitting", "stop")
         )
 
     @classmethod
@@ -1026,6 +1037,34 @@ class EngineerBrain:
             (
                 "box", "boxing", "pit", "pitting", "stop", "strategy", "tyre",
                 "tire", "soft", "medium", "hard", "inter", "wet", "mean", "talking about",
+            ),
+        ):
+            return True
+
+        # A verdict on the plan — for or against — is a conversational turn,
+        # not a request for the standing call. Both really happened, one minute
+        # apart: "That strategy works." was answered with a fresh pit
+        # instruction, and "I feel that that strategy is absolutely stupid."
+        # was answered with the same call it was rejecting. Repeating the call
+        # at a driver who is reacting to it is what reads as being ignored;
+        # the model sees the radio history and can answer the reaction itself.
+        if has_any_phrase(
+            text,
+            (
+                "that works", "works for me", "sounds good", "sounds great",
+                "i agree", "agreed", "good plan", "great plan", "good call",
+                "happy with that", "let s do that", "let s do it",
+                "go with that", "strategy works", "plan works", "love it",
+            ),
+        ):
+            return True
+        if has_any_phrase(
+            text,
+            (
+                "stupid", "ridiculous", "terrible", "awful", "rubbish",
+                "nonsense", "absurd", "insane", "crazy", "dumb", "idiotic",
+                "bad idea", "bad call", "worst", "hate", "not happy",
+                "unhappy", "disagree",
             ),
         ):
             return True
@@ -1477,7 +1516,15 @@ class EngineerBrain:
             )
             prefix = "Driver override active — " if active_override.get("enabled") else ""
             if telemetry_stale:
-                prefix = "Telemetry stale — last confirmed: " + prefix
+                # On the grid, in the strategy screens and in the pause menu
+                # the game trickles packets slowly enough to trip the live
+                # disconnect rule while still clearly present. "Telemetry
+                # stale" there sounded like a fault; the plan is simply the
+                # last confirmed one.
+                if state.get("game_presence") == "standing_by":
+                    prefix = "From the last green-flag data: " + prefix
+                else:
+                    prefix = "Telemetry stale — last confirmed: " + prefix
             challenged = has_any_phrase(
                 text,
                 ("are you sure", "does not make sense", "doesn't make sense", "why this strategy", "why box", "why stay out"),

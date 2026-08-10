@@ -92,6 +92,11 @@ class Settings(BaseSettings):
     )
     udp_port: int = 20777
     disconnect_after_s: float = 3.0
+    # How long after the last packet the game still counts as present. F1 25
+    # trickles packets during the pre-start grid, strategy screens and the
+    # pause menu, with measured gaps up to 49 seconds — well past the live
+    # disconnect rule, but the game has not gone anywhere.
+    presence_grace_s: float = 120.0
     web_host: str = "127.0.0.1"
     web_port: int = 8000
     web_lan_access: bool = False

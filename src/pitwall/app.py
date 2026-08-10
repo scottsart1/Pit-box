@@ -5,7 +5,7 @@ import logging
 import sys
 import tempfile
 import time as _time
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from dataclasses import asdict
 from pathlib import Path
 
@@ -163,7 +163,9 @@ async def _connection_watchdog() -> None:
     previous_catalog_session_id: str | None = None
     while True:
         await asyncio.sleep(1.0)
-        await store.mark_disconnected_if_stale(settings.disconnect_after_s)
+        await store.mark_disconnected_if_stale(
+            settings.disconnect_after_s, settings.presence_grace_s
+        )
         snapshot = await store.snapshot_live()
         loop_time = asyncio.get_running_loop().time()
         session_uid = int(snapshot.get("session_uid") or 0)
@@ -617,6 +619,12 @@ class StrategyOverrideRequest(BaseModel):
     note: str = "dashboard override"
 
 
+class WhatIfRequest(BaseModel):
+    """A hypothetical stop for the Strategy workspace, e.g. 'box lap 18 for hards'."""
+
+    scenario: str
+
+
 class RacePlanRequest(BaseModel):
     """A whole-race plan: one compound per stint, one lap per stop.
 
@@ -903,7 +911,32 @@ async def websocket_state(websocket: WebSocket) -> None:
     await websocket.accept()
     try:
         while True:
-            await websocket.send_json(await store.snapshot_live())
+            try:
+                await websocket.send_json(await store.snapshot_live())
+            except MemoryError:
+                # Serializing a frame is the largest single allocation this
+                # process makes at 4 Hz, so when the machine is out of memory
+                # (game + browser + capture on one box) it fails here first.
+                # One dropped dashboard connection is recoverable — the client
+                # reconnects and bootstraps over HTTP; an unhandled MemoryError
+                # tearing through the ASGI stack mid-race is not.
+                log.warning(
+                    "Not enough memory to serialize a live state frame; "
+                    "dropping this dashboard connection so it can reconnect"
+                )
+                with suppress(Exception):
+                    await websocket.close(code=1011)
+                return
+            except RuntimeError:
+                # uvicorn raises RuntimeError("Unexpected ASGI message
+                # 'websocket.send', after sending 'websocket.close'") when the
+                # client vanished between our last receive and this send. That
+                # is a disconnect, not a server fault. Still offer a close so
+                # a transport that remained open is released; if the close was
+                # what already happened, this raises again and is ignored.
+                with suppress(Exception):
+                    await websocket.close()
+                return
             try:
                 await asyncio.wait_for(
                     websocket.receive_text(), timeout=WEBSOCKET_ACK_TIMEOUT_S
@@ -1133,6 +1166,27 @@ async def clear_strategy_override() -> dict[str, object]:
     )
     await store.update(strategy_override=override)
     return {"override": override, "strategy": await strategy.recompute()}
+
+
+@app.post("/api/strategy/what-if")
+async def strategy_what_if(request: WhatIfRequest) -> dict[str, object]:
+    """Evaluate a hypothetical stop against the current recommendation.
+
+    Deterministic: the same stint simulation the ranked plans use, no model
+    call. Serves the Strategy workspace's what-if row.
+    """
+    scenario = request.scenario.strip()
+    if not scenario:
+        raise HTTPException(400, "Describe the stop, e.g. 'box lap 18 for hards'.")
+    return await strategy.what_if(scenario)
+
+
+@app.get("/api/strategy/rivals")
+async def strategy_rival_stops(
+    top_n: int = Query(default=8, ge=1, le=12),
+) -> dict[str, object]:
+    """Deterministic projected next stops for nearby rivals (timeline overlay)."""
+    return await strategy.predict_rival_strategy(top_n)
 
 
 @app.post("/api/strategy/plan")

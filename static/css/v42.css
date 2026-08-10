@@ -967,3 +967,64 @@ button:disabled,
   .map-canvas,
   .trace-canvas { max-height: 280px; }
 }
+
+/* --- Strategy workspace ---------------------------------------------------
+   The what-if pane sits in the main column with the radio pane beside it,
+   mirroring Session Review's main/side split. Everything else spans. */
+.strategy-main-col { grid-column: 1; }
+.strategy-side { grid-column: 2; display: flex; flex-direction: column; }
+.strategy-side .controls { display: flex; gap: 8px; margin-top: 8px; }
+.strategy-side .controls input { flex: 1; min-width: 0; }
+
+.whatif-controls {
+  display: grid;
+  grid-template-columns: 110px 110px minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+}
+.whatif-controls input,
+.whatif-controls select {
+  background: #0a1016;
+  color: inherit;
+  border: 1px solid #3a4a58;
+  border-radius: 8px;
+  padding: 10px;
+  min-width: 0;
+}
+
+.strategy-radio {
+  flex: 1;
+  min-height: 260px;
+  white-space: pre-wrap;
+  overflow: auto;
+  line-height: 1.42;
+  background: #0c131a;
+  border: 1px solid var(--border, #263542);
+  border-radius: 8px;
+  padding: 10px;
+}
+
+.strategy-workspace .analysis-canvas { width: 100%; }
+
+.decision-log { display: grid; gap: 6px; }
+.decision-entry {
+  display: grid;
+  grid-template-columns: 64px minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: baseline;
+  padding: 7px 4px;
+  border-bottom: 1px solid var(--border, #263542);
+}
+.decision-entry:last-child { border-bottom: 0; }
+.decision-entry .lap { font-weight: 800; white-space: nowrap; }
+.decision-entry .context { color: var(--text-2, #91a6b8); font-size: 12px; white-space: nowrap; }
+.decision-entry.changed { border-left: 3px solid var(--warn, #ffc15c); padding-left: 8px; }
+
+.plan-row-recommended td { background: color-mix(in srgb, #3f86ff 12%, transparent); }
+
+@media (max-width: 960px) {
+  .strategy-main-col,
+  .strategy-side { grid-column: 1 / -1; }
+  .whatif-controls { grid-template-columns: 1fr 1fr; }
+  .whatif-controls input[id="stratWhatIfText"] { grid-column: 1 / -1; }
+}

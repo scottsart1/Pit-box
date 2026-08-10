@@ -21,6 +21,11 @@ from .state import StateStore
 
 log = logging.getLogger(__name__)
 
+# Spoken when the engineer brain fails after the driver already heard the
+# acknowledgement. TTS is a separate, faster API call than the failed model
+# request, so it usually still works when the model call has timed out.
+BRAIN_FALLBACK_LINE = "Sorry, the radio dropped that one — go again."
+
 
 class NativeVoiceController:
     """Shared Windows microphone for hands-free wake radio and L3 fallback.
@@ -1005,7 +1010,28 @@ class NativeVoiceController:
         )
         with contextlib.suppress(Exception):
             await ack_task
-        reply = await brain_task
+        try:
+            reply = await brain_task
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # noqa: BLE001 - every failure must be spoken
+            # The driver heard "Copy" and is waiting. Dead air here reads as a
+            # broken radio and they will keep waiting instead of re-asking, so
+            # say what happened out loud. Seen in real races when the model
+            # call exceeded its route deadline mid-stint.
+            log.warning("Engineer could not answer the %s command: %s", source, exc)
+            snapshot = await self.store.snapshot_live()
+            failed = dict(snapshot.get("radio_latency", {}))
+            failed["stage"] = "error"
+            await self.store.update(
+                last_error=f"Engineer error: {exc}",
+                engineer_status="error",
+                radio_indicator="error",
+                radio_latency=failed,
+            )
+            with contextlib.suppress(Exception):
+                await self.speak_text(BRAIN_FALLBACK_LINE)
+            return
         await self._mark_latency("model_ms")
         await self.speak_text(reply)
 

@@ -251,3 +251,50 @@ async def test_conversation_history_survives_a_strategy_turn(stack):
     assert any("one-stop to hards" in text for text in history), (
         "the earlier question must remain visible to the model"
     )
+
+
+@pytest.mark.asyncio
+async def test_a_verdict_on_the_plan_is_never_answered_with_the_plan(stack):
+    """Verbatim from the 2026-08-09 Brazil GP session.
+
+    "That strategy works." was answered with a fresh pit instruction, and one
+    minute later "I feel that that strategy is absolutely stupid." was answered
+    with the very call it was rejecting. A reaction to the plan must go to the
+    model, which sees the radio history; repeating the standing call at a
+    driver who is reacting to it reads as being ignored.
+    """
+    _store, brain = await _brain_with_field(stack)
+    for reaction in (
+        "That strategy works.",
+        "I feel that that strategy is absolutely stupid.",
+    ):
+        assert await brain._fast_answer(reaction) is None, reaction
+
+
+@pytest.mark.asyncio
+async def test_an_explicit_refusal_wins_over_its_own_editorialising(stack):
+    """Verbatim from the 2026-08-09 Brazil GP session.
+
+    "No, I am not boxing, it does not make sense." contains both a hard
+    first-person refusal and the hedge phrase "does not make sense". The hedge
+    check ran first, so no hold was set and the reply was the same pit call
+    again. The refusal must win: hold set, wording left to the model.
+    """
+    store, brain = await _brain_with_field(stack)
+    utterance = "No, I am not boxing, it does not make sense."
+    assert EngineerBrain._strategy_refusal(utterance) is True
+
+    answer = await brain._fast_answer(utterance)
+    assert answer is None, "the model acknowledges; the state carries the hold"
+    snapshot = await store.snapshot_live()
+    hold = snapshot.get("strategy_hold", {})
+    assert hold.get("active") is True
+    assert hold.get("until_lap") == 17  # current lap 12 + 5
+
+    # Questions that merely contain refusal-shaped phrases stay questions.
+    for question in (
+        "should we stay out",
+        "does staying out make sense",
+        "why not box this lap",
+    ):
+        assert EngineerBrain._strategy_refusal(question) is False, question

@@ -10,6 +10,7 @@ from typing import Any
 
 from .capture import (
     CapturedDatagram,
+    CaptureFormatError,
     CaptureScanReport,
     CaptureWriter,
     recover_capture,
@@ -95,16 +96,56 @@ class CaptureService:
     async def recover_pending(self) -> CaptureRecoverySummary:
         """Recover complete blocks from exact unfinished PWCAP temp files."""
 
+        def quarantine(path: Path) -> str | None:
+            """Move a permanently unrecoverable temp file out of the scan path.
+
+            Without this, a dead stub (typically a 0-byte file left by a launch
+            that lost the port race and died before writing a header) was
+            re-reported as unresolved at every startup forever. The file is
+            moved, never deleted: whatever bytes it holds stay inspectable
+            under ``unrecoverable/``.
+            """
+            relative = path.relative_to(self.root)
+            destination = self.root / "unrecoverable" / relative
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            if destination.exists():
+                stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S.%f")
+                destination = destination.with_name(
+                    f"{destination.name}.{stamp}"
+                )
+            try:
+                path.replace(destination)
+            except OSError:
+                return None
+            return destination.relative_to(self.root).as_posix()
+
         def recover() -> CaptureRecoverySummary:
             recovered: list[CaptureScanReport] = []
             unresolved: list[tuple[str, str]] = []
             for path in sorted(self.root.rglob("*.tmp")):
                 if ".pwcap" not in path.name.casefold():
                     continue
+                if "unrecoverable" in path.relative_to(self.root).parts:
+                    continue
                 try:
                     path.resolve().relative_to(self.root)
                     report = recover_capture(path)
+                except CaptureFormatError as exc:
+                    # The content itself is invalid; retrying next launch can
+                    # never succeed. Park it once and stop warning about it.
+                    moved = quarantine(path)
+                    note = (
+                        f"{exc} — moved to {moved}"
+                        if moved
+                        else f"{exc} — could not be moved aside"
+                    )
+                    unresolved.append(
+                        (path.relative_to(self.root).as_posix(), note)
+                    )
+                    continue
                 except (OSError, ValueError) as exc:
+                    # Possibly transient (file lock, disk hiccup): leave the
+                    # file in place so the next launch can retry it.
                     unresolved.append(
                         (path.relative_to(self.root).as_posix(), str(exc))
                     )

@@ -93,3 +93,36 @@ async def test_capture_service_stops_admission_at_configured_size_limit(tmp_path
     assert snapshot.queue_drops == 2
     assert service.submit(b"later", ("127.0.0.1", 20_777)) is False
     assert await service.stop() is not None
+
+
+@pytest.mark.asyncio
+async def test_unrecoverable_temp_files_are_quarantined_once_not_rewarned_forever(
+    tmp_path,
+) -> None:
+    """A dead capture stub must be parked, not re-reported at every startup.
+
+    Real installs accumulated eight 0-byte .pwcap.tmp stubs (launches that
+    lost the port race and died before writing a header) and warned about all
+    of them at every launch. The content can never become recoverable, so the
+    file is moved — never deleted — under unrecoverable/ and stops being
+    scanned.
+    """
+    stub = tmp_path / "2026" / "capture-dead.pwcap.tmp"
+    stub.parent.mkdir(parents=True)
+    stub.touch()
+
+    service = CaptureService(tmp_path)
+    first = await service.recover_pending()
+
+    assert len(first.unresolved) == 1
+    path, reason = first.unresolved[0]
+    assert path == "2026/capture-dead.pwcap.tmp"
+    assert "moved to" in reason
+    assert not stub.exists()
+    quarantined = tmp_path / "unrecoverable" / "2026" / "capture-dead.pwcap.tmp"
+    assert quarantined.exists()
+
+    # The whole point: the next launch is clean.
+    second = await service.recover_pending()
+    assert second.unresolved == ()
+    assert second.recovered == ()

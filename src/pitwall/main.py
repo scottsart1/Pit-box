@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import json
 import logging
 import socket
 import sys
 import threading
 import time
+import urllib.request
 import webbrowser
 from logging.handlers import RotatingFileHandler
 
@@ -111,8 +113,43 @@ def open_dashboard_when_ready(
     webbrowser.open(url)
 
 
+def another_instance_is_serving(host: str, port: int, timeout_s: float = 2.0) -> bool:
+    """True when a healthy Your Pit Box already answers on this host/port.
+
+    Launching a second copy used to half-start: application startup ran far
+    enough to leave a dead 0-byte capture stub, the port bind then failed with
+    WinError 10048, and the new process died — while its browser thread opened
+    the OLD instance's dashboard, so it looked like the launch had worked.
+    When an instance already answers, the honest move is to open its dashboard
+    and start nothing.
+    """
+    target = "127.0.0.1" if host.strip() in {"0.0.0.0", "", "::", "[::]"} else host
+    try:
+        with urllib.request.urlopen(
+            f"http://{target}:{int(port)}/api/health", timeout=timeout_s
+        ) as response:
+            if response.status != 200:
+                return False
+            payload = json.loads(response.read())
+    except (OSError, ValueError, TypeError):
+        # Nothing answering, still shutting down, or not speaking HTTP:
+        # start normally and let the bind itself be the arbiter.
+        return False
+    return isinstance(payload, dict) and payload.get("ok") is True
+
+
 def run() -> None:
     configure_logging()
+    if another_instance_is_serving(settings.web_host, settings.web_port):
+        url = local_dashboard_url(settings.web_host, settings.web_port)
+        log.info(
+            "Your Pit Box is already running at %s; opening its dashboard "
+            "instead of starting a second copy",
+            url,
+        )
+        if settings.open_browser:
+            webbrowser.open(url)
+        return
     if settings.open_browser:
         threading.Thread(
             target=open_dashboard_when_ready,

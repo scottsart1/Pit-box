@@ -165,3 +165,47 @@ async def test_full_snapshot_bounds_the_trace_payload() -> None:
     assert analysis["traces"] == []
     # The most recent sample must survive downsampling; it is the current state.
     assert full["traces"][-1]["d"] == store.state.traces[-1]["d"]
+
+
+@pytest.mark.asyncio
+async def test_live_snapshot_serializes_drivers_without_touching_histories() -> None:
+    """The 4 Hz live payload drops per-lap histories without paying for them.
+
+    The previous implementation asdict-ed each driver (deep copying every
+    history entry of the whole race) and then popped the heavy fields. The
+    replacement must produce the same shape: every scalar field present, the
+    six history fields absent, and mutable fields copied, not shared.
+    """
+    from dataclasses import fields as dataclass_fields
+
+    from pitwall.state import DriverState
+
+    store = StateStore()
+    driver = store.state.drivers[3]
+    driver.active = True
+    driver.name = "Rival"
+    driver.tyre_wear = [10.0, 11.0, 12.0, 13.0]
+    driver.lap_history = [{"lap": i, "lap_time_ms": 90_000 + i} for i in range(60)]
+    driver.gap_history = [{"session_time_s": i, "lap": 1, "gap_s": 2.0} for i in range(90)]
+    driver.position_history = [{"lap": i, "position": 5} for i in range(60)]
+
+    live = await store.snapshot_live()
+    serialized = next(d for d in live["drivers"] if d["car_idx"] == 3)
+
+    excluded = {
+        "lap_history", "tyre_stints", "position_history",
+        "gap_history", "energy_lap_history", "pit_stop_history",
+    }
+    expected_keys = {f.name for f in dataclass_fields(DriverState)} - excluded
+    assert set(serialized) == expected_keys
+    assert serialized["name"] == "Rival"
+
+    # Mutable fields must be copies: rendering state must never alias live state.
+    serialized["tyre_wear"][0] = 99.0
+    assert driver.tyre_wear[0] == 10.0
+
+    # The analysis/full profiles still carry the histories for tools/briefings.
+    full = await store.snapshot()
+    complete = next(d for d in full["drivers"] if d["car_idx"] == 3)
+    assert len(complete["lap_history"]) == 60
+    assert len(complete["gap_history"]) == 90
