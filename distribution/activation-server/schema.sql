@@ -15,7 +15,14 @@ CREATE TABLE IF NOT EXISTS codes (
   signature        TEXT NOT NULL,      -- base64 Ed25519 signature
   claimed          INTEGER NOT NULL DEFAULT 0,
   claimed_device   TEXT,               -- SHA-256 device hash of the first claim
-  claimed_at       TEXT                -- ISO-8601 UTC
+  claimed_at       TEXT,               -- ISO-8601 UTC
+  -- Set by the daily ledger sync from the workbook's Status column (see
+  -- distribution/tools/sync_ledger_status.py). A disabled code is refused for
+  -- activation, re-activation AND download; without it a Replaced code's
+  -- original device could re-activate forever. Existing databases get these
+  -- via migrations/0001_disabled_codes.sql.
+  disabled         INTEGER NOT NULL DEFAULT 0,
+  disabled_reason  TEXT                -- e.g. "ledger status: Replaced"
 );
 
 CREATE INDEX IF NOT EXISTS idx_codes_claimed ON codes (claimed);

@@ -98,12 +98,26 @@ async function handleActivate(request, env) {
   const db = env.DB;
   const existing = await db
     .prepare(
-      "SELECT entitlement_json, signature, claimed, claimed_device FROM codes WHERE code_id = ?"
+      "SELECT entitlement_json, signature, claimed, claimed_device, disabled FROM codes WHERE code_id = ?"
     )
     .bind(codeId)
     .first();
 
   if (!existing) return err("code_not_found", "Code not recognized.", 404, env);
+
+  // Retired by the ledger sync (Replaced / Void in the workbook). Checked
+  // before the claimed branch on purpose: a Replaced code's original device
+  // must not keep re-activating alongside its replacement — that is the very
+  // hole the sync exists to close. Running installs are unaffected; they
+  // validate their cached licence offline.
+  if (existing.disabled === 1) {
+    return err(
+      "code_retired",
+      "This code has been retired. Reply to your purchase email and I will sort it out.",
+      410,
+      env
+    );
+  }
 
   // Already claimed: same device is a re-install (allowed); any other device is
   // refused. This is the single-global-use rule.
@@ -173,7 +187,7 @@ async function handleDownload(request, env) {
     );
   }
 
-  const row = await env.DB.prepare("SELECT code_id FROM codes WHERE code_id = ?")
+  const row = await env.DB.prepare("SELECT code_id, disabled FROM codes WHERE code_id = ?")
     .bind(codeId)
     .first();
   if (!row) {
@@ -181,6 +195,14 @@ async function handleDownload(request, env) {
       "code_not_found",
       "That code was not recognized. Check it against your purchase email, or reply to it and I will sort it out.",
       404,
+      env
+    );
+  }
+  if (row.disabled === 1) {
+    return err(
+      "code_retired",
+      "This code has been retired. Reply to your purchase email and I will sort it out.",
+      410,
       env
     );
   }
@@ -227,11 +249,14 @@ async function handleFile(request, env, url) {
     return err("code_not_found", "Code not recognized.", 404, env);
   }
 
-  const row = await env.DB.prepare("SELECT code_id FROM codes WHERE code_id = ?")
+  const row = await env.DB.prepare("SELECT code_id, disabled FROM codes WHERE code_id = ?")
     .bind(codeId)
     .first();
   if (!row) {
     return err("code_not_found", "That code was not recognized.", 404, env);
+  }
+  if (row.disabled === 1) {
+    return err("code_retired", "This code has been retired.", 410, env);
   }
 
   if (!env.DOWNLOADS) {
