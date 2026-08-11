@@ -6,10 +6,10 @@ was pure bookkeeping. Now a scheduled run reads the Status column and sets the
 ``disabled`` flag in the live D1 database, and the Worker refuses a disabled
 code for activation, re-activation and download.
 
-Which statuses retire a code (the default is deliberately narrower than
-"anything but Unused"):
+Only Unused stays live — the owner's explicit rule (2026-08-10):
 
-  Unused     active   — the shelf.
+  Unused     active   — the shelf. Reverting any code to Unused in the sheet
+                        re-enables it on the next run.
   Sold       48-HOUR WINDOW — the buyer is told they have 48 hours to
                         install. A Sold code is retired at the first run at
                         least ``--sold-window-days`` (default 2) days after
@@ -18,11 +18,10 @@ Which statuses retire a code (the default is deliberately narrower than
                         while the sheet went un-updated is never punished for
                         the bookkeeping. A Sold row with no readable Sold
                         Date is left active and warned about.
-  Activated  active   — already claimed and device-bound, so nobody else can
-                        use it; it must keep answering so the buyer can
-                        re-activate after a disk death or reinstall.
-                        ``--disable-activated`` retires these too (same-device
-                        re-activation then needs a replacement code).
+  Activated  RETIRED  — the buyer's install keeps running (the licence
+                        validates offline), but the code itself stops
+                        answering. A reinstall after a wiped disk therefore
+                        needs a replacement code — accepted support cost.
   Replaced   RETIRED  — a replacement was issued; without this the original
                         device could re-activate forever alongside it.
   Void       RETIRED  — minted but cancelled or leaked.
@@ -58,9 +57,10 @@ ACTIVATION_SERVER_DIR = Path(__file__).resolve().parents[1] / "activation-server
 SHEET_NAME = "Activation Keys"
 D1_DATABASE = "pitwall-licenses"
 
-# Statuses whose codes are retired. See the module docstring for why Sold and
-# Activated are NOT here by default.
-DEFAULT_DISABLING_STATUSES = frozenset({"Replaced", "Void"})
+# Statuses whose codes are retired outright. Sold is absent because it is
+# governed by the 48-hour window, not because it survives — see the module
+# docstring. Only Unused stays live.
+DEFAULT_DISABLING_STATUSES = frozenset({"Activated", "Replaced", "Void"})
 KNOWN_STATUSES = frozenset({"Unused", "Sold", "Activated", "Replaced", "Void"})
 
 
@@ -238,15 +238,9 @@ def main(argv: list[str] | None = None) -> int:
         "--sold-window-days", type=int, default=2,
         help="days a Sold code stays activatable after its Sold Date (default 2 = the promised 48 hours)",
     )
-    parser.add_argument(
-        "--disable-activated", action="store_true",
-        help="ALSO retire codes marked Activated (breaks same-device re-activation)",
-    )
     args = parser.parse_args(argv)
 
     disabling = set(DEFAULT_DISABLING_STATUSES)
-    if args.disable_activated:
-        disabling.add("Activated")
 
     workbook_path = args.workbook or newest_workbook()
     statuses = read_statuses(workbook_path)

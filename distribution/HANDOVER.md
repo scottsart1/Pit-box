@@ -221,18 +221,18 @@ the newest `activation_keys_*.xlsx` and sets the `disabled` flag in D1. The
 Worker refuses a disabled code for activation, re-activation and download
 (`code_retired`, HTTP 410).
 
-Policy — deliberately narrower than "anything but Unused":
+Policy — the owner's rule: **only Unused stays live** (decided 2026-08-10):
 
-- **Replaced / Void** → retired. This closes a real hole: before this, a
-  Replaced code's original device could re-activate forever alongside its
-  replacement.
+- **Activated / Replaced / Void** → retired at the next run. For Activated,
+  the buyer's install keeps running (the licence validates offline), but a
+  reinstall after a wiped disk needs a replacement code — accepted support
+  cost. For Replaced this closes a real hole: before this, a Replaced code's
+  original device could re-activate forever alongside its replacement.
 - **Sold** → the buyer is told they have 48 hours to install. Retired at the
   first run ≥ `--sold-window-days` (default 2) days after the workbook's
   Sold Date, and even then only `WHERE claimed = 0` — a buyer who activated
   while the sheet lagged is never punished. No Sold Date ⇒ no countdown
   (warned in the log).
-- **Activated** → stays live so same-device re-activation (disk death,
-  reinstall) keeps working. `--disable-activated` exists but breaks that.
 
 The sheet is authoritative both ways: reverting a code to Unused re-enables it
 on the next run. Retiring a code never reaches into an already-activated

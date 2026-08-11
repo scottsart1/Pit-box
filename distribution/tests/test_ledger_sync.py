@@ -1,11 +1,11 @@
-"""The daily ledger sync: workbook Status -> D1 `disabled`, safely.
+"""The daily ledger sync: workbook Status -> D1 `disabled`.
 
-The workbook used to be pure bookkeeping. These tests pin the policy that
-makes it enforceable without hurting buyers: Replaced and Void retire a code,
-Sold and Activated do not (a paying buyer must still be able to activate, and
-an activated buyer must still be able to re-activate after a disk death), and
-the sheet is authoritative in both directions so a mis-click is undone by
-fixing the sheet.
+The workbook used to be pure bookkeeping. These tests pin the owner's rule —
+only Unused stays live — plus its two safety valves: a Sold code keeps the
+promised 48-hour activation window (guarded by ``AND claimed = 0`` so a buyer
+who activated while the sheet lagged is not punished), and the sheet is
+authoritative in both directions so a mis-click is undone by fixing the
+sheet, not the database.
 """
 
 from __future__ import annotations
@@ -62,20 +62,31 @@ def test_reads_every_code_with_its_status(tmp_path):
     }
 
 
-def test_default_policy_retires_replaced_and_void_only(tmp_path):
-    """Sold and Activated stay live: the buyer paid for exactly that."""
+def test_only_unused_stays_live(tmp_path):
+    """The owner's rule: any status but Unused ends in retirement.
+
+    Sold is the one nuance — not retired HERE because it dies through the
+    48-hour window instead (see the window test below). Everything else
+    non-Unused dies at the next run, Activated included: the buyer's install
+    keeps running offline, but a reinstall needs a replacement code.
+    """
     path = _workbook_with_statuses(
         tmp_path, ["Unused", "Sold", "Activated", "Replaced", "Void"]
     )
     sql = build_sql(read_statuses(path))
+    assert DEFAULT_DISABLING_STATUSES == {"Activated", "Replaced", "Void"}
+    assert (
+        "UPDATE codes SET disabled = 0, disabled_reason = NULL "
+        "WHERE code_id = 'PITW-AAAAA-AAAAA-AAAAA';" in sql
+    ), "Unused stays live"
     assert (
         "UPDATE codes SET disabled = 0, disabled_reason = NULL "
         "WHERE code_id = 'PITW-BBBBB-BBBBB-BBBBB';" in sql
-    ), "a Sold code must remain activatable"
+    ), "a Sold code inside its window is still activatable"
     assert (
-        "UPDATE codes SET disabled = 0, disabled_reason = NULL "
+        "UPDATE codes SET disabled = 1, disabled_reason = 'ledger status: Activated' "
         "WHERE code_id = 'PITW-CCCCC-CCCCC-CCCCC';" in sql
-    ), "an Activated code must keep answering same-device re-activation"
+    )
     assert (
         "UPDATE codes SET disabled = 1, disabled_reason = 'ledger status: Replaced' "
         "WHERE code_id = 'PITW-DDDDD-DDDDD-DDDDD';" in sql
@@ -102,18 +113,6 @@ def test_reverting_the_sheet_re_enables_the_code(tmp_path):
     assert (
         "UPDATE codes SET disabled = 0, disabled_reason = NULL "
         "WHERE code_id = 'PITW-AAAAA-AAAAA-AAAAA';" in second
-    )
-
-
-def test_widened_policy_is_opt_in_only(tmp_path):
-    path = _workbook_with_statuses(
-        tmp_path, ["Unused", "Sold", "Activated", "Replaced", "Void"]
-    )
-    widened = frozenset(DEFAULT_DISABLING_STATUSES | {"Sold", "Activated"})
-    sql = build_sql(read_statuses(path), widened)
-    assert (
-        "disabled = 1, disabled_reason = 'ledger status: Sold' "
-        "WHERE code_id = 'PITW-BBBBB-BBBBB-BBBBB'" in sql
     )
 
 
