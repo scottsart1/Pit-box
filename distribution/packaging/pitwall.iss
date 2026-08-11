@@ -18,7 +18,7 @@
 ;     destroy race history and burn their one activation on a reinstall.
 
 #ifndef AppVersion
-  #define AppVersion "4.2.1"
+  #define AppVersion "4.3.0"
 #endif
 #ifndef SourceDir
   #define SourceDir "..\..\build\dist\Your Pit Box"
