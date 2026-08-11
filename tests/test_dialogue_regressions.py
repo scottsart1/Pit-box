@@ -381,3 +381,30 @@ def test_questions_about_a_tactic_are_not_agreements_to_it():
         assert EngineerBrain._strategy_intent(question, 10) is None, question
     # And rejecting one is not agreeing to it either.
     assert EngineerBrain._strategy_intent("the undercut is not on", 10) is None
+
+
+@pytest.mark.asyncio
+async def test_a_tactic_with_stay_out_phrasing_is_the_tactic_not_a_refusal(stack):
+    """Caught while cutting marketing video 4.
+
+    "We're doing the overcut on the cars ahead — I'm staying out" contains an
+    explicit stay-out phrase, and the refusal branch ran first, so it was
+    filed as a bare refusal: hold set, no AGREED intent, nothing on the
+    dashboard. The named tactic must win; its branch sets the same hold.
+    """
+    store, brain = await _brain_with_field(stack)
+    answer = await brain._fast_answer(
+        "we're doing the overcut on the cars ahead — I'm staying out"
+    )
+    assert answer is None
+    snapshot = await store.snapshot_live()
+    assert snapshot["strategy_intent"].get("intent") == "overcut"
+    assert snapshot["strategy_intent"].get("active") is True
+    assert snapshot["strategy_hold"].get("active") is True, "the hold still applies"
+
+    # A refusal with no tactic named still lands in the refusal branch.
+    await store.update(strategy_intent={}, strategy_hold={})
+    assert await brain._fast_answer("I am not boxing this lap") is None
+    snapshot = await store.snapshot_live()
+    assert not snapshot["strategy_intent"].get("intent")
+    assert snapshot["strategy_hold"].get("active") is True

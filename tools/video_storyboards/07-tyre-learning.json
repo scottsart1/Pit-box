@@ -1,0 +1,25 @@
+[
+  {
+    "page": "strategy",
+    "seconds": 3.5,
+    "caption": "It learns how YOU use a tyre.",
+    "sub": "Not a spec sheet. Your laps, your circuit, your wear.",
+    "js": "document.getElementById('stratPlannerTrack').value='16';document.getElementById('stratPlannerLaps').value='50';document.getElementById('stratPlannerStart').value='MEDIUM';"
+  },
+  {
+    "seconds": 5.0,
+    "caption": "Measured: the compounds you ran.",
+    "sub": "Softs and mediums, fitted per-lap from real wear and real pace.",
+    "js": "document.getElementById('stratPlannerForm').requestSubmit();"
+  },
+  {
+    "seconds": 5.0,
+    "caption": "Inferred: the one you didn't.",
+    "sub": "Two compounds teach it the third — labelled honestly, replaced the lap you run it."
+  },
+  {
+    "seconds": 3.2,
+    "caption": "Your Pit Box — a race engineer for F1 25 on PS5 & PC",
+    "sub": "Evidence, not vibes."
+  }
+]

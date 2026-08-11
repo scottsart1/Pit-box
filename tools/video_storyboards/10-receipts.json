@@ -1,0 +1,27 @@
+[
+  {
+    "page": "review",
+    "seconds": 5.0,
+    "caption": "After the flag: every call, on the record.",
+    "sub": "The plan on every lap — and exactly when it changed.",
+    "js": "const s=document.getElementById('historyScope');if(s){s.value='all';}document.getElementById('refreshReview')?.click();"
+  },
+  {
+    "seconds": 5.0,
+    "caption": "Lap by lap. Decision by decision.",
+    "sub": "Strategy snapshots, race phases, confidence — archived automatically, race after race.",
+    "js": "setTimeout(()=>document.getElementById('historyStrategies')?.scrollIntoView({behavior:'smooth',block:'start'}),400);"
+  },
+  {
+    "page": "session-review",
+    "seconds": 5.0,
+    "caption": "Every session becomes data.",
+    "sub": "Reopen any race. Replay any lap. Argue with receipts.",
+    "js": "const s=document.getElementById('reviewSessionSelect');if(s&&s.options.length>1){s.value=s.options[1].value;s.dispatchEvent(new Event('change'));}"
+  },
+  {
+    "seconds": 3.2,
+    "caption": "Your Pit Box — a race engineer for F1 25 on PS5 & PC",
+    "sub": "Receipts included."
+  }
+]

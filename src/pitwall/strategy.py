@@ -3223,11 +3223,16 @@ class StrategyEngine:
             }
             for name, model in (historical.get("compounds") or {}).items()
         }
+        # The picker can plan any circuit, so the name comes from the chosen
+        # track — the live session's name is only right when they coincide.
+        from .udp import TRACKS
+
+        track_name = TRACKS.get(resolved_track) or state.get("track_name")
         return {
             "available": bool(plans),
             "reason": "" if plans else "No legal, feasible plan fits that distance.",
             "track_id": resolved_track,
-            "track_name": state.get("track_name"),
+            "track_name": track_name,
             "total_laps": laps,
             "start_compound": planning_state["tyre"]["compound"],
             "plans": plans,

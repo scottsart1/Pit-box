@@ -59,6 +59,14 @@ class Beat:
     page: str | None = None
     ask: str | None = None
     sub: str = ""
+    # Optional JavaScript run in the page when the beat starts, so a
+    # storyboard can press the product's own buttons: build a race plan,
+    # open a tab's inner view, start a comparison. The UI it drives is real.
+    js: str | None = None
+    # Trigger the app's own unsolicited call (POST /api/proactive/test) and
+    # play what it actually spoke. The engineer speaks first; nothing is
+    # scripted, and the driver never asked.
+    proactive: bool = False
 
 
 STORYBOARD: tuple[Beat, ...] = (
@@ -123,6 +131,31 @@ STORYBOARD: tuple[Beat, ...] = (
         sub="Your Pit Box — a race engineer for F1 26 on PS5.",
     ),
 )
+
+
+def load_storyboard(path: Path) -> tuple[Beat, ...]:
+    """Load a storyboard from JSON, so one pipeline cuts many videos.
+
+    Each entry mirrors Beat: caption, seconds, and optionally page, ask, sub.
+    The hardcoded STORYBOARD remains the default for the original long demo.
+    """
+    entries = json.loads(path.read_text(encoding="utf-8"))
+    beats = []
+    for entry in entries:
+        beats.append(
+            Beat(
+                caption=str(entry.get("caption", "")),
+                seconds=float(entry.get("seconds", 4.0)),
+                page=entry.get("page"),
+                ask=entry.get("ask"),
+                sub=str(entry.get("sub", "")),
+                js=entry.get("js"),
+                proactive=bool(entry.get("proactive", False)),
+            )
+        )
+    if not beats:
+        raise SystemExit(f"{path} contains no beats")
+    return tuple(beats)
 
 
 CAPTION_CSS = """
@@ -348,6 +381,30 @@ async def ask_over_radio(
     )
 
 
+async def trigger_proactive_call(base: str, work: Path, index: int) -> RadioExchange:
+    """Fire the app's own test call and keep exactly what it spoke."""
+    async with httpx.AsyncClient(timeout=180.0) as client:
+        state = await client.get(f"{base}/api/state")
+        before = (state.json().get("proactive") or {}).get("last_call", "")
+        response = await client.post(f"{base}/api/proactive/test")
+        response.raise_for_status()
+        spoken = ""
+        for _ in range(120):
+            await asyncio.sleep(1.0)
+            state = await client.get(f"{base}/api/state")
+            payload = (state.json().get("proactive") or {})
+            if payload.get("last_call") and payload.get("last_call") != before:
+                spoken = str(payload["last_call"])
+                break
+        if not spoken:
+            raise RuntimeError("the proactive call was never delivered")
+        audio = work / f"proactive-{index:02d}.mp3"
+        got = await client.get(f"{base}/api/latest-audio")
+        got.raise_for_status()
+        audio.write_bytes(got.content)
+    return RadioExchange(question="", transcript="", reply=spoken, audio=audio)
+
+
 # --------------------------------------------------------------------------
 # Assembly
 # --------------------------------------------------------------------------
@@ -389,7 +446,8 @@ def write_frames(frames: list[tuple[float, bytes]], work: Path) -> tuple[Path, f
 
 
 def assemble(
-    listing: Path, exchanges: list[RadioExchange], out: Path, total: float
+    listing: Path, exchanges: list[RadioExchange], out: Path, total: float,
+    tail: float = 4.0,
 ) -> Path:
     ffmpeg = ffmpeg_exe()
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -422,7 +480,7 @@ def assemble(
         "-c:v", "libx264", "-pix_fmt", "yuv420p",
         "-r", "30", "-preset", "medium", "-crf", "21",
         "-movflags", "+faststart",
-        "-t", f"{total + 4.0:.2f}",
+        "-t", f"{total + tail:.2f}",
         str(out),
     ]
     print("  encoding…")
@@ -445,7 +503,12 @@ class Result:
     stills: list[Path] = field(default_factory=list)
 
 
-async def record(base: str, out: Path, work: Path, browser: str) -> Result:
+async def record(
+    base: str, out: Path, work: Path, browser: str,
+    storyboard: tuple[Beat, ...] = STORYBOARD,
+    stills: bool = True,
+    tail: float = 4.0,
+) -> Result:
     profile = Path(tempfile.mkdtemp(prefix="pitwall_video_"))
     process = subprocess.Popen(
         [
@@ -499,7 +562,16 @@ async def record(base: str, out: Path, work: Path, browser: str) -> Result:
             # time but keeps it out of the footage, and the reply is just as
             # real for having been fetched a minute earlier.
             answers: dict[int, RadioExchange] = {}
-            for number, beat in enumerate(STORYBOARD, start=1):
+            for number, beat in enumerate(storyboard, start=1):
+                if beat.proactive:
+                    print(f"  triggering the engineer's own call [{number}]")
+                    try:
+                        exchange = await trigger_proactive_call(base, work, number)
+                        answers[number] = exchange
+                        print(f"    engineer (unprompted): {exchange.reply[:110]}")
+                    except Exception as exc:  # noqa: BLE001 - reported, not fatal
+                        print(f"    proactive call failed: {exc}")
+                    continue
                 if not beat.ask:
                     continue
                 print(f"  asking [{number}]: {beat.ask}")
@@ -514,24 +586,33 @@ async def record(base: str, out: Path, work: Path, browser: str) -> Result:
             start = time.monotonic()
             print("recording")
 
-            for number, beat in enumerate(STORYBOARD, start=1):
+            for number, beat in enumerate(storyboard, start=1):
                 if beat.page:
                     await devtools.goto(f"{base}/#{beat.page}", settle=2.5)
                     await install_overlay(devtools)
+                if beat.js:
+                    await devtools.evaluate(beat.js)
                 await set_caption(devtools, beat.caption, beat.sub)
 
                 exchange = answers.get(number)
-                if beat.ask and exchange is not None:
+                if beat.proactive and exchange is not None:
+                    # The engineer's own call: no question card, just the voice
+                    # and the reply text, timed like any radio exchange.
+                    exchange.offset_s = time.monotonic() - start
+                    await set_radio(devtools, "", exchange.reply, True)
+                    exchanges.append(exchange)
+                    await asyncio.sleep(_clip_seconds(exchange.audio) + 1.0)
+                elif beat.ask and exchange is not None:
                     # Show the question, then the answer as it starts speaking.
                     await set_radio(devtools, exchange.transcript or beat.ask, "…", True)
-                    await asyncio.sleep(1.6)
+                    await asyncio.sleep(1.1)
                     exchange.offset_s = time.monotonic() - start
                     await set_radio(
                         devtools, exchange.transcript or beat.ask, exchange.reply, True
                     )
                     exchanges.append(exchange)
                     # Hold while it is spoken, plus a moment to read it.
-                    await asyncio.sleep(_clip_seconds(exchange.audio) + 1.8)
+                    await asyncio.sleep(_clip_seconds(exchange.audio) + 1.0)
                 elif beat.ask:
                     await set_radio(devtools, "", "", False)
                     await asyncio.sleep(beat.seconds)
@@ -552,7 +633,7 @@ async def record(base: str, out: Path, work: Path, browser: str) -> Result:
                 ("live", "07-hungaroring-decision.png", 1080),
                 ("live", "08-hungaroring-radio.png", 1560),
                 ("field", "09-hungaroring-field.png", 1080),
-            ):
+            ) if stills else ():
                 await devtools.goto(f"{base}/#{page}", settle=3.5)
                 await devtools.call(
                     "Emulation.setDeviceMetricsOverride",
@@ -575,7 +656,7 @@ async def record(base: str, out: Path, work: Path, browser: str) -> Result:
         raise SystemExit("no frames were captured")
 
     listing, total = write_frames(frames, work)
-    video = assemble(listing, exchanges, out, total)
+    video = assemble(listing, exchanges, out, total, tail=tail)
     return Result(video=video, exchanges=exchanges, stills=stills)
 
 
@@ -602,13 +683,28 @@ def main() -> int:
     parser.add_argument("--base", default="http://127.0.0.1:8010")
     parser.add_argument("--out", default="distribution/website/assets/pitwall-demo.mp4")
     parser.add_argument("--work", default="")
+    parser.add_argument(
+        "--storyboard", default="",
+        help="JSON beats file; omitted means the original long-form demo",
+    )
+    parser.add_argument("--no-stills", action="store_true")
+    parser.add_argument(
+        "--tail", type=float, default=4.0,
+        help="seconds the final frame holds; short punchy cuts want ~0.8",
+    )
     args = parser.parse_args()
 
     work = Path(args.work) if args.work else Path(tempfile.mkdtemp(prefix="pitwall_demo_"))
     work.mkdir(parents=True, exist_ok=True)
     print(f"working directory: {work}")
 
-    result = asyncio.run(record(args.base, Path(args.out), work, find_browser()))
+    board = load_storyboard(Path(args.storyboard)) if args.storyboard else STORYBOARD
+    result = asyncio.run(
+        record(
+            args.base, Path(args.out), work, find_browser(),
+            storyboard=board, stills=not args.no_stills, tail=args.tail,
+        )
+    )
 
     print(f"\nvideo: {result.video}  ({result.video.stat().st_size / 1e6:.1f} MB)")
     transcript = work / "radio-transcript.md"

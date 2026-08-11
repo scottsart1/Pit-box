@@ -1337,6 +1337,36 @@ class EngineerBrain:
                 parts.append(f"{int(current['preferred_stops'])}-stop priority")
             return "Driver strategy locked: " + ", then ".join(parts) + "."
 
+        # A named tactic outranks refusal phrasing: "we're doing the overcut
+        # — I'm staying out" is the tactic, and the tactic branch sets the
+        # same hold. Checking refusal first filed exactly that utterance as a
+        # bare refusal, and the AGREED chip never appeared.
+        intent = self._strategy_intent(utterance, int(state.get("current_lap", 0) or 0))
+        if intent is not None:
+            await self.store.update(strategy_intent=intent)
+            if intent["direction"] == "stay_out":
+                # Agreeing to overcut IS declining the next stop. Without this
+                # the engineer said "we'll run the overcut" and then called
+                # "Box lap 12" two laps later.
+                current_lap = int(state.get("current_lap", 0) or 0)
+                hold = dict(state.get("strategy_hold", {}) or {})
+                hold.update(
+                    {
+                        "active": True,
+                        "until_lap": current_lap + 5,
+                        "reason": f"agreed {intent['intent'].replace('_', ' ')}: {utterance.strip()}",
+                        "set_at": time.time(),
+                        "set_at_lap": current_lap,
+                    }
+                )
+                hold.setdefault("baseline", {})
+                hold.setdefault("change_reason", "")
+                hold.setdefault("raised_after_release", False)
+                await self.store.update(strategy_hold=hold)
+            # The model acknowledges in the driver's own words; the state
+            # mutation above is what makes it binding on later calls.
+            return None
+
         if self._strategy_refusal(utterance):
             current_lap = int(state.get("current_lap", 0) or 0)
             damage = state.get("damage", {}) or {}
@@ -1372,32 +1402,6 @@ class EngineerBrain:
             await self.store.update(strategy_hold=hold)
             # Let the language route acknowledge the driver's exact wording;
             # the deterministic state mutation above is the safety invariant.
-            return None
-
-        intent = self._strategy_intent(utterance, int(state.get("current_lap", 0) or 0))
-        if intent is not None:
-            await self.store.update(strategy_intent=intent)
-            if intent["direction"] == "stay_out":
-                # Agreeing to overcut IS declining the next stop. Without this
-                # the engineer said "we'll run the overcut" and then called
-                # "Box lap 12" two laps later.
-                current_lap = int(state.get("current_lap", 0) or 0)
-                hold = dict(state.get("strategy_hold", {}) or {})
-                hold.update(
-                    {
-                        "active": True,
-                        "until_lap": current_lap + 5,
-                        "reason": f"agreed {intent['intent'].replace('_', ' ')}: {utterance.strip()}",
-                        "set_at": time.time(),
-                        "set_at_lap": current_lap,
-                    }
-                )
-                hold.setdefault("baseline", {})
-                hold.setdefault("change_reason", "")
-                hold.setdefault("raised_after_release", False)
-                await self.store.update(strategy_hold=hold)
-            # The model acknowledges in the driver's own words; the state
-            # mutation above is what makes it binding on later calls.
             return None
 
         preference_updates = self._preference_updates(utterance)

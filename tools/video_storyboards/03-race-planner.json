@@ -1,0 +1,31 @@
+[
+  {
+    "page": "strategy",
+    "seconds": 3.5,
+    "caption": "Sunday's race. Planned before the lights.",
+    "sub": "Pick the circuit and the distance. Your own tyre history does the rest.",
+    "js": "document.getElementById('stratPlannerTrack').value='16';document.getElementById('stratPlannerLaps').value='50';document.getElementById('stratPlannerStart').value='MEDIUM';"
+  },
+  {
+    "seconds": 4.0,
+    "caption": "Every stint, simulated. Ranked.",
+    "sub": "Built from the laps you actually drove at this circuit — not a generic table.",
+    "js": "document.getElementById('stratPlannerForm').requestSubmit();"
+  },
+  {
+    "seconds": 4.5,
+    "caption": "Measured where you've run. Inferred where you haven't.",
+    "sub": "Two compounds in practice teach it the third. Labelled honestly, never faked."
+  },
+  {
+    "seconds": 4.0,
+    "caption": "One click. That's the race plan.",
+    "sub": "Loaded, locked — and the engineer runs it.",
+    "js": "document.querySelector('#stratPlannerRows button')?.click();"
+  },
+  {
+    "seconds": 3.2,
+    "caption": "Your Pit Box — a race engineer for F1 25 on PS5 & PC",
+    "sub": "Settle the race before it starts."
+  }
+]

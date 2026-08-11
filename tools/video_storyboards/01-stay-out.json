@@ -1,0 +1,24 @@
+[
+  {
+    "page": "live",
+    "seconds": 4.5,
+    "caption": "Las Vegas. A real race — replayed from its own telemetry.",
+    "sub": "P22 on the grid an hour ago. Every number on this screen arrived over UDP from F1 25."
+  },
+  {
+    "seconds": 2.0,
+    "ask": "Mark, should I box now?",
+    "caption": "One question decides the race",
+    "sub": "Spoken, transcribed, answered by the running engineer. Nothing scripted."
+  },
+  {
+    "seconds": 5.0,
+    "caption": "It prices the overtakes, not just the stopwatch",
+    "sub": "A two-stop can win on paper and lose on track. Your engineer knows what a position costs to win back."
+  },
+  {
+    "seconds": 4.0,
+    "caption": "Your Pit Box — a race engineer for F1 25 on PS5 & PC",
+    "sub": "The driver kept the position. The engineer showed the receipts."
+  }
+]

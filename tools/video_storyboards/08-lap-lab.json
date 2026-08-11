@@ -1,0 +1,32 @@
+[
+  {
+    "page": "lap-lab",
+    "seconds": 4.0,
+    "caption": "Every lap you drive is kept. In full.",
+    "sub": "Brake, throttle, line, speed — stored from the packets, lap after lap.",
+    "js": "const s=document.getElementById('lapLabSessionSelect');if(s&&s.options.length>1){s.value=s.options[1].value;s.dispatchEvent(new Event('change'));}"
+  },
+  {
+    "seconds": 3.0,
+    "caption": "Pick a lap. Any lap.",
+    "sub": "",
+    "js": "const c=document.getElementById('candidateLapSelect');if(c&&c.options.length>1){c.value=c.options[1].value;c.dispatchEvent(new Event('change'));}"
+  },
+  {
+    "seconds": 2.5,
+    "caption": "One click.",
+    "sub": "",
+    "js": "document.getElementById('analyzeLapAlone')?.click();"
+  },
+  {
+    "seconds": 6.0,
+    "caption": "Measured from its own trace. No reference needed.",
+    "sub": "Top speed. Braking events. Full-throttle share. Every segment timed — even on your first visit to a circuit.",
+    "js": "setTimeout(()=>document.getElementById('soloAnalysisPane')?.scrollIntoView({behavior:'smooth'}),300);"
+  },
+  {
+    "seconds": 3.2,
+    "caption": "Your Pit Box — a race engineer for F1 25 on PS5 & PC",
+    "sub": "Find where the tenth lives."
+  }
+]

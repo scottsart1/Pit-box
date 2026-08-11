@@ -1,0 +1,30 @@
+[
+  {
+    "page": "live",
+    "seconds": 3.0,
+    "caption": "Both hands on the wheel.",
+    "sub": "Say \"Mark\" — the engineer is listening."
+  },
+  {
+    "seconds": 1.5,
+    "ask": "Mark, what's the gap ahead?",
+    "caption": "Ask.",
+    "sub": ""
+  },
+  {
+    "seconds": 1.5,
+    "ask": "Mark, what's the gap behind?",
+    "caption": "Keep driving.",
+    "sub": ""
+  },
+  {
+    "seconds": 3.0,
+    "caption": "No menus. No pausing. No typing.",
+    "sub": "Spoken, transcribed, answered — at racing speed."
+  },
+  {
+    "seconds": 3.0,
+    "caption": "Your Pit Box — a race engineer for F1 25 on PS5 & PC",
+    "sub": "Every answer computed live."
+  }
+]
