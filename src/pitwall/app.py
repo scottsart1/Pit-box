@@ -49,7 +49,7 @@ from .config import settings
 from .database import PitWallDatabase
 from .field_service import FieldAnalysisService
 from .forwarding import DatagramForwarder
-from .full_field_archive import FullFieldArchiveService
+from .full_field_archive import FullFieldArchiveService, cars_in_trace_scope
 from .network_profiles import NetworkProfileRepository
 from .network_service import ListenerBindError, NetworkService
 from .networking import PacketHealthTracker
@@ -167,6 +167,11 @@ async def _connection_watchdog() -> None:
             settings.disconnect_after_s, settings.presence_grace_s
         )
         snapshot = await store.snapshot_live()
+        # Keep full per-car traces for the cars the analysis actually reads
+        # back — in a race that is the player, the teammate, the podium and
+        # the cars the player started among. Practice and qualifying keep
+        # everything, because full-field lap comparison is their whole point.
+        full_field_archive.set_trace_scope(cars_in_trace_scope(snapshot))
         loop_time = asyncio.get_running_loop().time()
         session_uid = int(snapshot.get("session_uid") or 0)
         current_catalog_session_id = (
@@ -617,6 +622,14 @@ class StrategyOverrideRequest(BaseModel):
     preferred_stops: int | None = None
     priority: str = "balanced"
     note: str = "dashboard override"
+
+
+class RacePlannerRequest(BaseModel):
+    """Plan a race distance before the lights, from stored tyre evidence."""
+
+    track_id: int | None = None
+    total_laps: int | None = None
+    start_compound: str | None = None
 
 
 class WhatIfRequest(BaseModel):
@@ -1166,6 +1179,23 @@ async def clear_strategy_override() -> dict[str, object]:
     )
     await store.update(strategy_override=override)
     return {"override": override, "strategy": await strategy.recompute()}
+
+
+@app.post("/api/strategy/plan-race")
+async def plan_race(request: RacePlannerRequest) -> dict[str, object]:
+    """Rank whole-race plans for a chosen distance, before the race starts."""
+    compound = request.start_compound
+    if compound is not None:
+        compound = str(compound).upper()
+        if compound not in {"SOFT", "MEDIUM", "HARD", "INTER", "WET"}:
+            raise HTTPException(400, f"Invalid compound: {compound}")
+    if request.total_laps is not None and not 2 <= int(request.total_laps) <= 200:
+        raise HTTPException(400, "total_laps must be between 2 and 200")
+    return await strategy.plan_race(
+        track_id=request.track_id,
+        total_laps=request.total_laps,
+        start_compound=compound,
+    )
 
 
 @app.post("/api/strategy/what-if")

@@ -105,3 +105,46 @@ async def test_analysis_router_rejects_missing_lap_and_bad_range(tmp_path: Path)
             "/api/v1/laps/lap_missing/trace", params={"from_m": 2, "to_m": 1}
         )
         assert invalid.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_a_lap_can_be_analyzed_on_its_own_with_no_reference(tmp_path: Path) -> None:
+    """Lap Lab could only answer "how does this differ from that one".
+
+    A driver with a single interesting lap — a first visit to a circuit, a
+    one-off session — had nothing to look at. Everything returned here is
+    measured from the lap's own trace.
+    """
+    database = PitWallDatabase(tmp_path / "pitwall.sqlite3")
+    await database.initialize()
+    trace_store = TraceStore(tmp_path / "traces")
+    archive = TraceArchiveService(database, trace_store)
+    only_lap = await _lap(database, archive, 1)
+    service = ComparisonService(database.path, trace_store)
+    app = FastAPI()
+    app.include_router(create_analysis_router(service))
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.get(f"/api/v1/laps/{only_lap}/analysis")
+        assert response.status_code == 200, response.text
+        payload = response.json()
+
+        assert payload["lap_id"] == only_lap
+        assert payload["lap_number"] == 1
+        assert payload["tyre_compound"] == "SOFT"
+        assert payload["top_speed_kph"] == 180.0
+        # The synthetic lap brakes exactly once, from 40 m to 50 m.
+        assert payload["braking_events"] == 1
+        assert 0 < payload["braking_pct"] < 100
+        assert payload["full_throttle_pct"] > 50
+        assert payload["segments"], "per-segment detail is the point of the view"
+        for segment in payload["segments"]:
+            assert segment["time_s"] > 0
+            assert segment["minimum_speed_kph"] > 0
+            assert segment["availability"] == "observed"
+        # No reference means no delta and no verdict, and it says so.
+        assert "no reference lap" in payload["availability_note"]
+        assert "delta_s" not in payload
+
+        missing = await client.get("/api/v1/laps/does-not-exist/analysis")
+        assert missing.status_code == 404

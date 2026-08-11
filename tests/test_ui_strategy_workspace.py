@@ -88,3 +88,65 @@ def test_rival_stop_projection_endpoint_is_bounded() -> None:
     assert "rivals" in payload
     assert len(payload["rivals"]) <= 4
     assert client.get("/api/strategy/rivals?top_n=99").status_code == 422
+
+
+def test_the_race_planner_is_present_and_wired() -> None:
+    """Item 1 from Las Vegas: settle the race before the lights.
+
+    The ranked plans on the live path all start from where the car is now,
+    so a race could not be planned until telemetry arrived.
+    """
+    for element_id in (
+        "stratPlannerForm",
+        "stratPlannerTrack",
+        "stratPlannerLaps",
+        "stratPlannerStart",
+        "stratPlannerRows",
+        "stratPlannerEvidence",
+    ):
+        assert f'id="{element_id}"' in INDEX, element_id
+    assert "/api/strategy/plan-race" in STRATEGY_JS
+    assert "buildRacePlans" in STRATEGY_JS
+
+
+def test_planner_endpoint_validates_and_answers_honestly() -> None:
+    client = TestClient(app)
+    # No session and no distance: it must refuse rather than invent a race.
+    empty = client.post("/api/strategy/plan-race", json={})
+    assert empty.status_code == 200
+    assert empty.json()["available"] is False
+
+    assert client.post(
+        "/api/strategy/plan-race", json={"total_laps": 1}
+    ).status_code == 400
+    assert client.post(
+        "/api/strategy/plan-race", json={"total_laps": 50, "start_compound": "CONCRETE"}
+    ).status_code == 400
+
+    planned = client.post(
+        "/api/strategy/plan-race",
+        json={"track_id": 31, "total_laps": 50, "start_compound": "MEDIUM"},
+    )
+    assert planned.status_code == 200
+    payload = planned.json()
+    assert payload["total_laps"] == 50
+    assert payload["start_compound"] == "MEDIUM"
+    assert "tyre_evidence" in payload
+    assert "inferred" in payload["basis"]
+
+
+def test_single_lap_analysis_is_reachable_from_lap_lab() -> None:
+    """Item 8: analyze a lap with no counterpart."""
+    assert 'id="analyzeLapAlone"' in INDEX
+    assert 'id="soloAnalysisPane"' in INDEX
+    workspaces = (ROOT / "static" / "js" / "workspaces.js").read_text(encoding="utf-8")
+    assert "/analysis`" in workspaces
+    assert "analyzeLapAlone" in workspaces
+
+
+def test_race_control_blip_covers_every_neutralisation() -> None:
+    """Item 10: speech can be late, the screen cannot."""
+    assert 'id="raceControlBlip"' in INDEX
+    assert "renderRaceControl" in INDEX
+    for phase in ("red_flag", "safety_car", "vsc", "formation", "yellow", "blue"):
+        assert phase in INDEX, phase

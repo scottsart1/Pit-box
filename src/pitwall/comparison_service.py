@@ -1657,6 +1657,101 @@ class ComparisonService:
             max_points=max_points,
         )
 
+    async def get_lap_analysis(self, lap_id: str) -> dict[str, Any]:
+        """Describe one lap on its own terms, with no reference lap.
+
+        Lap Lab could only ever answer "how does this lap differ from that
+        one", so a driver with a single interesting lap — a one-off session,
+        a first visit to a circuit, a lap nobody has a counterpart for — had
+        nothing to look at. Everything here is measured from the lap's own
+        trace: no model, no comparison, no opinion about what a better lap
+        would have looked like.
+        """
+        record, trace = await self.lap_trace(lap_id)
+        distance = trace.distance_m
+        if distance.size < 2:
+            raise TraceUnavailableError("Lap trace is too short to analyze")
+        speed = trace.signals.get("speed")
+        if speed is None or speed.size != distance.size:
+            raise TraceUnavailableError("Lap trace carries no speed channel")
+
+        throttle = trace.signals.get("throttle")
+        brake = trace.signals.get("brake")
+        # Traces are stored in SI, so speed arrives in m/s; every value this
+        # returns is labelled kph and converted here rather than leaving the
+        # caller to guess which unit it received.
+        speed_kph = speed * 3.6
+        # Time is derived from distance and speed rather than assumed: a trace
+        # is distance-indexed, and sample spacing is not uniform in time.
+        steps = np.diff(distance)
+        mid_speed = np.maximum((speed[:-1] + speed[1:]) / 2.0, 1.0)
+        step_seconds = steps / mid_speed
+
+        def _fraction(signal: NDArray[np.float64] | None, mask: Any) -> float | None:
+            if signal is None or signal.size != distance.size:
+                return None
+            weighted = float(np.sum(step_seconds[mask[:-1]]))
+            total = float(np.sum(step_seconds))
+            return round(weighted / total * 100.0, 1) if total > 0 else None
+
+        segments = await asyncio.to_thread(
+            self._segment_selection_sync,
+            record,
+            float(distance[0]),
+            float(distance[-1]),
+        )
+        segment_rows: list[dict[str, Any]] = []
+        for segment in segments.segments:
+            inside = (distance >= segment.start_m) & (distance <= segment.end_m)
+            if int(np.count_nonzero(inside)) < 2:
+                continue
+            window = np.zeros_like(step_seconds, dtype=bool)
+            window[inside[:-1] & inside[1:]] = True
+            segment_rows.append(
+                {
+                    "segment_id": segment.id,
+                    "label": segment.label,
+                    "start_m": round(float(segment.start_m), 1),
+                    "end_m": round(float(segment.end_m), 1),
+                    "time_s": round(float(np.sum(step_seconds[window])), 3),
+                    "minimum_speed_kph": round(float(np.min(speed_kph[inside])), 1),
+                    "entry_speed_kph": round(float(speed_kph[inside][0]), 1),
+                    "exit_speed_kph": round(float(speed_kph[inside][-1]), 1),
+                    "availability": "observed",
+                }
+            )
+
+        braking_events = 0
+        if brake is not None and brake.size == distance.size:
+            engaged = brake > 0.15
+            braking_events = int(np.count_nonzero(engaged[1:] & ~engaged[:-1]))
+
+        return {
+            "lap_id": record.id,
+            "lap_number": record.lap_number,
+            "lap_time_ms": record.lap_time_ms,
+            "valid": record.valid,
+            "tyre_compound": record.tyre_compound,
+            "tyre_age_laps": record.tyre_age_laps,
+            "coverage_ratio": round(float(record.coverage_ratio), 3),
+            "quality_score": round(float(record.quality_score), 3),
+            "trace_source": trace.source,
+            "distance_covered_m": round(float(distance[-1] - distance[0]), 1),
+            "top_speed_kph": round(float(np.max(speed_kph)), 1),
+            "minimum_speed_kph": round(float(np.min(speed_kph)), 1),
+            "average_speed_kph": round(float(np.mean(speed_kph)), 1),
+            "full_throttle_pct": _fraction(throttle, (throttle > 0.98) if throttle is not None else None),
+            "braking_pct": _fraction(brake, (brake > 0.15) if brake is not None else None),
+            "braking_events": braking_events,
+            "segments": segment_rows,
+            "segment_source": segments.segment_source,
+            "provenance": dict(trace.provenance),
+            "availability_note": (
+                "Measured from this lap alone; no reference lap is involved, so "
+                "there is no delta and no coaching verdict."
+            ),
+        }
+
     async def get_comparison_trace(
         self,
         comparison_id: str,

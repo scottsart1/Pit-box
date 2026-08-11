@@ -11,7 +11,7 @@ from collections import deque
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import TypeAlias
+from typing import Any, TypeAlias
 
 from .catalog import lap_id
 from .session_assembler import BranchInvalidation, FinalizedLapBatch
@@ -40,6 +40,51 @@ class FullFieldArchiveSnapshot:
     invalidation_queue_capacity: int
     invalidation_queue_drops: int
     reconciliation_required: bool
+    out_of_scope_batches_skipped: int = 0
+
+
+def cars_in_trace_scope(state: dict[str, Any]) -> set[int] | None:
+    """Car indices whose full traces are worth keeping, or None for everyone.
+
+    Storing every sampled channel for all 24 cars every lap of a race is far
+    more than the analysis ever reads back, and the write pressure is what
+    made per-car telemetry land sporadically rather than completely. In a
+    race the cars that actually get compared are the player, the teammate,
+    the podium, and the cars racing the player — so those are kept in full.
+
+    Practice and qualifying return None: there is no traffic to speak of, the
+    sessions are short, and full-field lap comparison is the entire point of
+    them.
+    """
+    if str(state.get("mode_profile", "")) not in {"race", "sprint"}:
+        return None
+
+    drivers = state.get("drivers", []) or []
+    player_index = int(state.get("player_car_index", -1))
+    keep: set[int] = {player_index} if player_index >= 0 else set()
+
+    player = next(
+        (d for d in drivers if int(d.get("car_idx", -1)) == player_index), None
+    )
+    player_grid = int((player or {}).get("grid_position", 0) or 0)
+    player_team = int((player or {}).get("team_id", -1)) if player else -1
+
+    for driver in drivers:
+        index = int(driver.get("car_idx", -1))
+        if index < 0:
+            continue
+        if driver.get("is_teammate") or (
+            player_team >= 0 and int(driver.get("team_id", -2)) == player_team
+        ):
+            keep.add(index)
+        if 1 <= int(driver.get("position", 0) or 0) <= 3:
+            keep.add(index)
+        # The cars the player started among: the race-long comparison set,
+        # fixed at the grid so it does not churn as positions swap.
+        grid = int(driver.get("grid_position", 0) or 0)
+        if player_grid and grid and abs(grid - player_grid) <= 2:
+            keep.add(index)
+    return keep
 
 
 class FullFieldArchiveService:
@@ -75,6 +120,14 @@ class FullFieldArchiveService:
         self._reconciliation_required = False
         self._invalidated_batch_ids: set[str] = set()
         self._invalidated_batch_order: deque[str] = deque(maxlen=16_384)
+        # None means keep everything, which is the default until a live race
+        # narrows it. Never inferred here: the service cannot see positions.
+        self._scope: set[int] | None = None
+        self._out_of_scope_skipped = 0
+
+    def set_trace_scope(self, indices: set[int] | None) -> None:
+        """Restrict full-trace archiving to these car indices (None = all)."""
+        self._scope = None if indices is None else set(indices)
 
     @property
     def running(self) -> bool:
@@ -98,6 +151,12 @@ class FullFieldArchiveService:
                 return False
             if item.invalidated or not item.groups:
                 self._incomplete_skipped += 1
+                return False
+            if (
+                self._scope is not None
+                and int(item.identity.car_index) not in self._scope
+            ):
+                self._out_of_scope_skipped += 1
                 return False
         if not self.running:
             return False
@@ -523,7 +582,12 @@ class FullFieldArchiveService:
             self._invalidation_queue.maxsize,
             self._invalidation_queue_drops,
             self._reconciliation_required,
+            self._out_of_scope_skipped,
         )
 
 
-__all__ = ["FullFieldArchiveService", "FullFieldArchiveSnapshot"]
+__all__ = [
+    "FullFieldArchiveService",
+    "FullFieldArchiveSnapshot",
+    "cars_in_trace_scope",
+]

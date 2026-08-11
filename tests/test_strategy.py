@@ -229,3 +229,82 @@ async def test_neutralisation_and_red_flag_pit_loss_models(stack):
     assert red["neutralisation"]["effective_pit_loss_s"] == 0
     assert red["neutralisation"]["red_flag_tyre_change"] is True
     assert "red flag" in red["recommended"]["instruction"].lower()
+
+
+def test_a_compound_never_run_is_inferred_from_the_ones_that_were():
+    """Reported after Las Vegas: deg was tied to the compounds actually run.
+
+    A practice session on mediums and hards taught the model nothing about
+    softs, so a soft stint fell back to a generic track default — even though
+    that afternoon had just measured how this car treats one step of compound
+    hardness.
+    """
+    from pitwall.strategy import infer_unrun_compounds
+
+    observed = {
+        "track_id": 31,
+        "compounds": {
+            "HARD": {
+                "sample_size": 8, "wear_sample_size": 8,
+                "slope_s_per_lap": 0.060, "max_wear_per_lap_pct": 2.0,
+            },
+            "MEDIUM": {
+                "sample_size": 8, "wear_sample_size": 8,
+                "slope_s_per_lap": 0.090, "max_wear_per_lap_pct": 2.8,
+            },
+        },
+    }
+    soft = infer_unrun_compounds(observed)["compounds"]["SOFT"]
+    # The measured hard->medium step is 1.5x on deg, so soft extrapolates one
+    # further step: 0.090 * 1.5.
+    assert soft["inferred_deg_s_per_lap"] == pytest.approx(0.135, abs=1e-3)
+    assert soft["inferred_wear_per_lap_pct"] == pytest.approx(3.92, abs=1e-2)
+    assert soft["inference_basis"] == "measured_compound_step"
+    assert soft["inferred_from"] == ["HARD", "MEDIUM"]
+    # It must never look like an observation.
+    assert soft.get("sample_size", 0) == 0
+    assert soft.get("slope_s_per_lap") is None
+
+
+def test_one_observed_compound_still_shapes_the_others():
+    from pitwall.strategy import infer_unrun_compounds
+
+    only_medium = {
+        "track_id": 31,
+        "compounds": {
+            "MEDIUM": {
+                "sample_size": 6, "wear_sample_size": 6,
+                "slope_s_per_lap": 0.090, "max_wear_per_lap_pct": 2.8,
+            }
+        },
+    }
+    compounds = infer_unrun_compounds(only_medium)["compounds"]
+    assert compounds["SOFT"]["inference_basis"] == "default_compound_step"
+    # Softer degrades faster than the medium; harder degrades slower.
+    assert compounds["SOFT"]["inferred_deg_s_per_lap"] > 0.090
+    assert compounds["HARD"]["inferred_deg_s_per_lap"] < 0.090
+
+
+def test_a_real_lap_on_the_compound_always_wins():
+    from pitwall.strategy import infer_unrun_compounds
+
+    measured = {
+        "track_id": 31,
+        "compounds": {
+            "HARD": {"sample_size": 8, "wear_sample_size": 8, "slope_s_per_lap": 0.060, "max_wear_per_lap_pct": 2.0},
+            "MEDIUM": {"sample_size": 8, "wear_sample_size": 8, "slope_s_per_lap": 0.090, "max_wear_per_lap_pct": 2.8},
+            "SOFT": {"sample_size": 5, "wear_sample_size": 5, "slope_s_per_lap": 0.115, "max_wear_per_lap_pct": 3.4},
+        },
+    }
+    soft = infer_unrun_compounds(measured)["compounds"]["SOFT"]
+    assert soft["slope_s_per_lap"] == 0.115
+    assert "inferred_deg_s_per_lap" not in soft
+
+
+def test_nothing_observed_infers_nothing():
+    from pitwall.strategy import infer_unrun_compounds
+
+    empty = {"track_id": 31, "compounds": {}}
+    assert infer_unrun_compounds(empty)["compounds"] == {}
+    thin = {"track_id": 31, "compounds": {"MEDIUM": {"sample_size": 1, "slope_s_per_lap": 0.09}}}
+    assert "inferred_deg_s_per_lap" not in infer_unrun_compounds(thin)["compounds"]["MEDIUM"]

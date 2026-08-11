@@ -459,6 +459,55 @@ async function loadReferences(lapId) {
   }
 }
 
+/* Analyze one lap with no counterpart.
+   Lap Lab could only answer "how does this lap differ from that one", so a
+   driver with a single interesting lap — a first visit to a circuit, a
+   one-off session — had nothing to look at. */
+async function analyzeLapAlone() {
+  const lapId = state.candidateLapId;
+  if (!lapId) return;
+  const action = byId("analyzeLapAlone");
+  const pane = byId("soloAnalysisPane");
+  action.disabled = true;
+  setNotice("lapLabStatus", "Measuring this lap from its own trace…");
+  try {
+    const payload = await api(`/laps/${encodeURIComponent(lapId)}/analysis`);
+    pane.hidden = false;
+    byId("soloAnalysisMeta").textContent = `Lap ${payload.lap_number ?? "—"} · ${formatLapTime(payload.lap_time_ms)} · ${payload.tyre_compound || "compound unavailable"}`;
+    const summary = byId("soloAnalysisSummary");
+    summary.replaceChildren(
+      summaryMetric("Top speed", `${payload.top_speed_kph ?? "—"} kph`, "Fastest point on the lap"),
+      summaryMetric("Slowest point", `${payload.minimum_speed_kph ?? "—"} kph`, "Tightest corner of the lap"),
+      summaryMetric("Full throttle", payload.full_throttle_pct == null ? "Unavailable" : `${payload.full_throttle_pct}%`, "Share of lap time"),
+      summaryMetric("Braking", payload.braking_pct == null ? "Unavailable" : `${payload.braking_pct}%`, `${payload.braking_events ?? 0} braking events`),
+    );
+    const rows = byId("soloAnalysisRows");
+    rows.replaceChildren();
+    for (const segment of payload.segments || []) {
+      const row = document.createElement("tr");
+      for (const value of [
+        segment.label,
+        `${segment.start_m} m`,
+        `${segment.end_m} m`,
+        `${segment.time_s}s`,
+        `${segment.entry_speed_kph} kph`,
+        `${segment.minimum_speed_kph} kph`,
+        `${segment.exit_speed_kph} kph`,
+      ]) {
+        const cell = document.createElement("td");
+        cell.textContent = String(value);
+        row.appendChild(cell);
+      }
+      rows.appendChild(row);
+    }
+    setNotice("lapLabStatus", `Single-lap analysis ready · ${(payload.segments || []).length} segments · trace ${payload.trace_source}.`, "success");
+  } catch (error) {
+    setNotice("lapLabStatus", formatError(error), "error");
+  } finally {
+    action.disabled = !state.candidateLapId;
+  }
+}
+
 function updateReferenceMeta() {
   const id = byId("referenceLapSelect")?.value || "";
   const reference = state.references.find((item) => item.lap_id === id);
@@ -1171,6 +1220,7 @@ function bindEvents() {
   byId("reviewReprocess")?.addEventListener("click", requestReprocess);
   byId("reviewOpenField")?.addEventListener("click", () => navigate("field"));
   byId("reviewOpenLibrary")?.addEventListener("click", () => navigate("library"));
+  byId("analyzeLapAlone")?.addEventListener("click", analyzeLapAlone);
   byId("candidateLapSelect")?.addEventListener("change", (event) => {
     state.candidateLapId = event.target.value;
     state.references = [];
@@ -1180,6 +1230,10 @@ function bindEvents() {
     updateCandidateMeta();
     renderComparison();
     renderReviewLaps();
+    // Solo analysis needs only a candidate, so it unlocks with one.
+    const soloAction = byId("analyzeLapAlone");
+    if (soloAction) soloAction.disabled = !state.candidateLapId;
+    byId("soloAnalysisPane").hidden = true;
     if (state.candidateLapId) loadReferences(state.candidateLapId);
     else replaceOptions(byId("referenceLapSelect"), [], "Choose candidate first");
   });

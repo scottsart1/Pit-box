@@ -378,6 +378,108 @@ async function runWhatIf(event) {
   }
 }
 
+/* ---- Race planner ---------------------------------------------------------
+   The ranked plans on the live path all start from where the car is now, so a
+   race could not be settled before the lights — the exact conversation a
+   driver wants to have in the garage. This runs the same stint simulation
+   over a hypothetical grid start. */
+
+async function loadPlannerTracks() {
+  const select = byId("stratPlannerTrack");
+  if (!select || select.dataset.loaded === "1") return;
+  try {
+    const payload = await api("/api/tracks");
+    for (const track of payload.tracks || []) {
+      const option = document.createElement("option");
+      option.value = String(track.id);
+      option.textContent = track.name;
+      select.appendChild(option);
+    }
+    select.dataset.loaded = "1";
+    if (view.lastState?.track_id >= 0) select.value = String(view.lastState.track_id);
+  } catch {
+    /* The current circuit still works; only the picker is unavailable. */
+  }
+}
+
+function describeEvidence(evidence) {
+  const parts = [];
+  for (const [compound, model] of Object.entries(evidence || {})) {
+    if (model.deg_s_per_lap == null) continue;
+    const measured = (model.laps_observed || 0) > 0;
+    parts.push(
+      `${compound}: ${Number(model.deg_s_per_lap).toFixed(3)}s/lap ${
+        measured ? `measured over ${model.laps_observed} laps` : `inferred from ${(model.inferred_from || []).join(" + ") || "observed compounds"}`
+      }`,
+    );
+  }
+  return parts.join(" · ");
+}
+
+async function buildRacePlans(event) {
+  event.preventDefault();
+  const status = byId("stratPlannerStatus");
+  const laps = byId("stratPlannerLaps").value;
+  const trackValue = byId("stratPlannerTrack").value;
+  const start = byId("stratPlannerStart").value;
+  status.dataset.tone = "";
+  status.textContent = "Simulating the race from a standing start…";
+  try {
+    const payload = await post("/api/strategy/plan-race", {
+      track_id: trackValue ? Number(trackValue) : null,
+      total_laps: laps ? Number(laps) : null,
+      start_compound: start || null,
+    });
+    const body = byId("stratPlannerRows");
+    body.replaceChildren();
+    byId("stratPlannerEvidence").textContent = describeEvidence(payload.tyre_evidence);
+    if (!payload.available) {
+      status.textContent = payload.reason || "No plans available for that distance.";
+      status.dataset.tone = "error";
+      const row = document.createElement("tr");
+      const cell = document.createElement("td");
+      cell.colSpan = 7;
+      cell.className = "empty";
+      cell.textContent = payload.reason || "No plans available.";
+      row.appendChild(cell);
+      body.appendChild(row);
+      return;
+    }
+    (payload.plans || []).forEach((plan, index) => {
+      const row = document.createElement("tr");
+      if (index === 0) row.className = "plan-row-recommended";
+      const evidence = payload.tyre_evidence?.[String((plan.compounds || [])[0] || "").toUpperCase()];
+      const cells = [
+        `${index + 1}${index === 0 ? " ★" : ""} · ${plan.stops_remaining}-stop`,
+        (plan.compounds || []).join(" → "),
+        (plan.box_laps || []).join(", ") || "none",
+        `${plan.monte_carlo?.p75_s ?? plan.risk_adjusted_time_s ?? "—"}s`,
+        `${plan.projected_max_wear_pct ?? "—"}%`,
+        evidence && (evidence.laps_observed || 0) > 0 ? "measured" : "inferred",
+      ];
+      for (const text of cells) {
+        const cell = document.createElement("td");
+        cell.textContent = String(text);
+        row.appendChild(cell);
+      }
+      const action = document.createElement("td");
+      const load = document.createElement("button");
+      load.type = "button";
+      load.className = "button ghost";
+      load.textContent = "Load";
+      load.addEventListener("click", () => adoptPlan(plan, status));
+      action.appendChild(load);
+      row.appendChild(action);
+      body.appendChild(row);
+    });
+    status.textContent = `${payload.plans.length} plan${payload.plans.length === 1 ? "" : "s"} for ${payload.total_laps} laps at ${payload.track_name || "this circuit"} · pit loss ${payload.pit_loss_s ?? "—"}s. ${payload.basis}`;
+    status.dataset.tone = "success";
+  } catch (error) {
+    status.textContent = String(error.message || error);
+    status.dataset.tone = "error";
+  }
+}
+
 /* ---- Decision log --------------------------------------------------------- */
 
 async function loadDecisionLog() {
@@ -444,6 +546,7 @@ if (HAS_DOM) {
     if (view.active) {
       if (view.lastState) renderAll(view.lastState);
       loadDecisionLog();
+      loadPlannerTracks();
     }
   });
   document.addEventListener("DOMContentLoaded", () => {
@@ -453,6 +556,7 @@ if (HAS_DOM) {
     post("/api/strategy/recompute").catch(() => {});
   });
   byId("stratWhatIfForm")?.addEventListener("submit", runWhatIf);
+  byId("stratPlannerForm")?.addEventListener("submit", buildRacePlans);
   byId("stratAskSend")?.addEventListener("click", sendAsk);
   byId("stratAsk")?.addEventListener("keydown", (event) => {
     if (event.key === "Enter") sendAsk();

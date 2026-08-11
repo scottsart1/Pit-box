@@ -322,3 +322,62 @@ async def test_a_rundown_request_is_never_answered_with_a_bare_pit_call(stack):
     answer = await brain._fast_answer("any strategy updates")
     assert answer is not None
     assert "box" in answer.lower() or "stay out" in answer.lower()
+
+
+@pytest.mark.asyncio
+async def test_an_agreed_overcut_binds_the_engineer(stack):
+    """Verbatim from the 2026-08-10 Las Vegas race.
+
+    "I feel that we should be trying to do an overcut rather than taking a pit
+    stop right now" was acknowledged — "we'll run the overcut" — and two laps
+    later the engineer called "Box lap 12 for mediums" as though it had never
+    been said. The agreement lived only in the radio log, which nothing
+    downstream reads.
+    """
+    store, brain = await _brain_with_field(stack)
+
+    assert await brain._fast_answer(
+        "I feel that we should be trying to do an overcut on the others "
+        "rather than taking a pit stop right now"
+    ) is None, "the model acknowledges in the driver's words"
+
+    snapshot = await store.snapshot_live()
+    intent = snapshot.get("strategy_intent", {})
+    assert intent.get("intent") == "overcut"
+    assert intent.get("direction") == "stay_out"
+    assert intent.get("active") is True
+    # Agreeing to overcut IS declining the next stop.
+    assert snapshot.get("strategy_hold", {}).get("active") is True
+
+    # It travels on every later request, not just the one that set it.
+    header = await brain.situation_header()
+    assert "AGREED WITH THE DRIVER" in header
+    assert "overcut" in header
+
+
+@pytest.mark.asyncio
+async def test_going_long_and_undercutting_are_both_understood(stack):
+    store, brain = await _brain_with_field(stack)
+
+    await brain._fast_answer("let's go long on this set")
+    assert (await store.snapshot_live())["strategy_intent"]["intent"] == "go_long"
+
+    # An undercut is a decision to stop EARLIER, so it must not set a hold.
+    await store.update(strategy_hold={})
+    await brain._fast_answer("let's undercut Albon")
+    snapshot = await store.snapshot_live()
+    assert snapshot["strategy_intent"]["intent"] == "undercut"
+    assert snapshot["strategy_intent"]["direction"] == "box_early"
+    assert not snapshot.get("strategy_hold", {}).get("active")
+
+
+def test_questions_about_a_tactic_are_not_agreements_to_it():
+    for question in (
+        "what is the undercut worth",
+        "is the overcut on",
+        "should we go long",
+        "how much would an undercut gain",
+    ):
+        assert EngineerBrain._strategy_intent(question, 10) is None, question
+    # And rejecting one is not agreeing to it either.
+    assert EngineerBrain._strategy_intent("the undercut is not on", 10) is None

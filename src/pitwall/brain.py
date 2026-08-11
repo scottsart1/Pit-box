@@ -362,6 +362,18 @@ class EngineerBrain:
                 f" | compound rule {state.get('strategy', {}).get('compound_rule', {})}"
                 f" | strategy {plan.get('instruction', 'strategy building')}"
             )
+        # An agreed tactical plan travels with every request, not only the one
+        # that set it. Outside include_strategy too: the driver expects the
+        # overcut they agreed to be honoured whatever they ask about next.
+        intent = state.get("strategy_intent", {}) or {}
+        if intent.get("active"):
+            strategy_clause += (
+                f" | AGREED WITH THE DRIVER on lap {intent.get('set_at_lap')}: "
+                f"{str(intent.get('intent', '')).replace('_', ' ')}"
+                f" ({intent.get('note', '')}). Honour it; if the data now says"
+                " otherwise, say so and offer the alternative rather than"
+                " silently reverting to the ranked plan."
+            )
         temperature_unit = str(state.get("temperature_unit", "c")).lower()
         temperatures, temperature_label = _temperature_values(
             [float(value) for value in state["tyre"]["inner_temps_c"]],
@@ -689,6 +701,58 @@ class EngineerBrain:
         elif has_any_phrase(text, ("fastest", "maximum pace", "attack strategy")):
             action["priority"] = "pace"
         return action
+
+    # Tactical plans a driver states in words rather than as a lap and a
+    # compound. Each maps to what it means for the next stop.
+    _STRATEGY_INTENTS = (
+        ("overcut", "stay_out", ("overcut", "over cut", "over-cut")),
+        (
+            "go_long",
+            "stay_out",
+            (
+                "go long", "going long", "extend the stint", "extend this stint",
+                "stay out longer", "stretch the stint", "stretch this stint",
+                "run longer", "longer stint",
+            ),
+        ),
+        ("undercut", "box_early", ("undercut", "under cut", "under-cut")),
+    )
+
+    @classmethod
+    def _strategy_intent(cls, utterance: str, current_lap: int) -> dict[str, Any] | None:
+        """Capture a tactical plan agreed out loud, e.g. "let's overcut them".
+
+        From a real race: "I feel that we should be trying to do an overcut
+        rather than taking a pit stop right now" was acknowledged — "we'll run
+        the overcut" — and then two laps later the engineer called "Box lap 12
+        for mediums" as though the conversation had never happened. The
+        agreement existed only in the radio log, which nothing downstream
+        reads. Recording it in state is what makes it binding.
+        """
+        text = cls._normalize_text(utterance)
+        for intent, direction, phrases in cls._STRATEGY_INTENTS:
+            if not has_any_phrase(text, phrases):
+                continue
+            # Only a decision counts. "What is the undercut worth?" is a
+            # question about one, and "the undercut is not on" rejects it.
+            if re.match(
+                r"^(?:how|what|when|where|why|would|could|can|is|are|do|does|should)\b",
+                text,
+            ):
+                return None
+            if has_negation(text) and not has_any_phrase(
+                text, ("rather than", "instead of", "not taking", "not boxing")
+            ):
+                return None
+            return {
+                "intent": intent,
+                "direction": direction,
+                "set_at_lap": int(current_lap),
+                "note": utterance.strip(),
+                "set_at": time.time(),
+                "active": True,
+            }
+        return None
 
     @classmethod
     def _preference_updates(cls, utterance: str) -> dict[str, Any]:
@@ -1308,6 +1372,32 @@ class EngineerBrain:
             await self.store.update(strategy_hold=hold)
             # Let the language route acknowledge the driver's exact wording;
             # the deterministic state mutation above is the safety invariant.
+            return None
+
+        intent = self._strategy_intent(utterance, int(state.get("current_lap", 0) or 0))
+        if intent is not None:
+            await self.store.update(strategy_intent=intent)
+            if intent["direction"] == "stay_out":
+                # Agreeing to overcut IS declining the next stop. Without this
+                # the engineer said "we'll run the overcut" and then called
+                # "Box lap 12" two laps later.
+                current_lap = int(state.get("current_lap", 0) or 0)
+                hold = dict(state.get("strategy_hold", {}) or {})
+                hold.update(
+                    {
+                        "active": True,
+                        "until_lap": current_lap + 5,
+                        "reason": f"agreed {intent['intent'].replace('_', ' ')}: {utterance.strip()}",
+                        "set_at": time.time(),
+                        "set_at_lap": current_lap,
+                    }
+                )
+                hold.setdefault("baseline", {})
+                hold.setdefault("change_reason", "")
+                hold.setdefault("raised_after_release", False)
+                await self.store.update(strategy_hold=hold)
+            # The model acknowledges in the driver's own words; the state
+            # mutation above is what makes it binding on later calls.
             return None
 
         preference_updates = self._preference_updates(utterance)

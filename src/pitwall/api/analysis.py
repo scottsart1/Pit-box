@@ -156,6 +156,15 @@ def create_analysis_router(service: ComparisonService) -> APIRouter:
             _raise_service_error(exc)
             raise AssertionError("unreachable") from exc
 
+    @router.get("/laps/{lap_id}/analysis", response_model=ApiResponse)
+    async def lap_analysis(lap_id: str) -> dict[str, Any]:
+        """Single-lap facts with no reference lap involved."""
+        try:
+            return await service.get_lap_analysis(lap_id)
+        except ComparisonServiceError as exc:
+            _raise_service_error(exc)
+            raise AssertionError("unreachable") from exc
+
     @router.get("/laps/{lap_id}/references", response_model=ReferenceResponse)
     async def references(lap_id: str) -> dict[str, Any]:
         try:

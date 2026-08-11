@@ -3,6 +3,7 @@ from __future__ import annotations
 import math
 import re
 import zlib
+from itertools import pairwise
 from statistics import median
 from typing import Any
 
@@ -86,6 +87,135 @@ TRACK_TYRE_SEVERITY = {
 # 0.0 is straightforward to pass, 1.0 is exceptionally difficult. These are
 # deliberately broad circuit characteristics, not claims about a particular
 # race. Unknown/new layouts fall back to 0.60 and lower projection confidence.
+# Dry compounds, hardest first. Index distance is one "step" of hardness.
+_COMPOUND_HARDNESS_ORDER = ("HARD", "MEDIUM", "SOFT")
+# Fallback step multipliers when only one compound has been run: one step
+# softer degrades and wears roughly this much faster. Used only to shape an
+# extrapolation that is always labelled as inferred, never as measured.
+_DEFAULT_DEG_STEP_RATIO = 1.35
+_DEFAULT_WEAR_STEP_RATIO = 1.30
+# A measured step ratio outside this range is a data artifact, not a compound
+# relationship, so the default step is used instead.
+_STEP_RATIO_BOUNDS = (1.05, 2.20)
+
+
+def infer_unrun_compounds(historical: dict[str, Any]) -> dict[str, Any]:
+    """Estimate compounds never run from the ones that were.
+
+    A practice session on mediums and hards taught the model nothing about
+    softs, so a soft stint fell back to a generic track default even though
+    that same afternoon had just measured how this car, driver and surface
+    treat one step of compound hardness. The step between the observed
+    compounds is exactly that measurement, so it is used to extrapolate;
+    with only one compound run the fallback step ratios apply.
+
+    Everything produced here is marked ``inferred_*`` and carries no sample
+    size, so nothing downstream can mistake it for an observation, and any
+    real lap on that compound immediately supersedes it.
+    """
+    compounds = historical.get("compounds", {})
+    if not isinstance(compounds, dict) or not compounds:
+        return historical
+
+    def anchors(key: str, sample_key: str, minimum: int) -> dict[str, float]:
+        found: dict[str, float] = {}
+        for name in _COMPOUND_HARDNESS_ORDER:
+            model = compounds.get(name) or {}
+            value = model.get(key)
+            if value is None or int(model.get(sample_key, 0) or 0) < minimum:
+                continue
+            if float(value) > 0:
+                found[name] = float(value)
+        return found
+
+    def step_ratio(observed: dict[str, float], default: float) -> float:
+        """Measured multiplier per step softer, or the default."""
+        ratios: list[float] = []
+        names = [n for n in _COMPOUND_HARDNESS_ORDER if n in observed]
+        for harder, softer in pairwise(names):
+            steps = _COMPOUND_HARDNESS_ORDER.index(
+                softer
+            ) - _COMPOUND_HARDNESS_ORDER.index(harder)
+            if steps <= 0 or observed[harder] <= 0:
+                continue
+            ratios.append((observed[softer] / observed[harder]) ** (1.0 / steps))
+        usable = [r for r in ratios if _STEP_RATIO_BOUNDS[0] <= r <= _STEP_RATIO_BOUNDS[1]]
+        return float(median(usable)) if usable else default
+
+    updated = {name: dict(model) for name, model in compounds.items()}
+    for key, sample_key, minimum, default_ratio, output_key in (
+        ("slope_s_per_lap", "sample_size", 3, _DEFAULT_DEG_STEP_RATIO, "inferred_deg_s_per_lap"),
+        (
+            "max_wear_per_lap_pct",
+            "wear_sample_size",
+            2,
+            _DEFAULT_WEAR_STEP_RATIO,
+            "inferred_wear_per_lap_pct",
+        ),
+    ):
+        observed = anchors(key, sample_key, minimum)
+        if not observed:
+            continue
+        ratio = step_ratio(observed, default_ratio)
+        measured_step = len(observed) >= 2
+        for target in _COMPOUND_HARDNESS_ORDER:
+            if target in observed:
+                continue
+            target_index = _COMPOUND_HARDNESS_ORDER.index(target)
+            # Extrapolate from the closest compound actually run.
+            anchor = min(
+                observed,
+                key=lambda name: abs(
+                    _COMPOUND_HARDNESS_ORDER.index(name) - target_index
+                ),
+            )
+            steps = target_index - _COMPOUND_HARDNESS_ORDER.index(anchor)
+            model = updated.setdefault(target, {"sample_size": 0, "wear_sample_size": 0})
+            model[output_key] = round(observed[anchor] * (ratio**steps), 4)
+            model["inference_basis"] = (
+                "measured_compound_step" if measured_step else "default_compound_step"
+            )
+            model["inferred_from"] = sorted(observed)
+            model.setdefault("source", "inferred_from_observed_compounds")
+
+    result = dict(historical)
+    result["compounds"] = updated
+    return result
+
+
+# Below this the car is not meaningfully quicker than what it must pass, so a
+# stop that drops it into traffic recovers nothing.
+_MIN_USEFUL_PACE_ADVANTAGE_S = 0.10
+# Fraction of the nominal pace advantage that is actually bankable across the
+# stint: the fresh-tyre offset erodes, and the cars ahead stop as well.
+_ADVANTAGE_RETENTION = 0.60
+# Used when the field's real spacing cannot be measured.
+_DEFAULT_ADJACENT_GAP_S = 1.8
+
+
+def _typical_adjacent_gap_s(state: dict[str, Any]) -> float:
+    """Median spacing between adjacent classified cars, in seconds.
+
+    This is what a pass has to be bought across, so it is measured from the
+    field rather than assumed: a strung-out race is far cheaper to recover
+    through than a train.
+    """
+    deltas = sorted(
+        float(driver["delta_to_leader_s"])
+        for driver in state.get("drivers", []) or []
+        if driver.get("delta_to_leader_s") is not None
+        and int(driver.get("position", 0) or 0) > 0
+    )
+    gaps = [
+        second - first
+        for first, second in pairwise(deltas)
+        if 0.0 < second - first < 30.0
+    ]
+    if not gaps:
+        return _DEFAULT_ADJACENT_GAP_S
+    return max(0.5, float(median(gaps)))
+
+
 TRACK_OVERTAKING_DIFFICULTY = {
     0: 0.52,   # Melbourne
     3: 0.38,   # Bahrain
@@ -794,6 +924,13 @@ class StrategyEngine:
                 "personal_track_history",
                 int(model.get("wear_sample_size", 0)),
             )
+        inferred = model.get("inferred_wear_per_lap_pct")
+        if inferred is not None and float(inferred) > 0:
+            return apply_feedback(
+                float(inferred) * style_factor,
+                f"inferred_from_{'_'.join(model.get('inferred_from', []) or ['observed'])}".lower(),
+                0,
+            )
         severity = TRACK_TYRE_SEVERITY.get(int(state.get("track_id", -1)), 1.0)
         return apply_feedback(
             DEFAULT_WEAR_PER_LAP.get(compound, 3.0) * severity * style_factor,
@@ -832,6 +969,16 @@ class StrategyEngine:
         value = prior.get("slope_s_per_lap")
         if value is not None and sample >= 3 and -0.1 <= float(value) <= 1.5:
             return apply_feedback(max(0.0, float(value)), "personal_track_history", sample)
+        # Never run this compound, but the compounds that were run measured
+        # how this car treats a step of hardness. That beats a generic track
+        # default, and ranks below any real lap on the compound itself.
+        inferred = prior.get("inferred_deg_s_per_lap")
+        if inferred is not None and -0.1 <= float(inferred) <= 1.5:
+            return apply_feedback(
+                max(0.0, float(inferred)),
+                f"inferred_from_{'_'.join(prior.get('inferred_from', []) or ['observed'])}".lower(),
+                0,
+            )
         severity = TRACK_TYRE_SEVERITY.get(int(state.get("track_id", -1)), 1.0)
         return apply_feedback(
             DEFAULT_DEG.get(compound, 0.08) * severity, "track_default", 0
@@ -1141,16 +1288,32 @@ class StrategyEngine:
             if item.get("pace_s") is not None
         ]
         reference_pace = float(median(nearby)) if nearby else player_final_pace
-        pace_advantage = max(0.0, reference_pace - player_final_pace)
-        # Even with a large tyre offset, track capacity bounds recovery. Seven
-        # laps at Monaco-like 0.9 difficulty cannot plausibly recover nine cars.
-        capacity = (
-            laps_after_stop * (1.0 - difficulty) * 0.90
-            + max(0.0, pace_advantage - 0.15)
-            * laps_after_stop
-            / (1.2 + 2.8 * difficulty)
-        )
-        return round(max(0.0, min(float(lost), capacity)), 2)
+        pace_advantage = reference_pace - player_final_pace
+
+        # A position is bought with time, never granted for circulating.
+        #
+        # The previous model handed out `laps * (1 - difficulty) * 0.9`
+        # positions before pace was considered at all. At Las Vegas
+        # (difficulty 0.22) that is 0.7 cars a lap, so any stop with thirty
+        # laps left "recovered" everything it lost whether or not the car was
+        # quicker. From a real race: a lap-19 stop from P5 projected P6 after
+        # rejoining P14 — nine cars passed for free — and the engineer kept
+        # insisting on a stop the driver was right to refuse. Aggregate time
+        # is not the whole story when the time has to be taken off cars that
+        # do not move over.
+        if pace_advantage <= _MIN_USEFUL_PACE_ADVANTAGE_S:
+            return 0.0
+        # The fresh-tyre offset erodes as the new set wears and the cars
+        # ahead stop themselves, so only part of the nominal advantage is
+        # ever bankable.
+        time_budget = pace_advantage * laps_after_stop * _ADVANTAGE_RETENTION
+        # Each pass costs the gap to that car plus a tax for actually getting
+        # by: ~2.3 s at Las Vegas, ~6.7 s at Monaco.
+        overtake_tax = 1.0 + 6.0 * difficulty
+        cost_per_position = _typical_adjacent_gap_s(state) + overtake_tax
+        if cost_per_position <= 0:
+            return 0.0
+        return round(max(0.0, min(float(lost), time_budget / cost_per_position)), 2)
 
     def _annotate_finish_projection(
         self,
@@ -1785,6 +1948,7 @@ class StrategyEngine:
         historical = await self.database.tyre_history_model(
             int(state.get("track_id", -1)), context=state
         )
+        historical = infer_unrun_compounds(historical)
         plan = self.compute(state, historical)
         plan = self._stabilize_radio_plan(state, previous_strategy, plan)
         await self.store.update(strategy=plan)
@@ -2880,6 +3044,7 @@ class StrategyEngine:
         historical = await self.database.tyre_history_model(
             int(state.get("track_id", -1)), context=state
         )
+        historical = infer_unrun_compounds(historical)
         own_deg, _, _ = self._deg_for(state, str(state["tyre"]["compound"]), historical)
         rival_age = int(target.get("tyre_age", 0))
         rival_compound = str(target.get("tyre_compound", "MEDIUM"))
@@ -2921,6 +3086,7 @@ class StrategyEngine:
         historical = await self.database.tyre_history_model(
             int(state.get("track_id", -1)), context=state
         )
+        historical = infer_unrun_compounds(historical)
         current_wear = max(state["tyre"]["wear"] or [0])
         current_deg, _, _ = self._deg_for(
             state, str(state["tyre"]["compound"]), historical
@@ -2978,11 +3144,109 @@ class StrategyEngine:
                 return item
         return None
 
+    async def plan_race(
+        self,
+        *,
+        track_id: int | None = None,
+        total_laps: int | None = None,
+        start_compound: str | None = None,
+    ) -> dict[str, Any]:
+        """Rank whole-race plans for a distance, before the race exists.
+
+        The ranked plans on the live path all start from where the car is
+        now, so there was no way to settle a race before the lights — or to
+        plan one at all until telemetry arrived. This runs the same stint
+        simulation over a hypothetical grid start, using stored tyre evidence
+        for the track (including compounds inferred from the ones actually
+        run), so a plan can be agreed in the garage and loaded.
+        """
+        state = dict(await self.store.snapshot_analysis())
+        resolved_track = int(
+            track_id if track_id is not None else state.get("track_id", -1)
+        )
+        laps = int(total_laps or state.get("total_laps", 0) or 0)
+        if laps < 2:
+            return {
+                "available": False,
+                "reason": "Choose a race distance of at least two laps.",
+            }
+        historical = await self.database.tyre_history_model(
+            resolved_track, context=state
+        )
+        historical = infer_unrun_compounds(historical)
+
+        # A grid start: lap zero, full fuel, a fresh set, nothing worn.
+        planning_state = dict(state)
+        planning_state.update(
+            {
+                "track_id": resolved_track,
+                "total_laps": laps,
+                "current_lap": 0,
+                "mode_profile": "race",
+                "race_control_phase": "green",
+                "tyre": {
+                    **dict(state.get("tyre", {}) or {}),
+                    "compound": str(start_compound or "MEDIUM").upper(),
+                    "age_laps": 0,
+                    "wear": [0.0, 0.0, 0.0, 0.0],
+                },
+            }
+        )
+        computed = self.compute(planning_state, historical)
+        plans = [
+            plan
+            for plan in (computed.get("plans") or [])
+            if plan.get("feasible") and plan.get("legal", True)
+        ][:5]
+        def _reported_deg(model: dict[str, Any]) -> float | None:
+            """The degradation the engine will actually use, not the raw fit.
+
+            A short sample can fit a negative slope — tyres that get quicker
+            forever — which `_compound_deg` floors at zero before using. The
+            planner has to show the same number, or it explains a plan with
+            evidence that did not produce it.
+            """
+            value = model.get("slope_s_per_lap")
+            if value is None:
+                value = model.get("inferred_deg_s_per_lap")
+            return None if value is None else round(max(0.0, float(value)), 4)
+
+        evidence = {
+            name: {
+                "source": model.get("source"),
+                "deg_s_per_lap": _reported_deg(model),
+                "wear_per_lap_pct": model.get("max_wear_per_lap_pct")
+                or model.get("inferred_wear_per_lap_pct"),
+                "laps_observed": int(model.get("sample_size", 0) or 0),
+                "inference_basis": model.get("inference_basis"),
+                "inferred_from": model.get("inferred_from"),
+            }
+            for name, model in (historical.get("compounds") or {}).items()
+        }
+        return {
+            "available": bool(plans),
+            "reason": "" if plans else "No legal, feasible plan fits that distance.",
+            "track_id": resolved_track,
+            "track_name": state.get("track_name"),
+            "total_laps": laps,
+            "start_compound": planning_state["tyre"]["compound"],
+            "plans": plans,
+            "tyre_evidence": evidence,
+            "pit_loss_s": computed.get("pit_loss_s"),
+            "compound_rule": computed.get("compound_rule"),
+            "basis": (
+                "Stored tyre evidence for this track. Compounds you have not "
+                "run are extrapolated from the ones you have and are labelled "
+                "as inferred."
+            ),
+        }
+
     async def what_if(self, scenario: str) -> dict[str, Any]:
         state = await self.store.snapshot_analysis()
         historical = await self.database.tyre_history_model(
             int(state.get("track_id", -1)), context=state
         )
+        historical = infer_unrun_compounds(historical)
         base = self.compute(state, historical)
         text = scenario.lower()
         compound = next(

@@ -493,6 +493,11 @@ class SessionState:
             "delivery_state": "idle",
         }
     )
+    # A tactical plan the driver and engineer agreed out loud — an overcut, an
+    # undercut, going long — which the ranked plan alone cannot express. Kept
+    # in state so the dashboard shows it and every later call is made in its
+    # light, rather than the agreement living only in the radio history.
+    strategy_intent: dict[str, Any] = field(default_factory=dict)
     final_classification: dict[str, Any] = field(default_factory=dict)
     # Latest generated brief/debrief of each kind for the live and review UI.
     briefings: dict[str, Any] = field(default_factory=dict)
