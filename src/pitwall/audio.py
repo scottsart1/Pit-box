@@ -165,23 +165,37 @@ class AudioService:
         stripped = " ".join(re.sub(r"[^a-z\s]", " ", text.strip().lower()).split())
         return bool(stripped) and stripped in _SILENCE_ARTIFACTS
 
-    @staticmethod
+    # Harmless words a driver actually says before the wake phrase — and that
+    # STT likes to prepend on its own. A closed list, not a wildcard: allowing
+    # arbitrary words before the phrase is how "talking about Mark's lap" on a
+    # crowded mic becomes an activation. Reported from a real race: strict
+    # prefix-only matching rejected honest calls like "uh, Mark, box confirm".
+    _WAKE_FILLERS = (
+        "uh", "um", "erm", "hey", "ok", "okay", "so", "yeah", "yes", "no",
+        "right", "and", "well", "oh", "alright", "please", "hmm", "now",
+    )
+
+    @classmethod
     def extract_wake_command(
+        cls,
         text: str,
         phrases: list[str],
     ) -> tuple[bool, str, str]:
-        """Match a wake phrase only at the beginning of a transcript."""
+        """Match a wake phrase at the start, tolerating a little filler first."""
         original = re.sub(r"\s+", " ", text.strip())
         if not original:
             return False, "", ""
 
+        filler = (
+            r"(?:(?:" + "|".join(cls._WAKE_FILLERS) + r")[\s,.:;!?—–-]+){0,2}"
+        )
         for phrase in sorted(phrases, key=len, reverse=True):
             words = [re.escape(part) for part in phrase.strip().split() if part]
             if not words:
                 continue
             prefix = r"\s+".join(words)
             match = re.match(
-                rf"^\s*{prefix}\b[\s,.:;!?—–-]*(.*)$",
+                rf"^\s*{filler}{prefix}\b[\s,.:;!?—–-]*(.*)$",
                 original,
                 flags=re.IGNORECASE,
             )

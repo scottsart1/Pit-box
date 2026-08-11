@@ -298,3 +298,27 @@ async def test_an_explicit_refusal_wins_over_its_own_editorialising(stack):
         "why not box this lap",
     ):
         assert EngineerBrain._strategy_refusal(question) is False, question
+
+
+@pytest.mark.asyncio
+async def test_a_rundown_request_is_never_answered_with_a_bare_pit_call(stack):
+    """Verbatim from the 2026-08-10 Las Vegas session.
+
+    "could you please give me a rundown of the overall strategy" and "can you
+    run down of the pit strategy" were both answered with a bare "Box this
+    lap for softs." A request for the whole picture goes to the model, which
+    inspects the ranked plans; a plain status ping stays deterministic.
+    """
+    _store, brain = await _brain_with_field(stack)
+    for rundown in (
+        "could you please give me a rundown of the overall strategy",
+        "can you run down of the pit strategy",
+        "give me the full race strategy",
+        "walk me through the whole strategy",
+    ):
+        assert await brain._fast_answer(rundown) is None, rundown
+
+    # A plain status ping keeps the fast deterministic answer.
+    answer = await brain._fast_answer("any strategy updates")
+    assert answer is not None
+    assert "box" in answer.lower() or "stay out" in answer.lower()

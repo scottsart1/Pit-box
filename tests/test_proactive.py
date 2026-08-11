@@ -12,6 +12,9 @@ class _Brain:
     async def proactive(self, event):
         return f"Update lap {event['payload'].get('lap')}"
 
+    async def record_spoken_call(self, text):
+        return None
+
 
 class _Voice:
     is_busy = False
@@ -272,3 +275,148 @@ async def test_qualifying_invalid_lap_queues_deleted_lap_call(stack):
     deleted = [item for item in engineer.pending if item["type"] == "lap_deleted"]
     assert len(deleted) == 1
     assert deleted[0]["payload"]["lap"] == 3
+
+
+def test_progress_fallback_never_speaks_a_raw_finding_dict():
+    """Verbatim from the 2026-08-10 Las Vegas session.
+
+    top_opportunity is sometimes the full finding dict, and the fallback read
+    "Lap 8: target 1:33.425. {'start_m': 5331.0, ...}" over the radio. The
+    dashboard already guarded for this shape; speech must too.
+    """
+    finding = {
+        "start_m": 5331.0, "end_m": 5354.5, "center_m": 5342.8,
+        "average_deviation_m": 1.45, "side": "right",
+        "instruction": "Around 5343 m, tighten the line on the right.",
+    }
+    event = {
+        "type": "progress_update",
+        "payload": {
+            "lap": 8,
+            "target": {"target": "1:33.425"},
+            "racing_line": {"top_opportunity": finding},
+            "strategy": {},
+        },
+    }
+    text = ProactiveEngineer._fallback_text(event, {})
+    assert "{" not in text and "start_m" not in text
+    assert "tighten the line" in text
+
+    # A dict with no instruction degrades to the generic line, never the repr.
+    event["payload"]["racing_line"]["top_opportunity"] = {"start_m": 1.0}
+    text = ProactiveEngineer._fallback_text(event, {})
+    assert "{" not in text
+    assert "keep the lap clean" in text
+
+
+def test_near_identical_consecutive_calls_are_swallowed(stack):
+    """Three rewordings of "Practice complete, P8" went out in 30 seconds.
+
+    Different event types converged on the same content, which the per-type
+    cooldown cannot see. The spoken text itself is the last line of defence.
+    """
+    import time as _time
+
+    store, database, _, _, _, _ = stack
+    engineer = ProactiveEngineer(store, _Brain(database), _Voice(), _Setup(), _Strategy())
+    engineer._last_spoken_text = (
+        "Practice complete, P8; the qualifying reference is set. "
+        "Engine damage is at 23%, non-critical."
+    )
+    engineer._last_spoken_at = _time.monotonic()
+    assert engineer._is_near_repeat(
+        "Practice complete, P8, and the qualifying reference is set. "
+        "No repeatable corner loss identified."
+    ) is True
+    assert engineer._is_near_repeat(
+        "Box this lap for mediums; rear wear is the limit."
+    ) is False
+    # Outside the horizon the same words are a fresh update, not a repeat.
+    engineer._last_spoken_at = _time.monotonic() - 300
+    assert engineer._is_near_repeat(
+        "Practice complete, P8; the qualifying reference is set."
+    ) is False
+
+
+def test_driver_check_rearms_when_the_window_moves(stack):
+    """Asked at lap 2 about a lap-5 window; the real stop became lap 12.
+
+    One check per stint per WINDOW: the same window never re-asks, a window
+    that moved four laps or more is a new conversation.
+    """
+    store, database, _, _, _, _ = stack
+    engineer = ProactiveEngineer(store, _Brain(database), _Voice(), _Setup(), _Strategy())
+
+    def state_for(box_lap, current_lap):
+        return {
+            "mode_profile": "race",
+            "race_control_phase": "green",
+            "ptt_pressed": False,
+            "current_lap": current_lap,
+            "strategy": {"recommended": {"box_lap": box_lap}, "plans": []},
+            "tyre": {"compound": "HARD", "age_laps": current_lap - 1, "wear": [10.0]},
+            "analysis": {"deg_model": {}},
+        }
+
+    engineer._detect_driver_check(state_for(box_lap=5, current_lap=2))
+    assert len(engineer.pending) == 1, "first window asks"
+    engineer.pending.clear()
+
+    engineer._detect_driver_check(state_for(box_lap=6, current_lap=3))
+    assert len(engineer.pending) == 0, "a one-lap slide is the same conversation"
+
+    engineer._detect_driver_check(state_for(box_lap=12, current_lap=10))
+    assert len(engineer.pending) == 1, "a moved window re-asks before the real stop"
+
+
+@pytest.mark.asyncio
+async def test_a_spoken_question_opens_the_reply_window(stack):
+    """When the engineer asks, the driver must not need the wake phrase.
+
+    Reported from Las Vegas: "Tyre state: holding or going away?" was asked,
+    and the driver then had to say "Mark" to be heard. After any delivered
+    call that ends with a question mark, the reply window opens.
+    """
+
+    class _QuestionBrain(_Brain):
+        async def proactive(self, event):
+            return "Tyre state: holding or going away?"
+
+    class _ListeningVoice(_Voice):
+        def __init__(self):
+            self.reply_windows = []
+
+        async def open_reply_window(self, reason="engineer asked a question"):
+            self.reply_windows.append(reason)
+
+    store, database, _, _, _, _ = stack
+    voice = _ListeningVoice()
+    engineer = ProactiveEngineer(store, _QuestionBrain(database), voice, _Setup(), _Strategy())
+
+    def apply(state):
+        state.connected = True
+        state.speed_kph = 40  # slow enough to be a safe speaking window
+        state.current_lap = 3
+        state.mode_profile = "race"
+        # The check stays relevant only while the box window is 1-3 laps out.
+        state.strategy = {"recommended": {"box_lap": 5, "fit_compound": "MEDIUM"}}
+    await store.mutate(apply)
+
+    engineer._enqueue("driver_check", {"laps_to_window": 2, "box_lap": 5}, critical=True)
+    await engineer._deliver(await store.snapshot_analysis())
+
+    assert voice.reply_windows == ["engineer asked a question"]
+
+    # A statement does not open the window.
+    class _StatementBrain(_Brain):
+        async def proactive(self, event):
+            return "Box this lap for mediums."
+
+    def move_window(state):
+        state.strategy = {"recommended": {"box_lap": 5, "fit_compound": "MEDIUM"}}
+    await store.mutate(move_window)
+    voice = _ListeningVoice()
+    engineer = ProactiveEngineer(store, _StatementBrain(database), voice, _Setup(), _Strategy())
+    engineer._enqueue("driver_check", {"laps_to_window": 2, "box_lap": 5}, critical=True)
+    await engineer._deliver(await store.snapshot_analysis())
+    assert voice.reply_windows == []

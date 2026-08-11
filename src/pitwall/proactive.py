@@ -216,7 +216,15 @@ class ProactiveEngineer:
         self._engine_failure_alerted = False
         self._energy_alert_lap = 0
         self._race_start_done = False
-        self._driver_check_stints: set[tuple[str, int]] = set()
+        # Stint key -> the box lap the check was asked about. A dict rather
+        # than a set so the check re-arms when the window MOVES: in a real race
+        # the first (wrong) window was lap 5, the check fired at lap 2, and
+        # when the real window became lap 12 the driver was never asked again.
+        self._driver_check_stints: dict[tuple[str, int], int] = {}
+        # Delivery-time guard against near-identical consecutive calls: three
+        # differently-worded "Practice complete, P8" calls went out inside 30
+        # seconds because separate event types converged on the same content.
+        self._last_spoken_text = ""
         self._cooldowns: dict[str, float] = {}
         self._safe_since = 0.0
         # Refreshed each detection pass so _enqueue can honour them.
@@ -513,7 +521,7 @@ class ProactiveEngineer:
         self._engine_failure_alerted = False
         self._energy_alert_lap = 0
         self._race_start_done = False
-        self._driver_check_stints = set()
+        self._driver_check_stints = {}
         self._cooldowns.clear()
         self._safe_since = 0.0
         await self.store.mutate(lambda s: s.proactive.update({
@@ -940,9 +948,13 @@ class ProactiveEngineer:
             str(tyre.get("compound", "UNKNOWN")),
             current_lap - int(tyre.get("age_laps", 0) or 0),
         )
-        if stint_key in self._driver_check_stints:
+        asked_for = self._driver_check_stints.get(stint_key)
+        # Ask once per stint per window. If the recommended box lap has moved
+        # by four laps or more since the driver was last asked, that is a new
+        # conversation to have, not a repeat of the old one.
+        if asked_for is not None and abs(int(box_lap) - asked_for) < 4:
             return
-        self._driver_check_stints.add(stint_key)
+        self._driver_check_stints[stint_key] = int(box_lap)
         plans = state.get("strategy", {}).get("plans", []) or []
         self._enqueue(
             "driver_check",
@@ -1303,6 +1315,15 @@ class ProactiveEngineer:
                 or payload.get("progress", {}).get("top_opportunity")
                 or "keep the lap clean"
             )
+            # top_opportunity is sometimes the full finding dict rather than a
+            # sentence. The dashboard already guards for this; the radio did
+            # not, and read a raw {'start_m': 5331.0, ...} repr to the driver
+            # mid-race. Speech gets the instruction or nothing.
+            if isinstance(opportunity, dict):
+                opportunity = (
+                    str(opportunity.get("instruction") or "").strip()
+                    or "keep the lap clean"
+                )
             if payload.get("mode_profile") == "qualifying":
                 quali = payload.get("qualifying", {})
                 return (
@@ -1609,6 +1630,15 @@ class ProactiveEngineer:
             self.pending.remove(event)
         await self.store.mutate(lambda s: s.proactive.update({"queued": len(self.pending), "delivery_state": "generating"}))
         text = await self._narrate(event, state)
+        # Different event types can converge on the same content: a real
+        # session heard "Practice complete, P8" three times in thirty seconds,
+        # worded three ways by the model. The per-type cooldown cannot see
+        # that, so the spoken text itself is the last line of defence.
+        if self._is_near_repeat(text):
+            event["delivery_outcome"] = "near-duplicate of the previous call"
+            self._mark_blocked(event, "near-duplicate of the previous call")
+            await self.database.save_proactive_call(state, event, text, False)
+            return
         delivered = False
         try:
             delivered = await self.voice.speak_text(text)
@@ -1617,12 +1647,54 @@ class ProactiveEngineer:
             await self.database.save_proactive_call(state, event, text, delivered)
         if delivered:
             self._last_spoken_at = time.monotonic()
+            self._last_spoken_text = text
             # Only a call the driver actually heard becomes conversation history.
             await self.brain.record_spoken_call(text)
             await self.store.mutate(lambda s: s.proactive.update({
                 "last_spoken_lap": s.current_lap, "last_call": text,
                 "queued": len(self.pending), "delivery_state": "delivered",
             }))
+            if text.rstrip().endswith("?"):
+                # The engineer asked; the driver must be able to answer
+                # without saying the wake phrase first.
+                open_window = getattr(self.voice, "open_reply_window", None)
+                if open_window is not None:
+                    await open_window("engineer asked a question")
+
+    _REPEAT_STOPWORDS = frozenset(
+        "a an and are at be but for in is it its no not of on or so the "
+        "to was we with you your this that has have had".split()
+    )
+
+    def _is_near_repeat(self, text: str) -> bool:
+        """Whether this call says what the previous one already said.
+
+        Two crude signals, within a short horizon: an identical opening (the
+        real repeats all began "Practice complete, P8"), or most of the
+        shorter call's content words appearing in the other. It only needs to
+        catch same-content-different-wording repeats seconds apart, not act
+        as a transcript deduplicator.
+        """
+        if not self._last_spoken_text:
+            return False
+        if time.monotonic() - self._last_spoken_at > 120.0:
+            return False
+
+        def normalize(value: str) -> list[str]:
+            return re.findall(r"[a-z0-9]+", value.lower())
+
+        current_words = normalize(text)
+        previous_words = normalize(self._last_spoken_text)
+        if not current_words or not previous_words:
+            return False
+        if " ".join(current_words)[:20] == " ".join(previous_words)[:20]:
+            return True
+        current = set(current_words) - self._REPEAT_STOPWORDS
+        previous = set(previous_words) - self._REPEAT_STOPWORDS
+        if not current or not previous:
+            return False
+        overlap = len(current & previous) / min(len(current), len(previous))
+        return overlap >= 0.55
 
     async def _run_detect(self) -> None:
         """Watch the race. Never waits for anything being said.

@@ -932,6 +932,33 @@ class NativeVoiceController:
             await realtime.send_audio(data, settings.audio_sample_rate)
         return True
 
+    async def open_reply_window(
+        self, reason: str = "engineer asked a question"
+    ) -> None:
+        """Let the driver answer the engineer without saying the wake phrase.
+
+        When the engineer asks something ("tyres holding, or going away?"),
+        making the driver say "Mark" before replying breaks the conversation —
+        reported from a real race. This arms the same follow-up window a bare
+        wake phrase arms, so the next utterance is taken as the answer.
+        """
+        if not settings.wake_enabled or self._signal_pressed or self.busy:
+            return
+        self._wake_armed_until = time.monotonic() + settings.wake_arm_timeout_s
+        await self.store.update(
+            wake_armed=True,
+            wake_status="listening — go ahead",
+            wake_last_reason=reason,
+            radio_indicator="listening",
+            engineer_status="listening",
+        )
+        if self._wake_arm_task and not self._wake_arm_task.done():
+            self._wake_arm_task.cancel()
+        self._wake_arm_task = self.loop.create_task(
+            self._wake_arm_timeout(),
+            name="pitwall-wake-arm-timeout",
+        )
+
     async def _arm_wake(self, phrase: str, cue: bool = True) -> None:
         self._wake_armed_until = time.monotonic() + settings.wake_arm_timeout_s
         snapshot = await self.store.snapshot_live()

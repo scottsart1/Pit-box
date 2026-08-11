@@ -99,6 +99,9 @@ the tyre stop it is being combined with is already justified on its own.
 Driver tyre feedback is evidence, not telemetry. When the driver's report and the bounded model
 disagree, state the model's position once with the wear or degradation number that drives it. If the
 driver repeats the decision, acknowledge it and follow it; do not re-argue the same pit call.
+When the driver declines a pit call, never leave it at "copy": give the revised consequence in one
+clause and offer exactly one concrete alternative — a later box lap, or a different plan shape such
+as going long — with its cost. The driver said no to this stop, not to having a strategy.
 
 Saved-session review, lap comparison and full-field analysis answers obey a stricter contract,
 because they quote stored measurements rather than the live car.
@@ -1108,6 +1111,21 @@ class EngineerBrain:
                 "could we", "can we", "how do we", "what about",
             ),
         ):
+            return True
+
+        # A request for the WHOLE picture goes to the model. In a real race
+        # "could you please give me a rundown of the overall strategy" and
+        # "can you run down of the pit strategy" were both answered with a
+        # bare "Box this lap for softs." — technically the standing call,
+        # nothing like what was asked.
+        if has_any_phrase(
+            text,
+            (
+                "rundown", "run down", "run me down", "overall", "full",
+                "complete", "entire", "whole", "walk me through",
+                "talk me through", "big picture",
+            ),
+        ) and cls._is_strategy_request(utterance):
             return True
 
         # A plain strategy request stays on the deterministic ranked plan.

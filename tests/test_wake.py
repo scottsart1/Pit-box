@@ -243,3 +243,31 @@ async def test_brain_failure_is_spoken_not_silent(monkeypatch, tmp_path) -> None
     assert "Engineer error" in snapshot["last_error"]
     assert snapshot["radio_latency"]["stage"] == "error"
     await controller.shutdown()
+
+
+def test_a_little_filler_before_the_wake_phrase_still_wakes():
+    """Reported from Las Vegas: "Mark" detection was too tight.
+
+    Real drivers (and STT itself) prepend filler — "uh, Mark", "okay Mark".
+    Up to two known filler words are tolerated; the wake word must still be
+    at the effective start, so mid-sentence mentions do not activate.
+    """
+    phrases = ["mark", "hey mark"]
+    for transcript, expected_command in (
+        ("Uh, Mark, box confirm", "box confirm"),
+        ("Okay Mark what's the gap", "what's the gap"),
+        ("yeah, uh, Mark, tyres are gone", "tyres are gone"),
+        ("So Mark, plan?", "plan"),
+    ):
+        matched, command, _ = AudioService.extract_wake_command(transcript, phrases)
+        assert matched, transcript
+        assert command == expected_command, transcript
+
+    for transcript in (
+        "I think Mark said to box",             # wake word mid-sentence
+        "the marker board on the left",         # not the wake word at all
+        "tell me what Mark thinks",             # mid-sentence again
+        "totally random mark",                  # non-filler word before it
+    ):
+        matched, _, _ = AudioService.extract_wake_command(transcript, phrases)
+        assert not matched, transcript
