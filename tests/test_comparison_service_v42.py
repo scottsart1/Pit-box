@@ -293,3 +293,64 @@ async def test_comparison_uses_exact_layout_active_segments_and_keeps_fallback(
     assert legacy_fallback["analysis_model"]["fallback"] is True
     assert legacy_fallback["comparison_id"] == fallback["comparison_id"]
     assert len(legacy_fallback["segments"]) == 10
+
+
+@pytest.mark.asyncio
+async def test_a_lap_is_never_compared_against_itself(tmp_path: Path) -> None:
+    """Self-comparison yields 0.000 s everywhere and looks like a perfect lap.
+
+    A real session review reported "100% coverage", "zero seconds lost" AND
+    "room for improvement" at once; one contributing path was that nothing
+    stopped candidate == reference for direct reference kinds.
+    """
+    from pitwall.comparison_service import UnsupportedReferenceError
+
+    database = PitWallDatabase(tmp_path / "pitwall.sqlite3")
+    await database.initialize()
+    trace_store = TraceStore(tmp_path / "traces")
+    archive = TraceArchiveService(database, trace_store)
+    lap_id = await _record(database, archive, _lap(1, slower=True))
+    service = ComparisonService(database.path, trace_store)
+
+    with pytest.raises(UnsupportedReferenceError, match="candidate itself"):
+        await service.create_comparison(
+            lap_id, reference_kind="lap", reference_lap_id=lap_id
+        )
+
+
+@pytest.mark.asyncio
+async def test_unmeasurable_segment_loss_is_none_not_zero(tmp_path: Path) -> None:
+    """From a real session: "Measured: 0.000 s" beside an improvement tip.
+
+    A segment whose aligned time delta cannot be measured must report its
+    loss as None (rendered "time attribution unavailable"), never as a
+    confident 0.000 — while control-signal findings may legitimately remain.
+    """
+    database = PitWallDatabase(tmp_path / "pitwall.sqlite3")
+    await database.initialize()
+    trace_store = TraceStore(tmp_path / "traces")
+    archive = TraceArchiveService(database, trace_store)
+
+    # The candidate's trace carries no usable time channel: every "t" is the
+    # same value, so per-segment time deltas cannot be interpolated.
+    broken = _lap(2, slower=True)
+    for point in broken["trace"]:
+        point["t"] = 0.0
+    reference_id = await _record(database, archive, _lap(1, slower=False))
+    candidate_id = await _record(database, archive, broken)
+    service = ComparisonService(database.path, trace_store)
+
+    result = await service.create_comparison(
+        candidate_id,
+        reference_kind="lap",
+        reference_lap_id=reference_id,
+    )
+    losses = [finding.get("measured_loss_s") for finding in result["findings"]]
+    assert all(loss is None or abs(loss) > 0.0005 for loss in losses), losses
+
+    # And the persisted copy keeps None as NULL rather than storing 0.
+    reopened = await ComparisonService(database.path, trace_store).get_comparison(
+        result["comparison_id"]
+    )
+    stored = [finding.get("measured_loss_s") for finding in reopened["findings"]]
+    assert stored == losses

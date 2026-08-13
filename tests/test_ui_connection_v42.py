@@ -124,8 +124,18 @@ def test_transport_uses_secure_websocket_and_rest_bootstrap() -> None:
 
 
 def test_frontend_assets_are_local_and_need_no_build_chain() -> None:
-    assert '<link rel="stylesheet" href="/static/css/v42.css">' in INDEX
-    assert '<script type="module" src="/static/js/connection.js"></script>' in INDEX
+    # The version query busts the browser's per-URL cache on upgrade (a stale
+    # cached asset against new HTML blanked pages on 2026-08-12); the asset
+    # itself is still local and unbuilt. test_ui_analysis_v461 pins the param
+    # to the app version.
+    assert re.search(
+        r'<link rel="stylesheet" href="/static/css/v42\.css(\?v=[\w.]+)?">',
+        INDEX,
+    )
+    assert re.search(
+        r'<script type="module" src="/static/js/connection\.js(\?v=[\w.]+)?"></script>',
+        INDEX,
+    )
     remote_assets = re.findall(
         r"<(?:script|link)\b[^>]+(?:src|href)=['\"]https?://",
         INDEX,

@@ -2557,6 +2557,18 @@ class StrategyEngine:
             # Classification remains primary for every appetite: an optimistic
             # tail cannot make a projected P18 beat a projected P10. Appetite
             # selects the gamble only among plans with the same central finish.
+            # Among plans the model itself scores as the same finishing
+            # position and points, prefer the LATER first stop; staying out
+            # counts as the latest of all. Raw simulated time used to break
+            # these ties, and it always crowned the earliest soft stop — in a
+            # real 25-lap race it called "box lap 6 for softs" from P8 with a
+            # projected rejoin of P22, when its own traffic model priced the
+            # stop at 15 places with ~1 recoverable. Position parity means the
+            # time difference is below what the model can cash in; track
+            # position and option value (safety car, red flag, better data)
+            # are not. The driver ran long instead and finished P5.
+            box_laps = plan.get("box_laps") or []
+            first_stop = int(box_laps[0]) if box_laps else int(total_laps) + 1
             return (
                 # A disqualified car scores nothing, so an illegal plan can
                 # never outrank a legal one whatever the appetite says.
@@ -2571,6 +2583,7 @@ class StrategyEngine:
                 int(plan.get("projected_finish_position", 99)),
                 appetite_position,
                 -float(appetite_points),
+                -first_stop,
                 float(plan.get("risk_adjusted_time_s", 1e9)),
                 int(plan.get("stops_remaining", 9)),
             )
@@ -2703,6 +2716,15 @@ class StrategyEngine:
             fit = best["compounds"][1]
             if neutralisation["phase"] == "red_flag":
                 instruction = f"During the red flag, fit {fit} for the restart."
+            elif not plans[0].get("legal", True) and not best.get("weather_crossover"):
+                # The stop exists because the rules demand a second compound.
+                # Saying only "Box lap 6 for SOFT" made a legality stop read as
+                # a (baffling) pace call in a real race; the driver judged it
+                # as one and overruled it. Lead with the actual reason — unless
+                # weather is forcing the stop, which is the bigger truth.
+                instruction = (
+                    f"A second compound is mandatory — box lap {box_lap} for {fit}."
+                )
             else:
                 instruction = f"Box lap {box_lap} for {fit}."
             current_projection = plans[0]["projected_finish_wear_pct"]

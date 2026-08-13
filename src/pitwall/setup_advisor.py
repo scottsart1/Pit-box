@@ -5,6 +5,13 @@ from statistics import median, pstdev
 from typing import Any
 
 from .database import PitWallDatabase
+from .setup_insights import (
+    adjustments_for,
+    analyze_turn,
+    characterize_lock,
+    cluster_turns,
+    resolve_adjustments,
+)
 from .setup_model import foundational_setup, setup_effects, track_archetype, track_name
 from .state import StateStore
 
@@ -163,6 +170,68 @@ class SetupAdvisor:
             recommendation["brake_bias"] = self._clamp("brake_bias", float(recommendation["brake_bias"]) - 1)
             rationale.append("Observed lock-ups: reduced peak pressure and moved bias one step rearward.")
 
+        # ------------------------------------------------------------------
+        # Per-corner causal evidence at THIS circuit: every stored lap's
+        # corners, clustered into physical turns, each measured against the
+        # driver's own best pass through the same turn. Only mechanisms a
+        # setup change can address move the car; technique losses become
+        # coaching notes instead of hardware changes.
+        corner_findings, net_adjustments, corner_notes = (
+            await self._corner_causal_findings(selected_track_id)
+        )
+        for field, delta in net_adjustments.items():
+            if field in recommendation:
+                recommendation[field] = self._clamp(
+                    field, float(recommendation[field]) + delta
+                )
+        for finding in corner_findings:
+            if finding.get("adjustments"):
+                moved = ", ".join(
+                    f"{name.replace('_', ' ')} {value:+g}"
+                    for name, value in finding["adjustments"].items()
+                )
+                rationale.append(
+                    f"{finding['label']}: median {finding['median_loss_s']:.2f}s "
+                    f"lost across {finding['samples']} passes — "
+                    f"{finding['mechanism_label']}; {moved}."
+                )
+        technique = [
+            finding
+            for finding in corner_findings
+            if not finding.get("setup_addressable")
+        ][:2]
+        for finding in technique:
+            rationale.append(
+                f"{finding['label']}: {finding['median_loss_s']:.2f}s is "
+                f"{finding['mechanism_label']} — that is driving, not setup; "
+                "no change made."
+            )
+        rationale.extend(corner_notes)
+
+        # Personal wear rate vs the circuit's baseline: a driver who burns the
+        # tyre faster than the track default gets a setup that protects it.
+        tyre_history = await self.database.tyre_history_model(
+            selected_track_id, context=state
+        )
+        style = self._personal_wear_style(state, tyre_history)
+        if style is not None and style >= 1.25:
+            for field in (
+                "front_left_tyre_pressure", "front_right_tyre_pressure",
+                "rear_left_tyre_pressure", "rear_right_tyre_pressure",
+            ):
+                recommendation[field] = self._clamp(
+                    field, float(recommendation[field]) - 0.2
+                )
+            rationale.append(
+                f"Your measured tyre wear here runs {style:.1f}× the circuit "
+                "baseline — pressures trimmed to protect the stint."
+            )
+        elif style is not None and style <= 0.8:
+            rationale.append(
+                f"Your measured tyre wear here runs {style:.1f}× the circuit "
+                "baseline — no protective compromise needed; setup keeps its pace bias."
+            )
+
         for index, field in enumerate((
             "front_left_tyre_pressure", "front_right_tyre_pressure",
             "rear_left_tyre_pressure", "rear_right_tyre_pressure",
@@ -222,6 +291,8 @@ class SetupAdvisor:
             "recommended": recommendation,
             "changes": changes,
             "rationale": rationale,
+            "corner_findings": corner_findings,
+            "corner_notes": corner_notes,
             "driver_preferences": preferences,
             "setup_effects": effects,
             "pit_adjustment": pit_adjustment,
@@ -231,6 +302,73 @@ class SetupAdvisor:
         await self.database.save_setup_recommendation(selected_track_id, track_name(selected_track_id), profile, recommendation, rationale, confidence)
         await self.store.update(setup_recommendation=result)
         return result
+
+    async def _corner_causal_findings(
+        self, track_id: int
+    ) -> tuple[list[dict[str, Any]], dict[str, float], list[str]]:
+        """Turn stored per-corner history into causal setup findings.
+
+        Entry lock-ups get their traces re-read to learn WHICH axle locks —
+        front locking wants bias rearward, rear locking wants the opposite,
+        and treating them alike would move the car the wrong way half the
+        time.
+        """
+        try:
+            rows = await self.database.corner_rows_for_track(track_id, 40)
+        except Exception:
+            return [], {}, []
+        findings: list[dict[str, Any]] = []
+        for cluster in cluster_turns(rows):
+            finding = analyze_turn(cluster)
+            if finding is None:
+                continue
+            axle: str | None = None
+            if finding["mechanism"] == "entry-lockup":
+                windows: list[list[dict[str, Any]]] = []
+                locked = [row for row in cluster["rows"] if row.get("wheel_lock")]
+                for row in locked[:3]:
+                    trace = await self.database.lap_trace(
+                        int(row["session_uid"]), int(row["lap_num"])
+                    )
+                    if not trace:
+                        continue
+                    start = float(row.get("entry_m") or 0.0)
+                    end = float(row.get("exit_m") or start + 1.0)
+                    window = [
+                        point
+                        for point in trace
+                        if start <= float(point.get("d", -1.0)) <= end
+                    ]
+                    if window:
+                        windows.append(window)
+                axle = characterize_lock(windows)
+                finding["evidence"]["lock_axle"] = axle
+            finding["adjustments"] = (
+                adjustments_for(finding, axle)
+                if finding["setup_addressable"]
+                else {}
+            )
+            findings.append(finding)
+        findings.sort(key=lambda f: float(f["median_loss_s"]), reverse=True)
+        net, notes = resolve_adjustments(findings)
+        return findings, net, notes
+
+    @staticmethod
+    def _personal_wear_style(
+        state: dict[str, Any], historical: dict[str, Any]
+    ) -> float | None:
+        """How fast THIS driver uses a tyre here, as a multiple of baseline.
+
+        Reuses the strategy engine's evidence extraction so setup and strategy
+        agree about the driver's wear style. None when only the track default
+        is available — a default is not evidence about the driver.
+        """
+        from .strategy import StrategyEngine
+
+        factor, evidence = StrategyEngine._driver_wear_factor(state, historical)
+        if evidence.get("source") == "track_default":
+            return None
+        return float(factor)
 
     async def learn_current_session(self) -> bool:
         state = await self.store.snapshot_analysis()

@@ -811,47 +811,13 @@ class PitWallDatabase:
                     float(lap.get("created_at", time.time())),
                 ),
             )
-            db.execute(
-                "DELETE FROM corner_metrics WHERE session_uid=? AND lap_num=?",
-                (_session_uid_to_sqlite(lap["session_uid"]), int(lap["lap_num"])),
+            self._write_corner_rows_sync(
+                db,
+                int(lap["session_uid"]),
+                int(lap["track_id"]),
+                int(lap["lap_num"]),
+                corner_metrics,
             )
-            for metric in corner_metrics:
-                db.execute(
-                    """
-                    INSERT INTO corner_metrics(
-                        session_uid, track_id, lap_num, corner_no, name,
-                        entry_m, apex_m, exit_m, brake_point_m, brake_peak,
-                        min_speed_kph, apex_speed_kph, throttle_on_m,
-                        full_throttle_m, gear_at_apex, max_lat_g,
-                        wheel_lock, wheelspin, time_in_corner_s,
-                        loss_vs_pb_s, cause, created_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """,
-                    (
-                        _session_uid_to_sqlite(lap["session_uid"]),
-                        int(lap["track_id"]),
-                        int(lap["lap_num"]),
-                        int(metric["corner_no"]),
-                        metric["name"],
-                        float(metric["entry_m"]),
-                        float(metric["apex_m"]),
-                        float(metric["exit_m"]),
-                        metric.get("brake_point_m"),
-                        metric.get("brake_peak"),
-                        metric.get("min_speed_kph"),
-                        metric.get("apex_speed_kph"),
-                        metric.get("throttle_on_m"),
-                        metric.get("full_throttle_m"),
-                        metric.get("gear_at_apex"),
-                        metric.get("max_lat_g"),
-                        1 if metric.get("wheel_lock") else 0,
-                        1 if metric.get("wheelspin") else 0,
-                        metric.get("time_in_corner_s"),
-                        metric.get("loss_vs_pb_s"),
-                        metric.get("cause", ""),
-                        time.time(),
-                    ),
-                )
             row = db.execute(
                 "SELECT id FROM laps WHERE session_uid=? AND lap_num=?",
                 (
@@ -862,6 +828,237 @@ class PitWallDatabase:
             if row is None:
                 raise RuntimeError("saved lap could not be read back")
             return int(row["id"])
+
+    @staticmethod
+    def _write_corner_rows_sync(
+        db: sqlite3.Connection,
+        session_uid: int,
+        track_id: int,
+        lap_num: int,
+        corner_metrics: list[dict[str, Any]],
+    ) -> None:
+        db.execute(
+            "DELETE FROM corner_metrics WHERE session_uid=? AND lap_num=?",
+            (_session_uid_to_sqlite(session_uid), lap_num),
+        )
+        for metric in corner_metrics:
+            db.execute(
+                """
+                INSERT INTO corner_metrics(
+                    session_uid, track_id, lap_num, corner_no, name,
+                    entry_m, apex_m, exit_m, brake_point_m, brake_peak,
+                    min_speed_kph, apex_speed_kph, throttle_on_m,
+                    full_throttle_m, gear_at_apex, max_lat_g,
+                    wheel_lock, wheelspin, time_in_corner_s,
+                    loss_vs_pb_s, cause, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    _session_uid_to_sqlite(session_uid),
+                    track_id,
+                    lap_num,
+                    int(metric["corner_no"]),
+                    metric["name"],
+                    float(metric["entry_m"]),
+                    float(metric["apex_m"]),
+                    float(metric["exit_m"]),
+                    metric.get("brake_point_m"),
+                    metric.get("brake_peak"),
+                    metric.get("min_speed_kph"),
+                    metric.get("apex_speed_kph"),
+                    metric.get("throttle_on_m"),
+                    metric.get("full_throttle_m"),
+                    metric.get("gear_at_apex"),
+                    metric.get("max_lat_g"),
+                    1 if metric.get("wheel_lock") else 0,
+                    1 if metric.get("wheelspin") else 0,
+                    metric.get("time_in_corner_s"),
+                    metric.get("loss_vs_pb_s"),
+                    metric.get("cause", ""),
+                    time.time(),
+                ),
+            )
+
+    async def tracks_with_traces(self) -> list[int]:
+        """Track ids that have at least one stored lap trace to segment."""
+        async with self._lock:
+            return await asyncio.to_thread(self._tracks_with_traces_sync)
+
+    def _tracks_with_traces_sync(self) -> list[int]:
+        with self._connect() as db:
+            rows = db.execute(
+                "SELECT DISTINCT track_id FROM laps WHERE length(trace_json) > 50"
+            ).fetchall()
+            return [int(row[0]) for row in rows]
+
+    async def rebuild_track_corners(
+        self,
+        track_id: int,
+        segmenter: Any,
+    ) -> int:
+        """Build the track's canonical turn model and re-measure every lap.
+
+        ``segmenter(trace, personal_best)`` is AnalysisEngine.segment_corners.
+        Exists because laps recorded before the milli-g fix produced one
+        lap-length "corner" per lap; the traces themselves were always good,
+        so the correct per-corner record is fully recoverable. Runs only when
+        the track has no model yet and enough traced laps to trust the shape;
+        after it, live laps are measured over the same windows, so the whole
+        history stays comparable. Idempotent.
+        """
+        async with self._lock:
+            return await asyncio.to_thread(
+                self._rebuild_track_corners_sync, track_id, segmenter
+            )
+
+    def _rebuild_track_corners_sync(self, track_id: int, segmenter: Any) -> int:
+        from .setup_insights import MODEL_MIN_LAPS, build_turn_model, measure_turns
+
+        if self._load_preference_sync(f"turn_model:{track_id}", None):
+            return 0
+        with self._connect() as db:
+            rows = db.execute(
+                """
+                SELECT session_uid, lap_num, lap_time_ms, valid, trace_json
+                FROM laps
+                WHERE track_id=? AND length(trace_json) > 50
+                ORDER BY (valid=1 AND lap_time_ms>0) DESC, lap_time_ms ASC
+                """,
+                (track_id,),
+            ).fetchall()
+            if len(rows) < MODEL_MIN_LAPS:
+                return 0
+            traces: list[tuple[dict[str, Any], list[dict[str, Any]]]] = []
+            for row in rows:
+                try:
+                    trace = json.loads(row["trace_json"])
+                except (TypeError, ValueError):
+                    continue
+                if isinstance(trace, list) and trace:
+                    traces.append((_restore_session_uid(dict(row)), trace))
+            model = build_turn_model(
+                [segmenter(trace, None) for _, trace in traces]
+            )
+            if not model:
+                return 0
+            # The fastest valid lap (first row) provides the reference pass
+            # each lap's loss and cause are computed against.
+            pb_rows = measure_turns(traces[0][1], model) if traces else []
+            rebuilt = 0
+            for row, trace in traces:
+                metrics = measure_turns(trace, model, pb_rows)
+                self._write_corner_rows_sync(
+                    db,
+                    int(row["session_uid"]),
+                    track_id,
+                    int(row["lap_num"]),
+                    metrics,
+                )
+                rebuilt += 1
+        self._save_preference_sync(f"turn_model:{track_id}", model)
+        return rebuilt
+
+    async def corner_rows_for_track(
+        self,
+        track_id: int,
+        max_laps: int = 40,
+    ) -> list[dict[str, Any]]:
+        """Corner rows for the most recent valid laps at a circuit."""
+        async with self._lock:
+            return await asyncio.to_thread(
+                self._corner_rows_for_track_sync, track_id, max_laps
+            )
+
+    def _corner_rows_for_track_sync(
+        self, track_id: int, max_laps: int
+    ) -> list[dict[str, Any]]:
+        # Only canonical rows ("Turn N", fixed-window measurement) are safe to
+        # compare across laps; zone rows from unmodelled tracks measure
+        # varying extents and would fabricate loss where there is none.
+        with self._connect() as db:
+            rows = db.execute(
+                """
+                WITH recent AS (
+                    SELECT session_uid, lap_num FROM laps
+                    WHERE track_id=? AND valid=1 AND lap_time_ms>0
+                    ORDER BY created_at DESC LIMIT ?
+                )
+                SELECT cm.* FROM corner_metrics cm
+                JOIN recent r
+                  ON r.session_uid = cm.session_uid AND r.lap_num = cm.lap_num
+                WHERE cm.track_id=? AND cm.name LIKE 'Turn %'
+                ORDER BY cm.apex_m
+                """,
+                (track_id, max_laps, track_id),
+            ).fetchall()
+            return [_restore_session_uid(dict(row)) for row in rows]
+
+    async def lap_trace(
+        self, session_uid: int, lap_num: int
+    ) -> list[dict[str, Any]]:
+        """The stored telemetry trace of one lap (empty when absent)."""
+        async with self._lock:
+            return await asyncio.to_thread(
+                self._lap_trace_sync, session_uid, lap_num
+            )
+
+    def _lap_trace_sync(self, session_uid: int, lap_num: int) -> list[dict[str, Any]]:
+        with self._connect() as db:
+            row = db.execute(
+                "SELECT trace_json FROM laps WHERE session_uid=? AND lap_num=?",
+                (_session_uid_to_sqlite(session_uid), int(lap_num)),
+            ).fetchone()
+            if row is None or not row["trace_json"]:
+                return []
+            try:
+                trace = json.loads(row["trace_json"])
+            except (TypeError, ValueError):
+                return []
+            return trace if isinstance(trace, list) else []
+
+    async def recent_lap_traces(
+        self, track_id: int, limit: int = 100
+    ) -> list[dict[str, Any]]:
+        """Recent valid laps with their stored traces, newest first.
+
+        Feeds whole-history geometry analysis (racing line), so it loads many
+        megabytes of JSON — call it from on-demand paths only, never per lap.
+        """
+        async with self._lock:
+            return await asyncio.to_thread(
+                self._recent_lap_traces_sync, track_id, limit
+            )
+
+    def _recent_lap_traces_sync(
+        self, track_id: int, limit: int
+    ) -> list[dict[str, Any]]:
+        with self._connect() as db:
+            rows = db.execute(
+                """
+                SELECT session_uid, lap_num, lap_time_ms, trace_json FROM laps
+                WHERE track_id=? AND valid=1 AND lap_time_ms>0
+                  AND length(trace_json) > 100
+                ORDER BY created_at DESC LIMIT ?
+                """,
+                (track_id, limit),
+            ).fetchall()
+            laps: list[dict[str, Any]] = []
+            for row in rows:
+                try:
+                    trace = json.loads(row["trace_json"])
+                except (TypeError, ValueError):
+                    continue
+                if not isinstance(trace, list):
+                    continue
+                laps.append(
+                    {
+                        "session_uid": _restore_session_uid(dict(row))["session_uid"],
+                        "lap_num": int(row["lap_num"]),
+                        "lap_time_ms": int(row["lap_time_ms"]),
+                        "trace": trace,
+                    }
+                )
+            return laps
 
     async def get_personal_best(self, track_id: int) -> dict[str, Any] | None:
         async with self._lock:

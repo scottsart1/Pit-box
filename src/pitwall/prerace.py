@@ -344,6 +344,38 @@ class PreRacePlanner:
             proposal=proposal,
         )
 
+    @staticmethod
+    def _repair_adjacent_stints(compounds: list[str], displaced: str) -> list[str]:
+        """Make a stint sequence legal again after one slot was changed.
+
+        Walking from the changed end: any stint equal to its predecessor is
+        replaced, preferring the compound the driver's change displaced (it
+        keeps the plan's original balance), otherwise any dry compound that
+        differs from both neighbours. At most one pass is needed because each
+        repair introduces a compound that differs from its left neighbour.
+        """
+        dry = ["SOFT", "MEDIUM", "HARD"]
+        repaired = list(compounds)
+        for index in range(1, len(repaired)):
+            if repaired[index] != repaired[index - 1]:
+                continue
+            right = repaired[index + 1] if index + 1 < len(repaired) else None
+            options = [displaced] + dry
+            replacement = next(
+                (
+                    option
+                    for option in options
+                    if option and option != repaired[index - 1] and option != right
+                ),
+                None,
+            )
+            if replacement is None:
+                # Nothing legal fits (e.g. wet compounds involved); leave the
+                # sequence for the normal legality check to refuse.
+                return repaired
+            repaired[index] = replacement
+        return repaired
+
     def _requested_change(
         self,
         text: str,
@@ -428,7 +460,14 @@ class PreRacePlanner:
             )
             if starting and compounds:
                 revised = list(compounds)
+                displaced = revised[0]
                 revised[0] = spoken_compounds[0]
+                # Changing one stint can leave two identical stints touching
+                # ("SOFT, SOFT, MEDIUM"), which is not a stop. The driver asked
+                # for a start tyre, not to be told their plan is illegal — so
+                # the rest of the sequence adapts around their choice instead
+                # of the request being refused.
+                revised = self._repair_adjacent_stints(revised, displaced)
                 return (
                     {
                         "compounds": revised,
@@ -439,7 +478,11 @@ class PreRacePlanner:
                 )
             if finishing and len(compounds) > 1:
                 revised = list(compounds)
+                displaced = revised[-1]
                 revised[-1] = spoken_compounds[-1]
+                revised = list(reversed(
+                    self._repair_adjacent_stints(list(reversed(revised)), displaced)
+                ))
                 return (
                     {
                         "compounds": revised,

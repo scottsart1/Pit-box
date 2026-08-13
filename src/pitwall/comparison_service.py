@@ -639,6 +639,14 @@ class ComparisonService:
         if kind in {"lap", "field_driver", "saved_benchmark"}:
             if not lap_key:
                 raise UnsupportedReferenceError(f"{kind} requires lap_id")
+            if str(lap_key) == str(candidate.id):
+                # Comparing a lap with itself produces 0.000 s everywhere and
+                # 100% coverage — numbers that look like a perfect lap rather
+                # than a meaningless comparison. The derived-reference SQL
+                # already excludes the candidate; direct references must too.
+                raise UnsupportedReferenceError(
+                    "The reference lap is the candidate itself; pick a different lap."
+                )
             return self._load_lap_record_sync(lap_key)
         with self._connect() as db:
             if kind == "session_pb":
@@ -1085,7 +1093,12 @@ class ComparisonService:
             "segment_id": finding.segment_id,
             "segment_label": finding.segment_label,
             "phase": finding.phase,
-            "measured_loss_s": finding.measured_loss_s,
+            # None, not 0.0, when the segment's time delta was unmeasurable:
+            # "Measured: 0.000 s" beside an improvement instruction reads as a
+            # contradiction, and it was one.
+            "measured_loss_s": (
+                finding.measured_loss_s if finding.loss_measured else None
+            ),
             "attributed_low_s": finding.attributed_low_s,
             "attributed_high_s": finding.attributed_high_s,
             "confidence": finding.confidence,
@@ -1188,7 +1201,8 @@ class ComparisonService:
                 dict(aligned.candidate.signals),
                 dict(aligned.reference.signals),
             )
-            loss = float(segment_result.delta_s or 0.0)
+            loss_measured = segment_result.delta_s is not None
+            loss = float(segment_result.delta_s) if loss_measured else 0.0
             evidence_rows.append((segment, facts, loss, segment_result.coverage))
             if compatibility.allows_coaching:
                 coaching = build_coaching_evidence(
@@ -1197,6 +1211,7 @@ class ComparisonService:
                         segment.label,
                         loss,
                         facts,
+                        loss_measured=loss_measured,
                         repeatability=0.0,
                         sample_count=1,
                         data_coverage=segment_result.coverage,
@@ -1374,7 +1389,11 @@ class ComparisonService:
                             result.comparison_id,
                             str(finding["type"]),
                             int(finding["rank"]),
-                            round(float(finding["measured_loss_s"]) * 1000),
+                            (
+                                None
+                                if finding["measured_loss_s"] is None
+                                else round(float(finding["measured_loss_s"]) * 1000)
+                            ),
                             round(float(finding["attributed_low_s"]) * 1000),
                             round(float(finding["attributed_high_s"]) * 1000),
                             float(finding["confidence"]),

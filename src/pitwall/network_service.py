@@ -15,6 +15,7 @@ import re
 import socket
 import time
 import uuid
+from collections import deque
 from collections.abc import Awaitable, Callable, Iterable, Mapping
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
@@ -320,10 +321,23 @@ class NetworkService:
         self.stale_after_ms = max(1, int(stale_after_ms))
         self._bind_host = normalized_host
         self._port = normalized_port
+        # True once the CURRENT bind has received at least one valid F1
+        # packet. An unproven bind is never persisted over a proven one: a
+        # real install saved "10.234.197.105:24" (a mistyped CIDR prefix) as
+        # its profile, and because shutdown persisted unconditionally — with
+        # last_working_at stamped — every later launch trusted and rebound
+        # the dead port for three days.
+        self._bind_proven = False
         self._transport: ClosableDatagramTransport | None = None
         self._protocol: _ObservedProtocol | None = None
         self._started_at: datetime | None = None
         self._last_valid_monotonic: float | None = None
+        # Arrival times of CarTelemetry (packet id 6) over the last seconds.
+        # Raw captures from two real race nights proved the feed itself can be
+        # sparse (4-12 Hz arriving, 60 expected) — the driver read the result
+        # as "telemetry is stored sporadically", so the rate is measured here
+        # at the socket and warned about with the actual number.
+        self._telemetry_times: deque[float] = deque(maxlen=1024)
         self._last_source: dict[str, object] | None = None
         self._last_game: dict[str, object] | None = None
         self._listener_error: str | None = None
@@ -609,6 +623,8 @@ class NetworkService:
 
                 self._bind_host = host
                 self._port = normalized_port
+                # A new bind starts unproven; only valid F1 traffic proves it.
+                self._bind_proven = False
                 self._started_at = None
                 self._last_valid_monotonic = None
                 self._last_source = None
@@ -645,20 +661,43 @@ class NetworkService:
                 self._receiver_queue_high_water = 0
                 self._receiver_queue_drops = 0
                 self._receiver_callback_errors = 0
-                try:
-                    await self.persist_profile(bind_host=host, port=self._port)
-                except NetworkServiceError:
-                    # Reception remains more important than preference storage;
-                    # the Connection Center exposes the persistence warning.
-                    pass
+                if await self._profile_missing():
+                    # A first-ever profile is worth writing immediately so a
+                    # fresh install remembers its setup. An EXISTING profile
+                    # is only replaced once the new bind is proven by a valid
+                    # F1 packet (see datagram path): persisting the bind at
+                    # start is how a mistyped port ("/24" read as port 24)
+                    # overwrote a working profile and was faithfully rebound
+                    # at every launch for three days.
+                    try:
+                        await self.persist_profile(bind_host=host, port=self._port)
+                    except NetworkServiceError:
+                        # Reception remains more important than preference
+                        # storage; the Connection Center shows the warning.
+                        pass
                 return self.listener_snapshot()
+
+    async def _profile_missing(self) -> bool:
+        if self._profile_repository is None:
+            return False
+        try:
+            return await self._profile_repository.load(self._profile_id) is None
+        except Exception:  # noqa: BLE001 - storage trouble must not stop the bind
+            return False
 
     async def stop_listener(self) -> ListenerSnapshot:
         async with self._listener_lock:
-            try:
-                await self.persist_profile()
-            except NetworkServiceError:
-                pass
+            if self._bind_proven:
+                # Only a bind that received valid F1 traffic is remembered.
+                # Persisting unconditionally is how a mistyped port (a CIDR
+                # prefix read as a port) became the stored profile, stamped
+                # "working", and was faithfully rebound at every launch. A
+                # session that never saw a packet leaves the last proven
+                # profile untouched.
+                try:
+                    await self.persist_profile()
+                except NetworkServiceError:
+                    pass
             await self._stop_transport_locked()
             await self._forwarder.close()
             self._listener_error = None
@@ -708,6 +747,12 @@ class NetworkService:
             return
         header = inspection.header
         self._last_valid_monotonic = now
+        if int(header.packet_id) == 6:
+            self._telemetry_times.append(now)
+        if not self._bind_proven:
+            # First valid packet on this bind: NOW it has earned persistence.
+            self._bind_proven = True
+            self._schedule_profile_persist()
         self._last_source = {"ip": str(addr[0]), "port": int(addr[1])}
         self._last_game = self._game_metadata(header)
         self._remember_working_interface(str(addr[0]))
@@ -971,6 +1016,13 @@ class NetworkService:
             ),
         }
 
+    def telemetry_rate_hz(self, *, window_s: float = 10.0) -> float:
+        """CarTelemetry packets per second over the recent window."""
+        now = self._monotonic()
+        cutoff = now - max(1.0, float(window_s))
+        recent = sum(1 for stamp in self._telemetry_times if stamp >= cutoff)
+        return round(recent / max(1.0, float(window_s)), 1)
+
     async def snapshot(self, *, refresh_interfaces: bool = False) -> NetworkSnapshot:
         discovery = await self.interfaces(refresh=refresh_interfaces)
         recommendation = self._recommendation(discovery)
@@ -979,12 +1031,36 @@ class NetworkService:
         warnings = [*discovery.warnings, *recommendation.warnings]
         if listener.error:
             warnings.append(listener.error)
+        if 0 < listener.port < 1024:
+            # F1 telemetry defaults to 20777, and no F1 title offers a
+            # privileged port. The one real occurrence of this was a subnet
+            # prefix ("/24") typed into the port field. The setup may still
+            # work if the game was matched to it, so this warns rather than
+            # rebinds.
+            warnings.append(
+                f"UDP port {listener.port} is unusual for F1 telemetry — the "
+                "game's default is 20777. If nothing arrives, set the port "
+                "back to 20777 here and in the game's telemetry settings."
+            )
         if listener.state is ListenerState.LISTENING:
             warnings.append(
                 "Your Pit Box is listening, but no valid F1 2026 telemetry has arrived."
             )
         elif listener.state is ListenerState.STALE:
             warnings.append("F1 telemetry was received but is now stale.")
+        if listener.state is ListenerState.RECEIVING:
+            # Raw captures from two real race nights measured car telemetry
+            # arriving at 4-12 Hz where the game can send 60: everything that
+            # arrived was stored, so sparse traces are a feed problem, not a
+            # storage one. Below 1 Hz the game is in a menu — stay quiet.
+            rate = self.telemetry_rate_hz()
+            if 1.0 <= rate < 15.0:
+                warnings.append(
+                    f"Car telemetry is arriving at {rate:.0f} Hz — detailed "
+                    "traces want 20 or more. Raise the game's UDP send rate "
+                    "(game Settings → Telemetry) and prefer a wired network; "
+                    "Wi-Fi loss thins it further."
+                )
         if health.invalid:
             count = sum(item.received for item in health.invalid)
             warnings.append(f"{count} invalid or incompatible UDP datagrams observed.")

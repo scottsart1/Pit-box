@@ -73,6 +73,11 @@ class SegmentEvidence:
     line_outcome_supported: bool = False
     gear_outcome_supported: bool = True
     segment_percentile: float | None = None
+    # False when the segment's aligned time delta could not be measured (the
+    # 0.0 in measured_loss_s is then a placeholder, not a measurement). A real
+    # session showed "Measured: 0.000 s" next to an improvement instruction —
+    # the number was a coerced None, not a claim the driver lost nothing.
+    loss_measured: bool = True
 
     def __post_init__(self) -> None:
         for name in (
@@ -155,6 +160,7 @@ class CoachingFinding:
     drill: str | None = None
     positive: bool = False
     algorithm_version: str = "coaching_rules_v1"
+    loss_measured: bool = True
 
 
 @dataclass(frozen=True, slots=True)
@@ -559,6 +565,7 @@ def build_coaching_evidence(
                 segment_label=evidence.label,
                 phase=draft.phase,
                 measured_loss_s=evidence.measured_loss_s,
+                loss_measured=evidence.loss_measured,
                 attributed_low_s=min(loss, low),
                 attributed_high_s=min(loss, high),
                 confidence=confidence,

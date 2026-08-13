@@ -249,7 +249,16 @@ function renderInterfaces(payload) {
     header.className = "adapter-head";
     const identity = document.createElement("div");
     identity.append(textElement("strong", "", item.name || item.description || "Network adapter"));
-    identity.append(textElement("div", "adapter-address", item.ipv4 ? `${item.ipv4}${item.prefix_length === null || item.prefix_length === undefined ? "" : `/${item.prefix_length}`}` : "IPv4 unavailable"));
+    /* The address is what the user copies into the PS5 and into the bind
+       field. Rendering it as "10.234.197.105/24" put a slash-number right
+       where a port is expected — a real user read the CIDR prefix as the
+       port, started the listener on port 24, and lost telemetry at every
+       launch for three days. The prefix is network trivia; label it as such,
+       away from the address. */
+    identity.append(textElement("div", "adapter-address", item.ipv4 ? item.ipv4 : "IPv4 unavailable"));
+    if (item.ipv4 && item.prefix_length !== null && item.prefix_length !== undefined) {
+      identity.append(textElement("div", "field-help", `subnet mask /${item.prefix_length} — not a port`));
+    }
     const stateText = item.operational ? "Active" : "Inactive";
     const stateChip = textElement("span", "state-chip", stateText);
     stateChip.dataset.state = item.operational ? "healthy" : "warning";
@@ -597,8 +606,16 @@ export function setConnectionCenterActive(active) {
   }, POLL_INTERVAL_MS);
 }
 
+// The ANALYSIS page hosts sub-views with their own role="tab" buttons.
+// syncTabs must treat a sub-view name as "the analysis page" and must never
+// collect the sub-tab buttons themselves: matching them made knownPage a
+// sub-view id, no <main> matched it, and every page went hidden at once —
+// the blank-screen-with-status-rail bug (2026-08-12).
+const ANALYSIS_SUBVIEWS = ["library", "session-review", "lap-lab", "field", "review"];
+
 function syncTabs(pageName) {
-  const tabs = [...document.querySelectorAll('[role="tab"][data-page]')];
+  if (ANALYSIS_SUBVIEWS.includes(pageName)) pageName = "analysis";
+  const tabs = [...document.querySelectorAll('.tab[role="tab"][data-page]')];
   const knownPage = tabs.some((tab) => tab.dataset.page === pageName) ? pageName : "live";
   tabs.forEach((tab) => {
     const selected = tab.dataset.page === knownPage;
@@ -622,7 +639,9 @@ function syncTabs(pageName) {
 }
 
 function initializeTabs() {
-  const tabs = [...document.querySelectorAll('[role="tab"][data-page]')];
+  // Top-level tabs only — the analysis sub-tabs have their own handlers and
+  // roving them together with the top nav made ArrowRight jump between rows.
+  const tabs = [...document.querySelectorAll('.tab[role="tab"][data-page]')];
   tabs.forEach((tab, index) => {
     tab.addEventListener("click", () => window.queueMicrotask(() => syncTabs(tab.dataset.page)));
     tab.addEventListener("keydown", (event) => {

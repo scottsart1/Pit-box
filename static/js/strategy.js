@@ -206,6 +206,8 @@ function drawTimeline(s) {
   const axisTop = 18;
   const rowHeight = 34;
   const barHeight = 18;
+  // Geometry is remembered so clicks can be mapped back to (plan, stint, lap).
+  view.timelineGeometry = null;
   const plotWidth = width - gutter - 16;
   const lapX = (lap) => gutter + (Math.min(Math.max(lap, 1), totalLaps) - 1) / (totalLaps - 1) * plotWidth;
 
@@ -251,6 +253,26 @@ function drawTimeline(s) {
       context.fill();
     }
   });
+
+  // The TOP row is editable by direct clicks; remember where things are.
+  {
+    const topPlan = plans[0];
+    const startLap = Math.max(1, currentLap || 1);
+    view.timelineGeometry = {
+      gutter,
+      plotWidth,
+      totalLaps,
+      currentLap,
+      axisY: height - 26,
+      topRow: {
+        y: axisTop + 10,
+        height: barHeight,
+        boxLaps: (topPlan.box_laps || []).map(Number),
+        compounds: (topPlan.compounds || []).map((c) => String(c).toUpperCase()),
+        startLap,
+      },
+    };
+  }
 
   // Current lap marker.
   if (currentLap >= 1) {
@@ -312,6 +334,116 @@ async function refreshRivals(s) {
       : "Projected rival stops are marked on the timeline.";
   } catch {
     view.rivals = null;
+  }
+}
+
+/* ---- Direct-manipulation editing on the timeline -------------------------- */
+
+const DRY_CYCLE = ["SOFT", "MEDIUM", "HARD"];
+
+function commitTimelinePlan(compounds, boxLaps, note) {
+  const statusNode = byId("stratPlanStatus");
+  statusNode.textContent = "Committing plan…";
+  statusNode.dataset.tone = "";
+  post("/api/strategy/plan", {
+    compounds,
+    box_laps: boxLaps,
+    lap_tolerance: 2,
+    note,
+    source: "timeline-click",
+  })
+    .then((result) => {
+      statusNode.textContent = result.spoken || "Plan updated.";
+      statusNode.dataset.tone = "success";
+    })
+    .catch((error) => {
+      statusNode.textContent = String(error.message || error);
+      statusNode.dataset.tone = "error";
+    });
+}
+
+function handleTimelineClick(event) {
+  const geometry = view.timelineGeometry;
+  if (!geometry) return;
+  const canvas = byId("stratTimeline");
+  const bounds = canvas.getBoundingClientRect();
+  // The canvas is CSS-scaled; convert to drawing coordinates first.
+  const x = (event.clientX - bounds.left) * (canvas.width / bounds.width);
+  const y = (event.clientY - bounds.top) * (canvas.height / bounds.height);
+  const lapAt = (px) =>
+    Math.round(
+      1 + ((px - geometry.gutter) / geometry.plotWidth) * (geometry.totalLaps - 1)
+    );
+  const clickedLap = Math.min(Math.max(lapAt(x), 1), geometry.totalLaps);
+  const row = geometry.topRow;
+  // Edits anchor on the driver's own committed plan when one exists. The
+  // drawn top row is the engine's live ranking, which may sit a lap or two
+  // off the committed plan — clicking a compound must never silently move
+  // the stop the driver placed.
+  const committed = (view.lastState || {}).strategy_override || {};
+  const base = committed.enabled && committed.locked && committed.plan?.compounds?.length
+    ? committed.plan
+    : { compounds: row.compounds, box_laps: row.boxLaps };
+  const compounds = (base.compounds || []).map((c) => String(c).toUpperCase());
+  const boxLaps = (base.box_laps || []).map(Number);
+
+  // Click on the lap axis: move the nearest stop of the top plan to that lap
+  // (or create the first stop when the plan has none).
+  if (y >= geometry.axisY - 4) {
+    if (clickedLap <= geometry.currentLap) {
+      byId("stratPlanStatus").textContent = "That lap has already been raced.";
+      byId("stratPlanStatus").dataset.tone = "error";
+      return;
+    }
+    if (!boxLaps.length) {
+      const displaced = compounds[0];
+      const second = DRY_CYCLE.find((c) => c !== displaced) || "MEDIUM";
+      commitTimelinePlan(
+        [compounds[0] || "MEDIUM", second],
+        [clickedLap],
+        `stop added at lap ${clickedLap} from the timeline`
+      );
+      return;
+    }
+    let nearest = 0;
+    for (let i = 1; i < boxLaps.length; i += 1) {
+      if (Math.abs(boxLaps[i] - clickedLap) < Math.abs(boxLaps[nearest] - clickedLap)) nearest = i;
+    }
+    boxLaps[nearest] = clickedLap;
+    const ordered = boxLaps.every((lap, i) => i === 0 || lap > boxLaps[i - 1]);
+    if (!ordered) {
+      byId("stratPlanStatus").textContent = "Stops must stay in lap order.";
+      byId("stratPlanStatus").dataset.tone = "error";
+      return;
+    }
+    commitTimelinePlan(compounds, boxLaps, `stop moved to lap ${clickedLap} from the timeline`);
+    return;
+  }
+
+  // Click on a stint bar in the top row: cycle that stint's dry compound,
+  // skipping choices that would put two identical stints back to back.
+  if (y >= row.y && y <= row.y + row.height) {
+    const bounds_ = [row.startLap, ...boxLaps, geometry.totalLaps];
+    let stint = -1;
+    for (let i = 0; i < bounds_.length - 1; i += 1) {
+      if (clickedLap >= bounds_[i] && clickedLap <= bounds_[i + 1]) { stint = i; break; }
+    }
+    if (stint < 0 || stint >= compounds.length) return;
+    const current = compounds[stint];
+    const left = stint > 0 ? compounds[stint - 1] : null;
+    const right = stint + 1 < compounds.length ? compounds[stint + 1] : null;
+    let candidate = current;
+    for (let step = 1; step <= DRY_CYCLE.length; step += 1) {
+      const next = DRY_CYCLE[(DRY_CYCLE.indexOf(current) + step + DRY_CYCLE.length) % DRY_CYCLE.length];
+      if (next !== left && next !== right) { candidate = next; break; }
+    }
+    if (candidate === current) return;
+    compounds[stint] = candidate;
+    commitTimelinePlan(
+      compounds,
+      boxLaps,
+      `stint ${stint + 1} set to ${candidate.toLowerCase()}s from the timeline`
+    );
   }
 }
 
@@ -556,6 +688,7 @@ if (HAS_DOM) {
     post("/api/strategy/recompute").catch(() => {});
   });
   byId("stratWhatIfForm")?.addEventListener("submit", runWhatIf);
+  byId("stratTimeline")?.addEventListener("click", handleTimelineClick);
   byId("stratPlannerForm")?.addEventListener("submit", buildRacePlans);
   byId("stratAskSend")?.addEventListener("click", sendAsk);
   byId("stratAsk")?.addEventListener("keydown", (event) => {

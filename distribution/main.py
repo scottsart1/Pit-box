@@ -120,14 +120,29 @@ def _start_app() -> None:
     run()
 
 
+def _prompt_first_run():  # type: ignore[no-untyped-def]
+    """First-run dialogs need the screen: drop the bootloader splash first."""
+    from pitwall.main import close_startup_splash
+
+    close_startup_splash()
+    return first_run.prompt_first_run()
+
+
+def _show_error(*args, **kwargs):  # type: ignore[no-untyped-def]
+    from pitwall.main import close_startup_splash
+
+    close_startup_splash()
+    return first_run.show_message(*args, **kwargs)
+
+
 def main(argv: list[str] | None = None) -> int:
     del argv
     _ensure_standard_streams()
     result: LaunchResult = launch(
         config_dir(),
         endpoint=os.environ.get("PITWALL_ACTIVATION_ENDPOINT", ACTIVATION_ENDPOINT),
-        prompt=first_run.prompt_first_run,
-        show_error=first_run.show_message,
+        prompt=_prompt_first_run,
+        show_error=_show_error,
         start_app=_start_app,
         save_api_key=_save_api_key,
     )

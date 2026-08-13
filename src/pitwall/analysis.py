@@ -9,6 +9,12 @@ from typing import TYPE_CHECKING, Any
 
 from .database import PitWallDatabase
 from .racing_line import compare_lines
+from .setup_insights import (
+    classify_cause,
+    clean_trace,
+    measure_turns,
+    reference_deltas,
+)
 from .state import StateStore
 from .strategy import StrategyEngine
 
@@ -93,7 +99,21 @@ class AnalysisEngine:
             await self.store.set_delta_reference(
                 pb["trace"], f"PB {fmt_ms(int(pb.get('lap_time_ms', 0)))}"
             )
-        corners = self.segment_corners(lap.get("trace", []), pb)
+        # A track with a canonical turn model gets fixed-window measurement,
+        # so this lap's corner times are directly comparable with every other
+        # stored lap. Zone detection remains the path for tracks the model
+        # has not been built for yet.
+        turn_model = await self.database.load_preference(
+            f"turn_model:{int(lap['track_id'])}", None
+        )
+        if isinstance(turn_model, list) and turn_model:
+            corners = measure_turns(
+                lap.get("trace", []),
+                turn_model,
+                (pb or {}).get("corner_metrics") or [],
+            )
+        else:
+            corners = self.segment_corners(lap.get("trace", []), pb)
         racing_line = compare_lines(
             lap.get("trace", []),
             pb.get("trace", []) if pb else None,
@@ -205,21 +225,7 @@ class AnalysisEngine:
 
     @staticmethod
     def _clean_trace(trace: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        points = [
-            point
-            for point in trace
-            if point.get("d") is not None and point.get("t") is not None
-        ]
-        points.sort(key=lambda item: (float(item["d"]), float(item["t"])))
-        cleaned: list[dict[str, Any]] = []
-        last_distance = -1.0
-        for point in points:
-            distance = float(point["d"])
-            if distance + 5 < last_distance:
-                continue
-            cleaned.append(point)
-            last_distance = max(last_distance, distance)
-        return cleaned
+        return clean_trace(trace)
 
     def segment_corners(
         self,
@@ -379,30 +385,7 @@ class AnalysisEngine:
         metric: dict[str, Any],
         reference: dict[str, Any],
     ) -> dict[str, float]:
-        """Signed differences from the personal-best corner.
-
-        Positive brake delta means the brake point was later than the
-        reference; negative apex-speed delta means slower through the apex.
-        These are kept on the metric so coaching can quote the actual numbers
-        instead of only naming a cause.
-        """
-        return {
-            "brake_point_delta_m": round(
-                float(metric.get("brake_point_m", 0))
-                - float(reference.get("brake_point_m", 0) or 0),
-                1,
-            ),
-            "apex_speed_delta_kph": round(
-                float(metric.get("min_speed_kph", 0))
-                - float(reference.get("min_speed_kph", 0) or 0),
-                1,
-            ),
-            "throttle_on_delta_m": round(
-                float(metric.get("throttle_on_m", 0))
-                - float(reference.get("throttle_on_m", 0) or 0),
-                1,
-            ),
-        }
+        return reference_deltas(metric, reference)
 
     @staticmethod
     def _cause(
@@ -410,23 +393,7 @@ class AnalysisEngine:
         reference: dict[str, Any],
         deltas: dict[str, float] | None = None,
     ) -> str:
-        if metric.get("wheel_lock"):
-            return "lock-up"
-        if metric.get("wheelspin"):
-            return "wheelspin"
-        resolved = deltas or AnalysisEngine._reference_deltas(metric, reference)
-        brake_delta = resolved["brake_point_delta_m"]
-        speed_delta = resolved["apex_speed_delta_kph"]
-        throttle_delta = resolved["throttle_on_delta_m"]
-        if brake_delta < -8:
-            return "early brake"
-        if brake_delta > 12 and speed_delta < -5:
-            return "late brake / overslow"
-        if speed_delta < -5:
-            return "low apex speed"
-        if throttle_delta > 10:
-            return "late throttle"
-        return "line or minimum-speed loss"
+        return classify_cause(metric, reference, deltas)
 
     @staticmethod
     def sector_fields(state: dict[str, Any], lap_num: int) -> dict[str, int]:

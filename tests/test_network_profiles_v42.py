@@ -189,3 +189,81 @@ async def test_network_profile_storage_is_a_non_secret_whitelist(
     }
     assert "must-not-enter-profile-storage" not in serialized_rows
     assert "also-not-persisted" not in serialized_rows
+
+
+@pytest.mark.asyncio
+async def test_an_unproven_bind_is_never_persisted_over_a_proven_one(tmp_path) -> None:
+    """From a real install: a CIDR prefix ("/24") typed as the port.
+
+    The mistyped listener bound successfully (port 24 binds fine), shutdown
+    persisted it unconditionally with last_working_at stamped, and every later
+    launch faithfully rebound the dead port — three days of "telemetry is not
+    connected". A bind that never received a valid F1 packet must not
+    overwrite the stored profile.
+    """
+    from tests.test_network_service_v42 import build_service, packet_bytes
+
+    database = PitWallDatabase(tmp_path / "pitwall.sqlite3")
+    await database.initialize()
+    repository = NetworkProfileRepository(database.path)
+
+    # A proven session: bind, receive valid traffic, stop -> persisted.
+    service, endpoints, _ = build_service()
+    service._profile_repository = repository
+    await service.start_listener("0.0.0.0", 20_777)
+    endpoints.protocols[-1].datagram_received(packet_bytes(5), ("192.168.1.61", 51_000))
+    await service.stop_listener()
+    stored = await repository.load("default")
+    assert stored is not None and stored.udp_port == 20_777
+
+    # The mistyped session: bind port 24, receive NOTHING, stop.
+    second, _, _ = build_service()
+    second._profile_repository = repository
+    await second.start_listener("0.0.0.0", 24)
+    await second.stop_listener()
+    stored = await repository.load("default")
+    assert stored.udp_port == 20_777, "an unproven bind must not be remembered"
+
+
+@pytest.mark.asyncio
+async def test_a_low_port_is_warned_about_but_respected(tmp_path) -> None:
+    """No F1 title sends telemetry to a privileged port, but a user who has
+    matched the game to a mistyped port has a WORKING setup — warn, never
+    silently rebind."""
+    from tests.test_network_service_v42 import build_service
+
+    service, _, _ = build_service()
+    await service.start_listener("0.0.0.0", 24)
+    snapshot = await service.snapshot()
+    assert any("unusual for F1 telemetry" in warning for warning in snapshot.warnings)
+    assert snapshot.listener.port == 24, "the working bind is left alone"
+
+
+@pytest.mark.asyncio
+async def test_sparse_telemetry_feed_is_measured_and_named(tmp_path) -> None:
+    """Raw captures from two real race nights showed car telemetry ARRIVING
+    at 4-12 Hz while the game can send 60 — every arriving packet was stored,
+    so "telemetry is stored sporadically" was a feed problem the app never
+    surfaced. The rate is measured at the socket and warned about with the
+    actual number; a healthy feed stays quiet."""
+    from tests.test_network_service_v42 import Clock, build_service, packet_bytes
+
+    clock = Clock()
+    service, endpoints, _ = build_service(clock=clock)
+    await service.start_listener("0.0.0.0", 20_777)
+    protocol = endpoints.protocols[-1]
+
+    # ~5 Hz for 10 simulated seconds.
+    for frame in range(50):
+        protocol.datagram_received(packet_bytes(frame), ("192.168.1.61", 51_000))
+        clock.advance(0.2)
+    snapshot = await service.snapshot()
+    sparse = [w for w in snapshot.warnings if "arriving at" in w]
+    assert sparse and "5 Hz" in sparse[0] and "UDP send rate" in sparse[0]
+
+    # A healthy 30 Hz feed clears the warning.
+    for frame in range(50, 350):
+        protocol.datagram_received(packet_bytes(frame), ("192.168.1.61", 51_000))
+        clock.advance(1 / 30)
+    snapshot = await service.snapshot()
+    assert not any("arriving at" in w for w in snapshot.warnings)

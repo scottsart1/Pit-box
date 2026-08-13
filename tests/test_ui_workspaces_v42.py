@@ -143,7 +143,9 @@ def test_unavailable_values_are_explicit_and_color_is_not_the_only_signal() -> N
 
 
 def test_saved_session_workspaces_are_responsive_and_local_only() -> None:
-    assert '<script type="module" src="/static/js/workspaces.js"></script>' in INDEX
+    # The version query busts the browser's per-URL module cache on upgrade;
+    # the asset itself is still local and unbuilt.
+    assert '<script type="module" src="/static/js/workspaces.js?v=' in INDEX
     assert "grid-template-columns: minmax(0, 1.45fr)" in CSS
     assert "@media (max-width: 1180px)" in CSS
     assert "@media (max-width: 700px)" in CSS

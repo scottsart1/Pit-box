@@ -77,6 +77,50 @@ def configure_logging() -> None:
     root.addHandler(handler)
 
 
+def close_startup_splash() -> None:
+    """Close the PyInstaller bootloader splash, if one is showing.
+
+    The splash itself is drawn by the BOOTLOADER, in its own process space
+    on its own main thread — never by this process's Python code. A first
+    attempt ran a Tk window in a daemon thread here instead, and tcl86t.dll
+    aborted the whole frozen app seconds after startup (Windows Event Log,
+    2026-08-12, exception 0x80000003) on the developer's own machine while
+    the smoke test — which had disabled the browser-opener and with it the
+    splash — stayed green. pyi_splash.close() only writes a message down the
+    bootloader's pipe, so it is safe from any thread; outside a frozen build
+    the import simply fails and there is nothing to close.
+    """
+    try:
+        import pyi_splash  # type: ignore[import-not-found]
+
+        pyi_splash.close()
+    except Exception:  # noqa: BLE001 - cosmetic; never block the launch
+        pass
+
+
+def close_splash_when_ready(
+    host: str,
+    port: int,
+    *,
+    timeout_s: float = 90.0,
+) -> None:
+    """Dismiss the bootloader splash once the server accepts a connection.
+
+    On timeout it closes anyway: a splash that outlives a failed launch would
+    hide the failure. Runs regardless of open_browser — the splash exists in
+    every frozen launch.
+    """
+    target = "127.0.0.1" if host.strip() in {"0.0.0.0", "", "::", "[::]"} else host
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline:
+        try:
+            with socket.create_connection((target, port), timeout=0.25):
+                break
+        except OSError:
+            time.sleep(0.3)
+    close_startup_splash()
+
+
 def open_dashboard_when_ready(
     host: str,
     port: int,
@@ -140,6 +184,15 @@ def another_instance_is_serving(host: str, port: int, timeout_s: float = 2.0) ->
 
 def run() -> None:
     configure_logging()
+    # Importing the app applies saved dashboard settings over the .env
+    # defaults (settings_service.apply_saved_overrides at module scope), and
+    # a saved web_port must be final BEFORE the single-instance probe and the
+    # browser-opener read it — otherwise both aim at the old port while the
+    # server binds the new one. The import lives inside run() on purpose: a
+    # frozen build cannot resolve uvicorn's "pitwall.app:app" string form,
+    # and importing here surfaces real tracebacks (see the Config note below).
+    from .app import app
+
     if another_instance_is_serving(settings.web_host, settings.web_port):
         url = local_dashboard_url(settings.web_host, settings.web_port)
         log.info(
@@ -147,9 +200,16 @@ def run() -> None:
             "instead of starting a second copy",
             url,
         )
+        close_startup_splash()
         if settings.open_browser:
             webbrowser.open(url)
         return
+    threading.Thread(
+        target=close_splash_when_ready,
+        args=(settings.web_host, settings.web_port),
+        name="pitwall-splash-close",
+        daemon=True,
+    ).start()
     if settings.open_browser:
         threading.Thread(
             target=open_dashboard_when_ready,
@@ -157,15 +217,11 @@ def run() -> None:
             name="pitwall-open-dashboard",
             daemon=True,
         ).start()
-    # Pass the application object, not the "pitwall.app:app" import string.
-    # uvicorn resolves a string by importing it by name at startup, which a
-    # frozen build cannot satisfy: the packaged app fails with "Error loading
-    # ASGI app. Could not import module" and exits. Importing it here also
-    # surfaces a real traceback if the import genuinely fails, instead of
-    # uvicorn's single-line summary. Reload is off, so nothing needs the
-    # string form.
-    from .app import app
-
+    # The app object was imported at the top of run(): uvicorn gets the
+    # object, never the "pitwall.app:app" string a frozen build cannot
+    # resolve ("Error loading ASGI app. Could not import module"), and a
+    # failing import shows its real traceback instead of uvicorn's
+    # single-line summary. Reload is off, so nothing needs the string form.
     # Built explicitly rather than via uvicorn.run() so the Server object can be
     # reached again: there is no other way to ask it to stop from inside a
     # request, and the packaged build is windowed, so there is no console to

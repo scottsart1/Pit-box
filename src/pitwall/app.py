@@ -50,6 +50,7 @@ from .database import PitWallDatabase
 from .field_service import FieldAnalysisService
 from .forwarding import DatagramForwarder
 from .full_field_archive import FullFieldArchiveService, cars_in_trace_scope
+from .line_insights import line_findings
 from .network_profiles import NetworkProfileRepository
 from .network_service import ListenerBindError, NetworkService
 from .networking import PacketHealthTracker
@@ -63,6 +64,13 @@ from .race_plan import (
 )
 from .realtime import RealtimeRadio
 from .session_assembler import SessionAssembler
+from .settings_service import (
+    PREFERENCE_KEY as APP_SETTINGS_KEY,
+    apply_runtime,
+    apply_saved_overrides,
+    coerce,
+    settings_view,
+)
 from .setup_advisor import SetupAdvisor
 from .state import StateStore
 from .storage_service import RetentionPolicy, StorageService
@@ -79,6 +87,10 @@ log = logging.getLogger(__name__)
 
 store = StateStore()
 database = PitWallDatabase(settings.data_dir / "pitwall.sqlite3")
+# Saved dashboard settings override .env installation defaults. This must
+# run before any service below constructs from `settings`, which is why it
+# reads SQLite synchronously here instead of through the async wrapper.
+apply_saved_overrides(settings, database.path)
 network_profiles = NetworkProfileRepository(database.path)
 trace_store = TraceStore(
     settings.trace_dir,
@@ -154,6 +166,7 @@ watchdog_task: asyncio.Task[None] | None = None
 event_persistence_task: asyncio.Task[None] | None = None
 maintenance_task: asyncio.Task[None] | None = None
 catalog_task: asyncio.Task[None] | None = None
+corner_rebuild_task: asyncio.Task[None] | None = None
 interfaces_task: asyncio.Task[None] | None = None
 
 
@@ -171,7 +184,12 @@ async def _connection_watchdog() -> None:
         # back — in a race that is the player, the teammate, the podium and
         # the cars the player started among. Practice and qualifying keep
         # everything, because full-field lap comparison is their whole point.
-        full_field_archive.set_trace_scope(cars_in_trace_scope(snapshot))
+        # PITWALL_FIELD_TRACE_SCOPE=all keeps every car in races too.
+        full_field_archive.set_trace_scope(
+            None
+            if settings.field_trace_scope == "all"
+            else cars_in_trace_scope(snapshot)
+        )
         loop_time = asyncio.get_running_loop().time()
         session_uid = int(snapshot.get("session_uid") or 0)
         current_catalog_session_id = (
@@ -331,6 +349,39 @@ async def _startup_catalog_sync() -> None:
         log.warning("4.2 Library backfill deferred: %s", exc)
 
 
+async def _startup_corner_rebuild() -> None:
+    """Build canonical turn models for tracks that lack one.
+
+    Laps recorded before the milli-g motion fix carry one lap-length "corner"
+    each — the traces were always correct, only their segmentation was wrong,
+    so the real per-corner record is fully recoverable. Each track is rebuilt
+    exactly once (the stored turn model is the marker); a track first raced
+    after this ships gets its model on the next launch with enough laps.
+    Runs per track so the database lock is released between tracks.
+    """
+
+    try:
+        total = 0
+        for track_id in await database.tracks_with_traces():
+            rebuilt = await database.rebuild_track_corners(
+                track_id, analysis.segment_corners
+            )
+            if rebuilt:
+                log.info(
+                    "Turn model built for track %d: %d lap(s) re-measured",
+                    track_id,
+                    rebuilt,
+                )
+            total += rebuilt
+            await asyncio.sleep(0)
+        if total:
+            log.info("Corner history rebuilt from traces: %d lap(s)", total)
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        log.warning("Corner history rebuild deferred: %s", exc)
+
+
 async def _startup_warm_interfaces() -> None:
     """Populate the adapter cache before the driver opens Connection.
 
@@ -371,6 +422,7 @@ def _report_trace_recovery(recovery: RecoveryReport) -> None:
 async def lifespan(app: FastAPI):
     global voice, proactive, watchdog_task, event_persistence_task
     global maintenance_task, catalog_task, interfaces_task, session_assembler
+    global corner_rebuild_task
     settings.data_dir.mkdir(parents=True, exist_ok=True)
     await database.initialize()
     stale_sessions = await database.catalog.finalize_recording_sessions()
@@ -413,6 +465,9 @@ async def lifespan(app: FastAPI):
     _report_trace_recovery(recovery)
     catalog_task = asyncio.create_task(
         _startup_catalog_sync(), name="pitwall-catalog-backfill"
+    )
+    corner_rebuild_task = asyncio.create_task(
+        _startup_corner_rebuild(), name="pitwall-corner-rebuild"
     )
     interfaces_task = asyncio.create_task(
         _startup_warm_interfaces(), name="pitwall-interface-warm"
@@ -504,6 +559,12 @@ async def lifespan(app: FastAPI):
             await catalog_task
         except asyncio.CancelledError:
             pass
+    if corner_rebuild_task:
+        corner_rebuild_task.cancel()
+        try:
+            await corner_rebuild_task
+        except asyncio.CancelledError:
+            pass
     if interfaces_task:
         interfaces_task.cancel()
         try:
@@ -528,7 +589,7 @@ async def lifespan(app: FastAPI):
         )
 
 
-app = FastAPI(title="Your Pit Box", version="4.3.1", lifespan=lifespan)
+app = FastAPI(title="Your Pit Box", version="4.6.2", lifespan=lifespan)
 app.add_middleware(
     LanAccessMiddleware,
     enabled=settings.web_lan_access,
@@ -589,6 +650,22 @@ def _static_root_path() -> Path:
 
 _static_root = _static_root_path()
 app.mount("/static", StaticFiles(directory=_static_root), name="static")
+
+
+@app.middleware("http")
+async def _no_stale_frontend(request: Request, call_next):  # type: ignore[no-untyped-def]
+    """Force revalidation of the dashboard and its assets.
+
+    After the 4.6.0 upgrade a browser kept heuristically-cached JS from the
+    previous install running against the new HTML, which blanked entire
+    pages. ETags are already served, so no-cache costs one localhost 304
+    per file per load and guarantees the frontend is never a version mix.
+    """
+    response = await call_next(request)
+    path = request.url.path
+    if path == "/" or path.startswith("/static"):
+        response.headers["Cache-Control"] = "no-cache"
+    return response
 
 
 class AskRequest(BaseModel):
@@ -820,6 +897,44 @@ async def review(track_id: int | None = Query(default=None)) -> dict[str, object
     snapshot = await store.snapshot_live()
     selected = int(track_id if track_id is not None else snapshot.get("track_id", -1))
     return await database.track_review(selected, 50)
+
+
+@app.get("/api/analysis/line")
+async def line_analysis(track_id: int | None = Query(default=None)) -> dict[str, object]:
+    """Per-turn racing-line findings from the driver's own recorded laps.
+
+    On-demand: it re-reads every stored trace at the circuit (megabytes of
+    JSON), which is fine for a page load and wrong for a per-lap hot path.
+    """
+    snapshot = await store.snapshot_live()
+    selected = int(track_id if track_id is not None else snapshot.get("track_id", -1))
+    if selected < 0:
+        # No live session: review the circuit most recently driven, which is
+        # what "how was my line" means the morning after.
+        recent = await database.recent_laps(None, 1)
+        selected = int(recent[0]["track_id"]) if recent else -1
+    if selected < 0:
+        return {"available": False, "reason": "Drive a session first — there is nothing recorded yet."}
+    model = await database.load_preference(f"turn_model:{selected}", None)
+    if not model:
+        return {
+            "available": False,
+            "track_id": selected,
+            "reason": (
+                "No canonical turn model for this circuit yet — it is built "
+                "automatically once enough traced laps are recorded here."
+            ),
+        }
+    laps = await database.recent_lap_traces(selected, 100)
+    findings = await asyncio.to_thread(line_findings, model, laps)
+    return {
+        "available": True,
+        "track_id": selected,
+        "track": TRACKS.get(selected, "—"),
+        "laps_analyzed": len(laps),
+        "turns_modelled": len(model),
+        "findings": findings,
+    }
 
 
 @app.get("/api/debrief")
@@ -1070,11 +1185,76 @@ async def setup_recommendation(request: SetupRequest) -> dict[str, object]:
     return result
 
 
+async def _persist_app_settings(changes: dict[str, object]) -> dict[str, object]:
+    saved = await database.load_preference(APP_SETTINGS_KEY, None)
+    merged = dict(saved) if isinstance(saved, dict) else {}
+    merged.update(changes)
+    await database.save_preference(APP_SETTINGS_KEY, merged)
+    return merged
+
+
+@app.get("/api/v1/app-settings")
+async def get_app_settings() -> dict[str, object]:
+    saved = await database.load_preference(APP_SETTINGS_KEY, None)
+    return {
+        "settings": settings_view(settings, saved if isinstance(saved, dict) else {})
+    }
+
+
+@app.post("/api/v1/app-settings")
+async def save_app_settings(changes: dict[str, object]) -> dict[str, object]:
+    """Validate, persist, and hot-apply dashboard settings.
+
+    Restart-flagged fields are persisted but not applied live — their
+    consumers constructed from the old value at launch, and pretending
+    otherwise would misreport the app's actual behavior.
+    """
+    if not changes:
+        raise HTTPException(400, "No settings provided.")
+    coerced: dict[str, object] = {}
+    for name, value in changes.items():
+        try:
+            coerced[name] = coerce(name, value)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+    await _persist_app_settings(coerced)
+    results: dict[str, object] = {}
+    for name, value in coerced.items():
+        results[name] = apply_runtime(settings, name, value)
+    if proactive is not None and {
+        "proactive_enabled", "proactive_cadence_laps"
+    } & coerced.keys():
+        await proactive.configure(
+            settings.proactive_enabled, settings.proactive_cadence_laps
+        )
+    saved = await database.load_preference(APP_SETTINGS_KEY, None)
+    return {
+        "results": results,
+        "settings": settings_view(settings, saved if isinstance(saved, dict) else {}),
+    }
+
+
 @app.post("/api/proactive/config")
 async def proactive_config(request: ProactiveRequest) -> dict[str, object]:
     if proactive is None:
         raise HTTPException(503, "Proactive engineer not started")
-    return await proactive.configure(request.enabled, request.cadence_laps)
+    result = await proactive.configure(request.enabled, request.cadence_laps)
+    # The DRIVE card used to change this in memory only, silently reverting
+    # to .env defaults at the next launch. Persist through the same store
+    # the Settings page uses, and mirror onto the live settings object so
+    # both surfaces report the same values.
+    settings.proactive_enabled = bool(request.enabled)
+    settings.proactive_cadence_laps = max(1, min(10, int(request.cadence_laps)))
+    await _persist_app_settings(
+        {
+            "proactive_enabled": coerce("proactive_enabled", request.enabled),
+            "proactive_cadence_laps": coerce(
+                "proactive_cadence_laps",
+                max(1, min(10, int(request.cadence_laps))),
+            ),
+        }
+    )
+    return result
 
 
 @app.post("/api/proactive/test")

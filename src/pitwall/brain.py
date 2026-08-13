@@ -900,8 +900,21 @@ class EngineerBrain:
         # box, but not because they were told to.
         gained = recommended.get("positions_gained_vs_stay_out")
         lost = recommended.get("positions_lost_by_stopping")
+        # The guard only applies to a PACE-driven stop. When the stop is
+        # mandatory (two-compound rule) or the tyre cannot reach the flag,
+        # "stay out" is not an option that exists — in a real race this line
+        # was spoken about a legality stop, directly contradicting the "box
+        # lap 6" call made sixty seconds earlier, and the driver rightly
+        # concluded the engineer had lost the plot.
+        stop_reason = str(recommended.get("stop_required_reason") or "")
+        stop_is_forced = "mandatory" in stop_reason or "cannot reach" in stop_reason
         try:
-            if gained is not None and lost is not None and int(gained) <= 0 < int(lost):
+            if (
+                not stop_is_forced
+                and gained is not None
+                and lost is not None
+                and int(gained) <= 0 < int(lost)
+            ):
                 places = int(lost)
                 return (
                     f"Stay out — boxing costs you {places} "

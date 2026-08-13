@@ -33,7 +33,9 @@ async def test_strategy_ignores_expired_game_window_and_gives_tyre_and_lap(stack
     if recommendation["stops_remaining"]:
         assert recommendation["box_lap"] >= 11
         assert recommendation["fit_compound"] in {"HARD", "SOFT"}
-        assert "Box lap" in recommendation["instruction"]
+        # A legality-mandated stop leads with the reason ("A second compound
+        # is mandatory — box lap 11 …"), so match case-insensitively.
+        assert "box lap" in recommendation["instruction"].lower()
 
 
 @pytest.mark.asyncio

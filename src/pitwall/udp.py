@@ -142,6 +142,17 @@ def normalize_wheels(values: Iterable[Any]) -> list[Any]:
     return [raw[2], raw[3], raw[0], raw[1]]
 
 
+def g_force_to_g(raw: Any) -> float:
+    """The 2026 Motion packet packs g-forces as int16 milli-g, not float g.
+
+    Verified against real captures: threshold braking reads -4002..-4040
+    (-4.0 g) and the hardest Vegas corner reads 3849 (3.85 g). Forwarding the
+    raw value made every sample over 120 kph look like a 1 600 g corner, which
+    merged corner segmentation into one lap-length zone.
+    """
+    return float(raw) / 1000.0
+
+
 def mode_profile(session_type: str) -> str:
     """Label-based fallback classifier for when the type id is unrecognised.
 
@@ -888,8 +899,10 @@ class F1DatagramProtocol(asyncio.DatagramProtocol):
                             "velocity_z": float(
                                 getattr(motion, "world_velocity_z", 0.0)
                             ),
-                            "lateral_g": float(getattr(motion, "g_force_lateral", 0.0)),
-                            "longitudinal_g": float(
+                            "lateral_g": g_force_to_g(
+                                getattr(motion, "g_force_lateral", 0.0)
+                            ),
+                            "longitudinal_g": g_force_to_g(
                                 getattr(motion, "g_force_longitudinal", 0.0)
                             ),
                             "yaw": float(getattr(motion, "yaw", 0.0)),
@@ -1776,8 +1789,8 @@ class F1DatagramProtocol(asyncio.DatagramProtocol):
         forward_x = float(getattr(motion, "world_forward_dir_x", 0)) / 32767.0
         forward_z = float(getattr(motion, "world_forward_dir_z", 32767)) / 32767.0
         await self.store.update(
-            lateral_g=float(motion.g_force_lateral),
-            longitudinal_g=float(motion.g_force_longitudinal),
+            lateral_g=g_force_to_g(motion.g_force_lateral),
+            longitudinal_g=g_force_to_g(motion.g_force_longitudinal),
             world_x=float(getattr(motion, "world_position_x", 0.0)),
             world_y=float(getattr(motion, "world_position_y", 0.0)),
             world_z=float(getattr(motion, "world_position_z", 0.0)),

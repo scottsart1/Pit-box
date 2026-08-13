@@ -1028,3 +1028,31 @@ button:disabled,
   .whatif-controls { grid-template-columns: 1fr 1fr; }
   .whatif-controls input[id="stratWhatIfText"] { grid-column: 1 / -1; }
 }
+
+/* Strategy rail: the conversation and the decision record stay beside the
+   plans they discuss, instead of a section at the top and its counterpart at
+   the bottom of the page. */
+.strategy-workspace .strategy-side {
+  grid-row: 2 / span 8;
+  align-self: start;
+  position: sticky;
+  top: 12px;
+  max-height: calc(100vh - 24px);
+  overflow: auto;
+}
+.strategy-rail-log { margin-top: 14px; border-top: 1px solid var(--border, #263542); padding-top: 12px; }
+#stratTimeline { cursor: pointer; }
+
+/* One Analysis workspace: Library, Session Review, Lap Lab, Field and
+   History as inner views instead of five top-level pages that were "one and
+   the same thing divided into three pages". */
+.analysis-subnav {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  padding: 10px 16px 0;
+  max-width: 1680px;
+  margin: 0 auto;
+}
+.analysis-view[hidden] { display: none; }
+#analysis { overflow: auto; height: 100%; }

@@ -213,6 +213,7 @@ async function loadSessions({ append = false, quiet = false } = {}) {
   if (!quiet) setNotice("libraryStatus", append ? "Loading more sessions…" : "Loading saved sessions…");
   try {
     const payload = await api(`/sessions?${buildSessionQuery(append ? state.nextCursor : null)}`);
+    if (!append) loadStorageStatus();
     const incoming = payload?.items || [];
     state.sessions = append ? [...state.sessions, ...incoming.filter((item) => !state.sessions.some((session) => session.id === item.id))] : incoming;
     state.nextCursor = payload?.next_cursor || null;
@@ -227,6 +228,36 @@ async function loadSessions({ append = false, quiet = false } = {}) {
       renderSessionRows();
       refreshSessionSelectors();
     }
+  }
+}
+
+async function loadStorageStatus() {
+  // The storage API existed since 4.2 with no consumer; the Library table
+  // showed per-session sizes while the overall budget stayed invisible.
+  const host = document.getElementById("libraryStorage");
+  if (!host) return;
+  try {
+    const status = await api("/storage/status");
+    const managed = Number(status.managed_bytes || 0);
+    const budget = Number(status.policy?.max_bytes || 0);
+    const free = Number(status.disk_free_bytes || 0);
+    const parts = [
+      `Telemetry storage: ${formatBytes(managed)} managed` +
+        (budget ? ` of a ${formatBytes(budget)} budget` : ""),
+      `${formatBytes(free)} free on disk`,
+    ];
+    const warningText = {
+      free_disk_below_configured_minimum:
+        "free disk is below the configured minimum",
+      capture_budget_exceeded:
+        "the capture budget is exceeded — nothing is deleted automatically; review old sessions in the table below",
+    };
+    const warnings = (status.warnings || []).map((w) => warningText[w] || w);
+    host.textContent = parts.join(" · ") + (warnings.length ? ` — ${warnings.join("; ")}` : "");
+    host.dataset.state = warnings.length ? "warn" : "";
+    host.hidden = false;
+  } catch (error) {
+    host.hidden = true;
   }
 }
 

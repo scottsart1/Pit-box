@@ -61,9 +61,24 @@ analysis = Analysis(
 
 pyz = PYZ(analysis.pure)
 
+# The launch splash is drawn by the BOOTLOADER on its own main thread and
+# closed from Python via pyi_splash.close() — a pipe write. It must never be
+# reimplemented as an in-process Tk window: tcl86t.dll aborted the whole
+# windowed build seconds after startup when a splash ran in a daemon thread
+# (Windows Event Log 2026-08-12, exception 0x80000003). Windows-only —
+# PyInstaller does not support the splash target on macOS.
+splash = None
+if sys.platform == "win32":
+    splash = Splash(
+        str(SPEC_DIR / "splash.png"),
+        binaries=analysis.binaries,
+        datas=analysis.datas,
+    )
+
 exe = EXE(
     pyz,
     analysis.scripts,
+    *([splash] if splash else []),
     [],
     exclude_binaries=True,
     name=APP_NAME,
@@ -77,6 +92,7 @@ exe = EXE(
 
 collect = COLLECT(
     exe,
+    *([splash.binaries] if splash else []),
     analysis.binaries,
     analysis.datas,
     strip=False,
@@ -92,7 +108,7 @@ if sys.platform == "darwin":
         info_plist={
             "CFBundleName": APP_NAME,
             "CFBundleDisplayName": APP_NAME,
-            "CFBundleShortVersionString": "4.3.1",
+            "CFBundleShortVersionString": "4.6.2",
             "NSHighResolutionCapable": True,
             # Your Pit Box listens for UDP telemetry on the local network, which
             # macOS gates behind a user prompt. Without this key the prompt
