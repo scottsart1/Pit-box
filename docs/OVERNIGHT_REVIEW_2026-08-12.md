@@ -488,3 +488,35 @@ after the 4.6.1 archive (20:17:00, uploaded from the dashboard-verified
 copy after wrangler's stale-read cache served 4.6.0 bytes and the hash
 guard correctly refused to archive them). Rollback chain now: 4.6.1,
 4.6.0, 4.5.0, 4.4.0, 4.3.1.
+
+## Cycle 13 (2026-08-16) — Setup Lab profile clicks rendered nothing; 4.6.3
+
+**Scott's report (mid-game):** clicking Race/Quali/Hybrid produced no
+results. Diagnosed read-only against his log (no server errors — client
+side) and reproduced on the isolated copy: the 4.6.1 refactor that
+extracted `renderSetupResult` out of `generateSetup` left it using the
+outer function's `profile` parameter. First statement threw a
+ReferenceError, so the title stuck on "Generating…" with nothing rendered.
+The earlier verification missed it because the auto-restore path swallows
+exceptions and the "verified" capture was served by a pre-refactor process
+— reinforcing the rule: after refactoring a click handler, verify the
+CLICK on a freshly reloaded page.
+
+**Fix:** `renderSetupResult` derives `profile` from the payload it is
+given (`j.profile`). Verified with real clicks on a reloaded page: all
+three profiles render (Race · Las Vegas with 6 corner findings). A source
+regression test pins the function owning every name it uses.
+
+**Process failure owned:** the first frozen smoke ran with default
+settings on the developer's machine WHILE HE WAS PLAYING — it opened a
+browser tab, took the microphone, and the engineer spoke through his
+speakers; he had to quit the stray instance himself. Verification
+instances on this machine now always run with PITWALL_OPEN_BROWSER=false,
+PITWALL_WAKE_ENABLED=false, PITWALL_NATIVE_VOICE=false. The quiet re-run
+verified health, the setup endpoint (6 findings), and a clean exit.
+
+**Ship — 4.6.3 published.** Full suite 1008 passed, 0 failed. Installer
+33,167,575 bytes, SHA-256 7F2055F7…D6C2D0; publish byte-verified by a
+fresh-cache wrangler read (4.123.0) matching the local hash exactly, and
+4.6.2 archived to the rollback chain from Scott's own hash-verified
+download. His running game session was never touched.

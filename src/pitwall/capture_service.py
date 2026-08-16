@@ -171,7 +171,7 @@ class CaptureService:
         destination = self._safe_destination(relative_path)
         destination.parent.mkdir(parents=True, exist_ok=True)
         capture_metadata = {
-            "app_version": "4.6.2",
+            "app_version": "4.6.3",
             "created_utc": datetime.now(UTC).isoformat(),
             "privacy_mode": "private",
             **(metadata or {}),

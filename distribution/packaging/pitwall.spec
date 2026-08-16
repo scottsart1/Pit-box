@@ -108,7 +108,7 @@ if sys.platform == "darwin":
         info_plist={
             "CFBundleName": APP_NAME,
             "CFBundleDisplayName": APP_NAME,
-            "CFBundleShortVersionString": "4.6.2",
+            "CFBundleShortVersionString": "4.6.3",
             "NSHighResolutionCapable": True,
             # Your Pit Box listens for UDP telemetry on the local network, which
             # macOS gates behind a user prompt. Without this key the prompt

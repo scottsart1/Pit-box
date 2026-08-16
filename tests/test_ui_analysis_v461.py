@@ -67,6 +67,17 @@ def test_connection_js_subview_list_matches_the_inline_router():
     assert parse(inline) == parse(connection)
 
 
+def test_render_setup_result_owns_every_name_it_uses():
+    """renderSetupResult was extracted from generateSetup and kept using the
+    outer function's ``profile`` parameter — every profile click then died on
+    a ReferenceError before the first DOM write (reported live, 2026-08-12).
+    The function must derive profile from the payload it is given."""
+    body = INDEX[INDEX.index("function renderSetupResult") :]
+    body = body[: body.index("\n")]
+    assert "const profile=String(j.profile" in body
+    assert "renderSetupResult(j)" in INDEX[INDEX.index("async function generateSetup") :][:2700]
+
+
 def test_dashboard_responses_forbid_stale_caching():
     assert "_no_stale_frontend" in APP_PY
     middleware = APP_PY[APP_PY.index("async def _no_stale_frontend") :]
