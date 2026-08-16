@@ -14,6 +14,7 @@ import argparse
 import asyncio
 import base64
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -29,13 +30,55 @@ CHROME_CANDIDATES = (
     r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
     r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
     r"C:\Program Files\Microsoft\Edge\Application\msedge.exe",
+    "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+    "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
 )
+
+# Executables to look for on PATH, and the roots a Playwright/Puppeteer
+# install drops a browser into. Capture is developed on Windows but has to
+# run on the Linux machines that cut the marketing footage, where Chrome is
+# rarely installed system-wide.
+CHROME_ON_PATH = (
+    "google-chrome", "google-chrome-stable", "chromium", "chromium-browser",
+    "microsoft-edge",
+)
+CHROME_SEARCH_ROOTS = (
+    "/opt/pw-browsers",
+    str(Path.home() / ".cache" / "ms-playwright"),
+    str(Path.home() / ".cache" / "puppeteer"),
+)
+
+
+def browser_flags() -> list[str]:
+    """Extra Chrome flags this machine needs.
+
+    Chrome refuses to start its sandbox as root, which is how a container
+    build agent runs. Dropping the sandbox is safe here and only here: the
+    only page ever loaded is our own dashboard on loopback.
+    """
+    if hasattr(os, "geteuid") and os.geteuid() == 0:
+        return ["--no-sandbox", "--disable-dev-shm-usage"]
+    return []
 
 
 def find_browser() -> str:
     for candidate in CHROME_CANDIDATES:
         if Path(candidate).exists():
             return candidate
+    for name in CHROME_ON_PATH:
+        found = shutil.which(name)
+        if found:
+            return found
+    # A downloaded browser bundle: chrome-linux/chrome, chrome-mac/…, and the
+    # headless shell, which drives CDP identically and is all a capture needs.
+    for root in CHROME_SEARCH_ROOTS:
+        base = Path(root)
+        if not base.is_dir():
+            continue
+        for pattern in ("*/chrome-*/chrome", "*/chrome-*/headless_shell"):
+            for found in sorted(base.glob(pattern)):
+                if found.is_file():
+                    return str(found)
     raise SystemExit("no Chrome or Edge binary found for screenshot capture")
 
 
@@ -111,6 +154,7 @@ async def capture(
             "--headless=new",
             "--disable-gpu",
             "--hide-scrollbars",
+            *browser_flags(),
             "--remote-debugging-port=9333",
             f"--user-data-dir={profile}",
             "--window-size=1600,1080",

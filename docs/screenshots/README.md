@@ -55,6 +55,7 @@ overtaking is hard enough that track position is worth defending.
 | `07-hungaroring-decision.png` | Drive | The decision point; also the demo video's poster frame |
 | `08-hungaroring-radio.png` | Drive, full height | The engineer's spoken answers in the radio feed, beside the three ranked plans they came from |
 | `09-hungaroring-field.png` | Field | The field during the same moment |
+| `15-promo-poster.png` | Drive | The opening frame of the captioned 45-second cut, caption bar included; it is the poster for that video, not a documentation shot |
 
 Reproduce them with:
 

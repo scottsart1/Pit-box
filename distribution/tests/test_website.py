@@ -156,6 +156,41 @@ def test_the_demo_video_is_referenced_and_present():
     assert (build_site.ASSET_DIR / "pitwall-demo.mp4").exists()
 
 
+def test_the_captioned_promo_is_referenced_and_present():
+    # The short cut is the one most people will actually watch through.
+    assert 'src="assets/pitwall-promo-45s.mp4"' in INDEX
+    assert "pitwall-promo-45s.mp4" in build_site._referenced_assets()
+    assert (build_site.ASSET_DIR / "pitwall-promo-45s.mp4").exists()
+
+
+def _mp4_seconds(path: Path) -> float:
+    """Duration from the MP4 movie header, without a media library.
+
+    `mvhd` sits inside `moov` and carries a timescale and a duration in that
+    scale. Boxes are length-prefixed, so the header can be found by walking
+    them; version 1 widens both fields to 64 bits.
+    """
+    data = path.read_bytes()
+    index = data.find(b"mvhd")
+    assert index != -1, f"{path.name} has no mvhd box"
+    version = data[index + 4]
+    if version == 1:
+        timescale = int.from_bytes(data[index + 24:index + 28], "big")
+        duration = int.from_bytes(data[index + 28:index + 36], "big")
+    else:
+        timescale = int.from_bytes(data[index + 16:index + 20], "big")
+        duration = int.from_bytes(data[index + 20:index + 24], "big")
+    assert timescale, f"{path.name} declares no timescale"
+    return duration / timescale
+
+
+def test_the_captioned_promo_stays_under_the_length_it_claims():
+    # The page calls it a forty-second tour, and short is the entire point of
+    # cutting it. A re-record that runs long makes the copy a lie.
+    seconds = _mp4_seconds(build_site.ASSET_DIR / "pitwall-promo-45s.mp4")
+    assert 20.0 < seconds <= 45.0, f"the promo cut is {seconds:.1f}s"
+
+
 def test_the_setup_guide_is_published_and_linked():
     assert "guide.html" in build_site.PAGES
     assert 'href="guide.html"' in INDEX
@@ -236,6 +271,15 @@ def test_the_video_poster_is_checked_like_any_other_image():
     # would let a missing one through and show a black box until play.
     posters = [i for i in build_site._referenced_images() if "hungaroring" in i]
     assert posters, "the demo video has no poster frame"
+
+
+def test_every_video_on_the_page_has_a_poster():
+    # Both players sit above the fold on a phone; an unposted one is a black
+    # rectangle until the viewer taps it.
+    players = re.findall(r"<video\b[^>]*>", INDEX, flags=re.DOTALL)
+    assert len(players) >= 2
+    for player in players:
+        assert "poster=" in player, player
 
 
 def test_the_demo_section_says_the_engineer_responses_are_not_scripted():

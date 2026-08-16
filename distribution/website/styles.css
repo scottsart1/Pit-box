@@ -187,14 +187,18 @@ h2 { font-size: clamp(1.5rem, 3vw, 2rem); letter-spacing: -.02em; margin: 0 0 .6
   overflow: hidden;
   background: var(--dark);
   box-shadow: 0 22px 50px -26px rgba(16, 23, 32, .5);
-  /* The capture is 1600x900; reserving the ratio stops the page reflowing
+  /* The captures are 16:9; reserving the ratio stops the page reflowing
      when the poster loads. */
   aspect-ratio: 16 / 9;
 }
 
 .video-frame video { display: block; width: 100%; height: 100%; object-fit: contain; background: #000; }
 
-.video-note { margin-top: .9rem; max-width: 72ch; }
+.video-note { margin-top: .9rem; max-width: 72ch; margin-bottom: 2.4rem; }
+
+/* Names the cut above each player, so the short captioned tour and the
+   full spoken demo are not mistaken for the same video twice. */
+.video-heading { margin: 0 0 .8rem; font-size: 1.05rem; letter-spacing: .01em; }
 
 /* ---------- gallery ---------- */
 
