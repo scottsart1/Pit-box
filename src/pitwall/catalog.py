@@ -395,7 +395,11 @@ class SessionCatalog:
         now = _utc_now()
         classification = state.get("final_classification") or {}
         finished = int(classification.get("position", 0) or 0) > 0
-        track_id = int(state.get("track_id", -1) or -1)
+        # Melbourne is track 0, and `or -1` reads that as "no track": every
+        # Albert Park session was catalogued as Track -1, which then lost
+        # the circuit on the review, field and lap screens.
+        raw_track = state.get("track_id")
+        track_id = int(raw_track) if raw_track is not None else -1
         length = int(state.get("track_length_m", 0) or 0)
         layout = f"f1:{int(state.get('packet_format', 0) or 0)}:{track_id}:{length}"
         drivers = state.get("drivers") or []

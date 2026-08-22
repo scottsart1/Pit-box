@@ -75,8 +75,17 @@ class Devtools:
         await self.websocket.send(
             json.dumps({"id": message_id, "method": method, "params": params})
         )
+        # A page that never settles used to hang the capture for ever, because
+        # this loop waited on a reply that was not coming. Failing the run is
+        # more useful than a job that has to be killed by hand.
+        deadline = time.monotonic() + 120.0
         while True:
-            raw = json.loads(await self.websocket.recv())
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError(f"{method} did not answer within 120s")
+            raw = json.loads(
+                await asyncio.wait_for(self.websocket.recv(), timeout=remaining)
+            )
             if raw.get("id") == message_id:
                 if "error" in raw:
                     raise RuntimeError(f"{method}: {raw['error']}")
@@ -139,24 +148,34 @@ async def capture(
             "--remote-debugging-port=9333",
             f"--user-data-dir={profile}",
             "--window-size=1600,1080",
-            "about:blank",
+            "--no-sandbox",
+            "--no-first-run",
         ],
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
     )
     try:
         # Attach to a page target, not the browser target: the browser-level
-        # endpoint does not implement Page or Runtime.
+        # endpoint does not implement Page or Runtime. Newer headless Chrome
+        # opens with no tab of its own, so ask for one rather than waiting for
+        # a page that is never going to appear. trust_env is off because a
+        # proxy in the environment must not be used to reach localhost.
         endpoint = None
         for _ in range(60):
             try:
-                targets = httpx.get("http://127.0.0.1:9333/json/list", timeout=1.0).json()
-                pages = [
-                    item for item in targets
-                    if item.get("type") == "page" and item.get("webSocketDebuggerUrl")
-                ]
-                if pages:
-                    endpoint = pages[0]["webSocketDebuggerUrl"]
+                with httpx.Client(trust_env=False, timeout=2.0) as client:
+                    listed = client.get("http://127.0.0.1:9333/json/list").json()
+                    pages = [
+                        item for item in listed
+                        if item.get("type") == "page" and item.get("webSocketDebuggerUrl")
+                    ]
+                    if pages:
+                        endpoint = pages[0]["webSocketDebuggerUrl"]
+                        break
+                    created = client.put(
+                        "http://127.0.0.1:9333/json/new?url=about:blank"
+                    ).json()
+                    endpoint = created["webSocketDebuggerUrl"]
                     break
             except Exception:  # noqa: BLE001 - browser is still starting
                 pass
@@ -177,6 +196,17 @@ async def capture(
 
                 await devtools.goto(f"{base}/#connection", settle=5.0)
                 await devtools.screenshot(out / "03-connection-center.png", 1600, 1080)
+
+            if wanted("strategy"):
+                # The workspace has a planner that only fills in once it has
+                # been run, so a shot taken straight after navigation shows an
+                # empty table next to a populated one.
+                print("capturing the strategy workspace")
+                await devtools.goto(f"{base}/#strategy", settle=5.0)
+                detail = await devtools.evaluate(STRATEGY_SETUP)
+                print(f"  strategy: {detail}")
+                await asyncio.sleep(6.0)
+                await devtools.screenshot(out / "15-strategy-workspace.png", 1600, 1500)
 
             if wanted("library"):
                 await devtools.goto(f"{base}/#library", settle=5.0)
@@ -207,10 +237,45 @@ async def capture(
             print(f"  lap-lab: {detail}")
             await asyncio.sleep(10.0)
             await devtools.screenshot(out / "07-lap-lab.png", 1600, 1400)
+
+            # History keeps every strategy snapshot the race produced. It
+            # opens scoped to the current session, which is empty before a
+            # race has run; widen it so the archive is what gets shot.
+            await devtools.goto(f"{base}/#review", settle=4.0)
+            await devtools.evaluate(HISTORY_SETUP)
+            await asyncio.sleep(6.0)
+            await devtools.screenshot(out / "16-history-archive.png", 1600, 1400)
+
+            await devtools.goto(f"{base}/#setup", settle=6.0)
+            await devtools.screenshot(out / "17-setup-lab.png", 1600, 1200)
+
+            await devtools.goto(f"{base}/#settings", settle=6.0)
+            await devtools.screenshot(out / "18-settings.png", 1600, 1200)
     finally:
         process.terminate()
         shutil.rmtree(profile, ignore_errors=True)
 
+
+STRATEGY_SETUP = """
+(async () => {
+  const wait = (ms) => new Promise(r => setTimeout(r, ms));
+  const run = document.getElementById('stratPlannerRun');
+  if (!run) return 'no planner';
+  run.click();
+  await wait(4000);
+  const rows = document.querySelectorAll('#stratPlannerRows tr').length;
+  return 'planner rows: ' + rows;
+})()
+"""
+
+HISTORY_SETUP = """
+(() => {
+  const scope = document.getElementById('historyScope');
+  if (scope) { scope.value = 'all'; scope.dispatchEvent(new Event('change', {bubbles: true})); }
+  document.getElementById('refreshReview')?.click();
+  return 'history widened to every session';
+})()
+"""
 
 LAP_LAB_SETUP = """
 (async () => {
@@ -245,7 +310,9 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--base", default="http://127.0.0.1:8010")
     parser.add_argument("--out", default="docs/screenshots")
-    parser.add_argument("--only", default="", help="live,library,analysis")
+    parser.add_argument(
+        "--only", default="", help="live,strategy,library,analysis"
+    )
     args = parser.parse_args()
     out = Path(args.out)
     groups = {g.strip() for g in args.only.split(",") if g.strip()} or None
