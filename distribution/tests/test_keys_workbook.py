@@ -87,16 +87,16 @@ def test_the_sheet_name_with_a_space_is_quoted(workbook):
                 assert "'Activation Keys'!" in cell.value, cell.coordinate
 
 
-def test_revenue_reads_from_the_price_cell_not_a_hardcoded_twenty(workbook):
+def test_revenue_reads_from_the_price_cell_not_a_hardcoded_amount(workbook):
     summary = workbook["Summary"]
-    assert summary["B3"].value == 20
+    assert summary["B3"].value == 5
     revenue = next(
         cell.value
         for row in summary.iter_rows()
         for cell in row
         if isinstance(cell.value, str) and cell.value.startswith("=($B$3)")
     )
-    # Changing the price must change the total; a literal 20 would not.
+    # Changing the price must change the total; a literal amount would not.
     assert "$B$3" in revenue
     assert "Sold" in revenue and "Activated" in revenue
     assert "Replaced" not in revenue, "a replacement code is not a second sale"

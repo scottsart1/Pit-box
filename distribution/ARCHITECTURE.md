@@ -12,7 +12,7 @@ this before it is wired into the packaged launcher and website.
 
 ## 1. What we are protecting, and the honest threat model
 
-This is a $20, one-time, single-activation hobby product. The goal is to make
+This is a $5, one-time, single-activation hobby product. The goal is to make
 casual copying not worth the bother and to enforce "one code, one activation",
 **not** to defeat a determined reverse-engineer. Client-side licensing on the
 user's own machine is always ultimately defeatable; the design is honest about
@@ -142,7 +142,7 @@ copies `license.json` to a second machine and patches out the device check in
 the binary can run there. Defenses that raise this cost: the server refuses a
 second *activation* on a different device, and `device.py` is inside the
 integrity manifest (§6), so patching `device_hash()` to return a constant is
-itself detected. For a $20 product this is a deliberate, proportionate
+itself detected. For a $5 product this is a deliberate, proportionate
 trade-off, not an oversight.
 
 ---
@@ -284,7 +284,7 @@ own integrity guarantee and a stronger one.
   to be honest and readable, not maximally protective, and consumer statutory
   rights override it regardless of wording.
 
-Payment is **Venmo at $20 with manual fulfilment**: the buyer pays, you mark
+Payment is **Venmo at $5 with manual fulfilment**: the buyer pays, you mark
 the code `sold` in the ledger and email it. There is no payment webhook, which
 is why the ledger lifecycle (`unused → sold → redeemed_email`) is the system of
 record.

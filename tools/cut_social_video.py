@@ -2,9 +2,9 @@
 
     python -m tools.cut_social_video \
         --footage capture/melbourne.mp4 \
-        --overlay-frames docs/social/overlay-frames \
+        --overlay-frames marketing/videos/overlay-frames \
         --storyboard tools/social_storyboards/reel-engineer.json \
-        --out docs/social/reel-engineer.mp4
+        --out marketing/videos/reel-engineer.mp4
 
 Two things are composited and neither is drawn for the video. The gameplay is
 whatever was recorded off the console or PC. The panel under it is
