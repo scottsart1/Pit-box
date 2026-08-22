@@ -14,6 +14,7 @@ import argparse
 import asyncio
 import base64
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -29,14 +30,38 @@ CHROME_CANDIDATES = (
     r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
     r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
     r"C:\Program Files\Microsoft\Edge\Application\msedge.exe",
+    # Screens are shot on Windows because that is where the product runs, but
+    # the same capture is useful from a Linux box or a mac when producing
+    # marketing stills, and the tool refused to start there.
+    "/usr/bin/google-chrome",
+    "/usr/bin/chromium",
+    "/usr/bin/chromium-browser",
+    "/opt/pw-browsers/chromium-1194/chrome-linux/chrome",
+    "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+    "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
 )
 
 
+def _browser_from_environment() -> str | None:
+    """Honour an explicit browser path before probing the known locations."""
+    override = os.environ.get("PITWALL_CHROME")
+    return override if override and Path(override).exists() else None
+
+
 def find_browser() -> str:
+    override = _browser_from_environment()
+    if override:
+        return override
     for candidate in CHROME_CANDIDATES:
         if Path(candidate).exists():
             return candidate
-    raise SystemExit("no Chrome or Edge binary found for screenshot capture")
+    found = shutil.which("google-chrome") or shutil.which("chromium")
+    if found:
+        return found
+    raise SystemExit(
+        "no Chrome or Edge binary found for screenshot capture; "
+        "set PITWALL_CHROME to one"
+    )
 
 
 class Devtools:

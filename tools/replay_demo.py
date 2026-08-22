@@ -72,6 +72,54 @@ TRACK_ID = 13  # Suzuka
 TRACK_LENGTH = 5807
 BASE_LAP_S = 92.5
 
+# Circuits this generator can be pointed at, so a replay can be matched to the
+# circuit a piece of real footage was driven on. The lap times are representative
+# green-flag race laps, not records: the generator wants self-consistent timing,
+# not a physics model. Track IDs follow the f1-packets 2026 TRACKS table, which
+# is what the application reads back out of the session packet.
+CIRCUITS = {
+    "melbourne": (0, 5278, 80.5),
+    "catalunya": (4, 4675, 77.0),
+    "monaco": (5, 3337, 73.0),
+    "silverstone": (7, 5891, 89.0),
+    "hungaroring": (9, 4381, 78.0),
+    "spa": (10, 7004, 105.0),
+    "monza": (11, 5793, 82.0),
+    "suzuka": (13, 5807, 92.5),
+    "zandvoort": (26, 4259, 72.0),
+    "imola": (27, 4909, 78.5),
+    "jeddah": (29, 6174, 91.0),
+    "las-vegas": (31, 6201, 95.0),
+}
+
+
+def select_circuit(name: str) -> None:
+    """Point the generator at one of CIRCUITS.
+
+    The packet builders read these as module globals, so this rebinds them once
+    before the send loop starts rather than threading three more parameters
+    through every builder.
+    """
+    global TRACK_ID, TRACK_LENGTH, BASE_LAP_S
+    TRACK_ID, TRACK_LENGTH, BASE_LAP_S = CIRCUITS[name]
+
+
+def select_driver(surname: str) -> None:
+    """Run the session as a named driver on the grid.
+
+    A demo recorded alongside real footage has to agree with it about who is in
+    the car; the application resolves the name from the participants packet, so
+    the only thing that has to change is which index is not AI-controlled.
+    """
+    global PLAYER_INDEX
+    wanted = surname.strip().upper().encode()
+    for index, spec in enumerate(GRID):
+        if spec[3] == wanted:
+            PLAYER_INDEX = index
+            return
+    known = ", ".join(spec[3].decode().title() for spec in GRID)
+    raise SystemExit(f"unknown driver {surname!r}; the grid is: {known}")
+
 # A fresh identity per run, as the game issues per session. A fixed UID made
 # successive replays append to one stored session, so the review tab showed laps
 # and strategy snapshots from different runs interleaved.
@@ -567,7 +615,18 @@ def main() -> None:
     parser.add_argument("--laps", type=int, default=30)
     parser.add_argument("--speed", type=float, default=25.0, help="time compression")
     parser.add_argument("--seed", type=int, default=7)
+    parser.add_argument(
+        "--circuit", default="suzuka", choices=sorted(CIRCUITS),
+        help="circuit to run the synthetic race on",
+    )
+    parser.add_argument(
+        "--driver", default=None,
+        help="surname of the grid driver to run as (default: Russell)",
+    )
     arguments = parser.parse_args()
+    select_circuit(arguments.circuit)
+    if arguments.driver:
+        select_driver(arguments.driver)
     run(arguments.host, arguments.port, arguments.laps, arguments.speed, arguments.seed)
 
 
