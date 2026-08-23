@@ -589,7 +589,7 @@ async def lifespan(app: FastAPI):
         )
 
 
-app = FastAPI(title="Your Pit Box", version="4.7.0", lifespan=lifespan)
+app = FastAPI(title="Your Pit Box", version="4.7.1", lifespan=lifespan)
 app.add_middleware(
     LanAccessMiddleware,
     enabled=settings.web_lan_access,
