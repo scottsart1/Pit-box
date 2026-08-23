@@ -54,21 +54,22 @@
 <p>Your Pit Box checks at startup that its own licensing code has not been modified. If that check fails, <strong>the application refuses to start and shows a message explaining why</strong>.</p>
 <p>To be explicit about what that does <em>not</em> do: it never deletes, moves, encrypts or damages anything — not the application, not your telemetry, not your files. If the check ever fails on a legitimate copy, which a damaged install or an over-eager antivirus can cause, reinstalling fixes it and your activation code remains valid. Your recorded sessions in <code>PitWallData</code> are never touched.</p>
 
-<h2>4. You need your own OpenAI account</h2>
-<p>The spoken radio and the reasoning behind it run on OpenAI's service using an API key that you supply. That means:</p>
+<h2>4. You need your own AI provider account</h2>
+<p>The spoken radio runs on OpenAI's service, and the engineer's reasoning runs on OpenAI by default — or, if you choose, on another supported provider (Anthropic's Claude, DeepSeek, Kimi / Moonshot AI, or a compatible endpoint you configure) using an API key that you supply. That means:</p>
 <ul>
-  <li>Those calls are billed to <strong>your</strong> OpenAI account, separately from the $20 you paid me. I never see, hold or charge that money.</li>
-  <li>Your use of OpenAI is governed by OpenAI's own terms, not these.</li>
-  <li>If OpenAI changes its pricing, models or availability, the radio is affected and there is nothing I can do about it. Everything that runs locally — telemetry, strategy, analysis, the dashboard — keeps working regardless.</li>
+  <li>Those calls are billed to <strong>your</strong> account with that provider — your own OpenAI account by default — separately from the $20 you paid me. I never see, hold or charge that money.</li>
+  <li>Your use of each provider is governed by that provider's own terms, not these.</li>
+  <li>If a provider changes its pricing, models or availability, the features that call it are affected and there is nothing I can do about it. Everything that runs locally — telemetry, strategy, analysis, the dashboard — keeps working regardless.</li>
+  <li>The spoken radio (speech-to-text and the engineer's voice) always uses OpenAI. Without an OpenAI key the engineer answers typed questions using the provider you configured, and stays silent on the radio.</li>
 </ul>
 
 <h2>5. What data goes where</h2>
 <p>Your telemetry stays on your computer. The session database, the raw 60&nbsp;Hz trace files and your Windows username are never uploaded anywhere.</p>
-<p>When you ask a question that genuinely needs judgement, a compact summary of the situation and selected computed results are sent to OpenAI so it can answer. With cloud transcription, recorded audio clips are sent to OpenAI for transcription. If you enable the optional Realtime voice mode, microphone audio is streamed to OpenAI while a radio session is active. Nothing is sent to me, and there is no analytics or telemetry reporting back to the developer.</p>
+<p>When you ask a question that genuinely needs judgement, a compact summary of the situation and selected computed results are sent to the AI provider you configured — OpenAI by default, or Claude, DeepSeek, Kimi or your own compatible endpoint if you chose one — so it can answer. With cloud transcription, recorded audio clips are sent to OpenAI for transcription. If you enable the optional Realtime voice mode, microphone audio is streamed to OpenAI while a radio session is active. Nothing is sent to me, and there is no analytics or telemetry reporting back to the developer.</p>
 <p>Your activation is recorded on the licence server as a code, a one-way hash identifying the computer, and a timestamp. The hash cannot be reversed to identify your machine, and no name, email or address is stored with it.</p>
 
 <h2>6. Refunds</h2>
-<p>If Your Pit Box does not work for you, email me within <strong>14 days</strong> of buying it and I will refund the $20 in full. You do not need to justify it, though I would genuinely like to know what went wrong.</p>
+<p>If Your Pit Box does not work for you, email me within <strong>7 days</strong> of buying it and I will refund the $20 in full. You do not need to justify it, though I would genuinely like to know what went wrong.</p>
 
 <h2>7. No warranty</h2>
 <p>Your Pit Box is provided as it is. I have tested it as thoroughly as one person can, but I cannot promise it is free of defects, that it will suit your particular setup, or that it will keep working after an update to the game, to Windows, or to OpenAI's service.</p>

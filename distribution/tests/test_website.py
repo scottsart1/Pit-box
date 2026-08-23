@@ -363,7 +363,20 @@ def test_the_comparison_admits_where_pit_wall_loses():
     # A comparison table where the product wins every row is an advert, not a
     # comparison. These two rows are the honest losses.
     assert "Radio needs it" in INDEX
-    assert "Your OpenAI usage" in INDEX
+    assert "Your AI provider usage" in INDEX
+
+
+def test_multi_provider_claims_carry_the_voice_caveat():
+    # 4.7 sells provider choice. The claim is only honest with its limit
+    # attached: reasoning is switchable, the spoken radio is OpenAI-backed.
+    for provider in ("Claude", "DeepSeek", "Kimi"):
+        assert provider in INDEX, f"{provider} missing from the provider choice"
+    assert "spoken radio" in INDEX.lower()
+    # Wherever another provider is offered, the OpenAI voice dependency is
+    # stated on the same page, in requirements, FAQ and the licence terms.
+    assert "always uses the OpenAI key" in INDEX or "always uses OpenAI" in INDEX
+    assert "always uses OpenAI" in EULA
+    assert "Claude, DeepSeek or Kimi" in GUIDE
 
 
 @pytest.mark.parametrize("page", [INDEX, GUIDE, DIAGNOSTICS, EULA])
