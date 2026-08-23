@@ -22,6 +22,10 @@ prose or jumping straight to code:
 - The 4.7 design canvas (DRIVE redesign, Strategy workspace, board map,
   alternates) is the standing reference for UI direction; extend it rather
   than starting a new aesthetic.
+- The 4.8.0 in-app implementation of that canvas (the New view toggle on
+  DRIVE) was reverted in 4.8.1 at the owner's request — the owner prefers
+  the original board in the running app. Do not reintroduce an in-app
+  redesign without being asked; canvas work stays on the canvas.
 
 ## Verification
 
