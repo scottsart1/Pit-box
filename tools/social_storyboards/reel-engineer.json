@@ -1,0 +1,90 @@
+{
+  "name": "reel-engineer",
+  "note": "30s vertical reel. Gameplay is a real Albert Park session; the panel is the real overlay against a replayed race, which the disclosure says on every frame.",
+  "width": 1080,
+  "height": 1920,
+  "brand": "Your Pit Box",
+  "brand_size": 30,
+  "disclosure": "Gameplay is real \u00b7 the panel is the real app on a synthetic race",
+  "disclosure_size": 19,
+  "layout": {
+    "brand_y": 50,
+    "video_y": 100,
+    "video_h": 771,
+    "overlay_x": 200,
+    "overlay_y": 890,
+    "caption_x": 0,
+    "caption_w": 1080,
+    "caption_bottom": 871,
+    "disclosure_y": 1572
+  },
+  "caption_sizes": {
+    "eyebrow": 20,
+    "title": 46,
+    "sub": 25,
+    "gap": 10,
+    "pad_x": 44,
+    "pad_top": 26,
+    "pad_bottom": 28
+  },
+  "overlay": {
+    "start_s": 0.0,
+    "fps": 12,
+    "width": 680,
+    "crop": [
+      30,
+      30,
+      1032,
+      1000
+    ]
+  },
+  "beats": [
+    {
+      "in": 29.2,
+      "out": 31.6,
+      "title": "Nobody's on your radio."
+    },
+    {
+      "in": 2.2,
+      "out": 8.8,
+      "eyebrow": "Now there is",
+      "title": "A race engineer that reads your telemetry.",
+      "sub": "It listens to the UDP feed your game already broadcasts, and runs the maths on your own PC."
+    },
+    {
+      "in": 14.8,
+      "out": 21.0,
+      "eyebrow": "Strategy",
+      "title": "It ranks the plans, not the stopwatch.",
+      "sub": "Projected finishing position first \u2014 pit loss, undercut maths and the compound rule included."
+    },
+    {
+      "in": 21.8,
+      "out": 28.6,
+      "eyebrow": "Calls you didn't ask for",
+      "title": "And it speaks first.",
+      "sub": "Rival stops as they happen. A car closing behind. Damage. Safety-car deltas."
+    },
+    {
+      "in": 28.6,
+      "out": 32.6,
+      "speed": 0.85,
+      "eyebrow": "The part that matters",
+      "title": "Every number computed locally.",
+      "sub": "Deterministic code does the maths. The model is only allowed to say it out loud."
+    }
+  ],
+  "end_card": {
+    "seconds": 3.2,
+    "eyebrow": "Your Pit Box",
+    "title": "A real race engineer for F1 25",
+    "sub": "PS5 / PC \u00b7 $5 once \u00b7 no subscription",
+    "note": "Your telemetry, your database and your raw traces stay on your PC."
+  },
+  "source_crop": [
+    140,
+    0,
+    1000,
+    714
+  ]
+}

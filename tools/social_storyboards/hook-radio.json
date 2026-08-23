@@ -1,0 +1,75 @@
+{
+  "name": "hook-radio",
+  "note": "16s vertical cut for stories and paid placements. One message, one payoff.",
+  "width": 1080,
+  "height": 1920,
+  "brand": "Your Pit Box",
+  "brand_size": 30,
+  "disclosure": "Gameplay is real \u00b7 the panel is the real app on a synthetic race",
+  "disclosure_size": 19,
+  "layout": {
+    "brand_y": 50,
+    "video_y": 100,
+    "video_h": 771,
+    "overlay_x": 200,
+    "overlay_y": 890,
+    "caption_x": 0,
+    "caption_w": 1080,
+    "caption_bottom": 871,
+    "disclosure_y": 1572
+  },
+  "caption_sizes": {
+    "eyebrow": 20,
+    "title": 46,
+    "sub": 25,
+    "gap": 10,
+    "pad_x": 44,
+    "pad_top": 26,
+    "pad_bottom": 28
+  },
+  "overlay": {
+    "start_s": 6.0,
+    "fps": 12,
+    "width": 680,
+    "crop": [
+      30,
+      30,
+      1032,
+      1000
+    ]
+  },
+  "beats": [
+    {
+      "in": 29.2,
+      "out": 32.6,
+      "speed": 0.9,
+      "title": "Nobody's on your radio."
+    },
+    {
+      "in": 15.2,
+      "out": 20.4,
+      "eyebrow": "Your Pit Box is",
+      "title": "It reads the telemetry and talks while you drive.",
+      "sub": "Strategy, tyres and corner coaching \u2014 computed on your PC, not guessed."
+    },
+    {
+      "in": 3.0,
+      "out": 7.4,
+      "eyebrow": "F1 25 \u00b7 2026 Season Pack",
+      "title": "PS5 / PC. $5 once.",
+      "sub": "No subscription. Your data never leaves your machine."
+    }
+  ],
+  "end_card": {
+    "seconds": 2.6,
+    "eyebrow": "Your Pit Box",
+    "title": "A real race engineer for F1 25",
+    "sub": "PS5 / PC \u00b7 $5 once \u00b7 no subscription"
+  },
+  "source_crop": [
+    140,
+    0,
+    1000,
+    714
+  ]
+}

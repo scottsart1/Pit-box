@@ -237,7 +237,9 @@ class FullFieldArchiveService:
     ) -> None:
         context = dict(batch.context)
         now = self._now()
-        track_id = int(context.get("track_id", -1) or -1)
+        # Track 0 is a real circuit (Melbourne), not a missing value.
+        raw_track = context.get("track_id")
+        track_id = int(raw_track) if raw_track is not None else -1
         layout = str(
             context.get("layout_signature")
             or f"f1:{int(context.get('packet_format', 0) or 0)}:{track_id}"

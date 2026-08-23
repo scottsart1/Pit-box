@@ -144,7 +144,7 @@ def _build_instructions_sheet(sheet, batch_label: str) -> None:
     row = _para(sheet, row, "KEEP THIS FILE PRIVATE", bold=True, color=ACCENT)
     row = _para(
         sheet, row,
-        "Every code below is worth $20 to whoever has it. Do not commit it to "
+        "Every code below is worth $5 to whoever has it. Do not commit it to "
         "git, email it, or put it in a shared drive. It sits in "
         "distribution/ledger/, which is gitignored for this reason.",
     )
@@ -228,7 +228,7 @@ def _build_summary_sheet(sheet, count: int) -> None:
     codes = "'Activation Keys'"
 
     sheet["A3"] = "Price per licence"
-    sheet["B3"] = 20
+    sheet["B3"] = 5
     sheet["B3"].number_format = "$#,##0"
     # Blue marks a hardcoded input: change it here and the revenue line follows.
     sheet["B3"].font = Font(name=FONT, size=10, color="0000FF", bold=True)

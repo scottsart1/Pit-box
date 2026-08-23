@@ -117,6 +117,38 @@ async def test_live_catalog_uses_restart_and_car_identity_in_opaque_keys(tmp_pat
 
 
 @pytest.mark.asyncio
+async def test_track_zero_is_catalogued_as_melbourne_not_as_missing(tmp_path) -> None:
+    """Melbourne is track 0, which is a circuit and not an absent value.
+
+    Reading it with ``or -1`` filed every Albert Park session under track -1,
+    so Session Review, Field Lab and Lap Lab all lost the circuit and the
+    layout signature could not match a stored lap to a later one.
+    """
+    path = tmp_path / "pitwall.sqlite3"
+    database = PitWallDatabase(path)
+    await database.initialize()
+    catalog = SessionCatalog(path)
+
+    key = await catalog.upsert_live_session(
+        {
+            "session_uid": 4242,
+            "restart_epoch": 0,
+            "player_car_index": 0,
+            "track_id": 0,
+            "track_length_m": 5278,
+            "packet_format": 2026,
+            "session_type": "Race",
+            "mode_profile": "race",
+            "drivers": [],
+        }
+    )
+    session = await catalog.get_session(key)
+    assert session is not None
+    assert session["track_id"] == 0
+    assert session["track_layout_signature"] == "f1:2026:0:5278"
+
+
+@pytest.mark.asyncio
 async def test_recording_sessions_are_finalized_without_downgrading_results(tmp_path) -> None:
     path = tmp_path / "pitwall.sqlite3"
     database = PitWallDatabase(path)
