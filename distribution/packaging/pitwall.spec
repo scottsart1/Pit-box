@@ -73,6 +73,14 @@ if sys.platform == "win32":
         str(SPEC_DIR / "splash.png"),
         binaries=analysis.binaries,
         datas=analysis.datas,
+        # The image alone did not explain itself: a buyer watching a silent
+        # 420x180 picture for ten seconds cannot tell "starting" from
+        # "stuck". The line below is drawn by the bootloader on the splash,
+        # so it is visible from the first frame after the double-click.
+        text_pos=(14, 166),
+        text_size=11,
+        text_color="#9eb2c2",
+        text_default="Starting Your Pit Box — the dashboard opens by itself…",
     )
 
 exe = EXE(

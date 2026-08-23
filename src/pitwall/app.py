@@ -490,7 +490,17 @@ async def lifespan(app: FastAPI):
         await store.update(standing_instructions=saved_instructions)
     router_status = brain.router.status()
     initial_provider = str(router_status["resolved_provider"])
-    await store.update(llm_provider=initial_provider, llm_model=settings.model)
+    # The footer shows this pair before the first model call. Seeding the
+    # OpenAI deep model against a non-OpenAI provider read as "kimi ·
+    # gpt-5.6-sol", which looks like a misconfiguration; use the resolved
+    # provider own deep model instead.
+    provider_models = (
+        router_status["providers"].get(initial_provider, {}).get("models", {})
+    )
+    await store.update(
+        llm_provider=initial_provider,
+        llm_model=str(provider_models.get("deep", "") or settings.model),
+    )
     await analysis.start()
     await analysis_jobs.start()
     voice = NativeVoiceController(store, brain, audio)
@@ -589,7 +599,7 @@ async def lifespan(app: FastAPI):
         )
 
 
-app = FastAPI(title="Your Pit Box", version="4.7.1", lifespan=lifespan)
+app = FastAPI(title="Your Pit Box", version="4.8.0", lifespan=lifespan)
 app.add_middleware(
     LanAccessMiddleware,
     enabled=settings.web_lan_access,
