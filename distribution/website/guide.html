@@ -121,6 +121,7 @@
           <li>Copy the complete secret immediately and keep it private. OpenAI only shows the full value when it is created.</li>
         </ol>
         <div class="guide-tip"><strong>If you lose the key, create another one.</strong> Do not send it by email, put it in a screenshot, or share it with Your Pit Box support.</div>
+        <div class="guide-tip"><strong>Prefer Claude, DeepSeek or Kimi?</strong> The engineer's reasoning can run on those too: paste that provider's key on the <strong>Connection</strong> tab after setup and pick it under <strong>Engineer runs on</strong>. The spoken radio still uses OpenAI, which is why this guide sets an OpenAI key up first.</div>
       </div>
       <figure class="guide-figure">
         <div class="shot guide-shot"><img src="assets/guide-03-openai-key.svg" alt="Privacy-safe illustration of creating an OpenAI secret key named Your Pit Box and copying the redacted secret once." width="1200" height="700" loading="lazy"></div>
@@ -156,7 +157,7 @@
         <h2>Confirm the key and copy the PC address</h2>
         <ol>
           <li>Your Pit Box starts its local server and opens the dashboard in your browser by itself. <strong>Give it 20–30 seconds</strong> — it loads the strategy engine, opens the telemetry socket and starts the audio device before the dashboard appears. Nothing is wrong during that wait. Then select the <strong>Connection</strong> tab.</li>
-          <li>Under <strong>OpenAI API key</strong>, select <strong>Test saved key</strong>. A successful test confirms that the saved key can authenticate with OpenAI.</li>
+          <li>Under <strong>AI provider &amp; API keys</strong>, keep <strong>OpenAI</strong> selected as the key being managed and select <strong>Test saved key</strong>. A successful test confirms that the saved OpenAI API key can authenticate with OpenAI.</li>
           <li>Copy the large address under <strong>Enter this UDP IP on PS5</strong> and note port <code>20777</code>. The screen is labelled for PS5, but the same address also works for a second PC running the game.</li>
         </ol>
         <div class="guide-warning">Use the recommended private LAN address, usually beginning <code>192.168.</code> or <code>10.</code>, when the game runs on a PS5 or a second PC. Never enter <code>127.0.0.1</code> or <code>0.0.0.0</code> there. The one exception: if F1 25 runs on this same PC as Your Pit Box, use <code>127.0.0.1</code> in the game instead of the address shown here.</div>

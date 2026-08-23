@@ -1,8 +1,14 @@
-# Your Pit Box 4.2.0 — OpenAI race engineer for PS5 and Windows
+# Your Pit Box 4.7 — AI race engineer for PS5 and Windows
 
 Your Pit Box receives **F1 26** telemetry (UDP format **2026**) from a PS5, runs deterministic
 strategy/corner/setup analysis locally, keeps persistent SQLite history, answers spoken questions,
 makes proactive radio calls, and serves a live dashboard at `http://127.0.0.1:8000`.
+
+The engineer's reasoning runs on the AI provider of your choice — **OpenAI**,
+**Anthropic (Claude)**, **DeepSeek**, **Kimi (Moonshot AI)**, or any
+OpenAI-compatible endpoint including a local server — using your own API key.
+Voice (speech-to-text and the engineer's spoken replies) is OpenAI-backed, so
+add an OpenAI key too if you want the radio to talk rather than type.
 
 ![The Drive screen during a race](docs/screenshots/01-drive-live-command-center.png)
 
@@ -69,6 +75,63 @@ Only enable `PITWALL_WEB_LAN_ACCESS=true` when a phone/tablet needs the
 dashboard. Bind the web host to `0.0.0.0`, set a long
 `PITWALL_WEB_ACCESS_TOKEN`, and keep it on a trusted LAN. Your Pit Box never opens a
 router or firewall to the public internet automatically.
+
+## What changed in 4.7.0
+
+4.7.0 opens the engineer to multiple AI providers and fixes the defects found
+in the pre-release review.
+
+### Choose who reasons for the radio
+
+The engineer runtime is no longer OpenAI-only. Five engines are registered and
+the primary/fallback choice is yours:
+
+- **OpenAI** (Responses API) — unchanged, still the default.
+- **Anthropic (Claude)** — Sonnet reasons deep strategy with extended thinking
+  inside the radio deadline; Haiku narrates ordinary tool output. Configure
+  `claude-opus-5` if you want the flagship.
+- **DeepSeek** — restored as a first-class engine, with its thinking-mode
+  tool-loop contract intact.
+- **Kimi (Moonshot AI)** — `kimi-k2-thinking` for strategy,
+  `kimi-k2-turbo-preview` for the radio. `MOONSHOT_API_KEY` is accepted.
+- **Custom endpoint** — any OpenAI-compatible server: Groq, xAI, Mistral,
+  OpenRouter, or a local Ollama/vLLM instance (no key required for local
+  servers).
+
+Every provider narrates the same deterministic tool evidence under the same
+schema validation, deadlines, truncation retries and circuit breakers.
+`PITWALL_LLM_PROVIDER=auto` resolves to the first provider with a usable key;
+an explicit fallback provider answers only when the primary fails, and `none`
+keeps failures explicit instead of silently switching. `POST
+/api/llm/shakedown` exercises the active chain, and the opt-in A/B comparison
+now runs across every configured provider on one frozen set of tool results.
+
+### Keys and provider choice from the dashboard
+
+The Connection Center's credential panel manages one key per provider — saved
+to `.env`, masked after saving, verified with a zero-token model-list call,
+and writable only from the PC itself, exactly as the OpenAI key always was.
+The active provider can be switched live from the same panel or the Settings
+tab; no restart, no `.env` editing, and a switch resets the provider circuit
+breakers so the first call after it goes to the new engine.
+
+### Voice degrades honestly
+
+Speech-to-text, spoken replies and the realtime radio remain OpenAI-backed.
+With another provider selected and no OpenAI key saved, the engineer answers
+typed questions in text and the dashboard says exactly that — "Voice needs an
+OpenAI API key" — instead of failing with a cryptic transcription error
+mid-race. `/api/health` reports `voice_ready` and `configured_llm_providers`.
+
+### Fixes
+
+- The Strategy workspace's what-if and race-planner endpoints no longer 500
+  when the database schema has not been created yet; they answer honestly
+  that no tyre evidence is available.
+- `update_windows.ps1` no longer rewrites `PITWALL_MODEL` and
+  `PITWALL_LLM_PROVIDER` on every update, so a customised model tier or
+  provider choice survives upgrades. Only genuinely legacy values are
+  migrated.
 
 ## What changed in 4.2.0
 
@@ -358,28 +421,31 @@ truncated display label.
 - Safety-car delta calls require a real Lap Data sample, preventing a configured
   positive threshold from treating the default zero value as a breach.
 
-## OpenAI-only engineer runtime
+## Multi-provider engineer runtime
 
-The live race-radio path registers only the OpenAI Responses provider:
+The live race-radio path registers five engines — OpenAI, Anthropic (Claude),
+DeepSeek, Kimi (Moonshot AI) and a custom OpenAI-compatible endpoint — and
+routes to the configured primary, with an optional explicit fallback:
 
 ```text
 Exact telemetry / commands      -> deterministic local handlers
-Normal interpretation           -> OpenAI, low reasoning
-Strategy / setup / what-if      -> OpenAI, high reasoning
-Speech-to-text and TTS          -> OpenAI audio models
+Normal interpretation           -> configured provider, fast model
+Strategy / setup / what-if      -> configured provider, deep/thinking model
+Speech-to-text and TTS          -> OpenAI audio models (always)
 ```
 
-Legacy DeepSeek fields are accepted only so older `.env` files and offline
-diagnostic tests do not break; they cannot reactivate DeepSeek in production.
-Every model call has a bounded deadline and tool-round limit, while common live
+Every model call has a bounded deadline and tool-round limit, tool arguments
+are schema-validated before execution regardless of provider, and common live
 questions bypass the model entirely.
 
 ### Provider diagnostics
 
-- `/api/health` reports `engineer_runtime: openai-only` and the configured model.
-- `/api/llm/providers` shows the OpenAI circuit state and the model that answered
-  the latest model-backed call.
-- `POST /api/llm/shakedown` verifies text and tool-continuation contracts.
+- `/api/health` reports `engineer_runtime: multi-provider`,
+  `configured_llm_providers`, `voice_ready`, and the resolved provider chain.
+- `/api/llm/providers` shows each provider's circuit state, its fast/deep
+  models, and the provider and model that answered the latest call.
+- `POST /api/llm/shakedown` verifies text and tool-continuation contracts on
+  the active primary/fallback chain.
 - Circuit breakers count provider-health failures; authentication and bad
   requests remain visible instead of silently switching providers.
 
@@ -396,7 +462,8 @@ questions bypass the model entirely.
 
 ## Recommended `.env`
 
-Copy `.env.example` to `.env`, then set the OpenAI key:
+Copy `.env.example` to `.env`, then set the key for the provider you want —
+or skip the file entirely and paste keys into the Connection Center.
 
 ```env
 PITWALL_LLM_PROVIDER=openai
@@ -412,9 +479,18 @@ PITWALL_TTS_MODEL=gpt-4o-mini-tts
 PITWALL_VOICE=coral
 ```
 
-The engineer runtime is OpenAI-only. Legacy DeepSeek variables may remain in an
-older `.env`, but they are ignored. Common live questions such as gaps, rival
-laps, tyre temperatures, damage and strategy status use deterministic telemetry
+To reason on Claude instead, add:
+
+```env
+PITWALL_LLM_PROVIDER=anthropic
+ANTHROPIC_API_KEY=your_anthropic_api_key
+```
+
+`DEEPSEEK_API_KEY`, `KIMI_API_KEY` (or `MOONSHOT_API_KEY`) and the
+`PITWALL_CUSTOM_LLM_*` block work the same way; see `.env.example` for the
+model knobs of each provider. Keep `OPENAI_API_KEY` set alongside any other
+provider if you want voice. Common live questions such as gaps, rival laps,
+tyre temperatures, damage and strategy status use deterministic telemetry
 answers before any model call.
 
 ## Install or upgrade on Windows
@@ -474,15 +550,22 @@ Expected provider fields:
 ```json
 {
   "openai_key_configured": true,
-  "engineer_runtime": "openai-only",
+  "engineer_runtime": "multi-provider",
+  "configured_llm_providers": ["openai"],
+  "voice_ready": true,
   "model": "gpt-5.6-sol",
   "llm": {
     "selected": "openai",
     "configured_provider": "openai",
     "resolved_provider": "openai",
     "fallback": "none",
+    "preferred_order": ["openai"],
     "providers": {
-      "openai": {"configured": true}
+      "openai": {"configured": true},
+      "anthropic": {"configured": false},
+      "deepseek": {"configured": false},
+      "kimi": {"configured": false},
+      "custom": {"configured": false}
     }
   }
 }
@@ -511,9 +594,10 @@ Expected routing:
 
 ```text
 Simple telemetry question       -> deterministic local handler
-Normal interpretation           -> OpenAI, low reasoning
-Strategy / setup / what-if      -> OpenAI, high reasoning
-OpenAI unavailable              -> explicit radio error; no silent model switch
+Normal interpretation           -> configured provider, fast model
+Strategy / setup / what-if      -> configured provider, deep/thinking model
+Provider unavailable            -> configured fallback, or an explicit radio
+                                   error; never a silent model switch
 ```
 
 ## Tool safety
@@ -537,11 +621,12 @@ Runtime data remains under:
 %USERPROFILE%\PitWallData
 ```
 
-Your Pit Box sends compact situation summaries and selected tool results to OpenAI
-only for questions that require model judgement. Exact live telemetry questions
-and unsolicited proactive calls are handled locally and deterministically. It
-does not upload the SQLite database, raw 60 Hz trace files, Windows username, or
-full microphone recordings to the reasoning model. Audio clips are sent to
+Your Pit Box sends compact situation summaries and selected tool results to the
+configured AI provider only for questions that require model judgement. Exact
+live telemetry questions and unsolicited proactive calls are handled locally
+and deterministically. It does not upload the SQLite database, raw 60 Hz trace
+files, Windows username, or full microphone recordings to the reasoning model.
+Each provider's key is sent only to that provider. Audio clips are sent to
 OpenAI transcription when cloud voice is enabled.
 
 Never commit or share `.env`.
@@ -550,8 +635,11 @@ Never commit or share `.env`.
 
 ### Engineer model fails
 
-Check `/api/llm/providers` and `/api/health`. Verify `OPENAI_API_KEY`, API billing,
-network access and `PITWALL_MODEL=gpt-5.6-sol`, then restart Your Pit Box.
+Check `/api/llm/providers` and `/api/health`. Verify the active provider's API
+key (Connection tab has a zero-cost **Test saved key** button), API billing,
+network access and the configured model names, then restart Your Pit Box. If
+the radio is silent but typed questions work, the reasoning provider is fine
+and the missing piece is the OpenAI key that voice requires.
 
 ### Strategy call changes unexpectedly
 

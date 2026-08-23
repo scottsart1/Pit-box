@@ -661,7 +661,25 @@ function initializeTabs() {
   syncTabs(location.hash.slice(1) || "live");
 }
 
-const CREDENTIAL_BASE = "/api/v1/credentials/openai";
+const CREDENTIAL_BASE = "/api/v1/credentials";
+
+// Labels and paste hints per engine provider. Mirrors the backend registry;
+// unknown ids degrade to their raw name rather than breaking the panel.
+const PROVIDER_META = {
+  openai: { label: "OpenAI", hint: "Starts with sk-. Paste the whole value.", placeholder: "sk-…" },
+  anthropic: { label: "Anthropic (Claude)", hint: "Starts with sk-ant-. Paste the whole value.", placeholder: "sk-ant-…" },
+  deepseek: { label: "DeepSeek", hint: "From platform.deepseek.com. Paste the whole value.", placeholder: "sk-…" },
+  kimi: { label: "Kimi (Moonshot AI)", hint: "From platform.moonshot.ai. Paste the whole value.", placeholder: "sk-…" },
+  custom: { label: "Custom endpoint", hint: "Whatever token your OpenAI-compatible endpoint expects (optional for local servers).", placeholder: "token…" },
+};
+
+function providerLabel(provider) {
+  return PROVIDER_META[provider]?.label || provider;
+}
+
+function selectedCredentialProvider() {
+  return byId("credentialProvider")?.value || "openai";
+}
 
 async function credentialRequest(path = "", options = {}) {
   const headers = new Headers(options.headers || {});
@@ -692,28 +710,60 @@ export function credentialBadgeState(status) {
   return { state: "receiving", label: `Key ${status.masked}` };
 }
 
-function renderCredentialStatus(status, message, tone = "info") {
+function renderProviderOptions(overview) {
+  const select = byId("credentialProvider");
+  if (!select) return;
+  for (const option of select.options) {
+    const meta = providerLabel(option.value);
+    const entry = overview?.providers?.[option.value];
+    option.textContent = entry?.configured ? `${meta} ✓ key saved` : meta;
+  }
+  const active = byId("activeProviderSelect");
+  if (active && overview?.active_provider && active.value !== overview.active_provider) {
+    active.value = overview.active_provider;
+  }
+}
+
+function renderCredentialStatus(message, tone = "info") {
+  const provider = selectedCredentialProvider();
+  const overview = uiState.credentials;
+  const status = overview?.providers?.[provider] || null;
   const { state, label } = credentialBadgeState(status);
   const badge = byId("credentialBadge");
   if (badge) badge.dataset.state = state;
-  setText("credentialBadgeText", label, "Unavailable");
+  setText("credentialBadgeText", `${providerLabel(provider)}: ${label}`, "Unavailable");
+
+  const meta = PROVIDER_META[provider] || {};
+  setText("credentialKeyHint", meta.hint || "Paste the whole value.");
+  setText("credentialVerifyLabel", `Check the key with ${providerLabel(provider)} before saving`);
+  const field = byId("credentialKey");
+  if (field && meta.placeholder) field.placeholder = meta.placeholder;
 
   const remove = byId("credentialRemove");
   const test = byId("credentialTest");
   if (remove) remove.disabled = !status?.configured;
   if (test) test.disabled = !status?.configured;
 
-  const detail = message || status?.detail || (status?.configured
-    ? "A key is saved. Paste a new one to replace it."
-    : "No key saved yet. The engineer radio stays offline until one is set.");
+  let detail = message;
+  if (!detail) {
+    detail = status?.configured
+      ? `A ${providerLabel(provider)} key is saved. Paste a new one to replace it.`
+      : `No ${providerLabel(provider)} key saved yet.`;
+    if (overview && !overview.voice_ready) {
+      detail += " Voice needs an OpenAI key; other providers answer in text only.";
+    }
+  }
   setNotice("credentialFormStatus", detail, tone);
 }
 
 async function refreshCredentialStatus() {
   try {
-    const status = await credentialRequest();
-    uiState.credentials = status;
-    renderCredentialStatus(status, "", status?.source === "environment" ? "warn" : "info");
+    const overview = await credentialRequest();
+    uiState.credentials = overview;
+    renderProviderOptions(overview);
+    const provider = selectedCredentialProvider();
+    const source = overview?.providers?.[provider]?.source;
+    renderCredentialStatus("", source === "environment" ? "warn" : "info");
   } catch (error) {
     uiState.credentials = null;
     setNotice("credentialFormStatus", error.message, "error");
@@ -729,6 +779,7 @@ function setCredentialBusy(busy) {
 
 async function submitCredential(event) {
   event.preventDefault();
+  const provider = selectedCredentialProvider();
   const field = byId("credentialKey");
   const apiKey = String(field?.value ?? "").trim();
   if (!apiKey) {
@@ -738,52 +789,81 @@ async function submitCredential(event) {
   }
   const verify = Boolean(byId("credentialVerify")?.checked);
   setCredentialBusy(true);
-  setNotice("credentialFormStatus", verify ? "Checking the key with OpenAI…" : "Saving…");
+  setNotice("credentialFormStatus", verify ? `Checking the key with ${providerLabel(provider)}…` : "Saving…");
   try {
-    const status = await credentialRequest("", {
+    await credentialRequest(`/${provider}`, {
       method: "PUT",
       body: JSON.stringify({ api_key: apiKey, verify }),
     });
-    uiState.credentials = status;
     // Clear the field on success: it is write-only, and leaving the key in the
     // DOM would put it in any screenshot of the Connection Center.
     if (field) field.value = "";
     revealCredential(false);
-    renderCredentialStatus(status, "API key saved. The engineer radio is ready.", "success");
+    await refreshCredentialStatus();
+    renderCredentialStatus(`${providerLabel(provider)} key saved. The engineer can use it now.`, "success");
   } catch (error) {
-    renderCredentialStatus(uiState.credentials, error.message, "error");
+    renderCredentialStatus(error.message, "error");
   } finally {
     setCredentialBusy(false);
   }
 }
 
 async function testCredential() {
+  const provider = selectedCredentialProvider();
   setCredentialBusy(true);
-  setNotice("credentialFormStatus", "Asking OpenAI to confirm the saved key…");
+  setNotice("credentialFormStatus", `Asking ${providerLabel(provider)} to confirm the saved key…`);
   try {
-    const result = await credentialRequest("/test", { method: "POST" });
-    renderCredentialStatus(uiState.credentials, result?.detail || "", result?.ok ? "success" : "error");
+    const result = await credentialRequest(`/${provider}/test`, { method: "POST" });
+    renderCredentialStatus(result?.detail || "", result?.ok ? "success" : "error");
   } catch (error) {
-    renderCredentialStatus(uiState.credentials, error.message, "error");
+    renderCredentialStatus(error.message, "error");
   } finally {
     setCredentialBusy(false);
   }
 }
 
 async function removeCredential() {
+  const provider = selectedCredentialProvider();
   if (HAS_DOM && typeof window.confirm === "function") {
-    const confirmed = window.confirm("Remove the saved OpenAI API key? The engineer radio will stop answering until a new one is set.");
+    const confirmed = window.confirm(`Remove the saved ${providerLabel(provider)} API key? The engineer cannot use ${providerLabel(provider)} until a new one is set.`);
     if (!confirmed) return;
   }
   setCredentialBusy(true);
   try {
-    const status = await credentialRequest("", { method: "DELETE" });
-    uiState.credentials = status;
-    renderCredentialStatus(status, "API key removed.", "success");
+    await credentialRequest(`/${provider}`, { method: "DELETE" });
+    await refreshCredentialStatus();
+    renderCredentialStatus(`${providerLabel(provider)} key removed.`, "success");
   } catch (error) {
-    renderCredentialStatus(uiState.credentials, error.message, "error");
+    renderCredentialStatus(error.message, "error");
   } finally {
     setCredentialBusy(false);
+  }
+}
+
+async function changeActiveProvider() {
+  const select = byId("activeProviderSelect");
+  if (!select) return;
+  const provider = select.value;
+  setNotice("credentialFormStatus", `Switching the engineer to ${provider === "auto" ? "automatic selection" : providerLabel(provider)}…`);
+  try {
+    const response = await fetch("/api/v1/app-settings", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      credentials: "same-origin",
+      body: JSON.stringify({ llm_provider: provider }),
+    });
+    const payload = await response.json().catch(() => null);
+    if (!response.ok) throw new Error(apiErrorMessage(payload, `Request failed (${response.status}).`));
+    await refreshCredentialStatus();
+    const overview = uiState.credentials;
+    const configured = overview?.providers?.[provider]?.configured;
+    if (provider !== "auto" && provider !== "custom" && overview && configured === false) {
+      renderCredentialStatus(`Engineer set to ${providerLabel(provider)} — now save a ${providerLabel(provider)} key below or the radio has nothing to call.`, "warn");
+    } else {
+      renderCredentialStatus(`Engineer now runs on ${provider === "auto" ? "the first configured provider" : providerLabel(provider)}.`, "success");
+    }
+  } catch (error) {
+    renderCredentialStatus(error.message, "error");
   }
 }
 
@@ -802,6 +882,13 @@ function bindEvents() {
   byId("credentialTest")?.addEventListener("click", testCredential);
   byId("credentialRemove")?.addEventListener("click", removeCredential);
   byId("credentialReveal")?.addEventListener("click", () => revealCredential());
+  byId("credentialProvider")?.addEventListener("change", () => {
+    const field = byId("credentialKey");
+    if (field) field.value = "";
+    revealCredential(false);
+    renderCredentialStatus("");
+  });
+  byId("activeProviderSelect")?.addEventListener("change", changeActiveProvider);
   byId("listenerForm")?.addEventListener("submit", submitListener);
   byId("listenerStop")?.addEventListener("click", stopListener);
   byId("refreshNetwork")?.addEventListener("click", refreshConnectionCenter);

@@ -121,3 +121,18 @@ async def test_round_trip_through_the_real_preference_store(stack):
     _, database, _, _, _, _ = stack
     await database.save_preference(PREFERENCE_KEY, {"engineer_name": "Bono"})
     assert load_saved(database.path) == {"engineer_name": "Bono"}
+
+
+def test_engineer_provider_is_dashboard_adjustable():
+    """4.7: the AI provider can be switched live, without touching .env."""
+    assert coerce("llm_provider", "ANTHROPIC") == "anthropic"
+    assert coerce("llm_provider", "auto") == "auto"
+    assert coerce("llm_fallback_provider", "none") == "none"
+    assert coerce("llm_fallback_provider", "kimi") == "kimi"
+    with pytest.raises(ValueError):
+        coerce("llm_provider", "skynet")
+    with pytest.raises(ValueError):
+        coerce("llm_fallback_provider", "auto")  # fallback walks no order
+    assert not SETTINGS_SPEC["llm_provider"].get("restart"), (
+        "provider switching must apply live"
+    )

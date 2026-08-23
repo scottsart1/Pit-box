@@ -100,6 +100,17 @@ class AudioService:
             else None
         )
 
+    @property
+    def voice_ready(self) -> bool:
+        """Whether OpenAI-backed STT/TTS can run at all.
+
+        The reasoning provider may be Anthropic, DeepSeek, Kimi or a custom
+        endpoint, but speech still needs the OpenAI key. The voice pipeline
+        checks this to degrade to text with an honest message instead of
+        failing on the first transcription call.
+        """
+        return self.client is not None
+
     @staticmethod
     def _looks_like_prompt_echo(text: str, prompt: str | None = None) -> bool:
         """Detect a transcript that is really the steering prompt read back.

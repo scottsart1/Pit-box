@@ -192,3 +192,102 @@ def test_a_lan_client_cannot_write_or_delete_the_key(env_file):
         # Reading status stays available: it discloses nothing.
         assert lan.get("/api/v1/credentials/openai").status_code == 200
     assert not env_file.exists()
+
+
+# ---------------------------------------------------------------------------
+# 4.7: one credential store per engine provider
+# ---------------------------------------------------------------------------
+
+ANTHROPIC_KEY = "sk-ant-api03-abcdefghijklmnopqrstuvwxyz012345"
+DEEPSEEK_KEY = "sk-deepseek-abcdefghijklmnop"
+
+
+@pytest.fixture
+def multi_env(tmp_path, monkeypatch):
+    path = tmp_path / ".env"
+    monkeypatch.setenv("PITWALL_ENV_FILE", str(path))
+    for spec in credentials.PROVIDERS.values():
+        monkeypatch.delenv(spec.env_var, raising=False)
+        monkeypatch.setattr(settings, spec.settings_attr, None)
+    return path
+
+
+def test_every_provider_saves_to_its_own_env_var(multi_env):
+    credentials.save_key(REAL_KEY, provider="openai")
+    credentials.save_key(ANTHROPIC_KEY, provider="anthropic")
+    credentials.save_key(DEEPSEEK_KEY, provider="deepseek")
+    text = multi_env.read_text(encoding="utf-8")
+    assert f"OPENAI_API_KEY={REAL_KEY}" in text
+    assert f"ANTHROPIC_API_KEY={ANTHROPIC_KEY}" in text
+    assert f"DEEPSEEK_API_KEY={DEEPSEEK_KEY}" in text
+
+
+def test_clearing_one_provider_leaves_the_others(multi_env):
+    credentials.save_key(REAL_KEY, provider="openai")
+    credentials.save_key(ANTHROPIC_KEY, provider="anthropic")
+    credentials.clear_key(provider="anthropic")
+    text = multi_env.read_text(encoding="utf-8")
+    assert "ANTHROPIC_API_KEY" not in text
+    assert f"OPENAI_API_KEY={REAL_KEY}" in text
+    assert credentials.current_status("openai").configured is True
+    assert credentials.current_status("anthropic").configured is False
+
+
+def test_status_is_scoped_per_provider(multi_env):
+    credentials.save_key(ANTHROPIC_KEY, provider="anthropic")
+    anthropic = credentials.current_status("anthropic")
+    assert anthropic.configured is True
+    assert anthropic.provider == "anthropic"
+    assert anthropic.masked.endswith(ANTHROPIC_KEY[-4:])
+    assert credentials.current_status("openai").configured is False
+
+
+def test_unknown_provider_is_rejected():
+    with pytest.raises(credentials.CredentialError):
+        credentials.provider_spec("grok9000")
+
+
+def test_all_statuses_cover_the_registry(multi_env):
+    statuses = credentials.all_statuses()
+    assert set(statuses) == set(credentials.PROVIDERS)
+
+
+def test_provider_routes_serve_every_provider(multi_env):
+    app = FastAPI()
+    app.include_router(create_credentials_router())
+    with TestClient(app) as api:
+        response = api.put(
+            "/api/v1/credentials/anthropic",
+            json={"api_key": ANTHROPIC_KEY, "verify": False},
+        )
+        assert response.status_code == 200
+        body = response.json()
+        assert body["provider"] == "anthropic"
+        assert body["configured"] is True
+        assert ANTHROPIC_KEY not in response.text
+
+        assert api.get("/api/v1/credentials/kimi").json()["configured"] is False
+        assert api.get("/api/v1/credentials/grok9000").status_code == 404
+
+        overview = api.get("/api/v1/credentials").json()
+        assert set(overview["providers"]) == set(credentials.PROVIDERS)
+        assert overview["providers"]["anthropic"]["configured"] is True
+        assert overview["voice_ready"] is False  # voice always needs OpenAI
+        assert overview["active_provider"] == settings.llm_provider
+
+        deleted = api.delete("/api/v1/credentials/anthropic")
+        assert deleted.status_code == 200
+        assert deleted.json()["configured"] is False
+
+
+def test_lan_clients_cannot_write_any_provider(multi_env):
+    app = FastAPI()
+    app.include_router(create_credentials_router())
+    with _lan_client(app) as lan:
+        for provider in credentials.PROVIDERS:
+            assert lan.put(
+                f"/api/v1/credentials/{provider}",
+                json={"api_key": ANTHROPIC_KEY, "verify": False},
+            ).status_code == 403
+            assert lan.delete(f"/api/v1/credentials/{provider}").status_code == 403
+    assert not multi_env.exists()

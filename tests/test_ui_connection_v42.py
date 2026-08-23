@@ -160,3 +160,24 @@ def test_connection_module_is_safe_to_parse_without_a_browser() -> None:
     assert 'typeof window !== "undefined"' in CONNECTION_JS
     assert 'typeof document !== "undefined"' in CONNECTION_JS
     assert "if (HAS_DOM)" in CONNECTION_JS
+
+
+def test_credential_panel_manages_every_engine_provider() -> None:
+    """4.7: one key per provider, plus a live provider switch, in one panel."""
+    for element_id in (
+        "credentialProvider",   # which provider's key is being edited
+        "activeProviderSelect", # which provider the engineer runs on
+        "credentialKey",
+        "credentialSave",
+        "credentialTest",
+        "credentialRemove",
+        "voiceKeyNote",         # voice stays OpenAI-backed; say so where keys live
+    ):
+        assert f'id="{element_id}"' in INDEX, element_id
+    for provider in ("openai", "anthropic", "deepseek", "kimi", "custom"):
+        assert f'value="{provider}"' in INDEX, provider
+    # The JS must target the provider-scoped credential API, not the old
+    # OpenAI-only route, and must switch the provider through app-settings.
+    assert 'CREDENTIAL_BASE = "/api/v1/credentials"' in CONNECTION_JS
+    assert "/api/v1/app-settings" in CONNECTION_JS
+    assert "llm_provider" in CONNECTION_JS

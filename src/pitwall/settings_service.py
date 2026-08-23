@@ -31,6 +31,24 @@ OPENAI_VOICES = (
 
 # name -> spec. type: bool | int | float | str | choice.
 SETTINGS_SPEC: dict[str, dict[str, Any]] = {
+    "llm_provider": {
+        "group": "Engineer", "type": "choice",
+        "choices": ("openai", "anthropic", "deepseek", "kimi", "custom", "auto"),
+        "label": "AI provider",
+        "description": (
+            "Which service reasons for the engineer. Needs that provider's "
+            "API key (Connection tab). Voice always runs on OpenAI."
+        ),
+    },
+    "llm_fallback_provider": {
+        "group": "Engineer", "type": "choice",
+        "choices": ("none", "openai", "anthropic", "deepseek", "kimi", "custom"),
+        "label": "Fallback provider",
+        "description": (
+            "Answers when the primary provider fails mid-race. none keeps "
+            "failures explicit instead of silently switching."
+        ),
+    },
     "engineer_name": {
         "group": "Engineer", "type": "str", "min_len": 1, "max_len": 24,
         "label": "Engineer name",

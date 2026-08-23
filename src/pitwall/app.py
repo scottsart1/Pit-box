@@ -589,7 +589,7 @@ async def lifespan(app: FastAPI):
         )
 
 
-app = FastAPI(title="Your Pit Box", version="4.6.3", lifespan=lifespan)
+app = FastAPI(title="Your Pit Box", version="4.7.0", lifespan=lifespan)
 app.add_middleware(
     LanAccessMiddleware,
     enabled=settings.web_lan_access,
@@ -599,12 +599,14 @@ app.add_middleware(
         else None
     ),
 )
-def _rebind_openai_clients() -> None:
-    """Re-read the API key into every client that cached it.
+def _rebind_provider_clients() -> None:
+    """Re-read API keys into every client that cached one.
 
-    The audio service and the engineer's provider router both build an
-    OpenAI client once at construction, so a key saved from the Connection
-    Center would otherwise not apply until the next launch.
+    The audio service and the engineer's provider router build their clients
+    once at construction, so a key saved from the Connection Center would
+    otherwise not apply until the next launch. The router also forgives its
+    circuit breakers here, so a provider tripped by "no key configured" takes
+    the very next call once a working key exists.
     """
     audio.rebind_client()
     router = getattr(brain, "router", None)
@@ -613,7 +615,7 @@ def _rebind_openai_clients() -> None:
         rebind()
 
 
-app.include_router(create_credentials_router(on_change=_rebind_openai_clients))
+app.include_router(create_credentials_router(on_change=_rebind_provider_clients))
 app.include_router(create_network_router(network_service))
 app.include_router(
     create_sessions_router(
@@ -780,9 +782,13 @@ async def health() -> dict[str, object]:
         "telemetry_connected": snapshot["connected"],
         "telemetry_stale": snapshot["telemetry_stale"],
         "openai_key_configured": bool(settings.api_key),
-        "engineer_runtime": "openai-only",
+        "engineer_runtime": "multi-provider",
+        "configured_llm_providers": settings.configured_llm_providers,
         "model": settings.model,
         "llm": brain.router.status(),
+        # Voice is OpenAI-backed regardless of the reasoning provider: without
+        # an OpenAI key the engineer answers in text but stays off the radio.
+        "voice_ready": bool(settings.api_key),
         "stt_model": settings.stt_model,
         "tts_model": settings.tts_model,
         "voice_pipeline": (
@@ -1227,6 +1233,10 @@ async def save_app_settings(changes: dict[str, object]) -> dict[str, object]:
         await proactive.configure(
             settings.proactive_enabled, settings.proactive_cadence_laps
         )
+    if {"llm_provider", "llm_fallback_provider"} & coerced.keys():
+        # Forgive provider circuits on a switch: a provider that cooled down
+        # while it was the primary must take the first call as the fallback.
+        _rebind_provider_clients()
     saved = await database.load_preference(APP_SETTINGS_KEY, None)
     return {
         "results": results,

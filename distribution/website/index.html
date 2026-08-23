@@ -176,11 +176,13 @@ Strategy / setup / what-if  → model, high reasoning
     <p class="section-lede">Every download gets the current build. Recent releases added:</p>
     <div class="split">
       <ul class="req-list">
+        <li><span class="tick" aria-hidden="true">✓</span> <span><strong>Choose your AI engine.</strong> The engineer's reasoning now runs on OpenAI, Claude (Anthropic), DeepSeek, Kimi (Moonshot&nbsp;AI), or any OpenAI-compatible endpoint &mdash; your key, your choice, switchable live from the dashboard. The spoken radio stays on OpenAI.</span></li>
         <li><span class="tick" aria-hidden="true">✓</span> <span><strong>Corner-by-corner setup insight.</strong> The Setup Lab reads your own recorded laps and says where the car costs you time, in seconds, per corner &mdash; and honestly tells you when the loss is driving, not setup.</span></li>
         <li><span class="tick" aria-hidden="true">✓</span> <span><strong>Racing-line coaching.</strong> Your quick laps become the reference: &ldquo;your quick laps release two metres further right on exit&rdquo; &mdash; measured from your own telemetry, never invented.</span></li>
         <li><span class="tick" aria-hidden="true">✓</span> <span><strong>A click-editable strategy timeline.</strong> Click a stint to change its tyre, click the lap axis to move the stop. The engineer takes your plan as seriously as a radio call.</span></li>
       </ul>
       <ul class="req-list">
+        <li><span class="tick" aria-hidden="true">✓</span> <span><strong>Keys managed in the app.</strong> One key per provider, saved from the Connection tab, checked with a zero-cost test before saving, never shown again afterwards &mdash; and never sent anywhere except its own provider.</span></li>
         <li><span class="tick" aria-hidden="true">✓</span> <span><strong>A dashboard you arrange.</strong> Show, hide and reorder the Drive cards; collapse the telemetry trace. It remembers.</span></li>
         <li><span class="tick" aria-hidden="true">✓</span> <span><strong>A proper Settings page.</strong> Engineer name, voice, radio verbosity, wake phrase, proactive cadence, telemetry detail and storage budgets &mdash; all in the app.</span></li>
         <li><span class="tick" aria-hidden="true">✓</span> <span><strong>Sharper strategy calls.</strong> Stop plans price in traffic and overtaking cost, explain <em>why</em> a stop is mandatory, and never contradict themselves mid-lap.</span></li>
@@ -229,18 +231,19 @@ Strategy / setup / what-if  → model, high reasoning
       <ul class="req-list">
         <li><span class="tick" aria-hidden="true">✓</span> <span><strong>F1 25: 2026 Season Pack</strong> on PS5 / PC, with UDP telemetry set to format <strong>2026</strong>.</span></li>
         <li><span class="tick" aria-hidden="true">✓</span> <span>A <strong>Windows 10 or 11 PC</strong> on the same home network as a PS5 or second PC running the game — or just the one PC running both.</span></li>
-        <li><span class="tick" aria-hidden="true">✓</span> <span>An <strong>OpenAI API key</strong> of your own. You paste it once when the app first starts.</span></li>
+        <li><span class="tick" aria-hidden="true">✓</span> <span>An <strong>OpenAI API key</strong> of your own — or, for the engineer's reasoning, a <strong>Claude (Anthropic), DeepSeek or Kimi</strong> key instead. The spoken radio always uses the OpenAI key. You paste it once when the app first starts.</span></li>
         <li><span class="tick" aria-hidden="true">✓</span> <span>A microphone and speakers, if you want to talk to it. Everything else works without them.</span></li>
       </ul>
       <div>
         <div class="callout">
-          <h3>The API key is billed by OpenAI, not by me</h3>
+          <h3>The API key is billed by its provider, not by me</h3>
           <p>
             Your Pit Box costs $5 once. The engineer's voice and reasoning run on
-            your own OpenAI account, so those calls appear on your OpenAI bill.
-            Most questions are answered locally and cost nothing at all, but a
-            long race with heavy radio use will run up a small charge. You set
-            API usage and billing controls on the OpenAI dashboard.
+            your own account with the provider you choose — OpenAI by default —
+            so those calls appear on that provider's bill, not mine. Most
+            questions are answered locally and cost nothing at all, but a long
+            race with heavy radio use will run up a small charge. You set API
+            usage and billing controls on the provider's own dashboard.
           </p>
         </div>
         <div class="callout">
@@ -278,7 +281,7 @@ Strategy / setup / what-if  → model, high reasoning
           <tr><th scope="row">Corner coaching with measured deltas</th><td class="no">No</td><td class="no">Some</td><td class="yes">Yes</td></tr>
           <tr><th scope="row">Keeps a permanent session history</th><td class="no">No</td><td class="no">Some</td><td class="yes">Yes</td></tr>
           <tr><th scope="row">Runs without an internet connection</th><td class="yes">Yes</td><td class="yes">Yes</td><td class="no">Radio needs it</td></tr>
-          <tr><th scope="row">Ongoing cost</th><td class="yes">None</td><td class="yes">None</td><td class="no">Your OpenAI usage</td></tr>
+          <tr><th scope="row">Ongoing cost</th><td class="yes">None</td><td class="yes">None</td><td class="no">Your AI provider usage</td></tr>
         </tbody>
       </table>
     </div>
@@ -388,18 +391,23 @@ Strategy / setup / what-if  → model, high reasoning
     </details>
 
     <details>
-      <summary>How much will the OpenAI usage actually cost?</summary>
-      <p>Less than most people expect, because the common questions never reach a model. Gaps, tyre temperatures, damage and strategy status are computed locally and cost nothing. What costs money is open-ended conversation and deep strategy reasoning during a long race. You can monitor API usage, use prepaid credits and configure billing alerts on the OpenAI dashboard; Your Pit Box keeps working without the radio if the key stops.</p>
+      <summary>How much will the AI usage actually cost?</summary>
+      <p>Less than most people expect, because the common questions never reach a model. Gaps, tyre temperatures, damage and strategy status are computed locally and cost nothing. What costs money is open-ended conversation and deep strategy reasoning during a long race. You can monitor API usage, use prepaid credits and configure billing alerts on your provider's dashboard — OpenAI's by default; Your Pit Box keeps working without the radio if the key stops.</p>
+    </details>
+
+    <details>
+      <summary>Can I use Claude, DeepSeek or Kimi instead of OpenAI?</summary>
+      <p>Yes, for the engineer's reasoning. Paste that provider's key on the Connection tab and pick it as the engineer's provider — it applies immediately, no restart. The spoken radio (speech-to-text and the engineer's voice) always uses OpenAI, so without an OpenAI key the engineer answers typed questions on the dashboard and stays silent on the radio. Local OpenAI-compatible servers work too, via the custom endpoint.</p>
     </details>
 
     <details>
       <summary>What data leaves my computer?</summary>
-      <p>Compact situation summaries and selected computed results, only for questions that need model judgement, and only to OpenAI. The database, the raw 60&nbsp;Hz trace files and your Windows username are never uploaded. Cloud transcription sends recorded audio clips to OpenAI; optional Realtime voice streams microphone audio to OpenAI while a radio session is active.</p>
+      <p>Compact situation summaries and selected computed results, only for questions that need model judgement, and only to the AI provider you configured — OpenAI by default. The database, the raw 60&nbsp;Hz trace files and your Windows username are never uploaded. Cloud transcription sends recorded audio clips to OpenAI; optional Realtime voice streams microphone audio to OpenAI while a radio session is active.</p>
     </details>
 
     <details>
       <summary>Do I need to be online?</summary>
-      <p>Once, to activate. After that the app runs offline — telemetry, strategy, analysis and the dashboard all work with no connection. Only the spoken radio needs internet, because that is the part that calls OpenAI.</p>
+      <p>Once, to activate. After that the app runs offline — telemetry, strategy, analysis and the dashboard all work with no connection. Only the spoken radio and model-backed answers need internet, because those are the parts that call your AI provider.</p>
     </details>
 
     <details>
