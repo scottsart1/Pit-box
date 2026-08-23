@@ -39,9 +39,16 @@ if (Test-Path .env) {
     return $Text
   }
 
-  $updatedEnvText = Set-YourPitBoxEnvValue $envText "PITWALL_LLM_PROVIDER" "openai"
-  $updatedEnvText = Set-YourPitBoxEnvValue $updatedEnvText "PITWALL_LLM_FALLBACK_PROVIDER" "none"
-  $updatedEnvText = Set-YourPitBoxEnvValue $updatedEnvText "PITWALL_MODEL" "gpt-5.6"
+  # 4.7 is multi-provider: PITWALL_LLM_PROVIDER may legitimately be openai,
+  # anthropic, deepseek, kimi, custom, or auto, so the provider choice is no
+  # longer forced. Only genuinely-legacy values are migrated; a customised
+  # PITWALL_MODEL (for example gpt-5.6-terra) is preserved instead of being
+  # rewritten on every update.
+  $updatedEnvText = Migrate-YourPitBoxEnvValue $envText "PITWALL_LLM_PROVIDER" "none" "openai"
+  $updatedEnvText = Migrate-YourPitBoxEnvValue $updatedEnvText "PITWALL_LLM_FALLBACK_PROVIDER" "auto" "none"
+  $updatedEnvText = Migrate-YourPitBoxEnvValue $updatedEnvText "PITWALL_MODEL" "deepseek-chat" "gpt-5.6-sol"
+  $updatedEnvText = Migrate-YourPitBoxEnvValue $updatedEnvText "PITWALL_MODEL" "deepseek-reasoner" "gpt-5.6-sol"
+  $updatedEnvText = Migrate-YourPitBoxEnvValue $updatedEnvText "PITWALL_MODEL" "gpt-5.6" "gpt-5.6-sol"
   $updatedEnvText = Migrate-YourPitBoxEnvValue $updatedEnvText "PITWALL_PTT_RELEASE_MODE" "silence" "explicit_or_silence"
   $updatedEnvText = Migrate-YourPitBoxEnvValue $updatedEnvText "PITWALL_PTT_RELEASE_IGNORE_MS" "450" "120"
   $updatedEnvText = Migrate-YourPitBoxEnvValue $updatedEnvText "PITWALL_PTT_SILENCE_RELEASE_S" "1.15" "2.20"
@@ -72,8 +79,8 @@ if ($LASTEXITCODE -ne 0) {
 
 Write-Host "Your Pit Box updated and tested successfully." -ForegroundColor Green
 if ($modelMigrated) {
-  Write-Host "Migrated the engineer runtime and safer radio-capture defaults. API keys and all unrelated .env values were preserved." -ForegroundColor Green
+  Write-Host "Migrated legacy engineer-runtime and radio-capture values. API keys, your provider choice, and all unrelated .env values were preserved." -ForegroundColor Green
 } else {
-  Write-Host "OpenAI model and radio-capture settings were already current. Your .env values and %USERPROFILE%\PitWallData database were not changed." -ForegroundColor Green
+  Write-Host "Engineer and radio-capture settings were already current. Your .env values and %USERPROFILE%\PitWallData database were not changed." -ForegroundColor Green
 }
 Read-Host "Press Enter to close"

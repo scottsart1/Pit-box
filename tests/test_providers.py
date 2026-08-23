@@ -211,11 +211,11 @@ class _FakeProvider:
 
 
 @pytest.mark.asyncio
-async def test_router_uses_openai_only_even_if_legacy_deepseek_is_injected() -> None:
+async def test_provider_outside_the_configured_chain_is_never_consulted() -> None:
     deepseek = _FakeProvider("deepseek", RuntimeError("temporary outage"))
     openai = _FakeProvider("openai", "Fallback answer")
     router = ProviderRouter(
-        _settings(),
+        _settings(),  # primary openai, fallback none
         providers={"deepseek": deepseek, "openai": openai},  # type: ignore[arg-type]
     )
 
@@ -314,7 +314,7 @@ async def test_fallback_reuses_primary_tool_result() -> None:
         return {"gap_s": 2.2, "name": name, "arguments": arguments}
 
     router = ProviderRouter(
-        _settings(),
+        _settings(llm_provider="deepseek", llm_fallback_provider="openai"),
         providers={
             "deepseek": _ToolThenFailProvider(),
             "openai": _ToolThenSucceedProvider(),
@@ -532,7 +532,7 @@ class _AlwaysTruncatedProvider:
 async def test_truncation_falls_back_without_opening_circuit() -> None:
     openai = _FakeProvider("openai", "Fallback answer")
     router = ProviderRouter(
-        _settings(),
+        _settings(llm_provider="deepseek", llm_fallback_provider="openai"),
         providers={
             "deepseek": _AlwaysTruncatedProvider(),
             "openai": openai,
@@ -564,7 +564,7 @@ class _SlowProvider:
 
 
 @pytest.mark.asyncio
-async def test_legacy_deepseek_provider_is_not_used_by_router() -> None:
+async def test_unconfigured_fallback_never_slows_the_primary() -> None:
     openai = _FakeProvider("openai", "fast fallback")
     router = ProviderRouter(
         _settings(llm_normal_deadline_s=0.02),
@@ -587,7 +587,7 @@ async def test_legacy_deepseek_provider_is_not_used_by_router() -> None:
     assert router.circuits["deepseek"].failures == 0
 
 
-def test_status_migrates_auto_provider_to_openai() -> None:
+def test_status_resolves_auto_to_first_configured_provider() -> None:
     deepseek = _FakeProvider("deepseek", "ok")
     openai = _FakeProvider("openai", "ok")
     router = ProviderRouter(
@@ -595,9 +595,61 @@ def test_status_migrates_auto_provider_to_openai() -> None:
         providers={"deepseek": deepseek, "openai": openai},  # type: ignore[arg-type]
     )
     status = router.status()
-    assert status["configured_provider"] == "openai"
+    assert status["configured_provider"] == "auto"
     assert status["resolved_provider"] == "openai"
     assert status["selected"] == "openai"
+
+
+def test_auto_skips_providers_without_credentials() -> None:
+    openai = _FakeProvider("openai", "ok")
+    openai.available = False
+    deepseek = _FakeProvider("deepseek", "ok")
+    router = ProviderRouter(
+        _settings(llm_provider="auto"),
+        providers={"openai": openai, "deepseek": deepseek},  # type: ignore[arg-type]
+    )
+    assert router.status()["resolved_provider"] == "deepseek"
+
+
+@pytest.mark.asyncio
+async def test_configured_non_openai_primary_takes_the_call() -> None:
+    deepseek = _FakeProvider("deepseek", "DeepSeek answer")
+    openai = _FakeProvider("openai", "OpenAI answer")
+    router = ProviderRouter(
+        _settings(llm_provider="deepseek", llm_fallback_provider="openai"),
+        providers={"deepseek": deepseek, "openai": openai},  # type: ignore[arg-type]
+    )
+    result = await router.generate(
+        prompt="test",
+        instructions="test",
+        route="normal",
+        effort="low",
+        tools=[],
+        execute_tool=lambda name, args: None,  # type: ignore[arg-type]
+        max_rounds=2,
+    )
+    assert result.provider == "deepseek"
+    assert openai.calls == 0
+
+
+@pytest.mark.asyncio
+async def test_unknown_explicit_provider_falls_back_to_openai() -> None:
+    openai = _FakeProvider("openai", "ok")
+    router = ProviderRouter(
+        _settings(),
+        providers={"openai": openai},  # type: ignore[arg-type]
+    )
+    result = await router.generate(
+        prompt="test",
+        instructions="test",
+        route="normal",
+        effort="low",
+        tools=[],
+        execute_tool=lambda name, args: None,  # type: ignore[arg-type]
+        max_rounds=2,
+        provider="not-a-provider",
+    )
+    assert result.provider == "openai"
 
 
 @pytest.mark.asyncio

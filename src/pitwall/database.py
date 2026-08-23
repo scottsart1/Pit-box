@@ -1673,22 +1673,28 @@ class PitWallDatabase:
     ) -> dict[str, Any]:
         from statistics import median
 
-        with self._connect() as db:
-            rows = db.execute(
-                """
-                SELECT l.compound, l.tyre_age_start, l.tyre_age_end,
-                       l.wear_start_json, l.wear_end_json, l.lap_time_ms,
-                       l.fuel_start_kg, l.fuel_end_kg, l.track_temp_c, l.air_temp_c,
-                       COALESCE(NULLIF(l.mode_profile, ''), s.mode_profile, '') AS mode_profile,
-                       l.setup_json
-                FROM laps AS l
-                LEFT JOIN sessions AS s ON s.session_uid=l.session_uid
-                WHERE l.track_id=? AND l.valid=1 AND l.lap_time_ms>0 AND l.pit_status=0
-                ORDER BY l.created_at DESC
-                LIMIT ?
-                """,
-                (track_id, limit),
-            ).fetchall()
+        try:
+            with self._connect() as db:
+                rows = db.execute(
+                    """
+                    SELECT l.compound, l.tyre_age_start, l.tyre_age_end,
+                           l.wear_start_json, l.wear_end_json, l.lap_time_ms,
+                           l.fuel_start_kg, l.fuel_end_kg, l.track_temp_c, l.air_temp_c,
+                           COALESCE(NULLIF(l.mode_profile, ''), s.mode_profile, '') AS mode_profile,
+                           l.setup_json
+                    FROM laps AS l
+                    LEFT JOIN sessions AS s ON s.session_uid=l.session_uid
+                    WHERE l.track_id=? AND l.valid=1 AND l.lap_time_ms>0 AND l.pit_status=0
+                    ORDER BY l.created_at DESC
+                    LIMIT ?
+                    """,
+                    (track_id, limit),
+                ).fetchall()
+        except sqlite3.OperationalError:
+            # A database whose schema has not been created yet (the endpoint
+            # was called before the first connect) holds no tyre evidence.
+            # "No evidence" is the honest deterministic answer, not a 500.
+            rows = []
 
         grouped: dict[str, list[dict[str, Any]]] = {}
         for raw in rows:
