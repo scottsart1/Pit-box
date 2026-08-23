@@ -1,0 +1,42 @@
+[
+  {
+    "page": "live",
+    "seconds": 4.5,
+    "caption": "Your PS5 already sends this. Nothing was reading it.",
+    "sub": "Hungaroring, the closing stint, P4. Every number on this screen arrived over UDP from the game and was computed on this PC."
+  },
+  {
+    "seconds": 4.5,
+    "caption": "Hards past twenty laps old, about half worn",
+    "sub": "Wear and temperature per corner, degradation measured over your own laps — not a lookup table."
+  },
+  {
+    "seconds": 5.0,
+    "js": "(()=>{const d=document.getElementById('rivalCompare'); if(d) d.open=true; return 'open'})()",
+    "caption": "Antonelli is three seconds back on tyres thirteen laps fresher",
+    "sub": "Quicker now, degrading faster. All twenty cars are read from the same packets, so a question about a rival is answered with that rival's data."
+  },
+  {
+    "page": "strategy",
+    "seconds": 5.0,
+    "caption": "Box and lose the place, or stay out and defend?",
+    "sub": "A stop costs 20.5 seconds. A second dry compound is mandatory here, and the engine enforces the rule rather than assuming it."
+  },
+  {
+    "seconds": 5.5,
+    "js": "(()=>{const h=document.getElementById('stratPlansHeading'); if(h) h.scrollIntoView({block:'center'}); return 'scrolled'})()",
+    "caption": "Plans ranked by where they finish, not by elapsed time",
+    "sub": "Compounds, box lap, projected finish, points, P75 race time and worst-case wear — for every plan it will actually let you take."
+  },
+  {
+    "page": "live",
+    "seconds": 4.0,
+    "caption": "The maths is deterministic. The model only reads it out.",
+    "sub": "Strategy, tyre and corner analysis are computed locally in ordinary code. A language model is never handed raw telemetry to interpret."
+  },
+  {
+    "seconds": 4.0,
+    "caption": "Your Pit Box — a race engineer for F1 on PS5 and PC",
+    "sub": "The race here is synthetic, generated as genuine 2026-format packets; the software reading them is not. $20 once, no subscription — yourpitbox.com"
+  }
+]

@@ -37,10 +37,18 @@ import websockets
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from tools.capture_screens import find_browser  # noqa: E402
+from tools.capture_screens import browser_flags, find_browser  # noqa: E402
 
 DEBUG_PORT = 9334
-WIDTH, HEIGHT = 1600, 900
+# The frame the video is cut at: native 1080p, so nothing is upscaled and the
+# dashboard's small type survives compression.
+WIDTH, HEIGHT = 1920, 1080
+# Headroom for the browser's own window chrome, which the page does not get.
+# Asking for a window exactly the size of the frame yielded a viewport of
+# 1600x760 for a 1600x900 request - not 16:9, and not a shape any platform
+# wants. This is only the opening bid; `fit_window` measures the real offset
+# and corrects it.
+WINDOW_PADDING = 200
 
 
 # --------------------------------------------------------------------------
@@ -293,7 +301,7 @@ class Devtools:
         await self.call(
             "Page.startScreencast",
             format="jpeg", quality=92,
-            maxWidth=WIDTH, maxHeight=HEIGHT, everyNthFrame=1,
+            maxWidth=WIDTH, maxHeight=HEIGHT + WINDOW_PADDING, everyNthFrame=1,
         )
         self._recording = True
 
@@ -301,6 +309,41 @@ class Devtools:
         self._recording = False
         with contextlib.suppress(Exception):
             await self.call("Page.stopScreencast")
+
+
+async def fit_window(devtools: Devtools) -> None:
+    """Make the page's own viewport exactly WIDTH x HEIGHT.
+
+    `Emulation.setDeviceMetricsOverride` resizes what the page believes it
+    has, but the screencast photographs the browser window, so an emulated
+    1920x1080 was arriving as 1920x1141 frames and being letterboxed back
+    down to 16:9. Chrome's window chrome is not a fixed height across
+    platforms and versions, so the offset is measured rather than assumed:
+    ask for a size, see what the page got, correct by the difference.
+    """
+    window = await devtools.call("Browser.getWindowForTarget")
+    window_id = window["windowId"]
+    bounds = window.get("bounds", {})
+    width = int(bounds.get("width") or WIDTH)
+    height = int(bounds.get("height") or HEIGHT + WINDOW_PADDING)
+    for _ in range(4):
+        inner = await devtools.evaluate(
+            "({w: window.innerWidth, h: window.innerHeight})"
+        ) or {}
+        got_w, got_h = int(inner.get("w", 0)), int(inner.get("h", 0))
+        if (got_w, got_h) == (WIDTH, HEIGHT):
+            return
+        if not got_w or not got_h:
+            break
+        print(f"  viewport {got_w}x{got_h}; resizing the window to reach {WIDTH}x{HEIGHT}")
+        width += WIDTH - got_w
+        height += HEIGHT - got_h
+        await devtools.call(
+            "Browser.setWindowBounds",
+            windowId=window_id, bounds={"width": width, "height": height},
+        )
+        await asyncio.sleep(0.4)
+    print(f"  warning: viewport is not {WIDTH}x{HEIGHT}; the encoder will letterbox")
 
 
 async def install_overlay(devtools: Devtools) -> None:
@@ -346,7 +389,11 @@ async def speak_question(client: httpx.AsyncClient, text: str, target: Path) -> 
 
     service = AudioService()
     if service.client is None:
-        raise SystemExit("OPENAI_API_KEY is not configured; the demo needs the real engineer")
+        # Not fatal. A storyboard with no radio in it - a captioned cut - is
+        # a legitimate video, and the beat simply holds its caption instead.
+        # SystemExit here also escaped the caller's `except Exception` and
+        # took the whole capture down with it.
+        raise RuntimeError("OPENAI_API_KEY is not configured; the radio beat needs the real engineer")
     # A different voice from the engineer's, so the two sides are distinguishable.
     response = await service.client.audio.speech.create(
         model="gpt-4o-mini-tts", voice="ash", input=text, response_format="wav",
@@ -447,7 +494,7 @@ def write_frames(frames: list[tuple[float, bytes]], work: Path) -> tuple[Path, f
 
 def assemble(
     listing: Path, exchanges: list[RadioExchange], out: Path, total: float,
-    tail: float = 4.0,
+    tail: float = 4.0, max_seconds: float | None = None,
 ) -> Path:
     ffmpeg = ffmpeg_exe()
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -459,6 +506,11 @@ def assemble(
     spoken = [e for e in exchanges if e.audio.exists() and e.audio.stat().st_size > 0]
     for exchange in spoken:
         command += ["-i", str(exchange.audio)]
+    if not spoken:
+        # A silent cut still ships an audio track. Several social and ad
+        # platforms reject a file with no audio stream outright, and a
+        # captioned video is exactly the kind that has nothing to say.
+        command += ["-f", "lavfi", "-i", "anullsrc=channel_layout=stereo:sample_rate=48000"]
 
     if spoken:
         # Place each reply at the moment it was actually spoken, then mix.
@@ -474,13 +526,31 @@ def assemble(
             "-c:a", "aac", "-b:a", "192k",
         ]
     else:
-        command += ["-map", "0:v"]
+        command += [
+            "-map", "0:v", "-map", "1:a", "-shortest",
+            "-c:a", "aac", "-b:a", "96k",
+        ]
+
+    # A cut sold as "under 45 seconds" has to be under 45 seconds. Beat
+    # durations are requested, not guaranteed: page loads settle, replies run
+    # long, and the sum drifts over. The encoder is where the promise is kept.
+    length = total + tail
+    if max_seconds is not None and length > max_seconds:
+        print(f"  trimming {length:.1f}s to the {max_seconds:.1f}s limit")
+        length = max_seconds
 
     command += [
+        # Pinned, not inherited. Screencast frame size depends on the window
+        # the browser happened to get; a promo has one output shape.
+        "-vf", (
+            f"scale={WIDTH}:{HEIGHT}:force_original_aspect_ratio=decrease,"
+            f"pad={WIDTH}:{HEIGHT}:(ow-iw)/2:(oh-ih)/2:color=black,setsar=1"
+        ),
         "-c:v", "libx264", "-pix_fmt", "yuv420p",
         "-r", "30", "-preset", "medium", "-crf", "21",
+        "-profile:v", "high", "-level", "4.0",
         "-movflags", "+faststart",
-        "-t", f"{total + tail:.2f}",
+        "-t", f"{length:.2f}",
         str(out),
     ]
     print("  encoding…")
@@ -508,14 +578,16 @@ async def record(
     storyboard: tuple[Beat, ...] = STORYBOARD,
     stills: bool = True,
     tail: float = 4.0,
+    max_seconds: float | None = None,
 ) -> Result:
     profile = Path(tempfile.mkdtemp(prefix="pitwall_video_"))
     process = subprocess.Popen(
         [
             browser, "--headless=new", "--disable-gpu", "--hide-scrollbars",
+            *browser_flags(),
             f"--remote-debugging-port={DEBUG_PORT}",
             f"--user-data-dir={profile}",
-            f"--window-size={WIDTH},{HEIGHT}",
+            f"--window-size={WIDTH},{HEIGHT + WINDOW_PADDING}",
             "--force-device-scale-factor=1",
             "about:blank",
         ],
@@ -539,16 +611,16 @@ async def record(
         raise SystemExit("headless browser did not expose a debugger endpoint")
 
     exchanges: list[RadioExchange] = []
-    stills: list[Path] = []
+    # Not `stills`: that is the flag saying whether to take any, and binding
+    # the list over it made `if stills` false for the rest of the function,
+    # so the refreshed screenshots were silently never captured.
+    captured_stills: list[Path] = []
     try:
         async with websockets.connect(endpoint, max_size=96 * 1024 * 1024) as socket:
             devtools = Devtools(socket)
             await devtools.call("Page.enable")
             await devtools.call("Runtime.enable")
-            await devtools.call(
-                "Emulation.setDeviceMetricsOverride",
-                width=WIDTH, height=HEIGHT, deviceScaleFactor=1, mobile=False,
-            )
+            await fit_window(devtools)
 
             print("loading the dashboard")
             await devtools.goto(f"{base}/#live", settle=8.0)
@@ -582,6 +654,7 @@ async def record(
                 except Exception as exc:  # noqa: BLE001 - reported, not fatal
                     print(f"    radio failed: {exc}")
 
+            await fit_window(devtools)
             await devtools.start_recording()
             start = time.monotonic()
             print("recording")
@@ -643,7 +716,7 @@ async def record(
                 shot = await devtools.call("Page.captureScreenshot", format="png")
                 path = work / name
                 path.write_bytes(base64.b64decode(shot["data"]))
-                stills.append(path)
+                captured_stills.append(path)
                 print(f"  still: {name}")
 
             frames = list(devtools.frames)
@@ -656,8 +729,8 @@ async def record(
         raise SystemExit("no frames were captured")
 
     listing, total = write_frames(frames, work)
-    video = assemble(listing, exchanges, out, total, tail=tail)
-    return Result(video=video, exchanges=exchanges, stills=stills)
+    video = assemble(listing, exchanges, out, total, tail=tail, max_seconds=max_seconds)
+    return Result(video=video, exchanges=exchanges, stills=captured_stills)
 
 
 def _clip_seconds(path: Path) -> float:
@@ -692,6 +765,10 @@ def main() -> int:
         "--tail", type=float, default=4.0,
         help="seconds the final frame holds; short punchy cuts want ~0.8",
     )
+    parser.add_argument(
+        "--max-seconds", type=float, default=0.0,
+        help="hard ceiling on the finished video; 0 means no ceiling",
+    )
     args = parser.parse_args()
 
     work = Path(args.work) if args.work else Path(tempfile.mkdtemp(prefix="pitwall_demo_"))
@@ -703,6 +780,7 @@ def main() -> int:
         record(
             args.base, Path(args.out), work, find_browser(),
             storyboard=board, stills=not args.no_stills, tail=args.tail,
+            max_seconds=args.max_seconds or None,
         )
     )
 
