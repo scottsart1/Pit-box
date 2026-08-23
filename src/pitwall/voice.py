@@ -26,6 +26,14 @@ log = logging.getLogger(__name__)
 # request, so it usually still works when the model call has timed out.
 BRAIN_FALLBACK_LINE = "Sorry, the radio dropped that one — go again."
 
+# Shown when a voice feature is used while no OpenAI key exists. Reasoning may
+# run on any configured provider, but STT/TTS and the realtime radio are
+# OpenAI-backed, so voice degrades to text-only until a key is saved.
+VOICE_NEEDS_OPENAI_KEY = (
+    "Voice needs an OpenAI API key (Connection tab). The engineer still "
+    "answers typed questions with the configured provider."
+)
+
 
 class NativeVoiceController:
     """Shared Windows microphone for hands-free wake radio and L3 fallback.
@@ -823,6 +831,11 @@ class NativeVoiceController:
                 )
                 return
 
+            if not getattr(self.audio, "voice_ready", True):
+                await self._reject_wake("voice needs an OpenAI key", "")
+                await self.store.update(last_error=VOICE_NEEDS_OPENAI_KEY)
+                return
+
             source = settings.data_dir / "latest_wake.wav"
             self._write_wav(source, data)
             await self.store.update(
@@ -1170,6 +1183,16 @@ class NativeVoiceController:
             output.writeframes(data.astype(np.int16, copy=False).tobytes())
 
     async def _process(self, data: np.ndarray) -> None:
+        if not getattr(self.audio, "voice_ready", True):
+            # Speech-to-text always runs on OpenAI, whatever provider reasons.
+            # Without that key the raw clip has nowhere to go, and the honest
+            # answer beats a cryptic transcription failure mid-race.
+            await self.store.update(
+                engineer_status="standing by",
+                radio_indicator="idle",
+                last_error=VOICE_NEEDS_OPENAI_KEY,
+            )
+            return
         if self.busy:
             if len(self._pending_clips) < self._pending_clips.maxlen:
                 self._pending_clips.append(data)
@@ -1228,6 +1251,12 @@ class NativeVoiceController:
 
     async def speak_text(self, text: str) -> bool:
         if not text.strip() or self._signal_pressed:
+            return False
+        if not getattr(self.audio, "voice_ready", True):
+            # TTS is OpenAI-backed. The text still reaches the dashboard radio
+            # log; reporting "not delivered" here lets proactive delivery
+            # record why instead of crashing the speech path.
+            await self.store.update(last_error=VOICE_NEEDS_OPENAI_KEY)
             return False
 
         # With a conversation already open, route the call through that session

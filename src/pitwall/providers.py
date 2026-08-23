@@ -7,10 +7,11 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable, Protocol
 
+import httpx
 from jsonschema import Draft202012Validator
 from openai import AsyncOpenAI
 
-from .config import Settings, settings
+from .config import LLM_PROVIDER_IDS, Settings, settings
 
 ToolExecutor = Callable[[str, dict[str, Any]], Awaitable[dict[str, Any]]]
 
@@ -227,6 +228,25 @@ def _openai_response_truncated(response: Any) -> bool:
     return status == "incomplete" and reason in {"max_output_tokens", "length"}
 
 
+def _validate_arguments(
+    name: str,
+    arguments: dict[str, Any],
+    schema_by_name: dict[str, dict[str, Any]],
+) -> str | None:
+    """Validate already-parsed tool arguments; returns an error message or None."""
+    if name not in schema_by_name:
+        return f"Unknown tool requested: {name}"
+    parameters = schema_by_name[name].get("parameters", {})
+    errors = sorted(
+        Draft202012Validator(parameters).iter_errors(arguments),
+        key=lambda error: list(error.path),
+    )
+    if errors:
+        message = "; ".join(error.message for error in errors[:4])
+        return f"Tool arguments failed validation: {message}"
+    return None
+
+
 def _parse_and_validate_arguments(
     name: str,
     raw_arguments: str | None,
@@ -240,14 +260,9 @@ def _parse_and_validate_arguments(
         return None, f"Tool arguments were not valid JSON: {exc.msg}"
     if not isinstance(arguments, dict):
         return None, "Tool arguments must be a JSON object."
-    parameters = schema_by_name[name].get("parameters", {})
-    errors = sorted(
-        Draft202012Validator(parameters).iter_errors(arguments),
-        key=lambda error: list(error.path),
-    )
-    if errors:
-        message = "; ".join(error.message for error in errors[:4])
-        return None, f"Tool arguments failed validation: {message}"
+    validation_error = _validate_arguments(name, arguments, schema_by_name)
+    if validation_error:
+        return None, validation_error
     return arguments, None
 
 
@@ -440,17 +455,31 @@ class DeepSeekChatProvider:
         client: AsyncOpenAI | None = None,
     ) -> None:
         self.config = config
-        base_url = config.deepseek_base_url.rstrip("/")
-        if config.deepseek_strict_tools and not base_url.endswith("/beta"):
+        self._client_injected = client is not None
+        self.client = client
+        if not self._client_injected:
+            self.rebind_client()
+
+    def rebind_client(self) -> None:
+        """Rebuild from the current config after an API key change.
+
+        A DeepSeek key saved from the Connection Center mid-session must take
+        effect without a restart, exactly like the OpenAI key always has. An
+        injected client (tests, offline diagnostics) is left alone.
+        """
+        if self._client_injected:
+            return
+        base_url = self.config.deepseek_base_url.rstrip("/")
+        if self.config.deepseek_strict_tools and not base_url.endswith("/beta"):
             base_url = f"{base_url}/beta"
-        self.client = client or (
+        self.client = (
             AsyncOpenAI(
-                api_key=config.deepseek_key,
+                api_key=self.config.deepseek_key,
                 base_url=base_url,
-                timeout=config.deepseek_timeout_s,
+                timeout=self.config.deepseek_timeout_s,
                 max_retries=0,
             )
-            if config.deepseek_key
+            if self.config.deepseek_key
             else None
         )
 
@@ -458,7 +487,7 @@ class DeepSeekChatProvider:
     def available(self) -> bool:
         return self.client is not None
 
-    def _model_for(self, route: str) -> str:
+    def model_for(self, route: str) -> str:
         return (
             self.config.deepseek_deep_model
             if route == "deep"
@@ -518,7 +547,7 @@ class DeepSeekChatProvider:
             raise ProviderConfigurationError("DeepSeek API key is not configured.")
 
         started = time.perf_counter()
-        model = self._model_for(route)
+        model = self.model_for(route)
         thinking_enabled = route == "deep"
         messages: list[dict[str, Any]] = [
             {"role": "system", "content": instructions},
@@ -628,6 +657,509 @@ class DeepSeekChatProvider:
         )
 
 
+class AnthropicAPIError(ProviderError):
+    """A non-2xx response from the Anthropic Messages API.
+
+    Carries ``status_code`` and ``code`` so the shared health-failure
+    classifier can distinguish an outage (5xx/429) from a configuration
+    problem (401/400) without knowing anything Anthropic-specific.
+    """
+
+    def __init__(self, message: str, status_code: int | None, code: str = "") -> None:
+        super().__init__(message)
+        self.status_code = status_code
+        self.code = code
+
+
+class AnthropicMessagesProvider:
+    """Claude race engineer over the Messages API.
+
+    Uses httpx directly rather than a new SDK dependency: the wire contract is
+    small (one POST per round) and the OpenAI package already ships httpx.
+    The deep route enables extended thinking; thinking blocks are replayed
+    verbatim between tool rounds, which the API requires.
+    """
+
+    name = "anthropic"
+
+    def __init__(
+        self,
+        config: Settings = settings,
+        transport: httpx.AsyncBaseTransport | None = None,
+    ) -> None:
+        self.config = config
+        # Injected transports (tests) see exactly the bytes production sends.
+        self._transport = transport
+
+    @property
+    def available(self) -> bool:
+        return bool(self.config.anthropic_key)
+
+    def model_for(self, route: str) -> str:
+        return (
+            self.config.anthropic_model
+            if route == "deep"
+            else self.config.anthropic_fast_model
+        )
+
+    def _anthropic_tools(self, tools: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        return [
+            {
+                "name": tool["name"],
+                "description": tool.get("description", ""),
+                "input_schema": tool.get("parameters", {"type": "object"}),
+            }
+            for tool in tools
+        ]
+
+    @staticmethod
+    def _usage(payload: dict[str, Any]) -> dict[str, int]:
+        usage = payload.get("usage") or {}
+        result: dict[str, int] = {}
+        for source, target in (
+            ("input_tokens", "input_tokens"),
+            ("output_tokens", "output_tokens"),
+            ("cache_read_input_tokens", "cached_input_tokens"),
+        ):
+            value = usage.get(source)
+            if value is not None:
+                result[target] = int(value)
+        if "input_tokens" in result and "output_tokens" in result:
+            result["total_tokens"] = result["input_tokens"] + result["output_tokens"]
+        return result
+
+    @staticmethod
+    def _raise_for_error(response: httpx.Response) -> None:
+        if response.status_code < 400:
+            return
+        code = ""
+        message = response.text[:300]
+        try:
+            body = response.json()
+            error = body.get("error") or {}
+            code = str(error.get("type", ""))
+            message = str(error.get("message", message))
+        except ValueError:
+            pass
+        raise AnthropicAPIError(
+            f"Anthropic API error {response.status_code}: {message}",
+            status_code=response.status_code,
+            code=code,
+        )
+
+    async def generate(
+        self,
+        *,
+        prompt: str,
+        instructions: str,
+        route: str,
+        effort: str,
+        tools: list[dict[str, Any]],
+        execute_tool: ToolExecutor,
+        max_rounds: int,
+    ) -> ProviderResult:
+        del effort  # thinking follows the route, mirroring the DeepSeek provider
+        key = self.config.anthropic_key
+        if not key:
+            raise ProviderConfigurationError("Anthropic API key is not configured.")
+
+        started = time.perf_counter()
+        model = self.model_for(route)
+        thinking_enabled = route == "deep"
+        thinking_budget = self.config.anthropic_thinking_budget_tokens
+        schema_by_name = {tool["name"]: tool for tool in tools}
+        anthropic_tools = self._anthropic_tools(tools)
+        messages: list[dict[str, Any]] = [{"role": "user", "content": prompt}]
+        total_usage: dict[str, int] = {}
+        headers = {
+            "x-api-key": key,
+            "anthropic-version": self.config.anthropic_version,
+            "content-type": "application/json",
+        }
+        url = f"{self.config.anthropic_base_url.rstrip('/')}/v1/messages"
+
+        async with httpx.AsyncClient(
+            timeout=self.config.anthropic_timeout_s,
+            transport=self._transport,
+        ) as client:
+            for round_index in range(max_rounds):
+                if thinking_enabled:
+                    base_budget = self.config.anthropic_deep_max_tokens
+                    retry_budget = self.config.anthropic_deep_retry_max_tokens
+                else:
+                    base_budget = 520
+                    retry_budget = 1200
+
+                payload: dict[str, Any] | None = None
+                for attempt, token_budget in enumerate((base_budget, retry_budget)):
+                    request: dict[str, Any] = {
+                        "model": model,
+                        "max_tokens": token_budget,
+                        # The persona is the stable prefix of every radio call;
+                        # a cache breakpoint here keeps successive calls from
+                        # paying full input price for the persona and schemas.
+                        "system": [
+                            {
+                                "type": "text",
+                                "text": instructions,
+                                "cache_control": {"type": "ephemeral"},
+                            }
+                        ],
+                        "messages": messages,
+                    }
+                    if anthropic_tools:
+                        request["tools"] = anthropic_tools
+                    if thinking_enabled:
+                        # The budget must stay inside max_tokens or nothing is
+                        # left for the visible answer.
+                        request["max_tokens"] = token_budget + thinking_budget
+                        request["thinking"] = {
+                            "type": "enabled",
+                            "budget_tokens": thinking_budget,
+                        }
+
+                    response = await client.post(url, json=request, headers=headers)
+                    self._raise_for_error(response)
+                    payload = response.json()
+                    _merge_usage(total_usage, self._usage(payload))
+                    if payload.get("stop_reason") == "max_tokens":
+                        if attempt == 0:
+                            continue
+                        raise ProviderTruncationError(
+                            "Anthropic exhausted the enlarged output-token budget."
+                        )
+                    break
+
+                assert payload is not None
+                content = payload.get("content") or []
+                calls = [
+                    block for block in content if block.get("type") == "tool_use"
+                ]
+                if not calls:
+                    text = _final_answer_only(
+                        " ".join(
+                            str(block.get("text", ""))
+                            for block in content
+                            if block.get("type") == "text"
+                        )
+                    )
+                    if not text:
+                        reason = payload.get("stop_reason", "unknown")
+                        raise ProviderResponseError(
+                            f"Anthropic returned no final text (stop_reason={reason})."
+                        )
+                    return ProviderResult(
+                        text=text,
+                        provider=self.name,
+                        model=model,
+                        latency_ms=(time.perf_counter() - started) * 1000.0,
+                        tool_rounds=round_index,
+                        usage=total_usage,
+                    )
+
+                # Replay the assistant turn verbatim: with thinking enabled the
+                # API requires the thinking blocks to accompany the tool_use.
+                messages.append({"role": "assistant", "content": content})
+
+                async def run_call(call: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
+                    name = str(call.get("name", ""))
+                    arguments = call.get("input")
+                    if not isinstance(arguments, dict):
+                        return call, {"error": "Tool arguments must be a JSON object."}
+                    validation_error = _validate_arguments(
+                        name, arguments, schema_by_name
+                    )
+                    if validation_error:
+                        return call, {"error": validation_error}
+                    try:
+                        result = await execute_tool(name, arguments)
+                    except Exception as exc:  # tool errors must not kill the loop
+                        result = {
+                            "error": f"Tool execution failed: {type(exc).__name__}: {exc}"
+                        }
+                    return call, result
+
+                results = await asyncio.gather(*(run_call(call) for call in calls))
+                messages.append(
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "tool_result",
+                                "tool_use_id": call.get("id", ""),
+                                "content": json.dumps(result, ensure_ascii=False),
+                            }
+                            for call, result in results
+                        ],
+                    }
+                )
+
+        raise ProviderResponseError(
+            "Anthropic did not produce a final answer within the tool-round limit."
+        )
+
+
+class OpenAICompatibleChatProvider:
+    """Chat-completions provider for OpenAI-compatible endpoints.
+
+    Kimi (Moonshot) and the user-configured custom endpoint (Groq, xAI,
+    Mistral, OpenRouter, a local Ollama/vLLM server, ...) all speak this
+    protocol. Thinking-capable models that return ``reasoning_content`` get it
+    replayed with the assistant tool-call message, the same contract DeepSeek
+    established.
+    """
+
+    name = "compatible"
+
+    def __init__(
+        self,
+        config: Settings = settings,
+        client: AsyncOpenAI | None = None,
+    ) -> None:
+        self.config = config
+        self._client_injected = client is not None
+        self.client = client
+        if not self._client_injected:
+            self.rebind_client()
+
+    # Per-provider configuration points -------------------------------------
+    def _key(self) -> str | None:
+        raise NotImplementedError
+
+    def _base_url(self) -> str:
+        raise NotImplementedError
+
+    def _timeout_s(self) -> float:
+        return 30.0
+
+    def _key_required(self) -> bool:
+        return True
+
+    def _configured(self) -> bool:
+        return bool(self._key()) or not self._key_required()
+
+    def model_for(self, route: str) -> str:
+        raise NotImplementedError
+
+    # ------------------------------------------------------------------------
+    def rebind_client(self) -> None:
+        if self._client_injected:
+            return
+        if not self._configured() or not self._base_url().strip():
+            self.client = None
+            return
+        self.client = AsyncOpenAI(
+            # Local OpenAI-compatible servers accept any placeholder token.
+            api_key=self._key() or "local",
+            base_url=self._base_url().rstrip("/"),
+            timeout=self._timeout_s(),
+            max_retries=0,
+        )
+
+    @property
+    def available(self) -> bool:
+        return self.client is not None
+
+    def _chat_tools(self, tools: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        return [
+            {
+                "type": "function",
+                "function": {
+                    "name": tool["name"],
+                    "description": tool.get("description", ""),
+                    "parameters": tool.get("parameters", {"type": "object"}),
+                },
+            }
+            for tool in tools
+        ]
+
+    @staticmethod
+    def _assistant_message(message: Any) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "role": "assistant",
+            "content": getattr(message, "content", None),
+        }
+        reasoning = getattr(message, "reasoning_content", None)
+        if reasoning is not None:
+            payload["reasoning_content"] = reasoning
+        calls = getattr(message, "tool_calls", None)
+        if calls:
+            payload["tool_calls"] = [
+                {
+                    "id": call.id,
+                    "type": "function",
+                    "function": {
+                        "name": call.function.name,
+                        "arguments": call.function.arguments,
+                    },
+                }
+                for call in calls
+            ]
+        return payload
+
+    async def generate(
+        self,
+        *,
+        prompt: str,
+        instructions: str,
+        route: str,
+        effort: str,
+        tools: list[dict[str, Any]],
+        execute_tool: ToolExecutor,
+        max_rounds: int,
+    ) -> ProviderResult:
+        del effort
+        if self.client is None:
+            raise ProviderConfigurationError(
+                f"{self.name} endpoint is not configured."
+            )
+
+        started = time.perf_counter()
+        model = self.model_for(route)
+        messages: list[dict[str, Any]] = [
+            {"role": "system", "content": instructions},
+            {"role": "user", "content": prompt},
+        ]
+        schema_by_name = {tool["name"]: tool for tool in tools}
+        chat_tools = self._chat_tools(tools)
+        total_usage: dict[str, int] = {}
+
+        for round_index in range(max_rounds):
+            if route == "deep":
+                # Same deep budget shape as the first-class providers; a
+                # thinking-capable model spends part of it on reasoning tokens.
+                base_budget = 2200
+                retry_budget = 6000
+            else:
+                base_budget = 650
+                retry_budget = 1400
+
+            choice: Any | None = None
+            message: Any | None = None
+            for attempt, token_budget in enumerate((base_budget, retry_budget)):
+                request: dict[str, Any] = {
+                    "model": model,
+                    "messages": messages,
+                    "max_tokens": token_budget,
+                }
+                if chat_tools:
+                    request["tools"] = chat_tools
+                    request["tool_choice"] = "auto"
+
+                response = await self.client.chat.completions.create(**request)
+                _merge_usage(total_usage, _usage_dict(getattr(response, "usage", None)))
+                if not response.choices:
+                    raise ProviderResponseError(
+                        f"{self.name} returned no choices."
+                    )
+                choice = response.choices[0]
+                if getattr(choice, "finish_reason", None) == "length":
+                    if attempt == 0:
+                        continue
+                    raise ProviderTruncationError(
+                        f"{self.name} exhausted the enlarged output-token budget."
+                    )
+                message = choice.message
+                break
+
+            assert choice is not None and message is not None
+            calls = list(getattr(message, "tool_calls", None) or [])
+            if not calls:
+                text = _final_answer_only(getattr(message, "content", None) or "")
+                if not text:
+                    reason = getattr(choice, "finish_reason", "unknown")
+                    raise ProviderResponseError(
+                        f"{self.name} returned no final text (finish_reason={reason})."
+                    )
+                return ProviderResult(
+                    text=text,
+                    provider=self.name,
+                    model=model,
+                    latency_ms=(time.perf_counter() - started) * 1000.0,
+                    tool_rounds=round_index,
+                    usage=total_usage,
+                )
+
+            messages.append(self._assistant_message(message))
+
+            async def run_call(call: Any) -> tuple[Any, dict[str, Any]]:
+                arguments, validation_error = _parse_and_validate_arguments(
+                    call.function.name,
+                    call.function.arguments,
+                    schema_by_name,
+                )
+                if validation_error:
+                    return call, {"error": validation_error}
+                assert arguments is not None
+                try:
+                    result = await execute_tool(call.function.name, arguments)
+                except Exception as exc:
+                    result = {
+                        "error": f"Tool execution failed: {type(exc).__name__}: {exc}"
+                    }
+                return call, result
+
+            results = await asyncio.gather(*(run_call(call) for call in calls))
+            for call, result in results:
+                messages.append(
+                    {
+                        "role": "tool",
+                        "tool_call_id": call.id,
+                        "content": json.dumps(result, ensure_ascii=False),
+                    }
+                )
+
+        raise ProviderResponseError(
+            f"{self.name} did not produce a final answer within the tool-round limit."
+        )
+
+
+class KimiChatProvider(OpenAICompatibleChatProvider):
+    name = "kimi"
+
+    def _key(self) -> str | None:
+        return self.config.kimi_key
+
+    def _base_url(self) -> str:
+        return self.config.kimi_base_url
+
+    def _timeout_s(self) -> float:
+        return self.config.kimi_timeout_s
+
+    def model_for(self, route: str) -> str:
+        return (
+            self.config.kimi_deep_model
+            if route == "deep"
+            else self.config.kimi_fast_model
+        )
+
+
+class CustomChatProvider(OpenAICompatibleChatProvider):
+    name = "custom"
+
+    def _key(self) -> str | None:
+        return self.config.custom_llm_key
+
+    def _base_url(self) -> str:
+        return self.config.custom_llm_base_url
+
+    def _timeout_s(self) -> float:
+        return self.config.custom_llm_timeout_s
+
+    def _key_required(self) -> bool:
+        return False
+
+    def _configured(self) -> bool:
+        return self.config.custom_llm_ready
+
+    def model_for(self, route: str) -> str:
+        return (
+            self.config.custom_llm_deep_model
+            if route == "deep"
+            else self.config.custom_llm_fast_model
+        )
+
+
 @dataclass(slots=True)
 class _CircuitState:
     failures: int = 0
@@ -644,11 +1176,16 @@ class ProviderRouter:
         providers: dict[str, EngineerProvider] | None = None,
     ) -> None:
         self.config = config
-        # Production race radio is intentionally OpenAI-only. The DeepSeek
-        # implementation remains in this module solely for backward-compatible
-        # tests and offline migration diagnostics; it is never registered here.
+        # Every engine is registered; which ones take calls is decided by the
+        # configured primary/fallback and by which keys exist. Deterministic
+        # local fast paths still answer simple telemetry questions first, and
+        # every provider narrates the same deterministic tool evidence.
         self.providers: dict[str, EngineerProvider] = providers or {
             "openai": OpenAIResponsesProvider(config),
+            "anthropic": AnthropicMessagesProvider(config),
+            "deepseek": DeepSeekChatProvider(config),
+            "kimi": KimiChatProvider(config),
+            "custom": CustomChatProvider(config),
         }
         self.circuits = {name: _CircuitState() for name in self.providers}
         self.last_result: ProviderResult | None = None
@@ -669,12 +1206,27 @@ class ProviderRouter:
             self.circuits[name] = _CircuitState()
 
     def _resolved_primary(self, explicit: str | None = None) -> str:
-        del explicit
-        return "openai"
+        candidate = (explicit or self.config.llm_provider or "openai").strip().lower()
+        if candidate == "auto":
+            for name in LLM_PROVIDER_IDS:
+                provider = self.providers.get(name)
+                if provider is not None and provider.available:
+                    return name
+            return "openai" if "openai" in self.providers else next(iter(self.providers), "openai")
+        if candidate in self.providers:
+            return candidate
+        return "openai" if "openai" in self.providers else next(iter(self.providers), "openai")
 
     def _preferred_order(self, explicit: str | None = None) -> list[str]:
-        del explicit
-        return ["openai"] if "openai" in self.providers else []
+        primary = self._resolved_primary(explicit)
+        order = [primary] if primary in self.providers else []
+        if explicit is None:
+            # An explicitly requested provider is honoured alone; the normal
+            # radio path may fail over to the configured fallback.
+            fallback = (self.config.llm_fallback_provider or "none").strip().lower()
+            if fallback not in {"none", ""} and fallback != primary and fallback in self.providers:
+                order.append(fallback)
+        return order
 
     def _deadline_for(self, route: str) -> float:
         return (
@@ -842,7 +1394,11 @@ class ProviderRouter:
                     "error": f"{type(exc).__name__}: {exc}",
                 }
 
-        names = [name for name in ("openai", "deepseek") if name in self.providers]
+        names = [
+            name
+            for name in LLM_PROVIDER_IDS
+            if name in self.providers and self.providers[name].available
+        ] or [name for name in ("openai",) if name in self.providers]
         results = await asyncio.gather(*(run(name) for name in names))
         return {"results": dict(results), "shared_tool_results": len(cache)}
 
@@ -959,6 +1515,13 @@ class ProviderRouter:
         self.last_shakedown = payload
         return payload
 
+    @staticmethod
+    def _models_for(provider: EngineerProvider) -> dict[str, str]:
+        model_for = getattr(provider, "model_for", None)
+        if callable(model_for):
+            return {"deep": str(model_for("deep")), "fast": str(model_for("normal"))}
+        return {}
+
     def status(self) -> dict[str, Any]:
         resolved = self._resolved_primary()
         return {
@@ -968,6 +1531,7 @@ class ProviderRouter:
             "configured_provider": self.config.llm_provider,
             "resolved_provider": resolved,
             "fallback": self.config.llm_fallback_provider,
+            "preferred_order": self._preferred_order(),
             "active_provider": self.last_result.provider if self.last_result else None,
             "active_model": self.last_result.model if self.last_result else None,
             "normal_deadline_s": self.config.llm_normal_deadline_s,
@@ -977,6 +1541,7 @@ class ProviderRouter:
             "providers": {
                 name: {
                     "configured": provider.available,
+                    "models": self._models_for(provider),
                     "failures": self.circuits[name].failures,
                     "cooldown_remaining_s": round(
                         max(0.0, self.circuits[name].blocked_until - time.monotonic()), 1

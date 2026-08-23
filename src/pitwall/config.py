@@ -6,6 +6,15 @@ from pathlib import Path
 from pydantic import AliasChoices, Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+# Engine providers the router can register, in "auto" preference order.
+LLM_PROVIDER_IDS: tuple[str, ...] = (
+    "openai",
+    "anthropic",
+    "deepseek",
+    "kimi",
+    "custom",
+)
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
@@ -15,10 +24,14 @@ class Settings(BaseSettings):
         case_sensitive=False,
     )
 
-    # Provider routing. Audio remains OpenAI-backed unless the user explicitly
-    # changes the STT/TTS implementation in a future release.
-    # Race engineer generation is OpenAI-only. Deterministic local fast paths
-    # handle simple telemetry questions; model-backed calls use the Responses API.
+    # Provider routing. The race-engineer brain speaks to whichever provider is
+    # selected here — OpenAI, Anthropic (Claude), DeepSeek, Kimi (Moonshot), or
+    # any OpenAI-compatible endpoint via the custom provider. Deterministic
+    # local fast paths still answer simple telemetry questions before any model
+    # is involved, and every provider narrates the same deterministic tool
+    # output. "auto" resolves to the first provider with a usable key.
+    # Audio (STT/TTS/realtime) remains OpenAI-backed: voice features need an
+    # OpenAI key even when another provider does the reasoning.
     llm_provider: str = "openai"
     llm_fallback_provider: str = "none"
 
@@ -49,6 +62,51 @@ class Settings(BaseSettings):
     deepseek_timeout_s: float = 30.0
     deepseek_max_tool_rounds: int = 4
     deepseek_strict_tools: bool = False
+
+    # Anthropic (Claude). Sonnet holds the deep strategy route: radio calls are
+    # latency-sensitive and Sonnet reasons well inside the route deadline;
+    # drivers who want the flagship can set claude-opus-5. Haiku narrates
+    # ordinary tool output for a fraction of the price, mirroring the
+    # Sol/Luna split on the OpenAI side.
+    anthropic_api_key: SecretStr | None = Field(
+        default=None,
+        validation_alias="ANTHROPIC_API_KEY",
+    )
+    anthropic_base_url: str = "https://api.anthropic.com"
+    anthropic_version: str = "2023-06-01"
+    anthropic_model: str = "claude-sonnet-5"
+    anthropic_fast_model: str = "claude-haiku-4-5-20251001"
+    anthropic_timeout_s: float = 30.0
+    anthropic_deep_max_tokens: int = 2200
+    anthropic_deep_retry_max_tokens: int = 6000
+    # Extended-thinking budget for the deep route. The API minimum is 1024;
+    # the budget must stay below max_tokens or nothing is left for the answer.
+    anthropic_thinking_budget_tokens: int = 1600
+
+    # Kimi (Moonshot AI). OpenAI-compatible chat endpoint. kimi-k2-thinking
+    # carries the deep strategy route; the turbo preview answers the radio.
+    kimi_api_key: SecretStr | None = Field(
+        default=None,
+        validation_alias=AliasChoices("KIMI_API_KEY", "MOONSHOT_API_KEY"),
+    )
+    kimi_base_url: str = "https://api.moonshot.ai/v1"
+    kimi_fast_model: str = "kimi-k2-turbo-preview"
+    kimi_deep_model: str = "kimi-k2-thinking"
+    kimi_timeout_s: float = 30.0
+
+    # Any other OpenAI-compatible endpoint: Groq, xAI, Mistral, OpenRouter, a
+    # local Ollama/vLLM server, and so on. The base URL and both models must be
+    # set for the provider to register; the key is optional because local
+    # servers often need none.
+    custom_llm_api_key: SecretStr | None = Field(
+        default=None,
+        validation_alias=AliasChoices("PITWALL_CUSTOM_LLM_API_KEY", "CUSTOM_LLM_API_KEY"),
+    )
+    custom_llm_base_url: str = ""
+    custom_llm_fast_model: str = ""
+    custom_llm_deep_model: str = ""
+    custom_llm_label: str = "Custom endpoint"
+    custom_llm_timeout_s: float = 30.0
     llm_failure_cooldown_s: float = 20.0
     llm_normal_deadline_s: float = 12.0
     llm_deep_deadline_s: float = 25.0
@@ -441,15 +499,22 @@ class Settings(BaseSettings):
     @field_validator("llm_provider")
     @classmethod
     def validate_primary_provider(cls, value: str) -> str:
-        # Legacy DeepSeek/auto settings are intentionally migrated to OpenAI so
-        # an old .env cannot silently reactivate the unreliable provider path.
+        # Unknown or legacy values (including "none") fall back to OpenAI so an
+        # old .env can never leave the radio without a primary provider.
+        normalized = value.strip().lower()
+        if normalized in LLM_PROVIDER_IDS or normalized == "auto":
+            return normalized
         return "openai"
 
     @field_validator("llm_fallback_provider")
     @classmethod
     def validate_fallback_provider(cls, value: str) -> str:
         normalized = value.strip().lower()
-        return "none" if normalized in {"none", "deepseek", "auto"} else "openai"
+        if normalized in LLM_PROVIDER_IDS:
+            return normalized
+        # "auto" as a fallback is meaningless (the router already walks the
+        # preference order) and anything unknown must not invent a provider.
+        return "none"
 
     @field_validator("deepseek_thinking_effort")
     @classmethod
@@ -478,10 +543,19 @@ class Settings(BaseSettings):
         "openai_deep_retry_max_output_tokens",
         "deepseek_deep_max_tokens",
         "deepseek_deep_retry_max_tokens",
+        "anthropic_deep_max_tokens",
+        "anthropic_deep_retry_max_tokens",
     )
     @classmethod
     def validate_token_budgets(cls, value: int) -> int:
         return max(256, min(128_000, int(value)))
+
+    @field_validator("anthropic_thinking_budget_tokens")
+    @classmethod
+    def validate_thinking_budget(cls, value: int) -> int:
+        # The Anthropic API rejects budgets below 1024; anything huge would eat
+        # the whole output allowance and truncate the answer instead.
+        return max(1024, min(32_000, int(value)))
 
     @property
     def wake_phrases(self) -> list[str]:
@@ -523,6 +597,49 @@ class Settings(BaseSettings):
     @property
     def deepseek_key(self) -> str | None:
         return self._usable_secret(self.deepseek_api_key)
+
+    @property
+    def anthropic_key(self) -> str | None:
+        return self._usable_secret(self.anthropic_api_key)
+
+    @property
+    def kimi_key(self) -> str | None:
+        return self._usable_secret(self.kimi_api_key)
+
+    @property
+    def custom_llm_key(self) -> str | None:
+        return self._usable_secret(self.custom_llm_api_key)
+
+    @property
+    def custom_llm_ready(self) -> bool:
+        """The custom endpoint is usable once addressed and given models.
+
+        A key is deliberately not required: local OpenAI-compatible servers
+        (Ollama, vLLM, LM Studio) usually run without one.
+        """
+        return bool(
+            self.custom_llm_base_url.strip()
+            and self.custom_llm_fast_model.strip()
+            and self.custom_llm_deep_model.strip()
+        )
+
+    def llm_provider_configured(self, provider: str) -> bool:
+        """Whether one provider has enough configuration to take a call."""
+        checks = {
+            "openai": lambda: bool(self.api_key),
+            "anthropic": lambda: bool(self.anthropic_key),
+            "deepseek": lambda: bool(self.deepseek_key),
+            "kimi": lambda: bool(self.kimi_key),
+            "custom": lambda: self.custom_llm_ready,
+        }
+        check = checks.get(provider)
+        return bool(check()) if check else False
+
+    @property
+    def configured_llm_providers(self) -> list[str]:
+        return [
+            name for name in LLM_PROVIDER_IDS if self.llm_provider_configured(name)
+        ]
 
 
 settings = Settings()

@@ -222,6 +222,8 @@ class CredentialStatusResponse(VersionedResponse):
     masked: str | None = None
     source: str | None = None
     detail: str = ""
+    provider: str = "openai"
+    label: str = "OpenAI"
 
 
 class CredentialUpdateRequest(ApiModel):
@@ -232,3 +234,15 @@ class CredentialUpdateRequest(ApiModel):
 class CredentialTestResponse(VersionedResponse):
     ok: bool
     detail: str
+
+
+class CredentialOverviewResponse(VersionedResponse):
+    """Key status for every engine provider, plus which one takes the calls."""
+
+    providers: dict[str, dict[str, object]]
+    active_provider: str
+    fallback_provider: str
+    resolved_provider: str
+    voice_provider: str = "openai"
+    voice_ready: bool = False
+    custom_endpoint_ready: bool = False

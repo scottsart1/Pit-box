@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Your Pit Box 4.6.3</title>
+<title>Your Pit Box 4.7.0</title>
 <style>
 :root{color-scheme:dark;font-family:Segoe UI,system-ui,sans-serif;--bg:#070b0f;--panel:#0c1218;--card:#121b24;--line:#263542;--muted:#91a6b8;--green:#49d17d;--blue:#3f86ff;--red:#ff6969;--amber:#ffc15c}*{box-sizing:border-box}body{margin:0;background:var(--bg);color:#eef4f8;overflow:hidden}.app{height:100vh;display:grid;grid-template-rows:50px 44px 1fr 34px}.top,.tabs,.bottom{display:flex;align-items:center;gap:18px;background:#111820;border-bottom:1px solid var(--line);padding:0 16px}.bottom{border-top:1px solid var(--line);border-bottom:0;color:#9eb2c2;font-size:12px}.brand{font-weight:900;letter-spacing:.09em}.dot{width:9px;height:9px;border-radius:50%;display:inline-block;background:var(--red)}.dot.on{background:var(--green)}.dot.pause{background:var(--amber)}.status{margin-left:auto}.pill,.tag{background:#263542;border-radius:14px;padding:5px 10px}.tabs{gap:5px;padding:5px 12px}.tab{border:0;background:transparent;color:var(--muted);font-weight:800;padding:8px 15px;border-radius:8px;cursor:pointer}.tab.active{background:#233545;color:white}.page{display:none;min-height:0}.page.active{display:block}.live-grid{display:grid;grid-template-columns:23% 54% 23%;height:100%;min-height:0}.review-grid,.setup-grid{display:grid;grid-template-columns:44% 56%;height:100%;min-height:0}.panel{padding:14px;overflow:auto;border-right:1px solid var(--line)}.panel:last-child{border:0}.label{font-size:11px;letter-spacing:.12em;color:#8fa4b7;text-transform:uppercase}.big{font-size:38px;font-weight:900}.hero{font-size:22px;font-weight:850}.card{background:var(--card);border:1px solid var(--line);border-radius:11px;padding:12px;margin:10px 0}.row{display:flex;justify-content:space-between;gap:12px;align-items:center}.muted{color:var(--muted)}.small{font-size:12px}.good{color:var(--green)}.warn{color:var(--amber)}.error{color:#ff8080}.timing{display:grid;grid-template-columns:42px 1fr auto;gap:8px;align-items:center;padding:9px 7px;border-bottom:1px solid #202b35}.timing.me{background:#1b303e;border-radius:7px}.tyre{font-size:11px;background:#263542;border-radius:10px;padding:2px 6px}.canvas{width:100%;background:#0b1117;border:1px solid #202d38;border-radius:10px}.trace{height:180px}.map{height:250px}.grid2{display:grid;grid-template-columns:1fr 1fr;gap:10px}.grid3{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}.metric{background:#0c131a;padding:9px;border-radius:8px}.radio{height:150px;overflow:auto;white-space:pre-wrap;line-height:1.42}.controls{display:flex;gap:8px}.controls input,.select{flex:1;min-width:0;background:#0a1016;color:white;border:1px solid #3a4a58;border-radius:8px;padding:10px}.button{border:0;border-radius:8px;padding:10px 14px;font-weight:800;cursor:pointer;background:#e7eef4;color:#081018}.button.primary{background:var(--blue);color:white}.button.ghost{background:#263542;color:white}.quad{display:grid;grid-template-columns:1fr 1fr;gap:8px}.strategy-main{font-size:17px;font-weight:850}.strategy-plan{padding:7px 0;border-bottom:1px solid var(--line)}.table{width:100%;border-collapse:collapse;font-size:13px}.table th,.table td{padding:8px;text-align:left;border-bottom:1px solid var(--line)}.change{display:grid;grid-template-columns:1fr auto auto;gap:10px;padding:7px;border-bottom:1px solid var(--line)}.empty{text-align:center;padding:22px;color:var(--muted)}pre{white-space:pre-wrap}.setup-fields{columns:2;column-gap:20px}.setup-fields .row{break-inside:avoid;border-bottom:1px solid #202c36;padding:4px 0}.diag{font-family:Consolas,monospace;font-size:11px}.nowrap{white-space:nowrap}.radio-rail{position:fixed;left:0;top:0;bottom:0;width:4px;background:transparent;z-index:1000;transition:background .12s ease,box-shadow .12s ease}.radio-rail.listening{background:#ffd21f;box-shadow:0 0 10px rgba(255,210,31,.55)}.radio-rail.processing{background:#49d17d;box-shadow:0 0 10px rgba(73,209,125,.55)}.radio-rail.speaking{background:#3f86ff;box-shadow:0 0 10px rgba(63,134,255,.55)}.radio-rail.error{background:#ff6969}.latency-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:6px}.latency-grid .metric{font-size:11px}@media(max-width:1150px){.live-grid{grid-template-columns:25% 50% 25%}.panel{padding:10px}.big{font-size:31px}.setup-fields{columns:1}}
 /* Race-control blip. The engineer cannot always speak a flag the instant it
@@ -31,10 +31,10 @@
 .boot-ring{width:54px;height:54px;border-radius:50%;border:4px solid rgba(125,147,166,.25);border-top-color:#49d17d;margin:0 auto;animation:bootspin .9s linear infinite}
 @keyframes bootspin{to{transform:rotate(360deg)}}
 </style>
-<link rel="stylesheet" href="/static/css/v42.css?v=4.6.3">
+<link rel="stylesheet" href="/static/css/v42.css?v=4.7.0">
 </head>
 <body><div id="bootOverlay" aria-live="polite"><div style="text-align:center"><div style="font-weight:800;letter-spacing:3px;font-size:22px;margin-bottom:18px">YOUR PIT BOX</div><div class="boot-ring"></div><div id="bootNote" class="small muted" style="margin-top:16px">Starting your pit box…</div></div></div><div id="radioRail" class="radio-rail"></div><div id="dashPopover" role="dialog" aria-label="Dashboard cards"><div class="label">Dashboard cards</div><div id="dashList"></div></div><div id="raceControlBlip" class="rc-blip" role="status" aria-live="assertive" hidden></div><div class="app">
-<header class="top"><span class="brand">YOUR PIT BOX 4.6.3</span><span><i id="udpDot" class="dot"></i> <span id="udp">Waiting for UDP</span></span><span id="session">—</span><span id="track">—</span><span id="eng" class="status pill">standing by</span><button id="dashConfig" class="button ghost" style="margin-left:10px;padding:6px 12px" title="Choose which dashboard cards are shown, and drag to rearrange them.">⚙ Dashboard</button><button id="quitApp" class="button ghost" style="margin-left:10px;padding:6px 12px" title="Your Pit Box keeps running after you close this tab. Use this to stop it.">Quit Your Pit Box</button></header>
+<header class="top"><span class="brand">YOUR PIT BOX 4.7.0</span><span><i id="udpDot" class="dot"></i> <span id="udp">Waiting for UDP</span></span><span id="session">—</span><span id="track">—</span><span id="eng" class="status pill">standing by</span><button id="dashConfig" class="button ghost" style="margin-left:10px;padding:6px 12px" title="Choose which dashboard cards are shown, and drag to rearrange them.">⚙ Dashboard</button><button id="quitApp" class="button ghost" style="margin-left:10px;padding:6px 12px" title="Your Pit Box keeps running after you close this tab. Use this to stop it.">Quit Your Pit Box</button></header>
 <nav class="tabs" role="tablist" aria-label="Your Pit Box workspaces"><button id="tab-live" class="tab active" type="button" role="tab" aria-controls="live" aria-selected="true" tabindex="0" data-page="live">DRIVE</button><button id="tab-strategy" class="tab" type="button" role="tab" aria-controls="strategy" aria-selected="false" tabindex="-1" data-page="strategy">STRATEGY</button><button id="tab-connection" class="tab" type="button" role="tab" aria-controls="connection" aria-selected="false" tabindex="-1" data-page="connection">CONNECTION</button><button id="tab-analysis" class="tab" type="button" role="tab" aria-controls="analysis" aria-selected="false" tabindex="-1" data-page="analysis">ANALYSIS</button><button id="tab-setup" class="tab" type="button" role="tab" aria-controls="setup" aria-selected="false" tabindex="-1" data-page="setup">SETUP LAB</button><button id="tab-settings" class="tab" type="button" role="tab" aria-controls="settings" aria-selected="false" tabindex="-1" data-page="settings">SETTINGS</button></nav>
 <main id="settings" class="page" role="tabpanel" aria-labelledby="tab-settings" tabindex="0" hidden><div style="max-width:860px;margin:0 auto;padding:14px;overflow:auto;height:100%"><div class="label">Settings</div><div class="small muted" style="margin-bottom:6px">Saved on this machine and applied over the installation defaults. Fields marked ⟳ take effect after the app restarts.</div><div id="settingsRestart" class="small" style="display:none;color:#ffbf47;margin-bottom:8px"></div><div id="settingsStatus" class="small muted" style="margin-bottom:8px"></div><div id="settingsGroups"></div></div></main>
 <main id="connection" class="page connection-page" role="tabpanel" aria-labelledby="tab-connection" tabindex="0" hidden>
@@ -59,25 +59,42 @@
 
   <section class="panel-surface credential-panel" aria-labelledby="credentialHeading">
     <div class="section-heading">
-      <div><div class="eyebrow">Race engineer</div><h2 id="credentialHeading">OpenAI API key</h2></div>
+      <div><div class="eyebrow">Race engineer</div><h2 id="credentialHeading">AI provider &amp; API keys</h2></div>
       <div id="credentialBadge" class="connection-state" data-state="off"><span aria-hidden="true">●</span> <span id="credentialBadgeText">Checking…</span></div>
     </div>
-    <p class="muted small">The radio, voice answers and strategy reasoning call OpenAI with your own key, billed to your OpenAI account. Telemetry capture, strategy maths and the dashboard all work without one.</p>
+    <p class="muted small">The radio and strategy reasoning run on whichever provider you pick, billed to your own account with that provider. Telemetry capture, strategy maths and the dashboard all work without any key.</p>
     <form id="credentialForm" class="credential-form" novalidate>
-      <label for="credentialKey">API key<span class="field-help">Starts with <code>sk-</code>. Paste the whole value.</span></label>
-      <div class="credential-entry">
+      <label for="activeProviderSelect">Engineer runs on<span class="field-help">Applies immediately. “Auto” uses the first provider with a saved key.</span></label>
+      <select id="activeProviderSelect" class="select">
+        <option value="auto">Auto — first configured</option>
+        <option value="openai" selected>OpenAI</option>
+        <option value="anthropic">Anthropic (Claude)</option>
+        <option value="deepseek">DeepSeek</option>
+        <option value="kimi">Kimi (Moonshot AI)</option>
+        <option value="custom">Custom endpoint</option>
+      </select>
+      <label for="credentialProvider">Manage key for<span class="field-help" id="credentialKeyHint">Starts with <code>sk-</code>. Paste the whole value.</span></label>
+      <select id="credentialProvider" class="select">
+        <option value="openai" selected>OpenAI</option>
+        <option value="anthropic">Anthropic (Claude)</option>
+        <option value="deepseek">DeepSeek</option>
+        <option value="kimi">Kimi (Moonshot AI)</option>
+        <option value="custom">Custom endpoint</option>
+      </select>
+      <div class="credential-entry form-span">
         <input id="credentialKey" name="api_key" type="password" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="sk-…" aria-describedby="credentialFormStatus">
         <button id="credentialReveal" class="button ghost icon-button" type="button" aria-pressed="false">Show</button>
       </div>
-      <label class="check-row form-span"><input id="credentialVerify" type="checkbox" checked> Check the key with OpenAI before saving</label>
+      <label class="check-row form-span"><input id="credentialVerify" type="checkbox" checked> <span id="credentialVerifyLabel">Check the key with the provider before saving</span></label>
       <div class="form-actions form-span">
         <button id="credentialSave" class="button primary" type="submit">Save key</button>
         <button id="credentialTest" class="button ghost" type="button">Test saved key</button>
         <button id="credentialRemove" class="button ghost" type="button">Remove</button>
       </div>
-      <div id="credentialFormStatus" class="inline-notice form-span" role="status" aria-live="polite">Checking for a saved key…</div>
+      <div id="credentialFormStatus" class="inline-notice form-span" role="status" aria-live="polite">Checking for saved keys…</div>
     </form>
-    <p class="field-help">Saved to the <code>.env</code> file next to Your Pit Box in plain text, the same place it was set by hand before. It is never shown again after saving and never sent anywhere except OpenAI. For that reason it can only be changed from this PC, not from a phone on the network.</p>
+    <p class="field-help" id="voiceKeyNote">Voice — the wake word, speech-to-text and the engineer’s spoken replies — always runs on OpenAI. With another provider selected and no OpenAI key saved, the engineer answers in text on the dashboard but stays silent on the radio.</p>
+    <p class="field-help">Keys are saved to the <code>.env</code> file next to Your Pit Box in plain text, the same place they were set by hand before. A key is never shown again after saving and never sent anywhere except its own provider. For that reason keys can only be changed from this PC, not from a phone on the network. The custom endpoint’s URL and model names are set in <code>.env</code> (<code>PITWALL_CUSTOM_LLM_BASE_URL</code>, <code>…_FAST_MODEL</code>, <code>…_DEEP_MODEL</code>).</p>
   </section>
 
   <section class="panel-surface" aria-labelledby="listenerHeading">
@@ -618,7 +635,7 @@ $('rivalCompare').ontoggle=()=>{lastRivalKey='';loadRivals()};$('objectiveDown')
      install can run the previous release's JS against the new backend. The
      navigated document (this file) is revalidated, so versioned subresource
      URLs bust reliably on upgrade. Keep in step with the app version. -->
-<script type="module" src="/static/js/connection.js?v=4.6.3"></script>
-<script type="module" src="/static/js/workspaces.js?v=4.6.3"></script>
-<script type="module" src="/static/js/strategy.js?v=4.6.3"></script>
+<script type="module" src="/static/js/connection.js?v=4.7.0"></script>
+<script type="module" src="/static/js/workspaces.js?v=4.7.0"></script>
+<script type="module" src="/static/js/strategy.js?v=4.7.0"></script>
 </body></html>
