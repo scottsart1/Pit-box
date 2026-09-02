@@ -127,6 +127,14 @@ def test_the_real_contact_details_are_in_place():
     assert "example.com" not in INDEX
 
 
+def test_the_partner_link_is_gone():
+    # The racewithme.net header link was removed at the owner's request; a
+    # stray copy in one page's header would put it straight back on the site.
+    for page in (INDEX, GUIDE, EULA, DIAGNOSTICS):
+        assert "racewithme" not in page
+        assert "site-promo" not in page
+
+
 def test_the_download_is_free_and_the_coffee_is_optional():
     # 4.9 dropped the price. A leftover "$5" anywhere would be a lie on a page
     # that says "free", and the coffee has to read as a thank-you, not a fee.
