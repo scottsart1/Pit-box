@@ -12,14 +12,14 @@
   PLAIN-LANGUAGE DRAFT, NOT LAWYER-REVIEWED.
 
   Written to be honest and readable rather than maximally protective, and not
-  checked by a lawyer. Before selling at any volume, have someone qualified
+  checked by a lawyer. Before this reaches any volume, have someone qualified
   read it — particularly the warranty, liability and consumer-rights sections.
-  Those cannot override a buyer's statutory rights: US state consumer
-  protection law, and for any buyer in the UK or EU, theirs.
+  Those cannot override a user's statutory rights: US state consumer
+  protection law, and for anyone in the UK or EU, theirs.
 
   There is deliberately no governing-law clause. Without one, which law
-  applies is decided by default rules, which for a consumer sale generally
-  means the buyer's own. That was an explicit choice, not an omission.
+  applies is decided by default rules, which for a consumer generally means
+  their own. That was an explicit choice, not an omission.
 -->
 <body>
 
@@ -36,28 +36,28 @@
 <main class="wrap legal">
 
 <h1>Licence terms</h1>
-<p class="updated">Last updated 6 August 2026. Plain English on purpose — if anything here is unclear, email <a href="mailto:vale.scott00@gmail.com">vale.scott00@gmail.com</a> and I will explain it.</p>
+<p class="updated">Last updated 2 September 2026. Plain English on purpose — if anything here is unclear, email <a href="mailto:vale.scott00@gmail.com">vale.scott00@gmail.com</a> and I will explain it.</p>
 
-<h2>1. What you are buying</h2>
-<p>A licence to use Your Pit Box on <strong>one computer</strong>, for as long as you like, for your own personal use. You are not buying ownership of the software itself.</p>
-<p>Your activation code works once. Reinstalling Your Pit Box on the same computer does not use it up. Moving to a different computer needs a new code — email me if a machine has died or been replaced and I will issue one rather than make you buy again.</p>
+<h2>1. What you are getting</h2>
+<p>A free licence to use Your Pit Box on your own computers, for as long as you like, for your own personal use. You are not buying anything, and you do not own the software itself.</p>
+<p>There is no activation code, no account and no registration. The download is the complete application; nothing is held back for a paid tier, and nothing expires. If you installed a version from before it went free, the activation code you were given stays valid on that computer, and you can move to the free build at any time by running the current installer over the top.</p>
 
 <h2>2. What you may not do</h2>
 <ul>
-  <li>Share, resell, sublicense or publish your activation code.</li>
-  <li>Redistribute the software, in whole or in part, modified or not.</li>
-  <li>Remove or work around the licence check.</li>
+  <li>Sell Your Pit Box, or charge anyone for access to it.</li>
+  <li>Redistribute the software, in whole or in part, modified or not. Link people to <a href="https://yourpitbox.com/">yourpitbox.com</a> instead, so they get the current build.</li>
+  <li>Remove or work around the integrity check.</li>
 </ul>
 <p>You may take the software apart to understand it, and you may keep backups. Any rights you have under law to reverse-engineer for interoperability are unaffected by anything here.</p>
 
 <h2>3. The integrity check</h2>
-<p>Your Pit Box checks at startup that its own licensing code has not been modified. If that check fails, <strong>the application refuses to start and shows a message explaining why</strong>.</p>
-<p>To be explicit about what that does <em>not</em> do: it never deletes, moves, encrypts or damages anything — not the application, not your telemetry, not your files. If the check ever fails on a legitimate copy, which a damaged install or an over-eager antivirus can cause, reinstalling fixes it and your activation code remains valid. Your recorded sessions in <code>PitWallData</code> are never touched.</p>
+<p>Your Pit Box checks at startup that its own launcher code has not been modified. If that check fails, <strong>the application refuses to start and shows a message explaining why</strong>.</p>
+<p>To be explicit about what that does <em>not</em> do: it never deletes, moves, encrypts or damages anything — not the application, not your telemetry, not your files. If the check ever fails on a legitimate copy, which a damaged install or an over-eager antivirus can cause, reinstalling fixes it. Your recorded sessions in <code>PitWallData</code> are never touched.</p>
 
 <h2>4. You need your own AI provider account</h2>
 <p>The spoken radio runs on OpenAI's service, and the engineer's reasoning runs on OpenAI by default — or, if you choose, on another supported provider (Anthropic's Claude, DeepSeek, Kimi / Moonshot AI, or a compatible endpoint you configure) using an API key that you supply. That means:</p>
 <ul>
-  <li>Those calls are billed to <strong>your</strong> account with that provider — your own OpenAI account by default — separately from the $5 you paid me. I never see, hold or charge that money.</li>
+  <li>Those calls are billed to <strong>your</strong> account with that provider — your own OpenAI account by default. Your Pit Box itself is free; I never see, hold or charge that money.</li>
   <li>Your use of each provider is governed by that provider's own terms, not these.</li>
   <li>If a provider changes its pricing, models or availability, the features that call it are affected and there is nothing I can do about it. Everything that runs locally — telemetry, strategy, analysis, the dashboard — keeps working regardless.</li>
   <li>The spoken radio (speech-to-text and the engineer's voice) always uses OpenAI. Without an OpenAI key the engineer answers typed questions using the provider you configured, and stays silent on the radio.</li>
@@ -66,22 +66,22 @@
 <h2>5. What data goes where</h2>
 <p>Your telemetry stays on your computer. The session database, the raw 60&nbsp;Hz trace files and your Windows username are never uploaded anywhere.</p>
 <p>When you ask a question that genuinely needs judgement, a compact summary of the situation and selected computed results are sent to the AI provider you configured — OpenAI by default, or Claude, DeepSeek, Kimi or your own compatible endpoint if you chose one — so it can answer. With cloud transcription, recorded audio clips are sent to OpenAI for transcription. If you enable the optional Realtime voice mode, microphone audio is streamed to OpenAI while a radio session is active. Nothing is sent to me, and there is no analytics or telemetry reporting back to the developer.</p>
-<p>Your activation is recorded on the licence server as a code, a one-way hash identifying the computer, and a timestamp. The hash cannot be reversed to identify your machine, and no name, email or address is stored with it.</p>
+<p>The download page offers to take an email address, and you can skip it. If you give one, it is stored on my Cloudflare account together with the date, and it is used for exactly one thing: telling you when a new version ships. It is not sold, shared or linked to anything the software does. Reply to any of those emails, or write to me, and I will delete it.</p>
 
-<h2>6. Refunds</h2>
-<p>If Your Pit Box does not work for you, email me within <strong>7 days</strong> of buying it and I will refund the $5 in full. You do not need to justify it, though I would genuinely like to know what went wrong.</p>
+<h2>6. Coffees</h2>
+<p>If Your Pit Box is useful to you, you can buy me a coffee. That is a gift, freely given: it does not buy a licence (you already have one), it does not unlock anything, and it does not create a support or warranty entitlement beyond what everyone gets. Coffees are not refundable, though if one was sent by mistake, email me within 7 days and I will send it back.</p>
 
 <h2>7. No warranty</h2>
 <p>Your Pit Box is provided as it is. I have tested it as thoroughly as one person can, but I cannot promise it is free of defects, that it will suit your particular setup, or that it will keep working after an update to the game, to Windows, or to OpenAI's service.</p>
 <p><strong>Do not use it as a safety-critical or financial decision-making tool.</strong> It is a companion for a racing game.</p>
 
 <h2>8. Limit of liability</h2>
-<p>My total liability to you for anything arising out of Your Pit Box is limited to the amount you paid for it. I am not liable for lost time, lost races, lost data, or any indirect or consequential loss.</p>
-<p>Nothing here limits liability for death or personal injury caused by negligence, for fraud, or for anything else that cannot lawfully be limited. If you bought as a consumer, your statutory rights are unaffected by any part of this document.</p>
+<p>Your Pit Box is free, and my total liability to you for anything arising out of it is limited to the amount you paid for it, which is nothing. A coffee is a gift, not a payment for the software. I am not liable for lost time, lost races, lost data, or any indirect or consequential loss.</p>
+<p>Nothing here limits liability for death or personal injury caused by negligence, for fraud, or for anything else that cannot lawfully be limited. If you are a consumer, your statutory rights are unaffected by any part of this document.</p>
 
 <h2>9. Ending the licence</h2>
-<p>You can stop using Your Pit Box and delete it at any time. I may end your licence if you redistribute the software or share your code, in which case you would not be entitled to a refund.</p>
-<p>If I stop supporting Your Pit Box, your existing installation keeps working. It runs offline after activation, so it does not stop when a server does.</p>
+<p>You can stop using Your Pit Box and delete it at any time. I may end your licence if you sell or redistribute the software.</p>
+<p>If I stop supporting Your Pit Box, your existing installation keeps working. It runs offline and phones nothing home, so it does not stop when a server does.</p>
 
 <h2>10. Not affiliated with anyone</h2>
 <p>Your Pit Box is an independent project. It is not affiliated with, endorsed by, sponsored by, or connected to Formula&nbsp;1, Formula One Management, the FIA, Electronic Arts, or Codemasters. All trademarks belong to their owners.</p>

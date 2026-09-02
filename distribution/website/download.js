@@ -1,87 +1,120 @@
-// Gate the installer download on a real activation code.
+// The free download, and the optional release-news signup in front of it.
 //
-// The check is server-side; this file only collects the code and reports the
-// answer. Nothing here decides whether a code is valid, so reading the source
-// tells an attacker nothing they could not learn by typing a wrong code.
+// Nothing here gates anything. The installer URL is public, and the email is a
+// courtesy the visitor can decline with one click: every path out of the
+// prompt ends in the same download. The address goes only to the Worker's
+// /subscribe route, which stores it for release announcements and nothing else.
 
-// The deployed activation Worker. It answers the CORS preflight this fetch
-// triggers (POST + Content-Type: application/json is not a simple request), so
-// the response is actually readable from the site's origin.
+// The deployed activation Worker. It streams the installer at /installer and
+// records signups at /subscribe. It answers the CORS preflight the JSON POST
+// triggers, so the response is actually readable from the site's origin.
 const ACTIVATION_API = "https://pitwall-activation.sarthakvij123450.workers.dev";
+const INSTALLER_URL = `${ACTIVATION_API}/installer`;
 
-const form = document.getElementById("downloadForm");
-const field = document.getElementById("downloadCode");
+const button = document.getElementById("downloadButton");
 const status = document.getElementById("downloadStatus");
+const modal = document.getElementById("emailModal");
+const form = document.getElementById("emailForm");
+const field = document.getElementById("emailField");
+const emailStatus = document.getElementById("emailStatus");
+const skip = document.getElementById("skipEmail");
 
-function say(message, tone) {
-  status.textContent = message;
-  status.dataset.tone = tone || "info";
+function say(element, message, tone) {
+  if (!element) return;
+  element.textContent = message;
+  element.dataset.tone = tone || "info";
 }
 
-// Format as the buyer types: upper-case, and regroup into PITW-XXXXX-XXXXX-XXXXX
-// so a code pasted without hyphens, or typed in lower case, still looks right.
-function tidy(raw) {
-  let text = raw.toUpperCase().replace(/[^A-Z0-9]/g, "");
-  text = text.replace(/^PITW/, "");
-  const groups = [text.slice(0, 5), text.slice(5, 10), text.slice(10, 15)].filter(Boolean);
-  return groups.length ? "PITW-" + groups.join("-") : text ? "PITW-" + text : "";
+// Navigate rather than fetch: the file is large, and letting the browser
+// handle it gives a normal download with a progress bar and resume.
+function startDownload(message, tone) {
+  say(status, message, tone);
+  window.location.href = INSTALLER_URL;
 }
 
-if (field) {
-  field.addEventListener("input", () => {
-    const caretAtEnd = field.selectionStart === field.value.length;
-    const tidied = tidy(field.value);
-    if (tidied !== field.value) {
-      field.value = tidied;
-      if (caretAtEnd) field.setSelectionRange(tidied.length, tidied.length);
-    }
+let lastFocus = null;
+
+function onKey(event) {
+  if (event.key === "Escape") closeModal();
+}
+
+function openModal() {
+  lastFocus = document.activeElement;
+  modal.hidden = false;
+  say(emailStatus, "");
+  field.focus();
+  document.addEventListener("keydown", onKey);
+}
+
+function closeModal() {
+  modal.hidden = true;
+  document.removeEventListener("keydown", onKey);
+  if (lastFocus && typeof lastFocus.focus === "function") lastFocus.focus();
+}
+
+// Loose on purpose: the Worker validates properly, and a false rejection here
+// would stop someone downloading over a typo in an optional field.
+function looksLikeEmail(value) {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(value);
+}
+
+async function subscribe(email) {
+  const response = await fetch(`${ACTIVATION_API}/subscribe`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ email, source: "website-download" }),
   });
+  const payload = await response.json().catch(() => null);
+  return { ok: response.ok, message: payload && payload.message };
 }
 
-if (form) {
+if (button && modal && form && field && skip) {
+  button.addEventListener("click", openModal);
+
+  skip.addEventListener("click", () => {
+    closeModal();
+    startDownload("Your download is starting. Run PitWall-Setup.exe when it finishes.", "success");
+  });
+
+  modal.querySelectorAll("[data-close]").forEach((element) => {
+    element.addEventListener("click", closeModal);
+  });
+
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
-    const code = tidy(field.value);
-    if (code.replace(/[^A-Z0-9]/g, "").length !== 19) {
-      say("That code looks incomplete. It has 15 characters after PITW.", "error");
+    const email = field.value.trim();
+
+    if (!email) {
+      closeModal();
+      startDownload("Your download is starting. Run PitWall-Setup.exe when it finishes.", "success");
+      return;
+    }
+    if (!looksLikeEmail(email)) {
+      say(emailStatus, "That does not look like an email address. Fix it, or skip the email.", "error");
       field.focus();
       return;
     }
 
-    const button = form.querySelector("button[type=submit]");
-    button.disabled = true;
-    say("Checking your code…");
+    const submit = form.querySelector("button[type=submit]");
+    submit.disabled = true;
+    say(emailStatus, "Saving…");
 
+    let message = "Thanks — you are on the list. Your download is starting.";
+    let tone = "success";
     try {
-      const response = await fetch(`${ACTIVATION_API}/download`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ code }),
-      });
-      const payload = await response.json().catch(() => null);
-
-      if (!response.ok) {
-        say(
-          (payload && payload.message) ||
-            "Could not check that code just now. Try again in a moment.",
-          "error"
-        );
-        return;
+      const result = await subscribe(email);
+      if (!result.ok) {
+        message = (result.message || "The signup did not go through") +
+          " Your download is starting anyway.";
+        tone = "info";
       }
-
-      say("Code accepted — your download is starting.", "success");
-      // Navigate rather than fetch: the file is large, and letting the browser
-      // handle it gives the buyer a normal download with a progress bar.
-      window.location.href = payload.url;
     } catch {
-      say(
-        "Could not reach the server. Check your connection and try again — " +
-          "if it keeps failing, email vale.scott00@gmail.com and I will send " +
-          "the installer directly.",
-        "error"
-      );
+      message = "Could not reach the signup server, but your download is starting anyway.";
+      tone = "info";
     } finally {
-      button.disabled = false;
+      submit.disabled = false;
+      closeModal();
+      startDownload(message, tone);
     }
   });
 }

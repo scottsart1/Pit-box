@@ -20,11 +20,12 @@
       <a href="#screens">Screens</a>
       <a href="guide.html">Setup guide</a>
       <a href="#requirements">Requirements</a>
-      <a href="#buy">Get it</a>
+      <a href="#download">Download</a>
+      <a href="#coffee">Buy me a coffee</a>
     </nav>
     <div class="header-actions">
       <a class="site-promo" href="https://racewithme.net/" target="_blank" rel="noopener noreferrer"><span class="site-promo-label">Our racing partner:</span> racewithme.net <span aria-hidden="true">↗</span></a>
-      <a class="button primary" href="#buy">Get it — $5</a>
+      <a class="button primary" href="#download">Download free</a>
     </div>
   </div>
 </header>
@@ -43,10 +44,10 @@
         by deterministic code — never invented by a language model.
       </p>
       <div class="hero-actions">
-        <a class="button primary" href="#buy">Get it — $5</a>
+        <a class="button primary" href="#download">Download free</a>
         <a class="button ghost" href="#how">How it works</a>
       </div>
-      <p class="price-note">One-time payment. One computer. No subscription.</p>
+      <p class="price-note">Free. No code, no account, no subscription. Windows 10 or 11.</p>
     </div>
     <figure>
       <div class="shot">
@@ -253,7 +254,7 @@ Strategy / setup / what-if  → model, high reasoning
         <div class="callout">
           <h3>The API key is billed by its provider, not by me</h3>
           <p>
-            Your Pit Box costs $5 once. The engineer's voice and reasoning run on
+            Your Pit Box itself is free. The engineer's voice and reasoning run on
             your own account with the provider you choose — OpenAI by default —
             so those calls appear on that provider's bill, not mine. Most
             questions are answered locally and cost nothing at all, but a long
@@ -303,50 +304,24 @@ Strategy / setup / what-if  → model, high reasoning
   </div>
 </section>
 
-<section id="buy">
+<section id="coffee">
   <div class="wrap">
-    <h2>Get Your Pit Box</h2>
-    <p class="section-lede">Paid by Venmo or PayPal, sent by hand. It is a one-person operation, so codes are emailed personally rather than issued by a robot.</p>
+    <h2>Free. If it helps you, buy me a coffee.</h2>
+    <p class="section-lede">Your Pit Box is free to download and free to keep — no code, no account, no subscription. It is a one-person project; if it earns you a position, a coffee keeps it going.</p>
     <div class="buy">
-      <div class="amount">$5</div>
-      <div class="once">once — not a subscription</div>
+      <div class="amount">Free</div>
+      <div class="once">every download is the full app — nothing held back, nothing expires</div>
       <p style="margin-top:1rem">
-        <a class="button primary" href="https://paypal.me/sarthakvij298/5" target="_blank" rel="noopener noreferrer">Buy me a coffee — $5 on PayPal</a>
+        <a class="button primary" href="https://paypal.me/sarthakvij298" target="_blank" rel="noopener noreferrer">Buy me a coffee on PayPal</a>
       </p>
-      <ol class="steps">
-        <li>
-          <div>
-            <strong>Send $5 on Venmo</strong> to <span class="handle">@scott-v-sv</span>,
-            or on PayPal — <a href="https://paypal.me/sarthakvij298/5" target="_blank" rel="noopener noreferrer">buy me a coffee</a> at
-            <span class="handle">paypal.me/sarthakvij298</span>.
-            Put the email address you want the code sent to in the payment note.
-          </div>
-        </li>
-        <li>
-          <div>
-            <strong>Get your activation code by email.</strong> Usually within a
-            day — it is sent by a person, not automatically. If it has been
-            longer than that, email
-            <a href="mailto:vale.scott00@gmail.com">vale.scott00@gmail.com</a>.
-          </div>
-        </li>
-        <li>
-          <div>
-            <strong>Install and enter the code once.</strong> It activates on that
-            computer and then runs offline. You will also be asked for your OpenAI
-            API key on the same screen.
-          </div>
-        </li>
-      </ol>
-      <p class="price-note" style="margin-top:1.4rem">
-        <strong>7-day money-back guarantee.</strong> If Your Pit Box does not work
-        for you, email within 7 days of purchase and the $5 comes back in full —
-        no forms, no arguing.
+      <p class="price-note" style="margin-top:1.2rem">
+        Prefer Venmo? <span class="handle">@scott-v-sv</span>. Any amount, entirely
+        optional, and it changes nothing about what you download.
       </p>
       <p class="price-note">
-        One code activates one computer. Reinstalling on the same machine is
-        fine and does not use it up. Moving to a new PC needs a new code —
-        email me if a machine died and I will sort it out.
+        A coffee is a thank-you, not a purchase: nothing unlocks and it is not
+        refundable. The only thing that ever costs money is your own AI
+        provider usage, billed by that provider to you.
       </p>
     </div>
   </div>
@@ -354,34 +329,30 @@ Strategy / setup / what-if  → model, high reasoning
 
 <section id="download" class="soft">
   <div class="wrap">
-    <h2>Already have a code?</h2>
-    <p class="section-lede">Enter it to download the installer. The same code activates the app the first time you run it, so keep it to hand.</p>
+    <h2>Download Your Pit Box</h2>
+    <p class="section-lede">Free, for Windows 10 or 11. There is no code and no account — the button starts the download.</p>
     <div class="buy">
-      <form id="downloadForm" novalidate>
-        <label for="downloadCode" class="field-label">Activation code</label>
-        <div class="code-entry">
-          <input id="downloadCode" name="code" type="text" inputmode="latin"
-                 autocomplete="off" autocapitalize="characters" spellcheck="false"
-                 placeholder="PITW-XXXXX-XXXXX-XXXXX" maxlength="24"
-                 aria-describedby="downloadStatus">
-          <button class="button primary" type="submit">Download</button>
-        </div>
-        <p id="downloadStatus" class="download-status" role="status" aria-live="polite"></p>
-      </form>
+      <p class="download-cta">
+        <button id="downloadButton" class="button primary" type="button">Download for Windows</button>
+        <span class="field-help"><code>PitWall-Setup.exe</code>, about 33&nbsp;MB</span>
+      </p>
+      <p id="downloadStatus" class="download-status" role="status" aria-live="polite"></p>
       <p class="field-help">
-        No code yet? <a href="#buy">Get one for $5</a> — it takes a Venmo payment
-        and a reply from me. If you have paid and not heard back, email
-        <a href="mailto:vale.scott00@gmail.com">vale.scott00@gmail.com</a>.
+        The button first offers to take your email so I can tell you about new
+        versions. That is optional — skip it and the download starts anyway.
+        If the download does not start at all, email
+        <a href="mailto:vale.scott00@gmail.com">vale.scott00@gmail.com</a> and
+        I will send the installer directly.
       </p>
     </div>
 
     <ol class="steps" style="margin-top:2rem;max-width:640px">
-      <li><div><strong>Download and run the installer.</strong> It installs for you only, so Windows will not ask for an administrator password.</div></li>
-      <li><div><strong>Your Pit Box starts by itself</strong> at the end of the installer and asks for your activation code and your OpenAI API key. Then follow the setup guide to connect your PS5 / PC.</div></li>
-      <li><div><strong>After setup, just open it</strong> from the Start Menu or the desktop icon. It goes straight to the dashboard without asking for the activation code again. Allow <strong>20–30 seconds</strong> for it to start, and a little longer on a busy PC — it opens your browser itself once it is ready.</div></li>
+      <li><div><strong>Download and run the installer.</strong> It installs for you only, so Windows will not ask for an administrator password. Already have a version installed? Run the new installer over it; your sessions and settings are kept.</div></li>
+      <li><div><strong>Your Pit Box starts by itself</strong> at the end of the installer and asks, once, for your OpenAI API key. Paste it, or choose <strong>Skip for now</strong> and add it later from the Connection tab. Then follow the setup guide to connect your PS5 / PC.</div></li>
+      <li><div><strong>After that, just open it</strong> from the Start Menu or the desktop icon. It goes straight to the dashboard. Allow <strong>20–30 seconds</strong> for it to start, and a little longer on a busy PC — it opens your browser itself once it is ready.</div></li>
     </ol>
     <p class="guide-prompt"><strong>Setting up for the first time?</strong> Follow the <a href="guide.html">illustrated setup guide</a> from download through your first live radio check.</p>
-    <p class="guide-prompt"><strong>Code not activating?</strong> Run the <a href="diagnostics.html">activation diagnostics</a> — it checks the server and your code without using the code up.</p>
+    <p class="guide-prompt"><strong>Installed an earlier version with an activation code?</strong> It keeps working as it is. The <a href="diagnostics.html">activation diagnostics</a> are still here if that code is ever rejected.</p>
   </div>
 </section>
 
@@ -402,7 +373,7 @@ Strategy / setup / what-if  → model, high reasoning
 
     <details>
       <summary>Does it work on PS5 / PC, or only one platform?</summary>
-      <p>Both. Your Pit Box's telemetry receiver has no platform-specific code — it reads standard F1 2026 UDP packets the same way regardless of whether they come from a PS5 or the PC version of the game, and licensing is tied to your Windows PC, not to a console. The <a href="guide.html#step-6">setup guide</a> covers both: PS5 / PC on your home network, or the game and Your Pit Box sharing one PC. This is based on the packet format and receiver code rather than a dedicated PC hardware test; if you hit anything unexpected, email me and I will help sort it out.</p>
+      <p>Both. Your Pit Box's telemetry receiver has no platform-specific code — it reads standard F1 2026 UDP packets the same way regardless of whether they come from a PS5 or the PC version of the game, and it runs on your Windows PC rather than on the console. The <a href="guide.html#step-6">setup guide</a> covers both: PS5 / PC on your home network, or the game and Your Pit Box sharing one PC. This is based on the packet format and receiver code rather than a dedicated PC hardware test; if you hit anything unexpected, email me and I will help sort it out.</p>
     </details>
 
     <details>
@@ -427,17 +398,22 @@ Strategy / setup / what-if  → model, high reasoning
 
     <details>
       <summary>Do I need to be online?</summary>
-      <p>Once, to activate. After that the app runs offline — telemetry, strategy, analysis and the dashboard all work with no connection. Only the spoken radio and model-backed answers need internet, because those are the parts that call your AI provider.</p>
+      <p>Not for Your Pit Box itself. There is no activation and no account: telemetry, strategy, analysis and the dashboard all work with no connection. Only the spoken radio and model-backed answers need internet, because those are the parts that call your AI provider.</p>
     </details>
 
     <details>
-      <summary>What happens if I reinstall Windows or change my hardware?</summary>
-      <p>Reinstalling Your Pit Box on the same Windows install is fine. A fresh Windows install or a new PC will need a new activation — email me and I will issue one. I would rather do that by hand than build a system that gets it wrong.</p>
+      <summary>Is it really free? What is the catch?</summary>
+      <p>Yes, and there is no catch. The download is the complete application, nothing is held back for a paid tier, and nothing expires. The only running cost is your own AI provider usage, billed by that provider to you. If Your Pit Box earns you a position, <a href="#coffee">buy me a coffee</a> — a thank-you, not a purchase.</p>
     </details>
 
     <details>
-      <summary>Is there a refund?</summary>
-      <p>Yes — there is a 7-day money-back guarantee. If it does not work for you, email within 7 days of purchase and I will refund the $5 in full. Please tell me what went wrong — for a one-person project that feedback is worth more than the money.</p>
+      <summary>What do you do with my email?</summary>
+      <p>The download prompt asks for an email address, and you can skip it. If you give one, it is stored with the date on my Cloudflare account and used for exactly one thing: telling you when a new version ships. No newsletter, nothing sold or shared, and a reply to any of those emails removes you. The app itself never sends me anything.</p>
+    </details>
+
+    <details>
+      <summary>I bought a code before it went free. What now?</summary>
+      <p>Your install keeps working exactly as it is, and the code stays valid on that computer. Whenever you like, download the current installer and run it over the top: your sessions and settings are kept, and it will never ask for a code again. Thank you for backing it when it cost something.</p>
     </details>
   </div>
 </section>
@@ -454,6 +430,28 @@ Strategy / setup / what-if  → model, high reasoning
     </div>
   </div>
 </footer>
+
+<div id="emailModal" class="modal" hidden>
+  <div class="modal-backdrop" data-close></div>
+  <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="emailModalTitle" aria-describedby="emailModalText">
+    <h3 id="emailModalTitle">Want to hear when a new version ships?</h3>
+    <p id="emailModalText">Leave an email and I will write when there is an update worth having. That is the only thing it is used for. It is optional: skip it and the download starts anyway.</p>
+    <form id="emailForm" novalidate>
+      <label for="emailField" class="field-label">Email (optional)</label>
+      <div class="code-entry">
+        <input id="emailField" name="email" type="email" inputmode="email"
+               autocomplete="email" spellcheck="false" placeholder="Your email address"
+               aria-describedby="emailStatus">
+        <button class="button primary" type="submit">Notify me and download</button>
+      </div>
+      <p id="emailStatus" class="download-status" role="status" aria-live="polite"></p>
+      <div class="modal-foot">
+        <button id="skipEmail" class="button ghost" type="button">Skip — just download</button>
+        <small>Unsubscribe by replying to any email.</small>
+      </div>
+    </form>
+  </div>
+</div>
 
 <script src="download.js" defer></script>
 </body>

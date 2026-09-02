@@ -563,10 +563,14 @@ def run(host: str, port: int, total_laps: int, speed: float, seed: int) -> None:
                     car.in_pit_for = 21.0
                     car.pit_stationary_ms = 2400
                     car.race_time += 20.0
-                if car.index == 16 and car.lap == 19:
+                # The scripted retirement and damage belong to AI cars. When
+                # --driver puts the player in one of those seats the script
+                # moves to the neighbouring car: a retired player never
+                # completes the race, so the send loop would spin for ever.
+                if car.index == (17 if PLAYER_INDEX == 16 else 16) and car.lap == 19:
                     car.retired = True
                     sock.sendto(build_event("RTMT", session_time, frame, vehicle_idx=car.index), target)
-                if car.index == 8 and car.lap == 7:
+                if car.index == (9 if PLAYER_INDEX == 8 else 8) and car.lap == 7:
                     car.damage = 34
 
         sock.sendto(build_lap_data(cars, session_time, frame), target)

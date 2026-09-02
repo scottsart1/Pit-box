@@ -20,7 +20,6 @@ from __future__ import annotations
 import argparse
 import asyncio
 import base64
-import json
 import subprocess
 import sys
 import tempfile
@@ -32,30 +31,9 @@ import websockets
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from tools.capture_screens import find_browser  # noqa: E402
+from tools.capture_screens import Devtools, browser_flags, find_browser  # noqa: E402
 
 DEBUG_PORT = 9345
-
-
-class Devtools:
-    """A minimal CDP client; only screenshots and navigation are needed."""
-
-    def __init__(self, websocket) -> None:
-        self.websocket = websocket
-        self._id = 0
-
-    async def call(self, method: str, **params):
-        self._id += 1
-        message_id = self._id
-        await self.websocket.send(
-            json.dumps({"id": message_id, "method": method, "params": params})
-        )
-        while True:
-            raw = json.loads(await self.websocket.recv())
-            if raw.get("id") == message_id:
-                if "error" in raw:
-                    raise RuntimeError(str(raw["error"]))
-                return raw.get("result", {})
 
 
 async def open_page(port: int) -> str:
@@ -91,7 +69,7 @@ async def record(base: str, out: Path, seconds: float, fps: float, width: int,
             f"--user-data-dir={profile}",
             f"--window-size={width},{height}",
             "--hide-scrollbars",
-            "--no-sandbox",
+            *browser_flags(),
             "--disable-gpu",
             "--no-first-run",
             # Without this the page is composited onto opaque white and the

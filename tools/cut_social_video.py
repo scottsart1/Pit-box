@@ -69,13 +69,58 @@ def font(kind: str, size: int) -> ImageFont.FreeTypeFont:
     )
 
 
-def probe_seconds(path: Path) -> float:
-    result = subprocess.run(
-        ["ffprobe", "-v", "error", "-show_entries", "format=duration",
-         "-of", "csv=p=0", str(path)],
+def ffmpeg_exe() -> str:
+    """The ffmpeg binary: the one imageio-ffmpeg bundles, else the one on PATH.
+
+    ``pip install .[video]`` brings imageio-ffmpeg, which is how the long-form
+    demo finds ffmpeg too. A bare "ffmpeg" literal only worked on machines that
+    happened to have it installed system-wide.
+    """
+    try:
+        import imageio_ffmpeg
+
+        return imageio_ffmpeg.get_ffmpeg_exe()
+    except Exception:  # noqa: BLE001 - not installed, or no bundled binary
+        found = shutil.which("ffmpeg")
+        if found:
+            return found
+        raise SystemExit(
+            "ffmpeg was not found. Install it with `pip install imageio-ffmpeg` "
+            "(or `pip install .[video]`), or put ffmpeg on PATH."
+        )
+
+
+def _stream_report(path: Path) -> str:
+    """ffmpeg's own description of a file.
+
+    Run without an output ffmpeg always exits non-zero, so the exit code means
+    nothing here; the stderr text is the product.
+    """
+    return subprocess.run(
+        [ffmpeg_exe(), "-hide_banner", "-i", str(path)],
         capture_output=True, text=True,
-    )
-    return float(result.stdout.strip() or 0.0)
+    ).stderr
+
+
+def probe_seconds(path: Path) -> float:
+    """Duration in seconds, from ffmpeg rather than a separate ffprobe binary.
+
+    imageio-ffmpeg ships ffmpeg alone. A silent 0.0 here used to turn every
+    downstream ``-t`` into a zero-length cut, which ffmpeg then reported as a
+    filter-graph error nowhere near the actual cause.
+    """
+    for line in _stream_report(path).splitlines():
+        if "Duration:" in line:
+            stamp = line.split("Duration:")[1].split(",")[0].strip()
+            if stamp == "N/A":
+                break
+            hours, minutes, seconds = stamp.split(":")
+            return int(hours) * 3600 + int(minutes) * 60 + float(seconds)
+    raise SystemExit(f"could not read the duration of {path}")
+
+
+def has_audio(path: Path) -> bool:
+    return any("Audio:" in line for line in _stream_report(path).splitlines())
 
 
 def run(command: list[str]) -> None:
@@ -281,7 +326,7 @@ def build_segments(footage: Path, beats: tuple[Beat, ...], work: Path,
         audio += f",afade=t=in:st=0:d=0.04,afade=t=out:st={max(0.0, beat.timeline_seconds - 0.06):.3f}:d=0.06"
         run(
             [
-                "ffmpeg", "-v", "error", "-y",
+                ffmpeg_exe(), "-v", "error", "-y",
                 "-ss", f"{beat.start:.3f}", "-to", f"{beat.end:.3f}", "-i", str(footage),
                 "-filter:v", video, "-filter:a", audio,
                 "-c:v", "libx264", "-preset", "medium", "-crf", "16",
@@ -294,7 +339,7 @@ def build_segments(footage: Path, beats: tuple[Beat, ...], work: Path,
     timeline = work / "timeline.mp4"
     run(
         [
-            "ffmpeg", "-v", "error", "-y", "-f", "concat", "-safe", "0",
+            ffmpeg_exe(), "-v", "error", "-y", "-f", "concat", "-safe", "0",
             "-i", str(listing), "-c", "copy", str(timeline),
         ]
     )
@@ -319,7 +364,7 @@ def overlay_clip(frames: Path, work: Path, spec: dict, fps: int) -> Path | None:
     clip = work / "overlay.mov"
     run(
         [
-            "ffmpeg", "-v", "error", "-y",
+            ffmpeg_exe(), "-v", "error", "-y",
             "-framerate", str(spec.get("fps", 12)),
             "-i", str(staged / "f_%05d.png"),
             "-vf", f"fps={fps},scale={spec.get('width', 780)}:-1:flags=lanczos",
@@ -349,6 +394,16 @@ def compose(timeline: Path, overlay: Path | None, cards: list[tuple[Path, float,
         # that starts at second nine never reaches it.
         inputs += ["-loop", "1", "-framerate", str(fps), "-t", f"{seconds:.3f}",
                    "-i", str(path)]
+
+    # Footage captured without sound (a muted capture card, a screen recorder
+    # with audio off) has no stream for "-map 0:a" to find, and ffmpeg aborts
+    # the whole composite over it. Feed silence instead so the cut is still a
+    # valid, loudness-normalised file.
+    audio_source = "0:a"
+    if not has_audio(timeline):
+        audio_source = f"{1 + (1 if overlay else 0) + len(statics) + len(cards)}:a"
+        inputs += ["-f", "lavfi", "-t", f"{seconds:.3f}",
+                   "-i", "anullsrc=r=48000:cl=stereo"]
 
     # A blurred, darkened copy of the same frame fills the 9:16 canvas: the
     # gameplay is 16:9 and anything else would either letterbox it or crop the
@@ -411,12 +466,12 @@ def compose(timeline: Path, overlay: Path | None, cards: list[tuple[Path, float,
 
     run(
         [
-            "ffmpeg", "-v", "error", "-y", *inputs,
+            ffmpeg_exe(), "-v", "error", "-y", *inputs,
             "-filter_complex", ";".join(graph),
             # Instagram plays back around -14 LUFS. Raw game capture sits far
             # below that, and a quiet reel is a scrolled-past reel.
             "-filter:a", "loudnorm=I=-14:TP=-1.5:LRA=11",
-            "-map", "[v]", "-map", "0:a",
+            "-map", "[v]", "-map", audio_source,
             # The captured overlay is usually longer than the cut. Without this
             # the composite runs to the overlay's length and the video ends on
             # a frozen last gameplay frame.
@@ -441,7 +496,7 @@ def append_end_card(video: Path, board: dict, work: Path, fps: int) -> None:
     tail = work / "endcard.mp4"
     run(
         [
-            "ffmpeg", "-v", "error", "-y", "-loop", "1", "-i", str(still),
+            ffmpeg_exe(), "-v", "error", "-y", "-loop", "1", "-i", str(still),
             "-f", "lavfi", "-i", "anullsrc=r=48000:cl=stereo",
             "-t", f"{float(spec.get('seconds', 3.0)):.2f}",
             "-r", str(fps),
@@ -455,7 +510,7 @@ def append_end_card(video: Path, board: dict, work: Path, fps: int) -> None:
     joined = work / "joined.mp4"
     run(
         [
-            "ffmpeg", "-v", "error", "-y", "-f", "concat", "-safe", "0",
+            ffmpeg_exe(), "-v", "error", "-y", "-f", "concat", "-safe", "0",
             "-i", str(listing), "-c:v", "libx264", "-preset", "slow", "-crf", "19",
             "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "192k",
             "-movflags", "+faststart", str(joined),

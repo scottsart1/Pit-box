@@ -1,5 +1,10 @@
 # Selling Your Pit Box through a storefront
 
+> **Superseded (4.9.0):** Your Pit Box is now free to download, with a
+> voluntary "buy me a coffee" link instead of a price. The $20 / $5 figures
+> and margin arithmetic below describe the paid model this document was
+> written for and are kept for the record only.
+
 Today the only way to buy Your Pit Box is to find `pitwall-2k7.pages.dev`, pay
 $20 by Venmo, wait for a code to be emailed by hand, and then talk Windows out
 of the SmartScreen warning that an unsigned installer earns. Every one of those

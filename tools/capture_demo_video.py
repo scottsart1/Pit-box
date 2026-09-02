@@ -407,7 +407,7 @@ async def ask_over_radio(
 ) -> RadioExchange:
     """Post spoken audio to /api/voice and keep what the engineer said."""
     clip = work / f"question-{index:02d}.wav"
-    async with httpx.AsyncClient(timeout=180.0) as client:
+    async with httpx.AsyncClient(timeout=180.0, trust_env=False) as client:
         await speak_question(client, question, clip)
         with clip.open("rb") as handle:
             response = await client.post(
@@ -430,7 +430,7 @@ async def ask_over_radio(
 
 async def trigger_proactive_call(base: str, work: Path, index: int) -> RadioExchange:
     """Fire the app's own test call and keep exactly what it spoke."""
-    async with httpx.AsyncClient(timeout=180.0) as client:
+    async with httpx.AsyncClient(timeout=180.0, trust_env=False) as client:
         state = await client.get(f"{base}/api/state")
         before = (state.json().get("proactive") or {}).get("last_call", "")
         response = await client.post(f"{base}/api/proactive/test")
@@ -596,7 +596,7 @@ async def record(
     endpoint = None
     for _ in range(60):
         try:
-            targets = httpx.get(f"http://127.0.0.1:{DEBUG_PORT}/json/list", timeout=1.0).json()
+            targets = httpx.get(f"http://127.0.0.1:{DEBUG_PORT}/json/list", timeout=1.0, trust_env=False).json()
             pages = [t for t in targets if t.get("type") == "page" and t.get("webSocketDebuggerUrl")]
             if pages:
                 endpoint = pages[0]["webSocketDebuggerUrl"]

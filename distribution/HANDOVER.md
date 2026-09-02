@@ -245,6 +245,37 @@ logs to `ledger/sync_log.txt`). Tests: `tests/test_ledger_sync.py`.
 
 ---
 
+## Free edition (4.9)
+
+Your Pit Box went free in 4.9. What that changed, and what it did not:
+
+- `distribution/edition.py` holds one switch, `FREE_EDITION = True`. With it
+  on, `launcher.launch()` runs `_launch_free`: integrity check, a one-time
+  welcome form (`first_run.prompt_first_run(free=True)`) that takes an
+  optional OpenAI key, then `start_app`. A `welcome_shown` marker in the
+  config directory stops the form reappearing. Nothing is claimed, bound or
+  phoned home. `distribution/tests/test_free_edition.py` pins all of that,
+  including that the free flow never calls `gate.activate`.
+- The paid flow is untouched and still tested; `launch(..., free=False)`
+  runs it. Existing paid installs validate their cached licence offline as
+  before, and the Worker's `/activate`, `/download` and `/file` routes stay
+  live for them.
+- The Worker gained `GET /installer` (public, streams the R2 object, Range
+  supported) and `POST /subscribe` (optional email for release news, stored
+  in the D1 `subscribers` table). The table comes from
+  `migrations/0002_subscribers.sql`; until it is applied `/subscribe`
+  answers 503 and the site still starts the download.
+- The site has no price and no code form. The Download button opens an
+  optional email prompt, then navigates to `/installer`. The PayPal and
+  Venmo details moved to a buy-me-a-coffee section.
+- `release_windows.ps1` now deploys the Worker and applies the migration
+  between the R2 upload and the site deploy, and confirms `/installer`
+  answers before the page that links to it goes out.
+
+The 4.9 installer must be in R2 before the 4.9 site is deployed: the site
+promises a free download, and the previous installer still asks for a code.
+The release script enforces that order.
+
 ## To go live
 
 Steps 1–4 and 6 are done. Preflight now reports "all checks passed" for the

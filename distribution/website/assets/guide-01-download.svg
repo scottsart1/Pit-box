@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1200" height="700" viewBox="0 0 1200 700" role="img" aria-labelledby="title desc">
-  <title id="title">Download Pit Wall with an activation code</title>
-  <desc id="desc">Illustrated setup guide showing a customer entering a privacy-safe placeholder activation code and downloading the Pit Wall installer.</desc>
+  <title id="title">Download Your Pit Box for free</title>
+  <desc id="desc">Illustrated setup guide showing the free download button, the optional email prompt for update news, and the Your Pit Box installer being saved.</desc>
   <defs>
     <filter id="shadow" x="-20%" y="-20%" width="140%" height="160%">
       <feDropShadow dx="0" dy="14" stdDeviation="18" flood-color="#101720" flood-opacity="0.14"/>
@@ -26,35 +26,35 @@
 
     <rect x="66" y="126" width="142" height="34" rx="17" fill="#f7dfe3"/>
     <text x="137" y="149" text-anchor="middle" fill="#9c0c23" font-size="15" font-weight="800" letter-spacing="1.2">STEP 1 · DOWNLOAD</text>
-    <text x="66" y="205" class="ink" font-size="42" font-weight="820" letter-spacing="-1.2">Download with your code</text>
-    <text x="66" y="240" class="copy body">Keep the activation code from your purchase email nearby.</text>
+    <text x="66" y="205" class="ink" font-size="42" font-weight="820" letter-spacing="-1.2">Download for free</text>
+    <text x="66" y="240" class="copy body">No code and no account. One button starts the download.</text>
 
     <g transform="translate(66 282)">
       <rect width="342" height="326" rx="18" fill="#ffffff" stroke="#dde2e9"/>
       <g transform="translate(25 29)">
         <circle cx="19" cy="19" r="19" fill="#c8102e"/>
         <text x="19" y="26" text-anchor="middle" fill="#ffffff" font-size="19" font-weight="800">1</text>
-        <text x="53" y="17" class="ink strong body">Open your email</text>
-        <text x="53" y="44" class="muted small">Find the Pit Wall activation code.</text>
+        <text x="53" y="17" class="ink strong body">Open the Download section</text>
+        <text x="53" y="44" class="muted small">On yourpitbox.com.</text>
       </g>
       <path d="M44 82V111" stroke="#dde2e9" stroke-width="3" stroke-linecap="round"/>
       <g transform="translate(25 111)">
         <circle cx="19" cy="19" r="19" fill="#c8102e"/>
         <text x="19" y="26" text-anchor="middle" fill="#ffffff" font-size="19" font-weight="800">2</text>
-        <text x="53" y="17" class="ink strong body">Enter the code</text>
-        <text x="53" y="44" class="muted small">Dashes are added automatically.</text>
+        <text x="53" y="17" class="ink strong body">Choose Download for Windows</text>
+        <text x="53" y="44" class="muted small">Leave an email for update news, or skip.</text>
       </g>
       <path d="M44 164V193" stroke="#dde2e9" stroke-width="3" stroke-linecap="round"/>
       <g transform="translate(25 193)">
         <circle cx="19" cy="19" r="19" fill="#c8102e"/>
         <text x="19" y="26" text-anchor="middle" fill="#ffffff" font-size="19" font-weight="800">3</text>
-        <text x="53" y="17" class="ink strong body">Choose Download</text>
-        <text x="53" y="44" class="muted small">Save PitWall-Setup.exe.</text>
+        <text x="53" y="17" class="ink strong body">Save the installer</text>
+        <text x="53" y="44" class="muted small">PitWall-Setup.exe, about 33 MB.</text>
       </g>
       <rect x="24" y="270" width="294" height="37" rx="10" fill="#e7f4ed"/>
       <circle cx="43" cy="288.5" r="8" fill="#17714b"/>
       <path d="M39 288.5L42 292L48 284.5" fill="none" stroke="#ffffff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
-      <text x="60" y="295" fill="#17714b" font-size="17" font-weight="730">One code, one computer</text>
+      <text x="60" y="295" fill="#17714b" font-size="17" font-weight="730">Free — nothing to enter</text>
     </g>
 
     <g transform="translate(456 127)" filter="url(#shadow)">
@@ -64,18 +64,18 @@
       <circle cx="52" cy="33" r="7" fill="#667081"/>
       <circle cx="76" cy="33" r="7" fill="#667081"/>
       <rect x="108" y="18" width="529" height="30" rx="8" fill="#27313d"/>
-      <text x="128" y="39" fill="#d8dee9" font-size="15">Pit Wall · Download</text>
+      <text x="128" y="39" fill="#d8dee9" font-size="15">Your Pit Box · Download</text>
 
-      <text x="42" y="119" class="ink" font-size="30" font-weight="820">Already have a code?</text>
-      <text x="42" y="151" class="copy small">Enter it below to download the installer.</text>
+      <text x="42" y="119" class="ink" font-size="30" font-weight="820">Want to hear about updates?</text>
+      <text x="42" y="151" class="copy small">Optional. Skip it and the download starts anyway.</text>
 
       <rect x="42" y="180" width="594" height="232" rx="16" fill="#f5f7fa" stroke="#dde2e9"/>
-      <text x="70" y="223" class="ink" font-size="17" font-weight="750">Activation code</text>
+      <text x="70" y="223" class="ink" font-size="17" font-weight="750">Email (optional)</text>
       <rect x="70" y="241" width="376" height="58" rx="10" fill="#ffffff" stroke="#aeb7c3" stroke-width="2"/>
-      <text x="91" y="277" fill="#667081" font-size="20" font-family="ui-monospace, Consolas, monospace" letter-spacing="1.1">PITW-XXXXX-XXXXX-XXXXX</text>
+      <text x="91" y="277" fill="#667081" font-size="20">Your email address</text>
       <rect x="461" y="241" width="146" height="58" rx="10" fill="#c8102e"/>
       <text x="534" y="277" text-anchor="middle" fill="#ffffff" font-size="19" font-weight="800">Download</text>
-      <text x="70" y="337" class="muted small">The same code activates Pit Wall on first run.</text>
+      <text x="70" y="337" class="muted small">Used only to tell you when a new version ships.</text>
       <rect x="70" y="357" width="271" height="35" rx="8" fill="#ffffff" stroke="#dde2e9"/>
       <path d="M91 367V381M85 376L91 382L97 376" fill="none" stroke="#17714b" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
       <text x="111" y="381" fill="#17714b" font-size="16" font-weight="730">PitWall-Setup.exe</text>

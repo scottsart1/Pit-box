@@ -1,8 +1,10 @@
 # Your Pit Box activation server
 
-A single Cloudflare Worker + D1 database. Its only job is to atomically claim a
-code for a device at first activation and return the code's pre-signed
-entitlement. It holds no private key and signs nothing.
+A single Cloudflare Worker + D1 database + private R2 bucket. Since the free
+edition (4.9) its everyday job is to stream the installer to anyone who asks
+and to record optional release-news signups. It also still claims activation
+codes for installs made under the paid model. It holds no private key and
+signs nothing.
 
 ## Deploy (free tier)
 
@@ -13,20 +15,43 @@ wrangler login
 # 1. Create the D1 database, then paste its id into wrangler.toml
 wrangler d1 create pitwall-licenses
 
-# 2. Create the schema
-wrangler d1 execute pitwall-licenses --file schema.sql
+# 2. Create the schema, then apply the migrations in order
+wrangler d1 execute pitwall-licenses --remote --file schema.sql
+wrangler d1 execute pitwall-licenses --remote --file migrations/0001_disabled_codes.sql
+wrangler d1 execute pitwall-licenses --remote --file migrations/0002_subscribers.sql
 
-# 3. Seed a batch of codes (generated offline; seed file is gitignored)
-wrangler d1 execute pitwall-licenses --file ../ledger/seed_codes_<stamp>.sql
+# 3. (Paid-model installs only) seed a batch of codes; the seed file is gitignored
+wrangler d1 execute pitwall-licenses --remote --file ../ledger/seed_codes_<stamp>.sql
 
 # 4. Ship it
 wrangler deploy
 ```
 
-The deployed URL (e.g. `https://pitwall-activation.<you>.workers.dev/activate`)
-is what the packaged app's first-run screen calls.
+`release_windows.ps1` at the repository root runs the deploy and the
+`0002_subscribers` migration on every release, after the installer has been
+uploaded to R2 and before the site is published.
 
 ## Contract
+
+### Free edition
+
+`GET /installer` → the installer as `attachment; filename="PitWall-Setup.exe"`,
+streamed from the private R2 bucket. `Range` requests are honoured (206), so a
+dropped download resumes. `503 { code: "not_configured" }` if the object has
+not been uploaded yet.
+
+`POST /subscribe` with `{ "email": "...", "source": "website-download" }`
+
+- `200 { ok: true }` — stored (duplicates are kept once, silently).
+- `422 { code: "bad_email" }` — not an email address.
+- `503 { code: "not_ready" }` — the `subscribers` table has not been created
+  yet. The website treats this as a soft failure and starts the download.
+
+The table is only ever read by hand (`wrangler d1 execute pitwall-licenses
+--remote --command "SELECT email, created_at FROM subscribers"`); nothing
+sends mail automatically.
+
+### Paid-model installs
 
 `POST /activate` with `{ "code": "PITW-...", "device_hash": "<64 hex>" }`
 
@@ -34,11 +59,18 @@ is what the packaged app's first-run screen calls.
   on the same device).
 - `404 { code: "code_not_found" }` — unknown code.
 - `409 { code: "code_already_claimed" }` — used on another device.
+- `410 { code: "code_retired" }` — retired by the ledger sync.
 - `400 { code: "bad_request" }` — malformed input.
+
+`POST /download` with `{ "code": "PITW-..." }` and `GET /file?code=...` are
+the code-gated download the site used before 4.9. They still work for anyone
+holding a code; the free build never calls them.
 
 `GET /health` → `200 { ok: true }`.
 
 ## Cost
 
 At hobby volume this stays inside Cloudflare's free tier (Workers: 100k
-requests/day; D1: millions of reads, 100k writes/day). Each sale is one write.
+requests/day; D1: millions of reads, 100k writes/day; R2: 10 GB stored and
+10 GB egress a month, which is roughly 300 installer downloads). Each signup
+is one write.

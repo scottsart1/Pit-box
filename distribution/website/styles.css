@@ -284,6 +284,33 @@ td.no { color: var(--muted); }
 
 .guide-prompt { max-width: 680px; margin: 1.5rem 0 0; color: var(--ink-2); }
 
+/* ---------- download prompt ---------- */
+
+/* The optional email ask that sits in front of the free download. It is a
+   real dialog (focus moves in, Escape closes it) rather than a banner, because
+   the one thing it must never do is look like a gate. */
+.modal { position: fixed; inset: 0; z-index: 20; display: grid; place-items: center; padding: 1.25rem; }
+.modal[hidden] { display: none; }
+.modal-backdrop { position: absolute; inset: 0; background: rgba(16, 23, 32, .55); }
+.modal-card {
+  position: relative;
+  width: min(540px, 100%);
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 1.6rem 1.7rem;
+  box-shadow: 0 30px 80px -30px rgba(16, 23, 32, .6);
+}
+.modal-card h3 { margin: 0 0 .5rem; font-size: 1.35rem; letter-spacing: -.01em; }
+.modal-card p { margin: 0 0 1rem; color: var(--ink-2); }
+.modal-card .code-entry input { font-family: var(--font); letter-spacing: 0; }
+.modal-foot { display: flex; justify-content: space-between; align-items: center; gap: 1rem; flex-wrap: wrap; margin: 1rem 0 0; }
+.modal-foot .button { padding: .55rem 1rem; font-size: .9rem; }
+.modal-foot small { color: var(--muted); font-size: .82rem; }
+.download-cta { display: flex; gap: 1rem; align-items: center; flex-wrap: wrap; margin: 0; }
+.download-cta .button { font-size: 1.05rem; padding: .85rem 1.6rem; }
+.download-cta .field-help { margin: 0; }
+
 /* ---------- illustrated setup guide ---------- */
 
 .guide-hero { padding: 4rem 0 3rem; background: linear-gradient(145deg, #fff 0%, #f7f8fa 70%, #f2e9eb 100%); }

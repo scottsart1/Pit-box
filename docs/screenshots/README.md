@@ -57,6 +57,19 @@ overtaking is hard enough that track position is worth defending.
 | `09-hungaroring-field.png` | Field | The field during the same moment |
 | `15-promo-poster.png` | Drive | The opening frame of the captioned 45-second cut, caption bar included; it is the poster for that video, not a documentation shot |
 
+## Workspace captures
+
+`19`–`22` are produced by the same `tools/capture_screens.py` run as the
+Silverstone set and document the pages added after 4.4: they are numbered
+after the promo poster so the two sets never collide.
+
+| File | Screen | Notable |
+|---|---|---|
+| `19-strategy-workspace.png` | Strategy | Ranked plans, the click-editable stint timeline and the strategy radio |
+| `20-history-archive.png` | History | Every strategy snapshot the race produced, widened past the current session |
+| `21-setup-lab.png` | Setup Lab | The recommended setup beside corner-by-corner findings |
+| `22-settings-full.png` | Settings | The full settings page as the capture run leaves it (13 is the curated version) |
+
 Reproduce them with:
 
 ```bash
