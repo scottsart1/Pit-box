@@ -34,6 +34,53 @@ body {
 
 .page { scroll-margin-top: 94px; }
 
+/* Quit prompt: the one moment a driver is not mid-lap, so the free app asks
+   for a coffee here, on the way out, and carries the old confirm()'s warning. */
+.quit-veil {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  background: rgba(7, 11, 15, .78);
+  backdrop-filter: blur(4px);
+}
+.quit-card {
+  width: min(520px, 100%);
+  background: var(--bg-1);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 22px 24px;
+  box-shadow: 0 30px 80px -30px rgba(0, 0, 0, .85);
+}
+.quit-kicker {
+  margin-bottom: 8px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: .12em;
+  text-transform: uppercase;
+  color: var(--text-2);
+}
+.quit-card h2 { margin: 0 0 8px; font-size: 22px; font-weight: 900; color: var(--text-1); }
+.quit-card p { margin: 0 0 12px; color: var(--text-2); line-height: 1.5; }
+.quit-links { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+.quit-coffee {
+  display: inline-flex;
+  align-items: center;
+  padding: 0 16px;
+  border-radius: 10px;
+  background: var(--gain);
+  border: 1px solid var(--gain);
+  color: #07130b;
+  font-weight: 800;
+  text-decoration: none;
+}
+.quit-coffee:hover { filter: brightness(1.08); }
+.quit-venmo { font-size: 13px; color: var(--text-2); }
+.quit-warning { padding-top: 12px; border-top: 1px solid var(--border); font-size: 13px; }
+.quit-actions { display: flex; justify-content: flex-end; gap: 10px; flex-wrap: wrap; }
+
 .sr-only {
   position: absolute;
   width: 1px;

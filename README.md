@@ -102,6 +102,10 @@ review of the tooling around it.
   between the installer upload and the site deploy, confirms the Worker is
   serving the installer before the page that links to it goes out, and stops
   on the first failing command rather than only the last one in a step.
+- **A coffee on the way out.** Quit Your Pit Box now opens a prompt instead
+  of the browser's confirm box: did you enjoy it, buy me a coffee (PayPal
+  and Venmo), and the same warning about what quitting stops. The
+  racewithme.net partner link is gone from the website header.
 
 ### Fixes
 

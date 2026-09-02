@@ -60,8 +60,8 @@ code { font-family: var(--mono); font-size: .92em; background: var(--bg-sunken);
 }
 
 .site-header .wrap {
-  /* Wider than the page column: the nav has eight items and the partner
-     pill, and at the content width the row broke onto three lines. */
+  /* Wider than the page column: the nav has eight items, and at the content
+     width the row broke onto three lines. */
   width: min(1320px, 100% - 2.5rem);
   display: flex;
   align-items: center;
@@ -73,29 +73,9 @@ code { font-family: var(--mono); font-size: .92em; background: var(--bg-sunken);
 .brand { display: flex; align-items: center; gap: .6rem; font-weight: 800; letter-spacing: -.01em; text-decoration: none; color: var(--ink); white-space: nowrap; }
 .brand-mark { width: 12px; height: 22px; background: var(--accent); border-radius: 2px; }
 
-/* Grouped so the header keeps three flex children. Adding the promo as a
-   fourth would have redistributed space-between and pulled the nav out of
-   position on every page. */
+/* Grouped so the header keeps three flex children and space-between keeps
+   the nav centred on every page. */
 .header-actions { display: flex; align-items: center; gap: .7rem; }
-.site-promo {
-  display: inline-flex;
-  align-items: center;
-  gap: .3rem;
-  padding: .34rem .66rem;
-  border: 1px solid var(--line);
-  border-radius: 999px;
-  color: var(--ink-2);
-  text-decoration: none;
-  font-size: .78rem;
-  font-weight: 700;
-  white-space: nowrap;
-}
-.site-promo:hover { border-color: var(--accent); color: var(--accent-ink); }
-.site-promo-label { color: var(--muted); font-weight: 600; }
-/* The full label is too wide beside eight nav items and the call to action
-   on anything but a wide desktop. The domain alone still carries the link,
-   so only the wording is dropped. */
-@media (max-width: 1400px) { .site-promo-label { display: none; } }
 .site-nav { display: flex; gap: 1.1rem; row-gap: .15rem; align-items: center; flex-wrap: wrap; justify-content: center; }
 .site-nav a { color: var(--ink-2); text-decoration: none; font-size: .93rem; font-weight: 600; white-space: nowrap; }
 .site-nav a:hover { color: var(--accent-ink); }
@@ -440,13 +420,11 @@ details p { color: var(--ink-2); margin: .7rem 0 0; max-width: 70ch; }
 }
 
 @media (max-width: 640px) {
-  /* Brand, partner pill and call to action do not fit one phone-width row
-     now that none of them wraps mid-word; let the actions drop to a second
-     row instead of pushing the page sideways. */
+  /* Brand and call to action do not wrap mid-word any more; let the actions
+     drop to a second row if they must, instead of pushing the page sideways. */
   .site-header .wrap { flex-wrap: wrap; row-gap: .35rem; padding: .45rem 0; }
   .site-header .wrap > .brand { flex: 1 1 auto; }
   .header-actions { flex: 1 1 100%; justify-content: flex-end; gap: .5rem; }
-  .site-promo { padding: .28rem .55rem; font-size: .74rem; }
   .header-actions .button { padding: .55rem .9rem; font-size: .88rem; }
   .hero { padding-top: 2.5rem; }
   .guide-hero { padding-top: 2.5rem; }
