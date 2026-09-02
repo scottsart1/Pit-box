@@ -147,6 +147,22 @@ def test_the_download_button_needs_no_code():
     assert "/download`" not in DOWNLOAD_JS and '"/download"' not in DOWNLOAD_JS
 
 
+def test_the_bridge_code_panel_is_hidden_until_the_worker_asks_for_it():
+    # Between the site going free and the free installer being uploaded, the
+    # installer online still asks for an activation code on first start. The
+    # page carries a panel for the shared code, hidden by default; only the
+    # Worker's /installer-info answer reveals it, and the release script turns
+    # that answer off the moment a free-edition build is uploaded.
+    panel = re.search(r'<div id="codePanel"[^>]*>', INDEX).group(0)
+    assert "hidden" in panel
+    assert 'id="freeCode"' in INDEX
+    assert "/installer-info" in DOWNLOAD_JS
+    assert "needs_code" in DOWNLOAD_JS
+    # The panel explains itself, and the guide covers the window it leads to.
+    assert "built before Your Pit Box went free" in INDEX
+    assert "Activate Your Pit Box" in GUIDE and "shared code" in GUIDE
+
+
 def test_the_email_prompt_is_optional_and_says_what_it_is_for():
     # The prompt collects an address for release news and nothing else. The
     # page and the licence terms must both say so, and the prompt must have a

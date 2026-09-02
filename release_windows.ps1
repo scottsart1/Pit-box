@@ -133,13 +133,30 @@ try {
     finally { Pop-Location }
   }
 
-  # CREATE TABLE IF NOT EXISTS: safe to run on every release. --yes answers
-  # wrangler's "run this on the remote database?" confirmation.
-  Step "Apply the D1 migration for the mailing list" {
+  # CREATE TABLE IF NOT EXISTS / INSERT OR IGNORE: safe to run on every
+  # release. --yes answers wrangler's "run this on the remote database?"
+  # confirmation.
+  Step "Apply the D1 migrations (mailing list, settings)" {
     Push-Location distribution\activation-server
     try {
       Run "wrangler d1 execute (0002_subscribers)" {
         Invoke-Wrangler d1 execute pitwall-licenses --remote --yes --file migrations/0002_subscribers.sql
+      }
+      Run "wrangler d1 execute (0003_settings)" {
+        Invoke-Wrangler d1 execute pitwall-licenses --remote --yes --file migrations/0003_settings.sql
+      }
+    }
+    finally { Pop-Location }
+  }
+
+  # The installer just uploaded is a free-edition build, so the site must stop
+  # showing the shared activation code that bridged the pre-4.9 installer.
+  # This is what turns the bridge off; the Worker reads it on every request.
+  Step "Tell the site the installer no longer needs a code" {
+    Push-Location distribution\activation-server
+    try {
+      Run "wrangler d1 execute (installer_needs_code=0)" {
+        Invoke-Wrangler d1 execute pitwall-licenses --remote --yes --command "UPDATE settings SET value = '0' WHERE key = 'installer_needs_code'"
       }
     }
     finally { Pop-Location }

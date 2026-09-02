@@ -2,9 +2,12 @@
 //
 // Since the free edition (4.9) the installer is streamed to anyone at
 // GET /installer, and POST /subscribe records an optional email for release
-// news. The code-gated routes (/activate, /download, /file) stay live for
-// installs activated under the paid model; the app runs fully offline after
-// activation, and the free build never calls them.
+// news. GET /installer-info says whether the installer currently in R2 still
+// asks for an activation code on first start (a build from before 4.9) and,
+// if so, the shared code the site should show. The code-gated routes
+// (/activate, /download, /file) stay live for installs activated under the
+// paid model; the app runs fully offline after activation, and the free build
+// never calls them.
 //
 // It holds no private key and signs nothing: signatures are minted offline and
 // stored at seed time. The app verifies them against the embedded public key,
@@ -82,6 +85,36 @@ function entitlementResponse(row, env) {
   );
 }
 
+// Small key/value table (migrations/0003_settings.sql). Two keys matter:
+//
+//   installer_needs_code  "1" while the installer in R2 is a build from before
+//                         the free edition, which still asks for an activation
+//                         code on first start. The site shows the shared code
+//                         while this is "1"; the release script sets it to "0"
+//                         right after it uploads a free-edition installer.
+//   universal_code        one seeded code reserved as the shared code. /activate
+//                         returns its entitlement to every device without
+//                         claiming it, so the pre-4.9 build activates for anyone.
+//
+// Both are read on demand and absent means "off", so a database without the
+// table behaves exactly as before.
+async function readSetting(env, key) {
+  try {
+    const row = await env.DB.prepare("SELECT value FROM settings WHERE key = ?")
+      .bind(key)
+      .first();
+    return row ? String(row.value) : null;
+  } catch {
+    return null;
+  }
+}
+
+async function handleInstallerInfo(request, env) {
+  const needsCode = (await readSetting(env, "installer_needs_code")) === "1";
+  const code = needsCode ? await readSetting(env, "universal_code") : null;
+  return json({ needs_code: needsCode && Boolean(code), code: code || null }, 200, env);
+}
+
 async function handleActivate(request, env) {
   let payload;
   try {
@@ -98,6 +131,22 @@ async function handleActivate(request, env) {
   }
 
   const db = env.DB;
+
+  // The shared code of the free edition's bridge period: every device gets the
+  // same pre-signed entitlement and nothing is claimed. The app only checks
+  // the signature and binds the licence to its own machine locally, so one
+  // entitlement serves any number of installs. Checked before the claimed and
+  // disabled branches on purpose: the reserved row is marked claimed so the
+  // ordinary path can never hand it to anyone.
+  const universal = await readSetting(env, "universal_code");
+  if (universal && codeId === universal) {
+    const shared = await db
+      .prepare("SELECT entitlement_json, signature FROM codes WHERE code_id = ?")
+      .bind(codeId)
+      .first();
+    if (shared) return entitlementResponse(shared, env);
+  }
+
   const existing = await db
     .prepare(
       "SELECT entitlement_json, signature, claimed, claimed_device, disabled FROM codes WHERE code_id = ?"
@@ -382,6 +431,9 @@ export default {
       } catch (e) {
         return err("server_error", "Could not start the download. Try again.", 500, env);
       }
+    }
+    if (request.method === "GET" && url.pathname === "/installer-info") {
+      return handleInstallerInfo(request, env);
     }
     if (request.method === "POST" && url.pathname === "/subscribe") {
       try {

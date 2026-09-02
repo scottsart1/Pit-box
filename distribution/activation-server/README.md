@@ -51,6 +51,16 @@ The table is only ever read by hand (`wrangler d1 execute pitwall-licenses
 --remote --command "SELECT email, created_at FROM subscribers"`); nothing
 sends mail automatically.
 
+`GET /installer-info` → `{ "needs_code": bool, "code": "PITW-..." | null }`.
+`needs_code` is true while the `settings` row `installer_needs_code` is `"1"`,
+meaning the installer in R2 is a build from before the free edition that still
+asks for an activation code on first start; `code` is then the shared code
+(`settings.universal_code`) the site shows under its Download button.
+`POST /activate` with that code returns its entitlement to any device without
+claiming it. `release_windows.ps1` sets the flag to `"0"` after uploading a
+free-edition installer. See `migrations/0003_settings.sql` and
+`HANDOVER.md`, "The bridge".
+
 ### Paid-model installs
 
 `POST /activate` with `{ "code": "PITW-...", "device_hash": "<64 hex>" }`

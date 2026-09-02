@@ -337,6 +337,13 @@ Strategy / setup / what-if  → model, high reasoning
         <span class="field-help"><code>PitWall-Setup.exe</code>, about 33&nbsp;MB</span>
       </p>
       <p id="downloadStatus" class="download-status" role="status" aria-live="polite"></p>
+      <div id="codePanel" class="code-panel" hidden>
+        <p><strong>One extra step, for a few days.</strong> The installer online right now was built before Your Pit Box went free, so the first time it starts it still asks for an activation code. Use this one. It is the same for everyone, it works on any PC, and the next installer removes the step entirely.</p>
+        <div class="code-entry">
+          <output id="freeCode" class="free-code" aria-label="Shared activation code">PITW-…</output>
+          <button id="copyCode" class="button ghost" type="button">Copy code</button>
+        </div>
+      </div>
       <p class="field-help">
         The button first offers to take your email so I can tell you about new
         versions. That is optional — skip it and the download starts anyway.
@@ -409,6 +416,11 @@ Strategy / setup / what-if  → model, high reasoning
     <details>
       <summary>What do you do with my email?</summary>
       <p>The download prompt asks for an email address, and you can skip it. If you give one, it is stored with the date on my Cloudflare account and used for exactly one thing: telling you when a new version ships. No newsletter, nothing sold or shared, and a reply to any of those emails removes you. The app itself never sends me anything.</p>
+    </details>
+
+    <details>
+      <summary>It is free, so why did the installer ask for an activation code?</summary>
+      <p>Only for a short while. The installer online today was built before Your Pit Box went free, and that build asks for a code the first time it starts. When that is the case, the download page shows a shared code right under the Download button; paste it into that window along with your OpenAI key and it activates on any PC, as many times as you like. The next installer drops the step, and installs made with the shared code keep working.</p>
     </details>
 
     <details>
