@@ -312,6 +312,22 @@ td.no { color: var(--muted); }
 .modal-foot { display: flex; justify-content: space-between; align-items: center; gap: 1rem; flex-wrap: wrap; margin: 1rem 0 0; }
 .modal-foot .button { padding: .55rem 1rem; font-size: .9rem; }
 .modal-foot small { color: var(--muted); font-size: .82rem; }
+.code-panel { margin: 1.1rem 0 .4rem; padding: 1rem 1.1rem; border-left: 3px solid #b77700; border-radius: 10px; background: #fff6df; }
+.code-panel p { margin: 0 0 .8rem; color: var(--ink-2); font-size: .93rem; }
+.free-code {
+  flex: 1 1 260px;
+  min-width: 0;
+  padding: .72rem .9rem;
+  border: 1px dashed #b77700;
+  border-radius: 10px;
+  background: #fff;
+  color: var(--ink);
+  font-family: var(--mono);
+  font-size: 1.05rem;
+  font-weight: 700;
+  letter-spacing: .08em;
+  user-select: all;
+}
 .download-cta { display: flex; gap: 1rem; align-items: center; flex-wrap: wrap; margin: 0; }
 .download-cta .button { font-size: 1.05rem; padding: .85rem 1.6rem; }
 .download-cta .field-help { margin: 0; }

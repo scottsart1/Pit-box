@@ -276,6 +276,34 @@ The 4.9 installer must be in R2 before the 4.9 site is deployed: the site
 promises a free download, and the previous installer still asks for a code.
 The release script enforces that order.
 
+### The bridge: shipping the free site before the free installer
+
+The 4.9 site and Worker went live on 2 September 2026 from a cloud session,
+while the installer in R2 was still the 4.8.1 build, which asks for an
+activation code on first start. To keep downloads usable in between:
+
+- D1 has a `settings` table (`migrations/0003_settings.sql`) with
+  `installer_needs_code = 1` and `universal_code = PITW-0HGQG-3XGGW-DJ021`.
+  That code is one of the seeded batch, marked claimed with
+  `claimed_device = 'free-edition-shared-code'` so the ordinary path can never
+  hand it out.
+- `POST /activate` with that code returns its pre-signed entitlement to any
+  device without claiming anything (checked before the claimed and disabled
+  branches). The app verifies the signature and binds locally, so one
+  entitlement serves every install. Nothing about the other 49 codes changed.
+- `GET /installer-info` answers `{ needs_code, code }`. `download.js` calls
+  it after the email prompt and, while `needs_code` is true, reveals the
+  `#codePanel` under the Download button with that code and a copy button.
+  The FAQ and guide step 4 explain the extra window.
+- `release_windows.ps1` ends the bridge automatically: after uploading a
+  free-edition installer it sets `installer_needs_code = 0`, the panel stops
+  appearing, and the shared code becomes irrelevant (installs made with it
+  keep working; they validate offline).
+
+Do not mark `PITW-0HGQG-3XGGW-DJ021` Void or Replaced in the ledger workbook
+while the bridge is on: the sync would retire it and the shared code would
+stop activating. Once the free installer is up, retiring it is harmless.
+
 ## To go live
 
 Steps 1–4 and 6 are done. Preflight now reports "all checks passed" for the
