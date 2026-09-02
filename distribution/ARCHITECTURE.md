@@ -8,11 +8,24 @@ the dev app (`python -m pitwall.main`) is never gated and never changed.
 The security-sensitive part is the licensing/activation design, below. Read
 this before it is wired into the packaged launcher and website.
 
+> **Free edition (4.9).** Your Pit Box is now free to download. The shipped
+> build has `distribution/edition.py::FREE_EDITION = True`, which makes the
+> launcher skip the activation gate entirely: no code, no online claim, no
+> device binding. The integrity check stays. Everything below about codes,
+> claims and entitlements is still the code that ships — installs made under
+> the paid model run it, and `FREE_EDITION = False` restores it for a new
+> build — but it is no longer on the path a new user takes. The Worker
+> additionally serves the installer publicly at `GET /installer` and takes
+> optional release-news signups at `POST /subscribe` (D1 table
+> `subscribers`, created by `activation-server/migrations/0002_subscribers.sql`).
+
 ---
 
 ## 1. What we are protecting, and the honest threat model
 
-This is a $5, one-time, single-activation hobby product. The goal is to make
+This was designed as a $5, one-time, single-activation hobby product (it is
+free since 4.9; the licensing stays for the installs that used it). The goal
+was to make
 casual copying not worth the bother and to enforce "one code, one activation",
 **not** to defeat a determined reverse-engineer. Client-side licensing on the
 user's own machine is always ultimately defeatable; the design is honest about

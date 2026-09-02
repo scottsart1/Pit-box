@@ -61,6 +61,9 @@ class _Recorder:
 
 
 def _launch(recorder: _Recorder, config_dir: Path) -> launcher.LaunchResult:
+    # These tests document the paid activation flow. The shipped build is the
+    # free edition (see test_free_edition.py), so the flow is selected
+    # explicitly rather than inherited from edition.FREE_EDITION.
     return launcher.launch(
         config_dir,
         endpoint="https://activation.test/activate",
@@ -68,6 +71,7 @@ def _launch(recorder: _Recorder, config_dir: Path) -> launcher.LaunchResult:
         show_error=recorder.show_error,
         start_app=recorder.start_app,
         save_api_key=recorder.save_api_key,
+        free=False,
     )
 
 

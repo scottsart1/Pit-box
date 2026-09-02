@@ -1,8 +1,10 @@
-// Pit Wall activation endpoint (Cloudflare Worker + D1).
+// Pit Wall download + activation endpoint (Cloudflare Worker + D1).
 //
-// The ONE online interaction in the licensing system. It atomically claims a
-// code for a device and returns the code's pre-signed entitlement. After this,
-// the app runs fully offline.
+// Since the free edition (4.9) the installer is streamed to anyone at
+// GET /installer, and POST /subscribe records an optional email for release
+// news. The code-gated routes (/activate, /download, /file) stay live for
+// installs activated under the paid model; the app runs fully offline after
+// activation, and the free build never calls them.
 //
 // It holds no private key and signs nothing: signatures are minted offline and
 // stored at seed time. The app verifies them against the embedded public key,
@@ -259,8 +261,31 @@ async function handleFile(request, env, url) {
     return err("code_retired", "This code has been retired.", 410, env);
   }
 
+  return streamInstaller(request, env);
+}
+
+// Stream the installer from the private bucket, with Range support so a
+// dropped connection resumes instead of restarting 33 MB.
+async function streamInstaller(request, env) {
   if (!env.DOWNLOADS) {
-    return err("not_configured", "The download is not available yet.", 503, env);
+    return err("not_configured", "The download is not available yet. Email vale.scott00@gmail.com and I will send it directly.", 503, env);
+  }
+
+  // HEAD answers with the object's metadata and no body, so the release
+  // script can confirm the Worker is serving the installer without pulling
+  // 33 MB through wrangler's (known stale) reader.
+  if (request.method === "HEAD") {
+    const meta = await env.DOWNLOADS.head(INSTALLER_KEY);
+    if (!meta) {
+      return err("not_configured", "The installer is not uploaded yet.", 503, env);
+    }
+    const headHeaders = new Headers(corsHeaders(env));
+    meta.writeHttpMetadata(headHeaders);
+    headHeaders.set("etag", meta.httpEtag);
+    headHeaders.set("content-disposition", `attachment; filename="${INSTALLER_KEY}"`);
+    headHeaders.set("accept-ranges", "bytes");
+    headHeaders.set("content-length", String(meta.size));
+    return new Response(null, { status: 200, headers: headHeaders });
   }
 
   // Only ask R2 for a range when one was actually requested. Passing the
@@ -299,6 +324,44 @@ async function handleFile(request, env, url) {
   return new Response(object.body, { status: 200, headers });
 }
 
+// The free edition: no code, no form. The page's Download button lands here
+// (after the optional email prompt), and so does anyone who copies the link —
+// that is the point now, not a hole.
+async function handleInstaller(request, env) {
+  return streamInstaller(request, env);
+}
+
+// Optional release-news signup from the download prompt. Stores the address
+// and when it arrived, nothing else; duplicates are silently kept once.
+const EMAIL_SHAPE = /^[^\s@]{1,64}@[^\s@]{1,190}\.[^\s@]{2,24}$/;
+
+async function handleSubscribe(request, env) {
+  let payload;
+  try {
+    payload = await request.json();
+  } catch {
+    return err("bad_request", "Body must be JSON.", 400, env);
+  }
+  const raw = payload && payload.email;
+  const email = typeof raw === "string" ? raw.trim().toLowerCase() : "";
+  if (!email || email.length > 254 || !EMAIL_SHAPE.test(email)) {
+    return err("bad_email", "That does not look like an email address.", 422, env);
+  }
+  const source = typeof payload.source === "string" ? payload.source.slice(0, 40) : "website";
+  try {
+    await env.DB.prepare(
+      "INSERT OR IGNORE INTO subscribers (email, created_at, source) VALUES (?, ?, ?)"
+    )
+      .bind(email, new Date().toISOString(), source)
+      .run();
+  } catch (e) {
+    // The subscribers table comes from migrations/0002_subscribers.sql; until
+    // it exists the download must still work, so this is a soft failure.
+    return err("not_ready", "The mailing list is not set up yet, but your download will still start.", 503, env);
+  }
+  return json({ ok: true }, 200, env);
+}
+
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
@@ -311,6 +374,24 @@ export default {
     if (request.method === "GET" && url.pathname === "/health") {
       return json({ ok: true }, 200, env);
     }
+
+    // The free edition: the site's Download button lands here.
+    if ((request.method === "GET" || request.method === "HEAD") && url.pathname === "/installer") {
+      try {
+        return await handleInstaller(request, env);
+      } catch (e) {
+        return err("server_error", "Could not start the download. Try again.", 500, env);
+      }
+    }
+    if (request.method === "POST" && url.pathname === "/subscribe") {
+      try {
+        return await handleSubscribe(request, env);
+      } catch (e) {
+        return err("server_error", "Could not save that just now, but your download will still start.", 500, env);
+      }
+    }
+
+    // Paid-model installs.
     if (request.method === "POST" && url.pathname === "/activate") {
       try {
         return await handleActivate(request, env);

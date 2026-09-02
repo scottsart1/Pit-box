@@ -1,4 +1,4 @@
-# Your Pit Box 4.7 — AI race engineer for PS5 and Windows
+# Your Pit Box 4.9 — AI race engineer for PS5 and Windows
 
 Your Pit Box receives **F1 26** telemetry (UDP format **2026**) from a PS5, runs deterministic
 strategy/corner/setup analysis locally, keeps persistent SQLite history, answers spoken questions,
@@ -75,6 +75,51 @@ Only enable `PITWALL_WEB_LAN_ACCESS=true` when a phone/tablet needs the
 dashboard. Bind the web host to `0.0.0.0`, set a long
 `PITWALL_WEB_ACCESS_TOKEN`, and keep it on a trusted LAN. Your Pit Box never opens a
 router or firewall to the public internet automatically.
+
+## What changed in 4.9.0
+
+4.9.0 makes Your Pit Box free to download, and clears the defects found in a
+review of the tooling around it.
+
+### Free to download
+
+- **No activation code.** The packaged build ships with
+  `distribution/edition.py::FREE_EDITION = True`. The launcher checks the
+  install's integrity, shows a one-time welcome screen that takes an optional
+  OpenAI API key, and starts. No online claim, no device binding, nothing to
+  buy. Installs activated under the paid model keep working unchanged, and
+  the paid flow is still in the code behind that one switch.
+- **A public installer route.** The activation Worker streams the installer
+  at `GET /installer` (Range requests supported) and records optional
+  release-news signups at `POST /subscribe`, stored in a new D1 table
+  (`activation-server/migrations/0002_subscribers.sql`).
+- **The website.** The price and the code form are gone. The page has a
+  Download button with an optional email prompt in front of it, and a
+  buy-me-a-coffee section where the checkout was. The licence terms, the
+  setup guide and its illustrations describe the free flow; the Windows
+  installer's own messages no longer mention a code.
+- **The release script** deploys the Worker and applies the migration
+  between the installer upload and the site deploy, confirms the Worker is
+  serving the installer before the page that links to it goes out, and stops
+  on the first failing command rather than only the last one in a step.
+
+### Fixes
+
+- `tools/replay_demo.py` no longer scripts a retirement or damage onto the
+  player's own car when the player index happens to be 16 or 8.
+- `tools/record_overlay_frames.py` shares the DevTools client and browser
+  flags with `tools/capture_screens.py`; `--no-sandbox` is passed only where
+  it is needed instead of unconditionally.
+- `tools/capture_demo_video.py` ignores proxy environment variables when
+  talking to the local browser, so a system proxy cannot swallow the DevTools
+  handshake.
+- `tools/cut_social_video.py` finds ffmpeg through imageio-ffmpeg (or PATH),
+  reads durations without a separate ffprobe binary and fails loudly instead
+  of producing a zero-length cut, and feeds silence when the footage has no
+  audio track instead of aborting on the audio map.
+- A `video` extra in `pyproject.toml` installs the capture and cutting
+  dependencies in one go: `pip install -e ".[video]"`.
+- Screenshot captures 19–22 are named for what they show.
 
 ## What changed in 4.7.0
 

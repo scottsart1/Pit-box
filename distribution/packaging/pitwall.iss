@@ -88,9 +88,9 @@ Filename: "{app}\{#AppExeName}"; Description: "Start {#AppName} now"; Flags: now
 Type: filesandordirs; Name: "{app}\_internal"
 
 [Messages]
-WelcomeLabel2=This will install [name/ver] on your computer.%n%nYou will need your activation code and an OpenAI API key the first time it runs. Your Pit Box will ask for both.
+WelcomeLabel2=This will install [name/ver] on your computer.%n%nYour Pit Box is free: there is no activation code. The first time it runs it asks for an OpenAI API key, which you can also add later from the Connection tab.
 FinishedLabelNoIcons=Setup has finished installing [name].
-FinishedLabel=Setup has finished installing [name].%n%nThe first time it starts, enter your activation code and your OpenAI API key. After that it opens straight to the dashboard.
+FinishedLabel=Setup has finished installing [name].%n%nThe first time it starts, paste your OpenAI API key or choose Skip for now. After that it opens straight to the dashboard.
 
 [Code]
 // Running copies are handled by CloseApplications in [Setup], not here. An
@@ -103,7 +103,7 @@ begin
   // hangs the uninstaller until the process is killed.
   if (CurUninstallStep = usPostUninstall) and not UninstallSilent then
     MsgBox('Your Pit Box has been removed.' + #13#10 + #13#10 +
-           'Your recorded sessions and licence in PitWallData have been left ' +
-           'in place, so reinstalling will not ask you to activate again.',
+           'Your recorded sessions and settings in PitWallData have been left ' +
+           'in place, so reinstalling picks up where you left off.',
            mbInformation, MB_OK);
 end;

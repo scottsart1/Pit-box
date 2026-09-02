@@ -186,7 +186,6 @@ async def capture(
             "--remote-debugging-port=9333",
             f"--user-data-dir={profile}",
             "--window-size=1600,1080",
-            "--no-sandbox",
             "--no-first-run",
         ],
         stdout=subprocess.DEVNULL,
@@ -244,7 +243,7 @@ async def capture(
                 detail = await devtools.evaluate(STRATEGY_SETUP)
                 print(f"  strategy: {detail}")
                 await asyncio.sleep(6.0)
-                await devtools.screenshot(out / "15-strategy-workspace.png", 1600, 1500)
+                await devtools.screenshot(out / "19-strategy-workspace.png", 1600, 1500)
 
             if wanted("library"):
                 await devtools.goto(f"{base}/#library", settle=5.0)
@@ -282,13 +281,13 @@ async def capture(
             await devtools.goto(f"{base}/#review", settle=4.0)
             await devtools.evaluate(HISTORY_SETUP)
             await asyncio.sleep(6.0)
-            await devtools.screenshot(out / "16-history-archive.png", 1600, 1400)
+            await devtools.screenshot(out / "20-history-archive.png", 1600, 1400)
 
             await devtools.goto(f"{base}/#setup", settle=6.0)
-            await devtools.screenshot(out / "17-setup-lab.png", 1600, 1200)
+            await devtools.screenshot(out / "21-setup-lab.png", 1600, 1200)
 
             await devtools.goto(f"{base}/#settings", settle=6.0)
-            await devtools.screenshot(out / "18-settings.png", 1600, 1200)
+            await devtools.screenshot(out / "22-settings-full.png", 1600, 1200)
     finally:
         process.terminate()
         shutil.rmtree(profile, ignore_errors=True)

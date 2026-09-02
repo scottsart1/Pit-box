@@ -127,11 +127,36 @@ def test_the_real_contact_details_are_in_place():
     assert "example.com" not in INDEX
 
 
-def test_the_buyer_is_told_to_put_their_email_in_the_venmo_note():
-    # Fulfilment is manual, so the payment note is the only channel carrying
-    # the address a code gets sent to. Losing it means a paid order with no
-    # way to deliver.
-    assert "payment note" in INDEX
+def test_the_download_is_free_and_the_coffee_is_optional():
+    # 4.9 dropped the price. A leftover "$5" anywhere would be a lie on a page
+    # that says "free", and the coffee has to read as a thank-you, not a fee.
+    for page in (INDEX, GUIDE, EULA, DIAGNOSTICS):
+        assert not re.search(r"\$\s?\d", page)
+    assert "Buy me a coffee" in INDEX
+    assert "https://paypal.me/sarthakvij298" in INDEX
+    assert "not a purchase" in INDEX
+    assert "purchase email" not in INDEX and "purchase email" not in GUIDE
+
+
+def test_the_download_button_needs_no_code():
+    # The Download button navigates straight to the public installer route.
+    # The code-gated /download endpoint is never called by the site now.
+    assert 'id="downloadButton"' in INDEX
+    assert 'id="downloadCode"' not in INDEX
+    assert "/installer" in DOWNLOAD_JS
+    assert "/download`" not in DOWNLOAD_JS and '"/download"' not in DOWNLOAD_JS
+
+
+def test_the_email_prompt_is_optional_and_says_what_it_is_for():
+    # The prompt collects an address for release news and nothing else. The
+    # page and the licence terms must both say so, and the prompt must have a
+    # skip that still downloads.
+    assert 'id="emailModal"' in INDEX
+    assert 'id="skipEmail"' in INDEX
+    assert "optional" in INDEX
+    assert "new version" in INDEX
+    assert "/subscribe" in DOWNLOAD_JS
+    assert "skip it" in EULA and "new version" in EULA
 
 
 def test_the_eula_sections_are_numbered_contiguously():
@@ -199,10 +224,10 @@ def test_the_setup_guide_is_published_and_linked():
 
 def test_the_setup_guide_covers_the_customer_journey():
     for required in (
-        "Activation code",
+        "Download for Windows",
         "API billing is separate",
         "Create new secret key",
-        "Activate Your Pit Box",
+        "Welcome to Your Pit Box",
         "Test saved key",
         "All configured providers ready",
         "UDP IP Address",

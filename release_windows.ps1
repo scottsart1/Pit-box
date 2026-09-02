@@ -1,9 +1,10 @@
 # Release Your Pit Box: test, build the installer, publish it, then the site.
 #
 # The one script for the whole release, in the only safe order. The installer
-# must reach R2 BEFORE the site deploys, because the site describes the
-# current build - deploying the page first would advertise features the
-# download does not have yet.
+# must reach R2, and the Worker that serves it must be deployed, BEFORE the
+# site deploys: the site describes the current build and links straight to
+# the download, so deploying the page first would advertise a file that is
+# not there yet.
 #
 # Run it by double-clicking release_windows.bat, or from PowerShell:
 #   Set-ExecutionPolicy -Scope Process Bypass
@@ -16,13 +17,26 @@ $ErrorActionPreference = "Stop"
 Set-Location $PSScriptRoot
 Start-Transcript -Path (Join-Path $PSScriptRoot "release_log.txt") -Force | Out-Null
 
+$ActivationApi = "https://pitwall-activation.sarthakvij123450.workers.dev"
+
 function Step([string]$Name, [scriptblock]$Body) {
   Write-Host ""
   Write-Host ("== " + $Name) -ForegroundColor Cyan
-  & $Body
-  if ($LASTEXITCODE -ne $null -and $LASTEXITCODE -ne 0) {
-    throw "FAILED at step: $Name (exit $LASTEXITCODE). See release_log.txt; distribution\HANDOVER.md documents the known traps."
+  try { & $Body }
+  catch {
+    throw "FAILED at step: $Name. $($_.Exception.Message) See release_log.txt; distribution\HANDOVER.md documents the known traps."
   }
+}
+
+# Native programs (git, python, wrangler) do not throw when they fail;
+# $ErrorActionPreference only governs cmdlets. Worse, the next native command
+# in the same block overwrites $LASTEXITCODE, so a check at the end of a
+# multi-command step only ever saw the last command. Every native call
+# therefore goes through here and is checked the moment it returns.
+function Run([string]$What, [scriptblock]$Command) {
+  $global:LASTEXITCODE = 0
+  & $Command
+  if ($LASTEXITCODE -ne 0) { throw "$What failed (exit $LASTEXITCODE)." }
 }
 
 # wrangler if installed, npx otherwise. Both use the Cloudflare login already
@@ -44,28 +58,35 @@ try {
     throw "distribution\.secrets\signing_key.ed25519 is missing. Copy the .secrets folder from your previous Pit-box clone - the licensing tests sign with the real production key."
   }
 
-  Step "Pull the release commit" {
-    git pull
-    $branch = (git branch --show-current)
+  Step "Check the branch" {
+    $branch = & git branch --show-current
+    if ($LASTEXITCODE -ne 0) { throw "git branch failed (exit $LASTEXITCODE)." }
     if ($branch -ne "main") { throw "On branch '$branch'. Release from main: git checkout main" }
   }
 
+  Step "Pull the release commit" {
+    Run "git pull" { git pull }
+  }
+
   Step "Install dependencies (including packaging tools)" {
-    & $python -m pip install --upgrade pip --quiet
-    & $python -m pip install -e ".[dev]" --quiet
-    & $python -m pip install pyinstaller openpyxl cryptography --quiet
+    Run "pip upgrade" { & $python -m pip install --upgrade pip --quiet }
+    Run "pip install .[dev]" { & $python -m pip install -e ".[dev]" --quiet }
+    Run "pip install packaging tools" { & $python -m pip install pyinstaller openpyxl cryptography --quiet }
   }
 
   Step "Compile and run the full test suite" {
-    & $python -m compileall -q .\src
-    & $python -m pytest -q
+    Run "compileall" { & $python -m compileall -q .\src }
+    Run "pytest" { & $python -m pytest -q }
   }
 
   $version = & $python -c "import sys; sys.path.insert(0,'src'); import pitwall; print(pitwall.__version__)"
+  if ($LASTEXITCODE -ne 0 -or -not $version) {
+    throw "Could not read the version from src\pitwall\__init__.py (exit $LASTEXITCODE)."
+  }
   Write-Host "Releasing version $version" -ForegroundColor Green
 
   Step "Build the Windows installer" {
-    & $python -m distribution.packaging.build --installer
+    Run "build.py --installer" { & $python -m distribution.packaging.build --installer }
   }
 
   $installer = Join-Path $env:LOCALAPPDATA "PitWallBuild\artifacts\PitWall-Setup.exe"
@@ -80,28 +101,61 @@ try {
   Write-Host "Installer: $bytes bytes, SHA-256 $sha" -ForegroundColor Green
 
   Step "Upload the installer to R2 (before the site, always)" {
-    Invoke-Wrangler r2 object put pitwall-downloads/PitWall-Setup.exe --file "$installer" --content-type application/vnd.microsoft.portable-executable --remote
+    Run "wrangler r2 object put" {
+      Invoke-Wrangler r2 object put pitwall-downloads/PitWall-Setup.exe --file "$installer" --content-type application/vnd.microsoft.portable-executable --remote
+    }
   }
 
   Step "Verify the uploaded bytes match the build" {
     $check = Join-Path $env:TEMP "r2-release-check.exe"
-    Invoke-Wrangler r2 object get pitwall-downloads/PitWall-Setup.exe --file "$check" --remote
+    Run "wrangler r2 object get" {
+      Invoke-Wrangler r2 object get pitwall-downloads/PitWall-Setup.exe --file "$check" --remote
+    }
     $remote = (Get-FileHash $check -Algorithm SHA256).Hash
     Remove-Item $check -Force -ErrorAction SilentlyContinue
     if ($remote -ne $sha) {
       # wrangler reads can serve a stale object long after a successful put
       # (seen on the 4.6.1 and 4.8.0 releases). The trusted read is the
-      # production path: the Worker download with a real code, or the R2
-      # object in the Cloudflare dashboard. Warn, do not abort the release
-      # on an untrusted reader.
-      Write-Host "WARNING: wrangler read back $remote, not $sha. wrangler reads are known to serve stale objects - verify via the Worker download (a code from D1; downloads never consume codes) or the Cloudflare dashboard before trusting either hash." -ForegroundColor Yellow
+      # production path: the Worker's /installer route, or the R2 object in
+      # the Cloudflare dashboard. Warn, do not abort the release on an
+      # untrusted reader.
+      Write-Host "WARNING: wrangler read back $remote, not $sha. wrangler reads are known to serve stale objects - verify via $ActivationApi/installer or the Cloudflare dashboard before trusting either hash." -ForegroundColor Yellow
     } else {
-      Write-Host "R2 round-trip verified: buyers get exactly this build." -ForegroundColor Green
+      Write-Host "R2 round-trip verified: downloads get exactly this build." -ForegroundColor Green
     }
   }
 
+  # The Worker is what serves /installer and takes /subscribe signups. The
+  # site links to both, so it has to be current before the page goes out.
+  Step "Deploy the activation Worker" {
+    Push-Location distribution\activation-server
+    try { Run "wrangler deploy" { Invoke-Wrangler deploy } }
+    finally { Pop-Location }
+  }
+
+  # CREATE TABLE IF NOT EXISTS: safe to run on every release. --yes answers
+  # wrangler's "run this on the remote database?" confirmation.
+  Step "Apply the D1 migration for the mailing list" {
+    Push-Location distribution\activation-server
+    try {
+      Run "wrangler d1 execute (0002_subscribers)" {
+        Invoke-Wrangler d1 execute pitwall-licenses --remote --yes --file migrations/0002_subscribers.sql
+      }
+    }
+    finally { Pop-Location }
+  }
+
+  Step "Confirm the free download answers before the site points at it" {
+    $probe = Invoke-WebRequest -Uri "$ActivationApi/installer" -Method Head -UseBasicParsing
+    $length = [int64]($probe.Headers["Content-Length"] | Select-Object -First 1)
+    if ($probe.StatusCode -ne 200 -or $length -lt 1MB) {
+      throw "$ActivationApi/installer answered $($probe.StatusCode) with $length bytes. The Worker or the R2 object is wrong; do not deploy the site."
+    }
+    Write-Host "Worker serves the installer: $length bytes." -ForegroundColor Green
+  }
+
   Step "Build the site" {
-    & $python -m distribution.website.build_site
+    Run "build_site" { & $python -m distribution.website.build_site }
   }
 
   Step "Deploy the site to production" {
@@ -110,7 +164,7 @@ try {
       # --branch main is load-bearing: without it, Pages files the deployment
       # under the local git branch, and anything but the production branch
       # becomes a PREVIEW that never reaches yourpitbox.com.
-      Invoke-Wrangler pages deploy _site --project-name pitwall --branch main
+      Run "wrangler pages deploy" { Invoke-Wrangler pages deploy _site --project-name pitwall --branch main }
     }
     finally { Pop-Location }
   }
