@@ -93,6 +93,23 @@ dashboard. Bind the web host to `0.0.0.0`, set a long
 `PITWALL_WEB_ACCESS_TOKEN`, and keep it on a trusted LAN. Your Pit Box never opens a
 router or firewall to the public internet automatically.
 
+## What changed in 4.9.1
+
+4.9.1 fixes the packaged Windows build crashing on its first launch.
+
+- **The welcome screen opens.** The 4.9.0 installer failed on every fresh
+  install with `TypeError: _prompt_first_run() takes 0 positional arguments
+  but 1 was given` right after the splash, before the welcome screen could
+  appear. The launcher passes the message to show above the first-run form,
+  and the packaged entry point's wrapper did not accept it. It does now, and
+  a test drives the launch with the real packaged callbacks so the wiring
+  is covered, not only the decision tree.
+- **Workaround for a 4.9.0 install** until you update: create an empty file
+  named `welcome_shown` in `%USERPROFILE%\PitWallData\license\` (or under
+  `PITWALL_DATA_DIR\license\` if you set that variable). The launcher then
+  skips the welcome screen and starts the app; an AI key can be added from
+  the Connection tab as usual.
+
 ## What changed in 4.9.0
 
 4.9.0 makes Your Pit Box free to download, and clears the defects found in a

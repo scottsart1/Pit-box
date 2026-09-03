@@ -120,12 +120,18 @@ def _start_app() -> None:
     run()
 
 
-def _prompt_first_run():  # type: ignore[no-untyped-def]
-    """First-run dialogs need the screen: drop the bootloader splash first."""
+def _prompt_first_run(message: str = ""):  # type: ignore[no-untyped-def]
+    """First-run dialogs need the screen: drop the bootloader splash first.
+
+    `launch()` always passes the message to show above the form (empty on the
+    first attempt, the failure reason on a retry), so this must take it. A
+    version that took no arguments raised ``TypeError`` on every first launch
+    of the packaged build, before the welcome screen could appear.
+    """
     from pitwall.main import close_startup_splash
 
     close_startup_splash()
-    return first_run.prompt_first_run()
+    return first_run.prompt_first_run(message)
 
 
 def _show_error(*args, **kwargs):  # type: ignore[no-untyped-def]
