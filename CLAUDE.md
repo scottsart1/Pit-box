@@ -27,6 +27,25 @@ prose or jumping straight to code:
   the original board in the running app. Do not reintroduce an in-app
   redesign without being asked; canvas work stays on the canvas.
 
+## Commit messages, PR descriptions and comments
+
+This repository is public and these are permanent. Write them about the
+change, for someone reading the repo later with no knowledge of how it was
+produced.
+
+- **Never include a session or chat-transcript URL** (`claude.ai/code/...`
+  or similar), in a commit trailer, a PR body, or a file. It is a link to a
+  private resource that is useless to every reader.
+- **Do not narrate the conversation that produced the change**: no
+  reasoning about instructions, no "the owner asked for", no "this was the
+  wrong instinct", no recounting of corrections. Describe what changed and
+  why it is right. An exception only when the owner explicitly asks for such
+  a note, and then keep it to one line.
+- Do not report work that is not in the diff (cleanups done elsewhere,
+  scans run, conversation outcomes). A PR describes its own changes.
+- A `Co-Authored-By:` trailer is fine. The project discloses its AI use
+  openly in the README's "How this was built" section.
+
 ## Verification
 
 Run `python -m pytest tests -q` for the app suite. `distribution/tests`
