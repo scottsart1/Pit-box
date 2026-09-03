@@ -61,6 +61,16 @@ claiming it. `release_windows.ps1` sets the flag to `"0"` after uploading a
 free-edition installer. See `migrations/0003_settings.sql` and
 `HANDOVER.md`, "The bridge".
 
+`GET /reviews` → `{ "reviews": [{ "name", "rating", "body", "created_at" }], "count", "average" }`.
+Only reviews with `approved = 1` are returned, newest first, at most 50. The
+reply email and the address hash are never returned.
+
+`POST /reviews` with `{ "name", "rating": 1-5, "body", "email"?: "...", "website": "" }`
+stores a review with `approved = 0`. `website` is a honeypot: a non-empty
+value is dropped silently. At most three reviews per connection per day
+(429 after that). Moderation is by hand in D1; `migrations/0004_reviews.sql`
+has the queries.
+
 ### Paid-model installs
 
 `POST /activate` with `{ "code": "PITW-...", "device_hash": "<64 hex>" }`

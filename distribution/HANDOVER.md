@@ -304,6 +304,21 @@ Do not mark `PITW-0HGQG-3XGGW-DJ021` Void or Replaced in the ledger workbook
 while the bridge is on: the sync would retire it and the shared code would
 stop activating. Once the free installer is up, retiring it is harmless.
 
+## Reviews on the website
+
+The Reviews section on the landing page posts to the Worker (`POST /reviews`)
+and reads back from it (`GET /reviews`). Nothing shows until it is approved
+by hand, so the site cannot be defaced while nobody is watching. Moderate in
+the Cloudflare dashboard's D1 console, database `pitwall-licenses`:
+
+    SELECT id, name, rating, body, email, created_at FROM reviews WHERE approved = 0;
+    UPDATE reviews SET approved = 1 WHERE id = <id>;
+    DELETE FROM reviews WHERE id = <id>;     -- spam
+
+The page caches the list for a minute. A review's email is for replying and
+is never returned to the page; `address_hash` only caps one connection to
+three reviews a day. The table comes from `migrations/0004_reviews.sql`.
+
 ## Releasing without the Windows PC
 
 `release_windows.ps1` needs Windows for one step, the PyInstaller and Inno

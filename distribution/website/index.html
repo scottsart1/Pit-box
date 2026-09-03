@@ -21,6 +21,7 @@
       <a href="guide.html">Setup guide</a>
       <a href="#requirements">Requirements</a>
       <a href="#download">Download</a>
+      <a href="#reviews">Reviews</a>
       <a href="#coffee">Buy me a coffee</a>
     </nav>
     <div class="header-actions">
@@ -362,14 +363,50 @@ Strategy / setup / what-if  → model, high reasoning
   </div>
 </section>
 
-<section class="soft">
+<section id="reviews" class="soft">
   <div class="wrap">
     <h2>Reviews</h2>
-    <div class="reviews-empty">
-      <strong>No reviews yet.</strong>
-      Your Pit Box has just been released, so there is nothing honest to put here.
-      This space stays empty until real buyers have said something real.
+    <p class="section-lede">From people who have raced with it. I read every review before it goes up, and I do not edit them.</p>
+    <p id="reviewSummary" class="review-summary" aria-live="polite"></p>
+    <div id="reviewList" class="review-list"></div>
+    <div id="reviewsEmpty" class="reviews-empty">
+      <strong>No reviews published yet.</strong>
+      Your Pit Box has only just been released. If you have raced with it, yours can be the first.
     </div>
+
+    <form id="reviewForm" class="review-form" novalidate>
+      <h3>Leave a review</h3>
+      <div class="review-fields">
+        <div>
+          <label for="reviewName" class="field-label">Name, as it should appear</label>
+          <input id="reviewName" name="name" type="text" maxlength="60" autocomplete="nickname" required>
+        </div>
+        <fieldset class="star-rating">
+          <legend class="field-label">Rating</legend>
+          <div class="star-options">
+            <input type="radio" id="star1" name="rating" value="1"><label for="star1">★<span class="sr-only">1 out of 5</span></label>
+            <input type="radio" id="star2" name="rating" value="2"><label for="star2">★<span class="sr-only">2 out of 5</span></label>
+            <input type="radio" id="star3" name="rating" value="3"><label for="star3">★<span class="sr-only">3 out of 5</span></label>
+            <input type="radio" id="star4" name="rating" value="4"><label for="star4">★<span class="sr-only">4 out of 5</span></label>
+            <input type="radio" id="star5" name="rating" value="5"><label for="star5">★<span class="sr-only">5 out of 5</span></label>
+          </div>
+        </fieldset>
+      </div>
+      <label for="reviewBody" class="field-label">Your review</label>
+      <textarea id="reviewBody" name="body" rows="4" minlength="20" maxlength="1200" required placeholder="What did it do for you on track? What did it get wrong?"></textarea>
+      <label for="reviewEmail" class="field-label">Email (optional, never shown)</label>
+      <input id="reviewEmail" name="email" type="email" inputmode="email" autocomplete="email" spellcheck="false" placeholder="Only so I can reply">
+      <p class="field-help">Not published, not added to any list. Only used if something in your review needs a reply.</p>
+      <div class="review-trap" aria-hidden="true">
+        <label for="reviewWebsite">Leave this empty</label>
+        <input id="reviewWebsite" name="website" type="text" tabindex="-1" autocomplete="off">
+      </div>
+      <div class="download-cta">
+        <button class="button primary" type="submit">Send review</button>
+        <p class="field-help">No account needed. It appears once I have read it.</p>
+      </div>
+      <p id="reviewStatus" class="download-status" role="status" aria-live="polite"></p>
+    </form>
   </div>
 </section>
 
@@ -465,5 +502,6 @@ Strategy / setup / what-if  → model, high reasoning
 </div>
 
 <script src="download.js" defer></script>
+<script src="reviews.js" defer></script>
 </body>
 </html>

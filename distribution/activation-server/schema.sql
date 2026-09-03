@@ -26,3 +26,19 @@ CREATE TABLE IF NOT EXISTS codes (
 );
 
 CREATE INDEX IF NOT EXISTS idx_codes_claimed ON codes (claimed);
+
+-- Reviews posted from the website. Shown only once approved by hand; the
+-- email is for a reply and never published. Existing databases get this via
+-- migrations/0004_reviews.sql, which also documents how to moderate.
+CREATE TABLE IF NOT EXISTS reviews (
+  id           INTEGER PRIMARY KEY AUTOINCREMENT,
+  name         TEXT NOT NULL,
+  rating       INTEGER NOT NULL CHECK (rating BETWEEN 1 AND 5),
+  body         TEXT NOT NULL,
+  email        TEXT,
+  created_at   TEXT NOT NULL,
+  address_hash TEXT,               -- truncated one-way hash, for the daily cap
+  approved     INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE INDEX IF NOT EXISTS idx_reviews_approved ON reviews (approved, created_at);

@@ -411,6 +411,109 @@ async function handleSubscribe(request, env) {
   return json({ ok: true }, 200, env);
 }
 
+// Reviews from the website. Anyone can post one; nothing is shown until the
+// owner has read it and set approved = 1 by hand in D1 (see
+// migrations/0004_reviews.sql). The optional email is for a reply and is
+// never returned to the page.
+const REVIEW_NAME_MAX = 60;
+const REVIEW_BODY_MIN = 20;
+const REVIEW_BODY_MAX = 1200;
+const REVIEWS_PER_DAY_PER_ADDRESS = 3;
+
+// A truncated one-way hash of the posting address, so one connection cannot
+// flood the queue. Not reversible, and not the address itself.
+async function addressHash(request) {
+  const address = request.headers.get("cf-connecting-ip") || "";
+  const digest = await crypto.subtle.digest(
+    "SHA-256",
+    new TextEncoder().encode(`pitwall-reviews:${address}`)
+  );
+  return [...new Uint8Array(digest)]
+    .slice(0, 12)
+    .map((byte) => byte.toString(16).padStart(2, "0"))
+    .join("");
+}
+
+async function handleReviewsList(request, env) {
+  let rows = [];
+  try {
+    const result = await env.DB.prepare(
+      "SELECT name, rating, body, created_at FROM reviews WHERE approved = 1 ORDER BY created_at DESC LIMIT 50"
+    ).all();
+    rows = result.results || [];
+  } catch {
+    // Until migrations/0004_reviews.sql is applied the page simply shows
+    // its empty state.
+    rows = [];
+  }
+  const count = rows.length;
+  const average = count
+    ? Math.round((rows.reduce((sum, row) => sum + Number(row.rating), 0) / count) * 10) / 10
+    : null;
+  const response = json({ reviews: rows, count, average }, 200, env);
+  response.headers.set("cache-control", "public, max-age=60");
+  return response;
+}
+
+async function handleReviewSubmit(request, env) {
+  let payload;
+  try {
+    payload = await request.json();
+  } catch {
+    return err("bad_request", "Body must be JSON.", 400, env);
+  }
+  const text = (value, max) => (typeof value === "string" ? value.trim().slice(0, max) : "");
+
+  // Honeypot: the form's "website" field is hidden from people and left
+  // empty; a bot fills it. Answer as if stored so it cannot tell.
+  if (text(payload && payload.website, 10)) return json({ ok: true, pending: true }, 200, env);
+
+  const name = text(payload && payload.name, REVIEW_NAME_MAX);
+  const body = text(payload && payload.body, REVIEW_BODY_MAX + 1);
+  const rating = Number(payload && payload.rating);
+  const email = text(payload && payload.email, 254).toLowerCase();
+
+  if (!name) return err("bad_review", "Add the name you want shown.", 422, env);
+  if (!Number.isInteger(rating) || rating < 1 || rating > 5) {
+    return err("bad_review", "Pick a rating from 1 to 5.", 422, env);
+  }
+  if (body.length < REVIEW_BODY_MIN) {
+    return err("bad_review", `Say a little more: at least ${REVIEW_BODY_MIN} characters.`, 422, env);
+  }
+  if (body.length > REVIEW_BODY_MAX) {
+    return err("bad_review", `Keep it under ${REVIEW_BODY_MAX} characters.`, 422, env);
+  }
+  if (email && !EMAIL_SHAPE.test(email)) {
+    return err("bad_review", "That does not look like an email address. Leave it blank if you prefer.", 422, env);
+  }
+
+  const hash = await addressHash(request);
+  const since = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+  try {
+    const recent = await env.DB.prepare(
+      "SELECT COUNT(*) AS n FROM reviews WHERE address_hash = ? AND created_at > ?"
+    )
+      .bind(hash, since)
+      .first();
+    if (recent && Number(recent.n) >= REVIEWS_PER_DAY_PER_ADDRESS) {
+      return err("too_many", "That is enough reviews from one connection for today. Thank you, though.", 429, env);
+    }
+    await env.DB.prepare(
+      "INSERT INTO reviews (name, rating, body, email, created_at, address_hash, approved) VALUES (?, ?, ?, ?, ?, ?, 0)"
+    )
+      .bind(name, rating, body, email || null, new Date().toISOString(), hash)
+      .run();
+  } catch (e) {
+    return err(
+      "not_ready",
+      "Reviews are not set up yet. Email vale.scott00@gmail.com instead and I will post it for you.",
+      503,
+      env
+    );
+  }
+  return json({ ok: true, pending: true }, 200, env);
+}
+
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
@@ -434,6 +537,16 @@ export default {
     }
     if (request.method === "GET" && url.pathname === "/installer-info") {
       return handleInstallerInfo(request, env);
+    }
+    if (request.method === "GET" && url.pathname === "/reviews") {
+      return handleReviewsList(request, env);
+    }
+    if (request.method === "POST" && url.pathname === "/reviews") {
+      try {
+        return await handleReviewSubmit(request, env);
+      } catch (e) {
+        return err("server_error", "Could not save that just now. Try again in a moment.", 500, env);
+      }
     }
     if (request.method === "POST" && url.pathname === "/subscribe") {
       try {

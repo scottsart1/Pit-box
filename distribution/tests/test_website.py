@@ -24,6 +24,7 @@ GUIDE = (DIST / "website" / "guide.html").read_text(encoding="utf-8")
 EULA = (DIST / "website" / "eula.html").read_text(encoding="utf-8")
 DIAGNOSTICS = (DIST / "website" / "diagnostics.html").read_text(encoding="utf-8")
 DOWNLOAD_JS = (DIST / "website" / "download.js").read_text(encoding="utf-8")
+REVIEWS_JS = (DIST / "website" / "reviews.js").read_text(encoding="utf-8")
 
 REAL_ENDPOINT = "https://activation.pitwall.app"
 
@@ -54,6 +55,7 @@ def _stage(tmp_path, monkeypatch, *, index=None, guide=None, eula=None, script=N
     (site / "download.js").write_text(
         script if script is not None else DOWNLOAD_JS, encoding="utf-8"
     )
+    (site / "reviews.js").write_text(REVIEWS_JS, encoding="utf-8")
     monkeypatch.setattr(build_site, "SITE_DIR", site)
     return site
 
@@ -181,6 +183,28 @@ def test_the_email_prompt_is_optional_and_says_what_it_is_for():
     assert "new version" in INDEX
     assert "/subscribe" in DOWNLOAD_JS
     assert "skip it" in EULA and "new version" in EULA
+
+
+def test_reviews_can_be_posted_and_are_read_before_they_appear():
+    # Anyone can leave a review from the page; nothing is shown until the
+    # owner has read it, and the page says so. The script renders review
+    # text as text only, so a review can never inject markup into the site.
+    assert 'id="reviews"' in INDEX and 'href="#reviews"' in INDEX
+    assert 'id="reviewForm"' in INDEX and 'id="reviewList"' in INDEX
+    assert 'name="rating"' in INDEX and 'name="body"' in INDEX
+    assert "read every review" in INDEX
+    assert 'src="reviews.js"' in INDEX
+    assert "reviews.js" in build_site.ASSETS and "reviews.js" in build_site.SCANNED
+    assert "/reviews" in REVIEWS_JS
+    assert "innerHTML" not in REVIEWS_JS and "insertAdjacentHTML" not in REVIEWS_JS
+    # The honeypot is present and hidden from people.
+    assert 'name="website"' in INDEX and 'class="review-trap" aria-hidden="true"' in INDEX
+    # The licence terms say what happens to a review and its optional email.
+    assert "leave a review" in EULA and "not shown" in EULA
+    # Both scripts are classic scripts on one page and share a global scope;
+    # a top-level `status` or `form` in reviews.js would collide with
+    # download.js and stop the file from running at all.
+    assert not re.search(r"^const (status|form|button) ", REVIEWS_JS, re.M)
 
 
 def test_the_eula_sections_are_numbered_contiguously():
@@ -439,11 +463,16 @@ def test_no_destructive_tamper_response_is_claimed():
     assert not re.search(r"kill.?switch", INDEX, re.IGNORECASE)
 
 
-def test_the_reviews_section_is_empty_and_says_so():
-    assert "No reviews yet" in INDEX
-    # Nothing that could read as a fabricated testimonial.
-    assert "★" not in INDEX
+def test_the_page_carries_no_reviews_of_its_own():
+    # Reviews come from the Worker at load time; the page itself holds only
+    # the empty state and the form. Nothing static could read as a fabricated
+    # testimonial: no review cards, and the only stars are the five rating
+    # buttons inside the form.
+    assert "No reviews published yet" in INDEX
     assert not re.search(r'class="(review|testimonial)"', INDEX)
+    stars = INDEX.count("★")
+    form = INDEX.split('<div class="star-options">')[1].split("</div>")[0]
+    assert stars == 5 and form.count("★") == 5
 
 
 def test_the_independence_disclaimer_is_present():
