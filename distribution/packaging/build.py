@@ -173,7 +173,7 @@ def write_eula(app_dir: Path) -> Path:
     return target
 
 
-def build_installer(app_dir: Path, version: str = "4.9.0") -> Path | None:
+def build_installer(app_dir: Path, version: str = "4.9.1") -> Path | None:
     """Compile the one-click installer, if Inno Setup is available.
 
     Returns None rather than failing the build when it is absent: the zip is
