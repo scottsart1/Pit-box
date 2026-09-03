@@ -86,6 +86,11 @@
       body: JSON.stringify(review),
     });
     const payload = await response.json().catch(() => null);
+    // A Worker without the route yet (a site deployed ahead of it) answers
+    // 404 with "Not found.", which tells a visitor nothing.
+    if (response.status === 404) {
+      return { ok: false, message: "Reviews are not open just yet. Email vale.scott00@gmail.com and I will post yours for you." };
+    }
     return { ok: response.ok, message: payload && payload.message };
   }
 
