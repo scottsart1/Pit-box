@@ -2,8 +2,8 @@
 
 The launcher tests drive `launch()` with recorders; this file checks the
 real implementations the packaged build wires in, without opening a window.
-The 4.9.0 installer crashed on every first launch because the prompt wrapper
-took no arguments while `launch()` passes one, and nothing here caught it.
+The shipped 4.8.1 installer crashed on every first launch because the prompt
+wrapper took no arguments while `launch()` passes one, and nothing caught it.
 """
 
 from __future__ import annotations

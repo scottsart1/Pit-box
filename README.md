@@ -95,20 +95,24 @@ router or firewall to the public internet automatically.
 
 ## What changed in 4.9.1
 
-4.9.1 fixes the packaged Windows build crashing on its first launch.
+4.9.1 fixes the packaged Windows build crashing before its first-run window.
 
-- **The welcome screen opens.** The 4.9.0 installer failed on every fresh
-  install with `TypeError: _prompt_first_run() takes 0 positional arguments
-  but 1 was given` right after the splash, before the welcome screen could
-  appear. The launcher passes the message to show above the first-run form,
-  and the packaged entry point's wrapper did not accept it. It does now, and
-  a test drives the launch with the real packaged callbacks so the wiring
-  is covered, not only the decision tree.
-- **Workaround for a 4.9.0 install** until you update: create an empty file
-  named `welcome_shown` in `%USERPROFILE%\PitWallData\license\` (or under
-  `PITWALL_DATA_DIR\license\` if you set that variable). The launcher then
-  skips the welcome screen and starts the app; an AI key can be added from
-  the Connection tab as usual.
+- **The first-run window opens.** Every fresh install of the packaged build
+  failed right after the splash with `TypeError: _prompt_first_run() takes 0
+  positional arguments but 1 was given`. The launcher passes the message to
+  show above the first-run form (empty at first, the failure reason on a
+  retry), and the packaged entry point's wrapper did not accept it. The bug
+  dates from the 4.6 splash work, so it is in the 4.8.1 installer that the
+  site has been serving as the bridge build, where it hits the activation
+  window, and it would hit the welcome screen of a free-edition build the
+  same way. An install that already holds a licence is unaffected. The
+  wrapper now takes the message, and a test drives the launch with the real
+  packaged callbacks so the wiring is covered, not only the decision tree.
+- **There is no workaround for an affected install**: the paid-edition
+  launcher always opens the activation window when no licence is saved, and
+  that is the call that fails. A 4.9.1 installer built with
+  `release_windows.ps1` is the fix; running it over the existing install
+  keeps sessions and settings.
 
 ## What changed in 4.9.0
 
