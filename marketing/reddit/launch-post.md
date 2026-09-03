@@ -1,9 +1,16 @@
 # Reddit launch post: Your Pit Box
 
 Short on purpose. Nobody reads a wall of text on Reddit, and on a launch
-post length itself reads as marketing. The post below is about 130 words.
+post length itself reads as marketing. The post below is about 165 words.
 Everything else in this file is a reply bank: detail goes in comments, one
 answer at a time, when somebody actually asks.
+
+The post says up front that the project was built with a heavy hand of AI,
+Claude and GPT both. That is deliberate. The commit history is public and
+shows it, so the choice is between saying it first and being caught at it
+later, and only one of those survives a racing subreddit. Conceding it also
+sharpens the claim that actually matters: how the source was written is a
+different question from whether the app can invent a number at runtime.
 
 Best format: post the 45-second captioned video, put the text in the first
 comment. Where the sub wants text posts, use the text and link the video.
@@ -28,7 +35,7 @@ The game already broadcasts UDP telemetry for all 24 cars, every lap. Nothing wa
 
 It works out gaps, tyre wear, degradation and ranked stop plans on your PC, then talks to you over the radio. You can ask it things mid-lap, and it calls rival stops, damage and safety-car deltas without being asked.
 
-Before anyone says it: every number is computed by ordinary code with tests. The model is never handed telemetry to interpret. It only reads out what the code already worked out, so it can't invent a lap time.
+Before anyone says it: I built this with a heavy hand of AI, Claude and GPT both, and the public commit history says so. That is a different thing from what runs during a race. Every number is computed by ordinary code with tests, the model is never handed telemetry to interpret, and it only reads out what the code already worked out. It can't invent a lap time.
 
 Free, Windows, no account. You bring your own OpenAI key for the voice, billed to you by OpenAI, not me.
 
@@ -43,14 +50,14 @@ yourpitbox.com
 Two to four sentences each. Post one when it is asked, not before.
 
 **"This is AI slop."**
-The test is whether a number on screen can be wrong because a model guessed it. None can. The strategy engine and tyre model are deterministic code with tests; the model can only read out what they produced. Find a number the model invented and I'll take the post down.
+I built it with a lot of AI help and I say so in the post rather than waiting to be caught. The question that decides whether it's slop is different: can a number on screen be wrong because a model guessed it? No. The strategy engine and tyre model are deterministic code with tests, and the model can only read out what they produced. Find a number the model invented and I'll take the post down.
 
 **"Is the code open?"**
 It's public: github.com/scottsart1/Pit-box. Read the strategy engine and the tool list the model is limited to.
 *(Only use this if you're happy with that. The repo has no licence file, so it's readable, not open source. Add a licence or make it private if you'd rather not.)*
 
 **"Did you use AI to write it?"**
-Answer honestly in your own words. Something like: yes, I use AI tools while building, like most people shipping software now. What I'm claiming is narrower: the app's numbers come from tested code, and the model that talks to you can't make things up.
+Yes, heavily. Claude and GPT both, across the whole project, and the commit history is public and shows it. I'm not going to pretend otherwise. What I'm claiming is narrower and checkable: the app's numbers come from tested, deterministic code, and the model that talks to you during a race can't make anything up.
 
 **"Why do I need my own API key?"**
 Otherwise I'd be paying for everyone's radio and would have to charge for the app. Your key stays on your PC. Most questions never reach a model at all, so a race usually costs pennies.
@@ -78,6 +85,6 @@ Telemetry, the session database and your Windows username never leave your PC. O
 ## Don't
 
 - Reply to everything within a minute. Reads as a bot.
-- Argue with downvotes. Answer the question under them, once.
+<!-- A line about reacting to downvotes was removed from here; added in error. -->
 - Post to four subs in an hour.
 - Promise a Mac build, a date, or a feature that isn't in the download today.

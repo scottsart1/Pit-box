@@ -1,5 +1,10 @@
 # Your Pit Box distribution & licensing — architecture
 
+> Like the rest of the project, this folder was written with a heavy hand of
+> AI — Claude and GPT both. See "How this was built" in the root `README.md`.
+> It changes nothing about the threat model below, which is about what the
+> shipped binary does on a buyer's machine, not about who typed the source.
+
 This folder builds a sellable, licensed copy of Your Pit Box. It is **fully
 isolated** from the core app: nothing under `src/pitwall` imports anything here,
 and the license gate runs **only** in the packaged distribution build. Running
