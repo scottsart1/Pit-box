@@ -304,6 +304,26 @@ Do not mark `PITW-0HGQG-3XGGW-DJ021` Void or Replaced in the ledger workbook
 while the bridge is on: the sync would retire it and the shared code would
 stop activating. Once the free installer is up, retiring it is harmless.
 
+## Releasing without the Windows PC
+
+`release_windows.ps1` needs Windows for one step, the PyInstaller and Inno
+Setup build. `.github/workflows/windows-installer.yml` runs that step on a
+GitHub-hosted runner on demand (Actions tab, "Build Windows installer",
+Run workflow). It runs the tests that need no signing key, builds the
+installer, checks it, and attaches it to a GitHub Release tagged
+`v<version>` with the SHA-256 in the notes. The 4.9.1 installer was produced
+this way on 3 September 2026 and published from a cloud session:
+
+1. Download `PitWall-Setup.exe` from the release and check its SHA-256.
+2. `wrangler r2 object put pitwall-downloads/PitWall-Setup.exe --file ... --remote`
+3. `UPDATE settings SET value = '0' WHERE key = 'installer_needs_code'` in D1
+   (only needed while the bridge is on).
+4. Confirm `GET /installer` on the Worker serves the new byte count and hash,
+   and `GET /installer-info` answers `needs_code: false`.
+5. Redeploy the Worker and the site only if their sources changed; compare
+   `build_site` output with the live pages first. Cloudflare rewrites
+   `mailto:` links at the edge, so those lines differ on every fetch.
+
 ## To go live
 
 Steps 1–4 and 6 are done. Preflight now reports "all checks passed" for the
