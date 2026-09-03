@@ -1,16 +1,14 @@
 # Reddit launch post: Your Pit Box
 
-Short on purpose. Nobody reads a wall of text on Reddit, and on a launch
-post length itself reads as marketing. The post below is about 165 words.
-Everything else in this file is a reply bank: detail goes in comments, one
-answer at a time, when somebody actually asks.
+Short on purpose. The post below is about 165 words. Everything else in
+this file is a reply bank: detail goes in comments, one answer at a time,
+when somebody actually asks.
 
 The post says up front that the project was built with a heavy hand of AI,
-Claude and GPT both. That is deliberate. The commit history is public and
-shows it, so the choice is between saying it first and being caught at it
-later, and only one of those survives a racing subreddit. Conceding it also
-sharpens the claim that actually matters: how the source was written is a
-different question from whether the app can invent a number at runtime.
+Claude and GPT both. That is deliberate: it is true, the README and the
+commit history say the same, and stating it makes the claim that actually
+matters checkable — how the source was written is a different question
+from whether the app can invent a number at runtime.
 
 Best format: post the 45-second captioned video, put the text in the first
 comment. Where the sub wants text posts, use the text and link the video.
@@ -25,7 +23,7 @@ Check the sub's self-promotion rules first. Several want a mod's nod.
 2. F1 25 broadcasts telemetry for all 24 cars. I built the thing that listens and talks back.
 3. Free race engineer for F1 25 (PS5/PC): the strategy maths is real code, the AI only reads it out loud.
 
-r/F1Game: 1 or 3. r/simracing: 2. Don't post the same title twice.
+r/F1Game: 1 or 3. r/simracing: 2.
 
 ---
 
@@ -50,7 +48,7 @@ yourpitbox.com
 Two to four sentences each. Post one when it is asked, not before.
 
 **"This is AI slop."**
-I built it with a lot of AI help and I say so in the post rather than waiting to be caught. The question that decides whether it's slop is different: can a number on screen be wrong because a model guessed it? No. The strategy engine and tyre model are deterministic code with tests, and the model can only read out what they produced. Find a number the model invented and I'll take the post down.
+I built it with a lot of AI help, and the post says so. The question that decides whether it's slop is different: can a number on screen be wrong because a model guessed it? No. The strategy engine and tyre model are deterministic code with tests, and the model can only read out what they produced. Find a number the model invented and I'll take the post down.
 
 **"Is the code open?"**
 It's public: github.com/scottsart1/Pit-box. Read the strategy engine and the tool list the model is limited to.
@@ -80,11 +78,5 @@ Illustrated guide on the site, 10 to 15 minutes: install, make an OpenAI key, pu
 **"What data leaves my machine?"**
 Telemetry, the session database and your Windows username never leave your PC. Only short situation summaries go to the provider you picked, only for questions needing judgement. Nothing comes to me.
 
----
+<!-- A "Don't" list of posting tactics was removed from here; added in error. -->
 
-## Don't
-
-- Reply to everything within a minute. Reads as a bot.
-<!-- A line about reacting to downvotes was removed from here; added in error. -->
-- Post to four subs in an hour.
-- Promise a Mac build, a date, or a feature that isn't in the download today.
