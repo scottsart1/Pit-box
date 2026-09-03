@@ -436,3 +436,78 @@ details p { color: var(--ink-2); margin: .7rem 0 0; max-width: 70ch; }
 @media (prefers-reduced-motion: reduce) {
   * { animation: none !important; transition: none !important; }
 }
+
+/* ---------- reviews ---------- */
+
+.review-summary { margin: -1.2rem 0 1.4rem; font-weight: 700; color: var(--ink); min-height: 1.4em; }
+.review-list { display: grid; gap: 1rem; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); margin-bottom: 1.6rem; }
+.review-list:empty { display: none; }
+.review {
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 1.2rem 1.4rem;
+}
+.review-head { display: flex; gap: .7rem; align-items: baseline; flex-wrap: wrap; margin-bottom: .5rem; }
+.review-stars { color: #b77700; letter-spacing: .08em; font-size: 1.05rem; }
+.review-name { font-weight: 700; }
+.review-when { color: var(--muted); font-size: .85rem; margin-left: auto; }
+.review-body { margin: 0; color: var(--ink-2); font-size: .97rem; white-space: pre-line; }
+
+.review-form {
+  margin-top: 2rem;
+  padding: 1.6rem;
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  max-width: 720px;
+}
+.review-form h3 { margin: 0 0 1rem; font-size: 1.2rem; letter-spacing: -.01em; }
+.review-fields { display: grid; gap: 1rem 1.6rem; grid-template-columns: 1fr auto; align-items: end; margin-bottom: 1rem; }
+.review-form input[type="text"],
+.review-form input[type="email"],
+.review-form textarea {
+  width: 100%;
+  padding: .72rem .9rem;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #fff;
+  color: var(--ink);
+  font-family: var(--font);
+  font-size: 1rem;
+}
+.review-form textarea { resize: vertical; min-height: 6.5rem; }
+.review-form input:focus-visible, .review-form textarea:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.review-form .field-label { margin-top: .9rem; }
+.review-form .review-fields .field-label { margin-top: 0; }
+.review-form .field-help { margin: .45rem 0 0; font-size: .85rem; color: var(--muted); }
+.review-form .download-cta { margin-top: 1.2rem; }
+.review-form .download-cta .field-help { margin: 0; }
+
+.star-rating { border: 0; padding: 0; margin: 0; min-width: 0; }
+.star-rating legend { padding: 0; }
+.star-options { display: flex; gap: .15rem; }
+.star-options input { position: absolute; width: 1px; height: 1px; opacity: 0; }
+.star-options label {
+  cursor: pointer;
+  font-size: 1.9rem;
+  line-height: 1;
+  color: var(--line);
+  padding: .1rem .12rem;
+  transition: color .1s ease;
+}
+/* Fill every star up to the one chosen. The inputs sit before their labels
+   in source, so the checked star and the ones after it are colored, and the
+   row is reversed so that "after" reads as "lower". */
+.star-options { flex-direction: row-reverse; justify-content: flex-end; }
+.star-options input:checked ~ label,
+.star-options label:hover,
+.star-options label:hover ~ label { color: #b77700; }
+.star-options input:focus-visible + label { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 6px; }
+
+/* The honeypot: hidden from people, present for bots. */
+.review-trap { position: absolute; left: -10000px; top: auto; width: 1px; height: 1px; overflow: hidden; }
+
+@media (max-width: 640px) {
+  .review-fields { grid-template-columns: 1fr; }
+}

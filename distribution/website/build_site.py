@@ -30,12 +30,12 @@ ASSET_DIR = SITE_DIR / "assets"
 OUTPUT_DIR = SITE_DIR / "_site"
 
 PAGES = ("index.html", "guide.html", "diagnostics.html", "eula.html")
-ASSETS = ("styles.css", "download.js")
+ASSETS = ("styles.css", "download.js", "reviews.js")
 
 # Scanned for placeholders alongside the pages. download.js carries the
 # activation endpoint, and a site published with the placeholder host has a
 # Download button that silently fails — which looks like a working page.
-SCANNED = PAGES + ("download.js",)
+SCANNED = PAGES + ("download.js", "reviews.js")
 
 # Every value that must be replaced before the site is public. Each is paired
 # with what to do about it, because "placeholder found" alone is not actionable.
