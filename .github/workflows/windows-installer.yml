@@ -25,11 +25,12 @@ permissions:
 jobs:
   build:
     runs-on: windows-latest
-    env:
-      # Outside the checkout, as build.py expects; see _build_root there.
-      PITWALL_BUILD_DIR: ${{ runner.temp }}\PitWallBuild
     steps:
       - uses: actions/checkout@v4
+
+      - name: Build outside the checkout, as build.py expects
+        shell: pwsh
+        run: '"PITWALL_BUILD_DIR=$env:RUNNER_TEMP\PitWallBuild" >> $env:GITHUB_ENV'
 
       - uses: actions/setup-python@v5
         with:
