@@ -10,6 +10,23 @@ OpenAI-compatible endpoint including a local server — using your own API key.
 Voice (speech-to-text and the engineer's spoken replies) is OpenAI-backed, so
 add an OpenAI key too if you want the radio to talk rather than type.
 
+## How this was built
+
+Your Pit Box was developed with a heavy hand of AI — a combination of Claude
+and GPT — across the code, the tests, the documentation and the marketing
+material. The commit history shows it. This note is here so nobody has to go
+digging to find that out.
+
+That is a statement about how the source was written, and it is a different
+claim from what the application does while you drive. At runtime, the
+strategy, tyre and corner maths are deterministic Python covered by the suite
+in `tests/`. The language model is never handed raw telemetry to interpret; it
+is only allowed to narrate results that code has already computed, through an
+allow-listed set of tools with validated arguments, and it has no filesystem,
+shell, network or database access. It cannot invent a lap time. See
+[Tool safety](#tool-safety) and `docs/PROVIDER_ARCHITECTURE.md` for how that
+boundary is enforced, and `tests/` for what is asserted about it.
+
 ![The Drive screen during a race](docs/screenshots/01-drive-live-command-center.png)
 
 *Mid-race at Silverstone: the full field with tyre age and gaps, live inputs,
