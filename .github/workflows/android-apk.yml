@@ -60,7 +60,7 @@ jobs:
         if: steps.wheels.outputs.cache-hit != 'true'
         env:
           PITBOX_HOST_PYTHON: ${{ steps.py312.outputs.python-path }}
-        run: ./android/build-wheels.sh
+        run: bash ./android/build-wheels.sh
 
       - name: Build the debug APK
         working-directory: android
