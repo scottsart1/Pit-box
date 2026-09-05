@@ -319,6 +319,31 @@ The page caches the list for a minute. A review's email is for replying and
 is never returned to the page; `address_hash` only caps one connection to
 three reviews a day. The table comes from `migrations/0004_reviews.sql`.
 
+## Android
+
+`android/` packages the same backend and dashboard as an APK; `android/README.md`
+is the reference. The shape of it:
+
+- Chaquopy embeds CPython 3.13 and pip-installs the runtime dependencies at
+  build time; `src/pitwall` is a Python source root of the app, not a copy.
+- A foreground service runs `pitwall.main.run()`; a WebView shows the
+  dashboard on `127.0.0.1`. Two backend hooks exist for it: the `static_dir`
+  setting (the dashboard is extracted from the APK's assets) and a route
+  probe in `networking.fallback_ipv4_interfaces` so the phone learns its own
+  LAN address.
+- pydantic-core, jiter and rpds-py have no Android wheels anywhere and are
+  cross-compiled by `android/build-wheels.sh` (cibuildwheel's Android
+  support). numpy comes from Chaquopy's repository as 1.26.2, the newest
+  there for 3.13; the full suite passes on it.
+- Voice is not in the first build: sounddevice/soundfile have no Android
+  build, and the wake word is disabled by `pitbox_android.py` until an
+  Android audio backend replaces that layer.
+- `.github/workflows/android-apk.yml` builds the APK on a runner and can
+  attach it to a GitHub Release tagged `android-v<version>` for sideloading.
+
+`distribution/tests/test_android_project.py` keeps the APK's pip list in
+step with `pyproject.toml`.
+
 ## Releasing without the Windows PC
 
 `release_windows.ps1` needs Windows for one step, the PyInstaller and Inno

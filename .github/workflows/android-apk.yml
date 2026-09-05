@@ -1,0 +1,103 @@
+# Build the Android APK on a GitHub-hosted runner.
+#
+# Mirrors android/README.md: cross-compile the three Rust dependencies with
+# cibuildwheel (cached by the versions pinned in build-wheels.sh), then let
+# Gradle and Chaquopy assemble the APK with the backend from src/pitwall.
+# The APK is uploaded as a workflow artifact and, on request, attached to a
+# GitHub Release tagged android-v<versionName>, from where a phone can
+# download and install it directly.
+name: Build Android APK
+
+on:
+  workflow_dispatch:
+    inputs:
+      attach_release:
+        description: Attach the APK to a GitHub Release tagged android-v<version>
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      # 3.12 drives cibuildwheel (3.13's strict certificate checks trip some
+      # proxies); 3.13 is what Chaquopy embeds, and its build needs the same
+      # minor version on the build machine.
+      - uses: actions/setup-python@v5
+        id: py312
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-python@v5
+        id: py313
+        with:
+          python-version: "3.13"
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android,x86_64-linux-android
+
+      - name: Install the wheel-building tools
+        run: ${{ steps.py312.outputs.python-path }} -m pip install --quiet cibuildwheel uv
+
+      - name: Restore cross-compiled wheels
+        id: wheels
+        uses: actions/cache@v4
+        with:
+          path: android/wheels
+          key: android-wheels-${{ hashFiles('android/build-wheels.sh') }}-${{ runner.os }}
+
+      - name: Cross-compile the Rust dependencies
+        if: steps.wheels.outputs.cache-hit != 'true'
+        env:
+          PITBOX_HOST_PYTHON: ${{ steps.py312.outputs.python-path }}
+        run: ./android/build-wheels.sh
+
+      - name: Build the debug APK
+        working-directory: android
+        run: ./gradlew --no-daemon assembleDebug -Ppitbox.buildPython=${{ steps.py313.outputs.python-path }}
+
+      - name: Read the version and record the APK's digest
+        id: apk
+        working-directory: android
+        run: |
+          apk=app/build/outputs/apk/debug/app-debug.apk
+          test -s "$apk"
+          version=$(grep -oP 'versionName = "\K[^"]+' app/build.gradle.kts)
+          sha=$(sha256sum "$apk" | cut -d' ' -f1)
+          size=$(stat -c %s "$apk")
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "path=android/$apk" >> "$GITHUB_OUTPUT"
+          echo "sha256=$sha" >> "$GITHUB_OUTPUT"
+          printf '## YourPitBox-%s.apk\n\n- %s bytes\n- SHA-256 `%s`\n' "$version" "$size" "$sha" >> "$GITHUB_STEP_SUMMARY"
+          cp "$apk" "YourPitBox-$version.apk"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: YourPitBox-${{ steps.apk.outputs.version }}
+          path: android/YourPitBox-${{ steps.apk.outputs.version }}.apk
+          if-no-files-found: error
+
+      - name: Attach the APK to a GitHub Release
+        if: ${{ inputs.attach_release }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="android-v${{ steps.apk.outputs.version }}"
+          file="android/YourPitBox-${{ steps.apk.outputs.version }}.apk"
+          notes="Debug-signed APK for sideloading, built from ${{ github.sha }}. SHA-256: ${{ steps.apk.outputs.sha256 }}"
+          if gh release view "$tag" --repo "${{ github.repository }}" >/dev/null 2>&1; then
+            gh release upload "$tag" "$file" --repo "${{ github.repository }}" --clobber
+          else
+            gh release create "$tag" "$file" --repo "${{ github.repository }}" --target "${{ github.sha }}" \
+              --title "Your Pit Box for Android ${{ steps.apk.outputs.version }}" --notes "$notes" --prerelease
+          fi

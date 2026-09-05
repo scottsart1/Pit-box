@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Tokens from static/index.html, so the shell and the dashboard agree. -->
+    <color name="pitbox_bg">#070b0f</color>
+    <color name="pitbox_panel">#121b24</color>
+    <color name="pitbox_line">#263542</color>
+    <color name="pitbox_text">#eef4f8</color>
+    <color name="pitbox_muted">#91a6b8</color>
+    <color name="pitbox_green">#49d17d</color>
+    <color name="pitbox_red">#ff6969</color>
+</resources>

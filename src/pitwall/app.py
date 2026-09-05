@@ -654,6 +654,8 @@ def _static_root_path() -> Path:
     expression resolves to a directory outside the bundle and StaticFiles
     raises at import time — before the server ever starts.
     """
+    if settings.static_dir is not None:
+        return settings.static_dir
     bundle = getattr(sys, "_MEIPASS", None)
     if bundle:
         return Path(bundle) / "static"

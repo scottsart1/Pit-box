@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Your Pit Box</string>
+    <string name="notification_channel">Pit box session</string>
+    <string name="notification_title">Your Pit Box is running</string>
+    <string name="notification_text">Receiving telemetry on port 20777. Tap to open the pit box.</string>
+    <string name="notification_stop">Stop</string>
+    <string name="starting">Starting your pit box…</string>
+    <string name="start_failed">Your Pit Box could not start. The log is in the app\'s PitWallData folder.</string>
+</resources>
