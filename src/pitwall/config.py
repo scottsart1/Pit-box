@@ -241,6 +241,11 @@ class Settings(BaseSettings):
     voice_clip_queue_size: int = 2
 
     data_dir: Path = Path.home() / "PitWallData"
+    # Where the dashboard's files are served from. Unset means "next to the
+    # source tree or inside the frozen bundle", which is right for the desktop
+    # builds; an embedded host such as the Android app extracts the files to
+    # its own storage and points here.
+    static_dir: Path | None = None
     open_browser: bool = True
     # Housekeeping. 60 Hz lap traces and pre-gating strategy snapshots dominate
     # database size; the reference lap for each track is always preserved.

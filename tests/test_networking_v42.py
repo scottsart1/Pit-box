@@ -396,3 +396,61 @@ def test_redacted_diagnostics_do_not_expose_adapter_or_full_ip() -> None:
     assert "192.168.88.61" not in encoded
     assert "192.168.88.99" not in encoded
     assert "192.168.88.x" in encoded
+
+
+def test_fallback_discovery_learns_the_lan_address_when_the_hostname_is_loopback(
+    monkeypatch,
+) -> None:
+    # Android resolves its hostname to 127.0.0.1 only, and many Linux hosts to
+    # 127.0.1.1. The route probe must then contribute the address the kernel
+    # would send from, without any packet leaving the machine.
+    import socket
+
+    from pitwall import networking
+
+    monkeypatch.setattr(
+        networking.socket,
+        "getaddrinfo",
+        lambda *args, **kwargs: [(socket.AF_INET, socket.SOCK_DGRAM, 17, "", ("127.0.0.1", 0))],
+    )
+
+    class _Probe:
+        def __init__(self, *args, **kwargs) -> None:
+            self.connected_to = None
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc) -> bool:
+            return False
+
+        def connect(self, target) -> None:
+            self.connected_to = target
+
+        def getsockname(self):
+            return ("192.168.1.42", 54321)
+
+    monkeypatch.setattr(networking.socket, "socket", lambda *a, **k: _Probe())
+    addresses = {iface.address for iface in networking.fallback_ipv4_interfaces()}
+    assert addresses == {"127.0.0.1", "192.168.1.42"}
+
+
+def test_fallback_discovery_skips_the_route_probe_when_a_real_address_resolves(
+    monkeypatch,
+) -> None:
+    import socket
+
+    from pitwall import networking
+
+    monkeypatch.setattr(
+        networking.socket,
+        "getaddrinfo",
+        lambda *args, **kwargs: [(socket.AF_INET, socket.SOCK_DGRAM, 17, "", ("10.0.0.7", 0))],
+    )
+
+    def explode(*args, **kwargs):
+        raise AssertionError("the route probe must not run when the hostname resolves")
+
+    monkeypatch.setattr(networking.socket, "socket", explode)
+    addresses = {iface.address for iface in networking.fallback_ipv4_interfaces()}
+    assert addresses == {"10.0.0.7"}

@@ -1,0 +1,10 @@
+.gradle/
+build/
+app/build/
+local.properties
+.wheel-build/
+# Built by build-wheels.sh; several MB each and reproducible.
+wheels/*.whl
+*.iml
+.idea/
+.kotlin/

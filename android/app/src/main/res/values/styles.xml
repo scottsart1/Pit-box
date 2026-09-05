@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- The dashboard paints its own dark ground (#070b0f); the native shell
+         matches it so the moment before the WebView loads is not a flash. -->
+    <style name="Theme.PitBox" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowBackground">@color/pitbox_bg</item>
+        <item name="android:statusBarColor">@color/pitbox_bg</item>
+        <item name="android:navigationBarColor">@color/pitbox_bg</item>
+        <item name="android:windowLightStatusBar">false</item>
+    </style>
+</resources>

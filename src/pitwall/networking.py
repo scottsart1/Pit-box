@@ -437,6 +437,17 @@ def fallback_ipv4_interfaces() -> tuple[IPv4Interface, ...]:
             addresses.add(str(info[4][0]))
     except OSError:
         pass
+    # On Android the hostname resolves to loopback only, and on Linux it often
+    # resolves to 127.0.1.1. Asking the kernel which source address it would
+    # route a packet from reveals the LAN interface without sending anything:
+    # connect() on a UDP socket only chooses a route.
+    if all(address.startswith("127.") for address in addresses):
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as probe:
+                probe.connect(("192.0.2.1", 9))
+                addresses.add(probe.getsockname()[0])
+        except OSError:
+            pass
     result = []
     for address in sorted(addresses):
         try:
