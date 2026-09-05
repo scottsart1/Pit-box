@@ -36,6 +36,7 @@ public class MainActivity extends Activity {
     private TextView status;
     private final Handler handler = new Handler(Looper.getMainLooper());
     private boolean loaded = false;
+    private long startedAt = 0;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -82,7 +83,46 @@ public class MainActivity extends Activity {
     private void startBackend() {
         Intent service = new Intent(this, PitBoxService.class);
         ContextCompat.startForegroundService(this, service);
+        startedAt = System.currentTimeMillis();
         handler.post(this::pollUntilReady);
+    }
+
+    /** The backend reports "http://127.0.0.1:8000" with no trailing slash. */
+    private static String join(String base, String path) {
+        return base.endsWith("/") ? base + path : base + "/" + path;
+    }
+
+    /**
+     * What the waiting screen says. A first start on a phone can take a
+     * while (the interpreter unpacks, the backend imports numpy), so the
+     * stage and the elapsed time are shown; past 45 seconds the tail of the
+     * backend's own log is shown too, so a stall can be read off the screen
+     * without a computer attached.
+     */
+    private void describeWait(String stage) {
+        long seconds = (System.currentTimeMillis() - startedAt) / 1000;
+        StringBuilder text = new StringBuilder(getString(R.string.starting));
+        text.append("\n\n").append(stage).append(" · ").append(seconds).append(" s");
+        if (seconds >= 45) {
+            text.append("\n\nThis is taking longer than it should. The backend's log so far:\n\n")
+                .append(logTail());
+        }
+        status.setText(text.toString());
+    }
+
+    private String logTail() {
+        java.io.File log = new java.io.File(getFilesDir(), "PitWallData/pitwall.log");
+        if (!log.isFile()) return "(no pitwall.log yet: the backend has not started logging)";
+        try (java.io.RandomAccessFile file = new java.io.RandomAccessFile(log, "r")) {
+            long length = file.length();
+            int want = (int) Math.min(length, 3000);
+            byte[] bytes = new byte[want];
+            file.seek(length - want);
+            file.readFully(bytes);
+            return new String(bytes, "UTF-8");
+        } catch (java.io.IOException error) {
+            return "(could not read pitwall.log: " + error + ")";
+        }
     }
 
     /** Loads the dashboard the moment the backend answers its health check. */
@@ -95,14 +135,16 @@ public class MainActivity extends Activity {
         }
         String url = PitBoxService.getDashboardUrl();
         if (url != null && PitBoxService.isRunning()) {
+            describeWait("Backend running, waiting for the dashboard at " + url);
+            String healthUrl = join(url, "api/health");
             new Thread(() -> {
-                boolean ready = healthy(url + "api/health");
+                boolean ready = healthy(healthUrl);
                 handler.post(() -> {
                     if (ready && !loaded) {
                         loaded = true;
                         status.setVisibility(View.GONE);
                         web.setVisibility(View.VISIBLE);
-                        web.loadUrl(url);
+                        web.loadUrl(join(url, ""));
                     } else {
                         handler.postDelayed(this::pollUntilReady, 400);
                     }
@@ -110,6 +152,7 @@ public class MainActivity extends Activity {
             }, "pitbox-health").start();
             return;
         }
+        describeWait(url == null ? "Starting the backend service" : "Backend starting");
         handler.postDelayed(this::pollUntilReady, 400);
     }
 
