@@ -454,3 +454,88 @@ def test_fallback_discovery_skips_the_route_probe_when_a_real_address_resolves(
     monkeypatch.setattr(networking.socket, "socket", explode)
     addresses = {iface.address for iface in networking.fallback_ipv4_interfaces()}
     assert addresses == {"10.0.0.7"}
+
+
+def test_registered_interface_sources_come_first_and_keep_their_names(monkeypatch) -> None:
+    from pitwall import networking
+
+    monkeypatch.setattr(
+        networking.socket,
+        "getaddrinfo",
+        lambda *args, **kwargs: [(2, 2, 17, "", ("192.168.12.204", 0))],
+    )
+
+    def phone_interfaces():
+        return (
+            networking.IPv4Interface(
+                adapter_id="android:wlan0",
+                name="wlan0",
+                address="192.168.12.204",
+                kind=networking.AdapterKind.WIFI,
+            ),
+            networking.IPv4Interface(
+                adapter_id="android:swlan0",
+                name="swlan0",
+                address="192.168.43.1",
+                kind=networking.AdapterKind.WIFI,
+            ),
+        )
+
+    networking.register_interface_source(phone_interfaces)
+    try:
+        listed = {item.address: item for item in networking.fallback_ipv4_interfaces()}
+    finally:
+        networking.unregister_interface_source(phone_interfaces)
+    assert set(listed) == {"192.168.12.204", "192.168.43.1"}
+    # The source's richer record wins over the hostname-derived duplicate.
+    assert listed["192.168.12.204"].adapter_id == "android:wlan0"
+    assert listed["192.168.43.1"].name == "swlan0"
+
+
+def test_a_failing_interface_source_falls_back_to_the_stdlib(monkeypatch) -> None:
+    from pitwall import networking
+
+    monkeypatch.setattr(
+        networking.socket,
+        "getaddrinfo",
+        lambda *args, **kwargs: [(2, 2, 17, "", ("10.0.0.7", 0))],
+    )
+
+    def broken():
+        raise RuntimeError("no java here")
+
+    networking.register_interface_source(broken)
+    try:
+        addresses = {iface.address for iface in networking.fallback_ipv4_interfaces()}
+    finally:
+        networking.unregister_interface_source(broken)
+    assert addresses == {"10.0.0.7"}
+
+
+def test_android_interface_names_classify_as_wifi_hotspot_or_cellular() -> None:
+    from pitwall.networking import AdapterKind, classify_adapter_kind
+
+    assert classify_adapter_kind("wlan0") is AdapterKind.WIFI
+    assert classify_adapter_kind("swlan0") is AdapterKind.WIFI
+    assert classify_adapter_kind("ap0") is AdapterKind.WIFI
+    assert classify_adapter_kind("rmnet_data0") is AdapterKind.CELLULAR
+    assert classify_adapter_kind("ccmni0") is AdapterKind.CELLULAR
+
+
+def test_cellular_addresses_rank_below_a_hotspot_that_is_not_the_default_route() -> None:
+    from pitwall.networking import AdapterKind, IPv4Interface, recommend_ipv4_interface
+
+    hotspot = IPv4Interface(
+        adapter_id="android:swlan0", name="swlan0", address="192.168.43.1", kind=AdapterKind.WIFI
+    )
+    mobile = IPv4Interface(
+        adapter_id="android:rmnet_data0",
+        name="rmnet_data0",
+        address="10.20.30.40",
+        prefix_length=29,
+        has_default_gateway=True,
+        kind=AdapterKind.CELLULAR,
+    )
+    recommendation = recommend_ipv4_interface((mobile, hotspot))
+    assert recommendation.recommended is hotspot
+    assert "cellular adapter" in recommendation.ranked[-1].reasons
