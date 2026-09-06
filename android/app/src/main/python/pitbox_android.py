@@ -39,7 +39,80 @@ def configure(files_dir: str, static_dir: str, microphone: bool = False) -> None
     # with a microphone the app is allowed to open.
     os.environ["PITWALL_WAKE_ENABLED"] = "true" if microphone else "false"
     os.chdir(str(files))
+    from pitwall.networking import register_interface_source
+
+    register_interface_source(android_ipv4_interfaces)
     _configured = True
+
+
+def _java_list(values) -> list:
+    """A java.util.List (or Enumeration) as a Python list, by index."""
+    from java import jclass
+
+    if not hasattr(values, "size"):
+        values = jclass("java.util.Collections").list(values)
+    return [values.get(index) for index in range(values.size())]
+
+
+def _default_route_address() -> str | None:
+    """The source address the kernel would send from, without sending."""
+    import socket
+
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as probe:
+            probe.connect(("192.0.2.1", 9))
+            return str(probe.getsockname()[0])
+    except OSError:
+        return None
+
+
+def android_ipv4_interfaces():
+    """Every IPv4 address the phone has, with the interface it belongs to.
+
+    The backend's own fallback learns one address from the default route,
+    which on a phone sharing its connection as a hotspot is the mobile
+    network, not the hotspot the console is on. Android lets an app list its
+    interfaces through java.net.NetworkInterface (wlan0 for Wi-Fi, ap0 or
+    swlan0 for the hotspot, rmnet_data* for mobile data), so CONNECTION can
+    show every address and rank the one the game should send to.
+    """
+    from java import jclass
+
+    from pitwall.networking import IPv4Interface, classify_adapter_kind
+
+    NetworkInterface = jclass("java.net.NetworkInterface")
+    default_route = _default_route_address()
+    result = []
+    for nic in _java_list(NetworkInterface.getNetworkInterfaces()):
+        try:
+            name = str(nic.getName())
+            display = str(nic.getDisplayName() or name)
+            is_up = bool(nic.isUp())
+            loopback = bool(nic.isLoopback())
+            bindings = _java_list(nic.getInterfaceAddresses())
+        except Exception:  # noqa: BLE001 - an interface that vanished mid-listing
+            continue
+        for binding in bindings:
+            try:
+                address = str(binding.getAddress().getHostAddress())
+                if ":" in address:
+                    continue  # IPv6
+                prefix = int(binding.getNetworkPrefixLength())
+                result.append(
+                    IPv4Interface(
+                        adapter_id=f"android:{name}",
+                        name=name,
+                        description=display if display != name else "",
+                        address=address,
+                        prefix_length=prefix if 0 <= prefix <= 32 else 24,
+                        is_up=is_up,
+                        has_default_gateway=address == default_route,
+                        kind=classify_adapter_kind("loopback" if loopback else name, display),
+                    )
+                )
+            except Exception:  # noqa: BLE001 - skip one unusable binding, keep the rest
+                continue
+    return tuple(result)
 
 
 def dashboard_url() -> str:

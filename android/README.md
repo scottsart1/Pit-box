@@ -64,8 +64,17 @@ source when asked).
 1. Open the app. The notification "Your Pit Box is running" means the
    backend is up; the dashboard appears when it answers.
 2. Open the CONNECTION tab: it shows the phone's IP address. In the game's
-   telemetry settings enter that address, UDP port 20777, format 2026.
+   telemetry settings enter that address, UDP port 20777, format 2026. The
+   address changes when the phone moves to another network, so check it
+   again after switching Wi-Fi; the game's saved address does not follow.
 3. Keep the phone on the same Wi-Fi as the console or PC running the game.
+   Some routers and most guest networks keep devices from talking to each
+   other ("AP isolation" or "client isolation"); if nothing arrives with the
+   address and port set correctly, turn that off, or make the phone the
+   network: enable its hotspot, join the console to it, and use the hotspot
+   address CONNECTION shows (192.168.43.1 on most phones). Setting the
+   game to broadcast mode is a useful test too: it reaches every device on
+   the network without an address.
 4. Leave with the back button and the session keeps running; Stop is in the
    notification, or Quit in the dashboard.
 

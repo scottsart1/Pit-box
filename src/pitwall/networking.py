@@ -8,9 +8,11 @@ granting administrator privileges or depending on a Windows-only package.
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import ipaddress
 import json
+import logging
 import math
 import platform
 import re
@@ -26,6 +28,8 @@ from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from enum import Enum
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 F1_2026_PACKET_FORMAT = 2026
 F1_HEADER_SIZE = 29
@@ -57,6 +61,7 @@ class AdapterKind(str, Enum):
     WIFI = "wifi"
     VPN = "vpn"
     VIRTUAL = "virtual"
+    CELLULAR = "cellular"
     LOOPBACK = "loopback"
     UNKNOWN = "unknown"
 
@@ -134,6 +139,14 @@ def classify_adapter_kind(name: str, description: str = "") -> AdapterKind:
     value = f"{name} {description}".casefold()
     if "loopback" in value:
         return AdapterKind.LOOPBACK
+    # Android names its mobile-data interfaces rmnet_dataN (Qualcomm) or
+    # ccmniN (MediaTek); the game on the LAN can never reach those addresses.
+    if any(token in value for token in ("rmnet", "ccmni", "cellular", "mobile data")):
+        return AdapterKind.CELLULAR
+    # Android's Wi-Fi hotspot interface is ap0 or swlan0: the phone is the
+    # router, and the console sends to this address.
+    if name.casefold().startswith(("ap", "swlan")):
+        return AdapterKind.WIFI
     if any(
         token in value
         for token in ("wireguard", "tailscale", "openvpn", " vpn", "tap-", "tun")
@@ -248,7 +261,7 @@ def recommend_ipv4_interface(
         if interface.kind in {AdapterKind.ETHERNET, AdapterKind.WIFI}:
             score += 25
             reasons.append(interface.kind.value)
-        elif interface.kind in {AdapterKind.VPN, AdapterKind.VIRTUAL}:
+        elif interface.kind in {AdapterKind.VPN, AdapterKind.VIRTUAL, AdapterKind.CELLULAR}:
             score -= 60
             reasons.append(f"{interface.kind.value} adapter")
         elif interface.kind is AdapterKind.LOOPBACK:
@@ -426,10 +439,41 @@ def parse_windows_interface_json(payload: str) -> tuple[IPv4Interface, ...]:
     return tuple(unique.values())
 
 
+InterfaceSource = Callable[[], Iterable[IPv4Interface]]
+
+_interface_sources: list[InterfaceSource] = []
+
+
+def register_interface_source(source: InterfaceSource) -> None:
+    """Add a platform-specific way of listing interfaces to the fallback.
+
+    The stdlib fallback learns one address from the hostname or the default
+    route, which is the wrong one on a phone acting as a Wi-Fi hotspot: the
+    default route is the mobile network, while the console sends to the
+    hotspot's address. A host that can enumerate its interfaces (the Android
+    app, through java.net.NetworkInterface) registers a source here, and its
+    interfaces, with their names and kinds, come first.
+    """
+
+    if source not in _interface_sources:
+        _interface_sources.append(source)
+
+
+def unregister_interface_source(source: InterfaceSource) -> None:
+    with contextlib.suppress(ValueError):
+        _interface_sources.remove(source)
+
+
 def fallback_ipv4_interfaces() -> tuple[IPv4Interface, ...]:
     """Best-effort stdlib discovery used when Windows APIs are unavailable."""
 
-    addresses: set[str] = set()
+    result: list[IPv4Interface] = []
+    for source in tuple(_interface_sources):
+        try:
+            result.extend(source())
+        except Exception as exc:  # noqa: BLE001 - one broken source must not hide the rest
+            logger.warning("Interface source %s failed: %s", source, exc)
+    addresses: set[str] = {item.address for item in result}
     try:
         for info in socket.getaddrinfo(
             socket.gethostname(), None, socket.AF_INET, socket.SOCK_DGRAM
@@ -448,8 +492,8 @@ def fallback_ipv4_interfaces() -> tuple[IPv4Interface, ...]:
                 addresses.add(probe.getsockname()[0])
         except OSError:
             pass
-    result = []
-    for address in sorted(addresses):
+    known = {item.address for item in result}
+    for address in sorted(addresses - known):
         try:
             classification = classify_ipv4(address)
         except ValueError:
