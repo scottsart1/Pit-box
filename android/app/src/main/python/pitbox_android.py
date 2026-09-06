@@ -16,8 +16,13 @@ from pathlib import Path
 _configured = False
 
 
-def configure(files_dir: str, static_dir: str) -> None:
-    """Point the backend at the app's private storage. Call before start()."""
+def configure(files_dir: str, static_dir: str, microphone: bool = False) -> None:
+    """Point the backend at the app's private storage. Call before start().
+
+    `microphone` says whether RECORD_AUDIO is granted: the wake word and
+    push-to-talk are enabled only then, so a refused permission never leaves
+    the voice layer retrying against a microphone it cannot open.
+    """
     global _configured
     files = Path(files_dir)
     data = files / "PitWallData"
@@ -29,9 +34,10 @@ def configure(files_dir: str, static_dir: str) -> None:
     # The dashboard lives in the activity's WebView, not a browser tab.
     os.environ["PITWALL_OPEN_BROWSER"] = "false"
     os.environ["PITWALL_WEB_HOST"] = "127.0.0.1"
-    # Voice needs the Android audio backend (phase 2); until then the
-    # microphone is not opened, so nothing retries against a missing device.
-    os.environ.setdefault("PITWALL_WAKE_ENABLED", "false")
+    # sounddevice.py and soundfile.py beside this file supply the audio layer
+    # on top of AudioRecord and AudioTrack; the wake word only makes sense
+    # with a microphone the app is allowed to open.
+    os.environ["PITWALL_WAKE_ENABLED"] = "true" if microphone else "false"
     os.chdir(str(files))
     _configured = True
 

@@ -35,11 +35,13 @@ extensions with no Android build anywhere, so `build-wheels.sh` compiles them
 with cibuildwheel's Android support before the APK is built. It takes a
 Rust toolchain and the Android SDK and runs in minutes.
 
-Left out on purpose: `sounddevice`/`soundfile` (PortAudio has no Android
-build; voice comes with an Android audio backend in a later phase, and until
-then the wake word is disabled by `pitbox_android.py`), and uvicorn's
-`[standard]` extras (uvloop, httptools, websockets), replaced by the
-pure-Python `wsproto` for the dashboard's `/ws` stream.
+Left out on purpose: uvicorn's `[standard]` extras (uvloop, httptools),
+which have no Android builds and are not needed. `sounddevice` and
+`soundfile` (PortAudio and libsndfile) have no Android builds either; the
+`sounddevice.py` and `soundfile.py` in `app/src/main/python` provide the
+subset the backend uses on top of Android's AudioRecord and AudioTrack, and
+`distribution/tests/test_android_project.py` fails if the backend starts
+using a name they do not provide.
 
 ## Building
 
@@ -67,10 +69,23 @@ source when asked).
 4. Leave with the back button and the session keeps running; Stop is in the
    notification, or Quit in the dashboard.
 
+## Voice on a phone
+
+The engineer listens on the phone's microphone and answers through its
+speaker, or through connected headphones. The first start asks for the
+microphone; if it is refused, the app runs without voice (text radio still
+works) until the permission is granted in Android's settings and the app is
+restarted. Push-to-talk from the controller works as on the desktop: the
+game forwards the button inside its telemetry, so the driver never touches
+the phone. The speech-to-speech radio (Settings, "voice realtime") is
+available too.
+
+Not yet: a Bluetooth headset's microphone. Playback reaches Bluetooth
+headphones, but capture uses the phone's own microphone until the headset
+audio route is added.
+
 ## What does not work yet
 
-- Voice (wake word, push-to-talk, spoken radio): needs the Android audio
-  backend. Text radio works.
 - The dashboard's layout is the desktop one. Tablets in landscape are fine;
   phones get the responsive rules in `static/css/v42.css`, which cover the
   workspaces but not yet a purpose-built DRIVE screen.

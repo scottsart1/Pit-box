@@ -69,15 +69,33 @@ public class MainActivity extends Activity {
                 FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
 
         setContentView(root);
-        requestNotificationPermission();
-        startBackend();
+        if (!requestPermissionsFirst()) startBackend();
     }
 
-    private void requestNotificationPermission() {
+    /**
+     * The microphone decides whether the backend starts its voice layer, and
+     * that is read once at start, so the question is asked before the
+     * service is started. Returns true when a prompt is showing; the backend
+     * then starts from the permission callback, whatever the answer.
+     */
+    private boolean requestPermissionsFirst() {
+        java.util.List<String> wanted = new java.util.ArrayList<>();
+        if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+            wanted.add(Manifest.permission.RECORD_AUDIO);
+        }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU
                 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
-            requestPermissions(new String[]{Manifest.permission.POST_NOTIFICATIONS}, 1);
+            wanted.add(Manifest.permission.POST_NOTIFICATIONS);
         }
+        if (wanted.isEmpty()) return false;
+        requestPermissions(wanted.toArray(new String[0]), 1);
+        return true;
+    }
+
+    @Override
+    public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] grantResults) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults);
+        if (requestCode == 1 && startedAt == 0) startBackend();
     }
 
     private void startBackend() {

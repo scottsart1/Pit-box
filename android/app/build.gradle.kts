@@ -22,8 +22,8 @@ android {
         applicationId = "com.yourpitbox.app"
         minSdk = 24
         targetSdk = 35
-        versionCode = 2
-        versionName = "4.9.1-android.2"
+        versionCode = 3
+        versionName = "4.9.1-android.3"
         ndk {
             // 64-bit phones and tablets, plus the x86_64 emulator.
             abiFilters += listOf("arm64-v8a", "x86_64")
@@ -65,14 +65,17 @@ chaquopy {
         pip {
             options("--find-links", localWheels.asFile.absolutePath)
             // The runtime dependencies from pyproject.toml, minus what cannot
-            // run on Android: sounddevice/soundfile (PortAudio; voice is
-            // phase 2) and uvicorn's [standard] extras (uvloop, httptools,
-            // websockets), which have no Android builds. wsproto replaces
-            // websockets for the dashboard's /ws stream. numpy is the newest
-            // Chaquopy provides for Python 3.13; the test suite passes on it.
+            // run on Android: sounddevice/soundfile (PortAudio; replaced by
+            // the sounddevice.py and soundfile.py in src/main/python) and
+            // uvicorn's [standard] extras (uvloop, httptools), which have no
+            // Android builds. numpy is the newest Chaquopy provides for
+            // Python 3.13; the test suite passes on it.
             install("fastapi>=0.115")
             install("uvicorn>=0.30")
             install("wsproto")
+            // The OpenAI Realtime radio (speech-to-speech mode) connects with
+            // websockets; cross-compiled like the Rust packages.
+            install("websockets")
             install("openai>=2.45,<3")
             install("pydantic>=2.8")
             install("pydantic-settings>=2.4")
