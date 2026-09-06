@@ -45,6 +45,18 @@ public class MainActivity extends Activity {
 
         FrameLayout root = new FrameLayout(this);
         root.setBackgroundColor(ContextCompat.getColor(this, R.color.pitbox_bg));
+        // Android 15 draws the window edge to edge, under the status bar and
+        // the gesture bar. The dashboard has its own header and footer at the
+        // window's edges, so the layout is inset by the bars (and the keyboard
+        // when it is up), leaving the bars over the page's own dark ground.
+        androidx.core.view.ViewCompat.setOnApplyWindowInsetsListener(root, (view, insets) -> {
+            androidx.core.graphics.Insets bars = insets.getInsets(
+                    androidx.core.view.WindowInsetsCompat.Type.systemBars()
+                            | androidx.core.view.WindowInsetsCompat.Type.displayCutout()
+                            | androidx.core.view.WindowInsetsCompat.Type.ime());
+            view.setPadding(bars.left, bars.top, bars.right, bars.bottom);
+            return androidx.core.view.WindowInsetsCompat.CONSUMED;
+        });
 
         web = new WebView(this);
         web.setBackgroundColor(ContextCompat.getColor(this, R.color.pitbox_bg));
@@ -184,6 +196,25 @@ public class MainActivity extends Activity {
             return code == 200;
         } catch (Exception ignored) {
             return false;
+        }
+    }
+
+    /**
+     * Quit in the dashboard stops the service and leaves the "stopping" page
+     * in the WebView. Coming back to the app after that should start a fresh
+     * session, not show the stale page: the backend's own run() has returned
+     * by the time the service reports not running, so the ports are free.
+     */
+    @Override
+    protected void onResume() {
+        super.onResume();
+        if (loaded && !PitBoxService.isRunning() && PitBoxService.getFailure() == null) {
+            loaded = false;
+            web.setVisibility(View.INVISIBLE);
+            web.loadUrl("about:blank");
+            status.setText(R.string.starting);
+            status.setVisibility(View.VISIBLE);
+            startBackend();
         }
     }
 
