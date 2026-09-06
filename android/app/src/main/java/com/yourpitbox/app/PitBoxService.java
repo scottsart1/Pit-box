@@ -82,7 +82,7 @@ public class PitBoxService extends Service {
             File files = getFilesDir();
             File staticDir = installDashboard(files);
             PyObject entry = Python.getInstance().getModule("pitbox_android");
-            entry.callAttr("configure", files.getAbsolutePath(), staticDir.getAbsolutePath());
+            entry.callAttr("configure", files.getAbsolutePath(), staticDir.getAbsolutePath(), microphoneGranted());
             dashboardUrl = entry.callAttr("dashboard_url").toString();
             running = true;
             // Blocks until the server is asked to stop (Quit in the dashboard,
@@ -207,6 +207,11 @@ public class PitBoxService extends Service {
         wakeLock = null;
     }
 
+    private boolean microphoneGranted() {
+        return checkSelfPermission(android.Manifest.permission.RECORD_AUDIO)
+                == android.content.pm.PackageManager.PERMISSION_GRANTED;
+    }
+
     private void createChannel() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return;
         NotificationChannel channel = new NotificationChannel(
@@ -233,8 +238,11 @@ public class PitBoxService extends Service {
                 .setPriority(NotificationCompat.PRIORITY_LOW)
                 .build();
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            startForeground(NOTIFICATION_ID, notification,
-                    ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE);
+            // Android 14 rejects a microphone-typed service without the
+            // permission, so the type is added only once it is granted.
+            int type = ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE;
+            if (microphoneGranted()) type |= ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE;
+            startForeground(NOTIFICATION_ID, notification, type);
         } else {
             startForeground(NOTIFICATION_ID, notification);
         }

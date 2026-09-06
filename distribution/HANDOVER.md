@@ -335,9 +335,13 @@ is the reference. The shape of it:
   cross-compiled by `android/build-wheels.sh` (cibuildwheel's Android
   support). numpy comes from Chaquopy's repository as 1.26.2, the newest
   there for 3.13; the full suite passes on it.
-- Voice is not in the first build: sounddevice/soundfile have no Android
-  build, and the wake word is disabled by `pitbox_android.py` until an
-  Android audio backend replaces that layer.
+- Voice: sounddevice/soundfile have no Android build, so
+  `android/app/src/main/python/sounddevice.py` and `soundfile.py` implement
+  the subset the backend uses on AudioRecord and AudioTrack (tests:
+  `distribution/tests/test_android_audio.py`, against fake Android classes).
+  The wake word is enabled only when RECORD_AUDIO is granted; the service
+  adds the `microphone` foreground type only then, as Android 14 requires.
+  websockets is cross-compiled too, for the realtime radio.
 - `.github/workflows/android-apk.yml` builds the APK on a runner and can
   attach it to a GitHub Release tagged `android-v<version>` for sideloading.
 

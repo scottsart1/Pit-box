@@ -17,6 +17,7 @@ ROOT = Path(__file__).resolve().parents[2]
 GRADLE = (ROOT / "android" / "app" / "build.gradle.kts").read_text(encoding="utf-8")
 WHEELS = (ROOT / "android" / "build-wheels.sh").read_text(encoding="utf-8")
 WORKFLOW = (ROOT / ".github" / "workflows" / "android-apk.yml").read_text(encoding="utf-8")
+ANDROID_PYTHON = ROOT / "android" / "app" / "src" / "main" / "python"
 
 # Desktop dependencies with no Android build, replaced or left out on purpose.
 NOT_ON_ANDROID = {
@@ -75,3 +76,35 @@ def test_the_workflow_builds_wheels_before_the_apk():
     assert "build-wheels.sh" in WORKFLOW
     assert WORKFLOW.index("build-wheels.sh") < WORKFLOW.index("assembleDebug")
     assert "python-version: \"3.13\"" in WORKFLOW
+
+
+def _names_provided(module_file: Path) -> set[str]:
+    source = module_file.read_text(encoding="utf-8")
+    return set(re.findall(r"^(?:def|class) (\w+)", source, re.MULTILINE))
+
+
+def test_the_android_audio_layer_covers_every_sounddevice_and_soundfile_use():
+    # The desktop opens the microphone and speaker through sounddevice and
+    # reads WAVs through soundfile. Android has neither package; the stand-ins
+    # in android/app/src/main/python must provide every name the backend
+    # uses, or voice breaks on the phone with an AttributeError.
+    used: dict[str, set[str]] = {"sd": set(), "sf": set()}
+    for path in (ROOT / "src" / "pitwall").rglob("*.py"):
+        for alias, name in re.findall(r"\b(sd|sf)\.([A-Za-z_]+)", path.read_text(encoding="utf-8")):
+            used[alias].add(name)
+    assert used["sd"] and used["sf"], "the backend's audio calls moved; update this test"
+    provided_sd = _names_provided(ANDROID_PYTHON / "sounddevice.py")
+    provided_sf = _names_provided(ANDROID_PYTHON / "soundfile.py")
+    assert used["sd"] <= provided_sd, f"missing from Android sounddevice: {used['sd'] - provided_sd}"
+    assert used["sf"] <= provided_sf, f"missing from Android soundfile: {used['sf'] - provided_sf}"
+
+
+def test_the_microphone_is_declared_and_only_typed_when_granted():
+    manifest = (ROOT / "android" / "app" / "src" / "main" / "AndroidManifest.xml").read_text(encoding="utf-8")
+    service = (ROOT / "android" / "app" / "src" / "main" / "java" / "com" / "yourpitbox" / "app" / "PitBoxService.java").read_text(encoding="utf-8")
+    assert 'android.permission.RECORD_AUDIO' in manifest
+    assert 'android.permission.FOREGROUND_SERVICE_MICROPHONE' in manifest
+    assert 'foregroundServiceType="connectedDevice|microphone"' in manifest
+    # Android 14 throws if a service claims the microphone type without the
+    # permission, so the type must be conditional on the grant.
+    assert "if (microphoneGranted()) type |= ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE" in service

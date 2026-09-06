@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Cross-compile the backend's Rust dependencies for Android.
 #
-# pydantic-core, jiter and rpds-py ship no Android wheels on PyPI and are not
+# pydantic-core, jiter, rpds-py and websockets ship no Android wheels on PyPI and are not
 # in Chaquopy's repository, so the APK build cannot pip-install them. This
 # builds them once with cibuildwheel's Android support into android/wheels/,
 # where app/build.gradle.kts points pip with --find-links.
@@ -22,6 +22,7 @@ PACKAGES=(
   "pydantic-core 2.46.5"
   "jiter 0.16.0"
   "rpds-py 2026.6.3"
+  "websockets 17.1"
 )
 
 : "${ANDROID_HOME:?set ANDROID_HOME to the Android SDK}"
