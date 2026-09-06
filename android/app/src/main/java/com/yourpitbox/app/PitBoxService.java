@@ -90,12 +90,41 @@ public class PitBoxService extends Service {
             entry.callAttr("start");
         } catch (Throwable error) {
             Log.e(TAG, "Backend stopped with an error", error);
-            failure = error.toString();
+            failure = describe(error);
+            recordFailure(failure);
         } finally {
             running = false;
             releaseLocks();
             stopForeground(STOP_FOREGROUND_REMOVE);
             stopSelf();
+            if (failure == null) {
+                // The backend keeps state a second start in the same process
+                // cannot survive, exactly as on the desktop, where Quit ends
+                // the process. Ending it here means the next tap on the icon
+                // starts clean. On a failure the process stays so the
+                // activity can show what went wrong.
+                android.os.Process.killProcess(android.os.Process.myPid());
+            }
+        }
+    }
+
+    /** The Python traceback, not just the exception's one-line summary. */
+    private static String describe(Throwable error) {
+        String trace = Log.getStackTraceString(error);
+        // Keep the end, where the Python frames and the message are.
+        return trace.length() > 6000 ? "…" + trace.substring(trace.length() - 6000) : trace;
+    }
+
+    private void recordFailure(String text) {
+        try {
+            File data = new File(getFilesDir(), "PitWallData");
+            //noinspection ResultOfMethodCallIgnored
+            data.mkdirs();
+            try (FileOutputStream out = new FileOutputStream(new File(data, "android-start-error.txt"))) {
+                out.write(text.getBytes("UTF-8"));
+            }
+        } catch (IOException ignored) {
+            // The screen still shows it.
         }
     }
 

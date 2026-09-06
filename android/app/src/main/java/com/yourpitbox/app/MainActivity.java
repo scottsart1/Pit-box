@@ -74,10 +74,17 @@ public class MainActivity extends Activity {
         status = new TextView(this);
         status.setText(R.string.starting);
         status.setTextColor(Color.parseColor("#9eb2c2"));
-        status.setTextSize(16);
-        status.setGravity(Gravity.CENTER);
-        status.setPadding(48, 48, 48, 48);
-        root.addView(status, new FrameLayout.LayoutParams(
+        status.setTextSize(15);
+        status.setGravity(Gravity.CENTER_HORIZONTAL);
+        status.setPadding(48, 96, 48, 96);
+        // Selectable and scrollable: a traceback must be readable and
+        // copyable on the device, with no computer attached.
+        status.setTextIsSelectable(true);
+        android.widget.ScrollView scroller = new android.widget.ScrollView(this);
+        scroller.setFillViewport(true);
+        scroller.addView(status, new FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.WRAP_CONTENT));
+        root.addView(scroller, new FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
 
         setContentView(root);
@@ -160,7 +167,8 @@ public class MainActivity extends Activity {
         if (loaded) return;
         String failure = PitBoxService.getFailure();
         if (failure != null) {
-            status.setText(getString(R.string.start_failed) + "\n\n" + failure);
+            status.setText(getString(R.string.start_failed) + "\n\n" + failure
+                    + "\n\nBackend log:\n\n" + logTail());
             return;
         }
         String url = PitBoxService.getDashboardUrl();
@@ -200,21 +208,16 @@ public class MainActivity extends Activity {
     }
 
     /**
-     * Quit in the dashboard stops the service and leaves the "stopping" page
-     * in the WebView. Coming back to the app after that should start a fresh
-     * session, not show the stale page: the backend's own run() has returned
-     * by the time the service reports not running, so the ports are free.
+     * Quit in the dashboard stops the backend, and the service then ends the
+     * process, as Quit does on the desktop. If this activity is somehow still
+     * here with nothing running and no failure to show, leave, so the next
+     * tap on the icon starts clean rather than showing a dead page.
      */
     @Override
     protected void onResume() {
         super.onResume();
         if (loaded && !PitBoxService.isRunning() && PitBoxService.getFailure() == null) {
-            loaded = false;
-            web.setVisibility(View.INVISIBLE);
-            web.loadUrl("about:blank");
-            status.setText(R.string.starting);
-            status.setVisibility(View.VISIBLE);
-            startBackend();
+            finishAndRemoveTask();
         }
     }
 
