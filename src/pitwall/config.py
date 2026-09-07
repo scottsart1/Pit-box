@@ -293,6 +293,11 @@ class Settings(BaseSettings):
     # Prevent tiny simulation changes from moving the radio pit call every lap.
     strategy_change_min_gain_s: float = 2.5
     strategy_min_hold_laps: int = 2
+    # A faster plan must remain the faster plan for this long before the
+    # spoken call moves to it. Shorter-lived gains are projection noise: at
+    # Sakhir the call swung between a one-stop on hards and a two-stop on
+    # softs several times a lap on gains that lasted a second at a time.
+    strategy_switch_confirm_s: float = 20.0
     # Cold-tyre out-lap penalty (seconds) applied to the first lap of a fresh
     # stint, halved on the second lap. Ignoring warm-up makes an undercut look
     # better than it is, because the cold in/out laps are where the time goes.

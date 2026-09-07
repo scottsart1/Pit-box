@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import math
 import re
+import time
 import zlib
 from itertools import pairwise
 from statistics import median
@@ -307,6 +308,13 @@ class StrategyEngine:
         # ~25 KB row several times a second (2 800 rows in one session, 515 MB
         # across the database). Only materially different plans are recorded.
         self._last_snapshot_key: tuple[Any, ...] | None = None
+        # Every plan that survived the shortlist on the last compute, so the
+        # stability hold can find a held plan that is no longer in the top
+        # five. See _stabilize_radio_plan.
+        self._candidate_pool: list[dict[str, Any]] = []
+        # (radio signature, monotonic first seen) of a faster plan that has
+        # not yet been the faster plan for long enough to be spoken.
+        self._pending_switch: tuple[tuple[Any, ...], float] | None = None
 
     @staticmethod
     def _valid_laps(state: dict[str, Any]) -> list[dict[str, Any]]:
@@ -682,7 +690,30 @@ class StrategyEngine:
 
     @staticmethod
     def _used_compounds(state: dict[str, Any]) -> list[str]:
+        """Compounds the car has actually raced on, plus the one fitted now.
+
+        A compound counts once a racing lap has been completed on it, or when
+        it is the tyre on the car. Nothing else does. The game's stint history
+        lists the set the car sat on before the start - at Suzuka the
+        qualifying softs, swapped for hards on the grid - as a stint that
+        ended on lap 0, and counting it satisfied the two-compound rule before
+        the lights went out. The engine then recommended a no-stop on hards
+        for a 27-lap race, which is a disqualification.
+        """
         used: list[str] = []
+        placeholders = {"UNKNOWN", "FITTED", ""}
+        current_lap = int(state.get("current_lap", 0) or 0)
+
+        def note(compound: Any) -> None:
+            name = str(compound or "").upper()
+            if name not in placeholders and name not in used:
+                used.append(name)
+
+        raced = [
+            lap
+            for lap in state.get("completed_laps", []) or []
+            if int(lap.get("lap_num", 0) or 0) >= 1
+        ]
         player_idx = int(state.get("player_car_index", 0))
         player = next(
             (
@@ -692,18 +723,28 @@ class StrategyEngine:
             ),
             None,
         )
-        if player:
-            for stint in player.get("tyre_stints", []):
-                compound = str(stint.get("compound", "UNKNOWN")).upper()
-                if compound not in {"UNKNOWN", "FITTED"} and compound not in used:
-                    used.append(compound)
-        for lap in state.get("completed_laps", []):
-            compound = str(lap.get("compound", "UNKNOWN")).upper()
-            if compound not in {"UNKNOWN", "FITTED"} and compound not in used:
-                used.append(compound)
-        current = str(state.get("tyre", {}).get("compound", "UNKNOWN")).upper()
-        if current not in {"UNKNOWN", "FITTED"} and current not in used:
-            used.append(current)
+        stints = list(player.get("tyre_stints", []) or []) if player else []
+        for index, stint in enumerate(stints):
+            name = str(stint.get("compound") or "").upper()
+            if name in placeholders:
+                continue
+            start_lap = int(stint.get("start_lap", 1) or 1)
+            end_lap = int(stint.get("end_lap", 0) or 0)
+            ongoing = end_lap >= 255 or index == len(stints) - 1
+            if ongoing:
+                # The set on the car is counted below as the fitted compound.
+                continue
+            if any(str(lap.get("compound") or "").upper() == name for lap in raced):
+                note(name)
+                continue
+            # No completed lap records it. Trust the stint only if it ended
+            # on a lap the race has finished: a set that ended on lap 0, or
+            # on the lap still in progress, is the grid swap.
+            if 1 <= end_lap < current_lap and end_lap - start_lap + 1 >= 1:
+                note(name)
+        for lap in raced:
+            note(lap.get("compound"))
+        note(state.get("tyre", {}).get("compound"))
         return used
 
     @staticmethod
@@ -1792,9 +1833,11 @@ class StrategyEngine:
         new_override = new_rec.get("driver_override", {})
         old_override = old_rec.get("driver_override", {}) if old_rec else {}
         if new_override.get("active") and new_override != old_override:
+            self._pending_switch = None
             candidate["stability"] = {"held": False, "reason": "driver strategy override changed"}
             return candidate
         if not old_rec or self._radio_signature(old_rec) == self._radio_signature(new_rec):
+            self._pending_switch = None
             if old_rec:
                 new_rec["committed_at_lap"] = int(old_rec.get("committed_at_lap", current_lap))
             return candidate
@@ -1814,15 +1857,27 @@ class StrategyEngine:
             or (old_box is not None and current_lap > old_box)
         )
         if material_trigger:
+            self._pending_switch = None
             candidate["stability"] = {"held": False, "reason": "material race-state change"}
             return candidate
 
         old_sig = self._radio_signature(old_rec)
+        # Look for the held plan in the whole shortlist, not only the five
+        # plans the dashboard shows. With thousands of candidates the top five
+        # are usually one shape on adjacent laps, so a perfectly good held
+        # plan of a different shape "vanished" from the list and the call
+        # flipped to whatever was fastest that second.
+        pool = list(candidate.get("plans", [])) + [
+            plan
+            for plan in self._candidate_pool
+            if plan.get("feasible") and plan.get("legal", True)
+        ]
         old_ranked = next(
-            (plan for plan in candidate.get("plans", []) if self._radio_signature(plan) == old_sig),
+            (plan for plan in pool if self._radio_signature(plan) == old_sig),
             None,
         )
         if old_ranked is None:
+            self._pending_switch = None
             candidate["stability"] = {"held": False, "reason": "previous plan no longer feasible or ranked"}
             return candidate
 
@@ -1831,13 +1886,23 @@ class StrategyEngine:
         improvement = float(old_ranked.get("risk_adjusted_time_s", 1e9)) - float(
             new_rec.get("risk_adjusted_time_s", 1e9)
         )
+        awaiting_confirmation = False
         if held_laps >= settings.strategy_min_hold_laps and improvement >= settings.strategy_change_min_gain_s:
-            candidate["stability"] = {
-                "held": False,
-                "reason": "new plan materially faster",
-                "gain_s": round(improvement, 2),
-            }
-            return candidate
+            # A faster plan has to stay the faster plan for a while before it
+            # is spoken. Projected times move with every gap sample and Monte
+            # Carlo pass, and at Sakhir the call swung between a one-stop on
+            # hards and a two-stop on softs several times a lap on gains that
+            # were real for a second at a time.
+            if self._switch_confirmed(self._radio_signature(new_rec)):
+                candidate["stability"] = {
+                    "held": False,
+                    "reason": "new plan materially faster",
+                    "gain_s": round(improvement, 2),
+                }
+                return candidate
+            awaiting_confirmation = True
+        else:
+            self._pending_switch = None
 
         held = dict(old_rec)
         for key in (
@@ -1859,12 +1924,31 @@ class StrategyEngine:
         candidate["recommended"] = held
         candidate["stability"] = {
             "held": True,
-            "reason": "prevented non-material strategy flap",
+            "reason": (
+                "faster plan awaiting confirmation"
+                if awaiting_confirmation
+                else "prevented non-material strategy flap"
+            ),
             "candidate_gain_s": round(improvement, 2),
             "held_laps": held_laps,
             "required_gain_s": settings.strategy_change_min_gain_s,
         }
         return candidate
+
+    def _switch_confirmed(self, signature: tuple[Any, ...]) -> bool:
+        """Whether a faster plan has been the faster plan for long enough.
+
+        The first time a new signature wins it is only noted; it has to keep
+        winning for ``strategy_switch_confirm_s`` before the spoken call
+        follows it. A different winner in between starts the clock again.
+        """
+        confirm_s = float(settings.strategy_switch_confirm_s)
+        now = time.monotonic()
+        pending = self._pending_switch
+        if pending is None or pending[0] != signature:
+            self._pending_switch = (signature, now)
+            return confirm_s <= 0.0
+        return now - pending[1] >= confirm_s
 
     def _snapshot_key(self, state: dict[str, Any], plan: dict[str, Any]) -> tuple[Any, ...]:
         """Identity of a strategy snapshot for persistence de-duplication.
@@ -2530,6 +2614,9 @@ class StrategyEngine:
                 float(plan.get("risk_adjusted_time_s", 1e9)),
                 int(plan.get("stops_remaining", 9)),
             )
+        # Remembered for _stabilize_radio_plan, which needs to find the plan
+        # currently being spoken even when it is not in the top five.
+        self._candidate_pool = list(shortlisted)
         ranked = sorted(
             shortlisted,
             key=ranking_key,

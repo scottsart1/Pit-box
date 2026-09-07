@@ -649,6 +649,15 @@ class EngineerBrain:
         # the driver then had to argue with for several laps.
         if has_negation(text):
             return None
+        # A question about a plan is not a plan. "Should we box for hard
+        # tyres right now?" wants an opinion; locking the compound it names
+        # would answer it with a commitment the driver never made.
+        if re.match(
+            r"^(?:should|shall|what|why|how|when|is it|are we|do you|does it|"
+            r"would it|would you|do we)\b",
+            text,
+        ):
+            return None
 
         compounds = extract_compounds(text)
         lap = extract_lap(text, current_lap)
@@ -662,6 +671,15 @@ class EngineerBrain:
                 "i am going to", "i'm going to", "we are going to", "we're going to",
                 "i will take", "i'll take", "put me on", "box lap", "box this lap",
                 "commit to", "stick with", "lock strategy",
+                # A stated preference is a decision. "I would actually prefer
+                # the soft two-stop" was answered "copy, soft two-stop" with
+                # nothing locked, and the next call contradicted it.
+                "i would prefer", "i d prefer", "id prefer", "i prefer", "we prefer",
+                "i would rather", "i d rather", "id rather", "i d like",
+                "i would like", "i want", "we want", "let s go with",
+                "lets go with", "go with the", "let s do", "lets do",
+                "switch to", "switching to", "move to", "change to", "shift to",
+                "shift over to",
             ),
         )
         stop_preference = None

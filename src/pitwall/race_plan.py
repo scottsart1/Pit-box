@@ -23,6 +23,9 @@ from typing import Any
 DRY_COMPOUNDS = ("SOFT", "MEDIUM", "HARD")
 WET_COMPOUNDS = ("INTER", "WET")
 KNOWN_COMPOUNDS = frozenset(DRY_COMPOUNDS + WET_COMPOUNDS)
+# Placeholders the engine uses before telemetry has named the fitted tyre.
+# They are never something a driver said, so they are never answered as one.
+UNRESOLVED_COMPOUNDS = frozenset({"", "UNKNOWN", "FITTED"})
 
 MAX_STOPS = 3
 # How far the ranker may slide a planned stop before it counts as a different
@@ -50,6 +53,14 @@ def normalise_plan(raw: Any, total_laps: int = 0) -> dict[str, Any]:
         raise PlanError("A plan needs a compound for each stint.")
     unknown = [item for item in compounds if item not in KNOWN_COMPOUNDS]
     if unknown:
+        if unknown[0] in UNRESOLVED_COMPOUNDS:
+            # The engine's own placeholder for a tyre it has not seen yet.
+            # "Unknown is not a tyre I know" was spoken four times in one
+            # race to a driver asking whether to switch to hards.
+            raise PlanError(
+                "I can't see which tyre you're on yet, so I can't set a plan "
+                "against it."
+            )
         raise PlanError(f"{unknown[0].title()} is not a tyre I know.")
     if len(compounds) - 1 > MAX_STOPS:
         raise PlanError(f"{len(compounds) - 1} stops is more than I can plan.")
@@ -187,11 +198,19 @@ def describe_plan(plan: dict[str, Any]) -> str:
     box_laps = list(plan.get("box_laps") or [])
     if not compounds:
         return "No plan set."
+
+    def name(compound: str) -> str:
+        # Never say "unknowns" over the radio. Before the fitted tyre has
+        # been seen, say that instead of a placeholder.
+        if compound.upper() in UNRESOLVED_COMPOUNDS:
+            return "the fitted tyre"
+        return f"{compound}s"
+
     if not box_laps:
-        return f"No stop, {compounds[0]}s to the flag."
+        return f"No stop, {name(compounds[0])} to the flag."
 
     stops = len(box_laps)
-    legs = [f"start on {compounds[0]}s"]
+    legs = [f"start on {name(compounds[0])}"]
     for index, lap in enumerate(box_laps):
-        legs.append(f"box lap {lap} for {compounds[index + 1]}s")
+        legs.append(f"box lap {lap} for {name(compounds[index + 1])}")
     return f"{stops}-stop: " + ", ".join(legs) + "."

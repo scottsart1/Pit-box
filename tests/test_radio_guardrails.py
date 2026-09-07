@@ -3,6 +3,7 @@ from __future__ import annotations
 import pytest
 
 from pitwall.brain import EngineerBrain
+from pitwall.config import settings
 from pitwall.state import DriverState
 
 
@@ -193,8 +194,11 @@ async def test_strategy_stability_holds_small_plan_changes(stack) -> None:
 
 
 @pytest.mark.asyncio
-async def test_strategy_stability_accepts_material_gain_after_hold(stack) -> None:
+async def test_strategy_stability_accepts_material_gain_after_hold(stack, monkeypatch) -> None:
     store, _, strategy, *_ = stack
+    # The confirmation window is covered by its own test; here the question
+    # is only whether a material gain after the hold is accepted at all.
+    monkeypatch.setattr(settings, "strategy_switch_confirm_s", 0.0)
     await store.update(
         current_lap=16,
         tyre={

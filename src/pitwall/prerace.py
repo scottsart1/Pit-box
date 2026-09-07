@@ -34,6 +34,7 @@ from .intent import (
     normalize_text,
 )
 from .race_plan import (
+    UNRESOLVED_COMPOUNDS,
     PlanError,
     compound_rule_ok,
     describe_plan,
@@ -131,6 +132,21 @@ class PreRacePlanner:
             )
 
         plan = await self.strategy.get_plan()
+        if self._shapes_unresolved(plan):
+            # get_plan hands back whatever was computed last, and the first
+            # computation of a race often ran before the compound arrived, so
+            # every shape starts on "UNKNOWN". Proposing that produced a plan
+            # nobody could edit: each change was refused with "Unknown is not
+            # a tyre I know". Recompute against the tyre now on the car.
+            plan = await self.strategy.recompute()
+            if self._shapes_unresolved(plan):
+                return await self._store_briefing(
+                    phase="idle",
+                    proposal={},
+                    alternatives=[],
+                    rationale="",
+                    spoken="Waiting to see which tyre you are on.",
+                )
 
         if not plan.get("available"):
             return await self._store_briefing(
@@ -174,6 +190,15 @@ class PreRacePlanner:
         the grid is the tyre the race starts on, so it carries over directly.
         """
         compounds = [str(item).upper() for item in shape.get("compounds", [])]
+        fitted = str(state.get("tyre", {}).get("compound", "") or "").upper()
+        if (
+            compounds
+            and compounds[0] in UNRESOLVED_COMPOUNDS
+            and fitted not in UNRESOLVED_COMPOUNDS
+        ):
+            # The first compound is always the tyre on the car. A placeholder
+            # there is a stale shape, not a choice: say what is fitted.
+            compounds[0] = fitted
         box_laps = [int(lap) for lap in shape.get("box_laps", [])]
         try:
             return normalise_plan(
@@ -190,6 +215,15 @@ class PreRacePlanner:
                 "stops": len(box_laps),
                 "lap_tolerance": 2,
             }
+
+    @staticmethod
+    def _shapes_unresolved(plan: dict[str, Any]) -> bool:
+        """Whether any offered shape still starts on a placeholder tyre."""
+        return any(
+            str(compound or "").upper() in UNRESOLVED_COMPOUNDS
+            for shape in (plan.get("shapes", []) or [])
+            for compound in (shape.get("compounds") or [])[:1]
+        )
 
     @staticmethod
     def _rationale(
@@ -240,6 +274,15 @@ class PreRacePlanner:
             return None
 
         state = await self.store.snapshot_analysis()
+        if not self.is_prerace(state):
+            # The lights went out with the discussion still open. From here
+            # every sentence about tyres is race talk, not plan talk. In a
+            # real race an unanswered grid proposal swallowed "should we box
+            # for hard tyres right now" on lap 10 - four times - and replied
+            # about the proposal's placeholder tyre. Close it; the race has
+            # the conversation now.
+            await self._lapse(briefing)
+            return None
         text = normalize_text(utterance)
         proposal = dict(briefing.get("proposal", {}) or {})
         alternatives = list(briefing.get("alternatives", []) or [])
@@ -267,6 +310,9 @@ class PreRacePlanner:
         agreed and the plan is now constraining the race.
         """
         briefing = await self.snapshot()
+        state = await self.store.snapshot_analysis()
+        if not self.is_prerace(state):
+            return await self._lapse(briefing)
         if briefing.get("phase") not in {"proposed", "negotiating"}:
             briefing = await self.propose()
             if briefing.get("phase") != "proposed":
@@ -414,7 +460,10 @@ class PreRacePlanner:
             )
 
         requested_lap = extract_lap(text, current_lap)
-        if requested_lap is not None and box_laps:
+        # "now" and "this lap" resolve to the current lap, which on the grid
+        # is lap 0 or 1 - never a stop anyone meant. Only a lap ahead of the
+        # car moves a stop.
+        if requested_lap is not None and box_laps and requested_lap > max(1, current_lap):
             revised = list(box_laps)
             revised[0] = requested_lap
             return (
@@ -653,6 +702,21 @@ class PreRacePlanner:
             alternatives=[],
             rationale="",
             spoken="Back to automatic strategy.",
+        )
+
+    async def _lapse(self, briefing: dict[str, Any]) -> dict[str, Any]:
+        """Close a discussion the race has overtaken, committing nothing."""
+        return await self._store_briefing(
+            phase="idle",
+            proposal={},
+            alternatives=[],
+            rationale="",
+            spoken=(
+                "The race is under way, so the grid plan discussion is closed. "
+                "Running automatic strategy; tell me over the radio if you want "
+                "to lock something in."
+            ),
+            transcript=list(briefing.get("transcript", []) or []),
         )
 
     # -- persistence -------------------------------------------------------

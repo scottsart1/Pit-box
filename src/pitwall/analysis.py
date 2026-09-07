@@ -635,13 +635,30 @@ class AnalysisEngine:
                 )
         return sorted(flagged, key=lambda item: item["average_loss_s"], reverse=True)
 
+    # The largest correction a driver can actually make. Beyond these the
+    # number is a reference-alignment artefact: "brake 463 metres later" was
+    # spoken in a real race, a distance longer than the braking zone and the
+    # straight before it put together.
+    _MAX_BRAKE_POINT_DELTA_M = 60.0
+    _MAX_THROTTLE_POINT_DELTA_M = 60.0
+    _MAX_APEX_SPEED_DELTA_KPH = 40.0
+
     @staticmethod
-    def _quantity(value: Any, unit: str, minimum: float = 1.0) -> str:
-        """Render a delta for radio use, or an empty string when it is noise."""
+    def _quantity(
+        value: Any, unit: str, minimum: float = 1.0, maximum: float | None = None
+    ) -> str:
+        """Render a delta for radio use, or an empty string when it is noise.
+
+        Below ``minimum`` the delta is not worth saying; above ``maximum`` it
+        cannot be a real driving correction, so the advice is given without
+        the number rather than with an absurd one.
+        """
         if value is None:
             return ""
         magnitude = abs(float(value))
         if magnitude < minimum:
+            return ""
+        if maximum is not None and magnitude > maximum:
             return ""
         return f"{magnitude:.0f} {unit}"
 
@@ -650,13 +667,16 @@ class AnalysisEngine:
         cause = corner.get("cause", "")
         name = corner.get("name", f"Corner {corner.get('corner_no', '?')}")
         brake = AnalysisEngine._quantity(
-            corner.get("brake_point_delta_m"), "metres", 2.0
+            corner.get("brake_point_delta_m"), "metres", 2.0,
+            AnalysisEngine._MAX_BRAKE_POINT_DELTA_M,
         )
         apex = AnalysisEngine._quantity(
-            corner.get("apex_speed_delta_kph"), "km/h", 2.0
+            corner.get("apex_speed_delta_kph"), "km/h", 2.0,
+            AnalysisEngine._MAX_APEX_SPEED_DELTA_KPH,
         )
         throttle = AnalysisEngine._quantity(
-            corner.get("throttle_on_delta_m"), "metres", 2.0
+            corner.get("throttle_on_delta_m"), "metres", 2.0,
+            AnalysisEngine._MAX_THROTTLE_POINT_DELTA_M,
         )
         if cause == "early brake":
             if brake:

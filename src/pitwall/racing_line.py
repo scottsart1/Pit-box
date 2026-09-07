@@ -97,6 +97,14 @@ def _tangent(reference: list[dict[str, float]], index: int) -> tuple[float, floa
     return dx / norm, dz / norm
 
 
+# A racing line cannot be this far from another racing line on the same
+# track: the circuit is not that wide. A zone whose average deviation exceeds
+# it is a reference that does not align with this lap - a different layout,
+# a rewound trace, a stale model - and "you are 388.6 m right of the
+# reference" (spoken in a real race) is the result of narrating it anyway.
+MAX_CREDIBLE_DEVIATION_M = 12.0
+
+
 def compare_lines(
     trace: list[dict[str, Any]],
     reference_trace: list[dict[str, Any]] | None,
@@ -169,6 +177,10 @@ def compare_lines(
         signed_mean = mean(signed_values)
         side = "left" if signed_mean > 0 else "right"
         average = mean(abs_values)
+        if average > MAX_CREDIBLE_DEVIATION_M:
+            # Not a line difference the driver can act on; see the constant.
+            active = []
+            return
         max_dev = max(abs_values)
         avg_speed = mean(speed_deltas)
         avg_brake = mean(brake_deltas)

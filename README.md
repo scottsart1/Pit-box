@@ -93,6 +93,55 @@ dashboard. Bind the web host to `0.0.0.0`, set a long
 `PITWALL_WEB_ACCESS_TOKEN`, and keep it on a trusted LAN. Your Pit Box never opens a
 router or firewall to the public internet automatically.
 
+## What changed in 4.9.3
+
+4.9.3 fixes what two real race weekends, Suzuka and Sakhir, exposed in the
+strategy engine and the radio.
+
+### Strategy
+
+- **The two-compound rule only counts tyres that were raced.** The game lists
+  the set the car sat on before the start (the qualifying softs, swapped for
+  hards on the grid) as a stint that ended on lap 0. Counting it satisfied the
+  mandatory change before the lights, and the engine recommended a no-stop on
+  hards for a 27-lap race. A compound now counts once a racing lap has been
+  completed on it, or when it is the tyre on the car.
+- **The spoken call stops flapping.** A held plan is looked for in the whole
+  shortlist rather than the five plans on the dashboard, and a faster plan has
+  to remain the faster plan for 20 seconds (`strategy_switch_confirm_s`) before
+  the call moves to it. At Sakhir the call swung between a one-stop on hards
+  and a two-stop on softs several times a lap.
+- **Stated preferences lock.** "I would actually prefer the soft two-stop" now
+  sets the driver override. Previously the word "stop" counted as a negation
+  and the sentence was discarded, so the engineer said "copy" and locked
+  nothing. Questions ("should we box for hards now?") are answered, not locked.
+
+### Pre-race plan
+
+- **The grid discussion closes when the race starts.** An unanswered proposal
+  used to keep owning strategy talk for the whole race, so mid-race questions
+  about hards were answered with "Unknown is not a tyre I know", the
+  proposal's placeholder tyre. Once the car is past lap one the discussion
+  lapses and the radio answers the race.
+- A proposal is never built from shapes computed before the fitted tyre was
+  known; the engine recomputes first, and a placeholder tyre is described as
+  "the fitted tyre", never "unknowns".
+
+### Radio
+
+- Strategy advice inside a queued call (progress, rival stopped, race control)
+  is refreshed to the current call when it is spoken, not when it was queued.
+  A strategy-change call whose plan has since moved on is dropped unspoken.
+- Nothing is called after the driver retires, is disqualified or is
+  classified; the queue is cleared.
+- Fuel, tyre, penalty and damage calls wait until the car is out of the garage
+  and moving, and the damage tracker re-arms when damage goes down (front-wing
+  change, flashback, fresh car). Penalty and warning calls undone by a
+  flashback are not spoken.
+- Coaching numbers are bounded: no "brake 463 metres later", and a
+  racing-line zone more than 12 m from the reference is treated as a
+  misaligned reference rather than advice.
+
 ## What changed in 4.9.2
 
 4.9.2 makes the race strategy's tyre learning trustworthy on real captures.

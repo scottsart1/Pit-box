@@ -35,7 +35,16 @@ NEGATIONS = (
     "not", "dont", "don t", "do not", "wont", "won t", "will not", "isnt",
     "is not", "arent", "are not", "cant", "can t", "cannot", "never",
     "no longer", "instead of", "rather than", "without", "avoid", "skip",
-    "cancel", "forget", "disregard", "ignore", "stop",
+    "cancel", "forget", "disregard", "ignore",
+    # "stop" only negates as a verb of cessation. As a bare word it is far
+    # more often the noun in "one stop", "two-stop" and "pit stop", and
+    # treating those as negations silently discarded "I'd prefer the soft
+    # two-stop" as a plan the driver had ruled out - in a real race the
+    # engineer said "copy" and locked nothing.
+    "stop telling", "stop calling", "stop raising", "stop going on",
+    "stop mentioning", "stop talking", "stop asking", "stop suggesting",
+    "stop recommending", "stop saying", "stop bringing up", "stop reminding",
+    "stop it", "stop that", "stop with",
 )
 
 

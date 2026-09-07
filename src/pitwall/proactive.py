@@ -48,6 +48,11 @@ DAMAGE_KEYS = (
     "engine",
 )
 DAMAGE_FAULT_KEYS = ("drs_fault", "ers_fault")
+# LapData.result_status values after which the player is no longer racing:
+# did not finish, disqualified, not classified, retired. Mirrors
+# udp.RETIRED_RESULT_STATUS without importing the packet parser here.
+OUT_OF_RACE_RESULT_STATUS = frozenset({4, 5, 6, 7})
+FINISHED_RESULT_STATUS = 3
 # Delivery priority. Recorded sessions showed only a third of queued calls ever
 # reaching the driver: the queue was strictly first-in-first-out and every
 # non-critical call had to wait out the same interval, so a rival stopping or a
@@ -720,10 +725,63 @@ class ProactiveEngineer:
                 )
 
     @staticmethod
+    def _player(state: dict[str, Any]) -> dict[str, Any] | None:
+        player_idx = int(state.get("player_car_index", -1))
+        return next(
+            (
+                driver
+                for driver in state.get("drivers", []) or []
+                if int(driver.get("car_idx", -1)) == player_idx
+            ),
+            None,
+        )
+
+    @staticmethod
+    def _player_out_of_race(state: dict[str, Any]) -> bool:
+        """Retired, disqualified, unclassified - or classified at the flag."""
+        player = ProactiveEngineer._player(state)
+        if player is None:
+            return False
+        status = int(player.get("result_status", 0) or 0)
+        if status in OUT_OF_RACE_RESULT_STATUS:
+            return True
+        return status == FINISHED_RESULT_STATUS and str(
+            state.get("mode_profile", "")
+        ) in {"race", "sprint"}
+
+    @staticmethod
+    def _player_in_garage(state: dict[str, Any]) -> bool:
+        player = ProactiveEngineer._player(state)
+        return bool(player) and str(player.get("status", "")) == "garage"
+
+    @staticmethod
+    def _car_moving(state: dict[str, Any]) -> bool:
+        return int(state.get("speed_kph", 0) or 0) > 30
+
+    @staticmethod
+    def _call_signature(recommended: dict[str, Any]) -> tuple[Any, str, int]:
+        """What a strategy call says, for telling two calls apart."""
+        return (
+            recommended.get("box_lap"),
+            str(recommended.get("fit_compound") or "").upper(),
+            int(recommended.get("stops_remaining", 0) or 0),
+        )
+
+    def _drop_pending(self, reason: str) -> None:
+        """Discard everything queued, recording why, so none of it is spoken."""
+        for item in self.pending:
+            item["delivery_outcome"] = reason
+            item.setdefault("blocked_reasons", []).append(reason)
+            self._discarded.append(item)
+        self.pending.clear()
+
+    @staticmethod
     def _event_still_relevant(event: dict[str, Any], state: dict[str, Any]) -> bool:
         if int(event.get("session_uid", 0)) != int(state.get("session_uid", 0)):
             return False
         if time.time() > float(event.get("expires_at", 0)):
+            return False
+        if ProactiveEngineer._player_out_of_race(state):
             return False
         kind = event.get("type")
         if kind == "race_control":
@@ -761,7 +819,27 @@ class ProactiveEngineer:
             )
         if kind == "strategy_change":
             hold = state.get("strategy_hold", {}) or {}
-            return not bool(hold.get("active"))
+            if hold.get("active"):
+                return False
+            # The call that was queued is only worth speaking while it is
+            # still the call. Plans move between queueing and a safe moment
+            # to speak: "Box lap 14 for softs" and "Box lap 18 for softs"
+            # went out thirty seconds apart in one race because the first
+            # had waited for a quiet straight.
+            payload = event.get("payload", {}) or {}
+            current = state.get("strategy", {}).get("recommended", {}) or {}
+            return ProactiveEngineer._call_signature(
+                payload
+            ) == ProactiveEngineer._call_signature(current)
+        if kind == "penalty":
+            # A flashback takes the penalty back; do not announce it after.
+            return int(state.get("penalties_s", 0) or 0) >= int(
+                (event.get("payload", {}) or {}).get("penalties_s", 0) or 0
+            )
+        if kind == "warning":
+            return int(state.get("corner_cutting_warnings", 0) or 0) >= int(
+                (event.get("payload", {}) or {}).get("corner_cutting_warnings", 0) or 0
+            )
         if kind == "driver_check":
             box_lap = (
                 state.get("strategy", {}).get("recommended", {}).get("box_lap")
@@ -842,6 +920,8 @@ class ProactiveEngineer:
             return "superseded by new session"
         if time.time() > float(event.get("expires_at", 0)):
             return "expired"
+        if ProactiveEngineer._player_out_of_race(state):
+            return "driver is out of the race"
         return None if ProactiveEngineer._event_still_relevant(event, state) else "superseded"
 
     @staticmethod
@@ -999,6 +1079,15 @@ class ProactiveEngineer:
             await self.setup_advisor.learn_current_session()
         if not bool(proactive.get("enabled", settings.proactive_enabled)):
             return
+        if self._player_out_of_race(state):
+            # The driver is a spectator now. In a real race the engineer kept
+            # calling "Bortoleto is closing" and "box for a front wing" for
+            # three minutes after "I'm retiring the car", then carried the
+            # damage and the 40-second penalty into the next session's first
+            # call.
+            self._drop_pending("driver is out of the race")
+            return
+        in_garage = self._player_in_garage(state)
 
         cadence = max(1, int(proactive.get("cadence_laps", settings.proactive_cadence_laps)))
         due_lap = cadence if self._last_lap_queued == 0 else self._last_lap_queued + cadence
@@ -1078,14 +1167,23 @@ class ProactiveEngineer:
             self._enqueue("weather_crossover", {"rain_15_pct": state.get("rain_next_15_pct"), "forecast": state.get("weather_forecast", [])}, critical=True, cooldown_s=0.0)
         self._last_weather_alert = wet
 
-        if float(state.get("fuel_laps_delta", 1.0)) < 0.3:
+        # Fuel, tyre, penalty and damage calls describe a car being driven.
+        # In the garage, and on the grid before the car has moved, the game
+        # still reports values and some are inherited from the last session:
+        # a Sakhir practice opened with "box for a front wing and serve the
+        # 40-second penalty", both from the Suzuka race before it, and three
+        # fuel warnings were spoken to a car sitting still at the grid.
+        car_running = not in_garage and self._car_moving(state)
+        if car_running and float(state.get("fuel_laps_delta", 1.0)) < 0.3:
             self._enqueue("fuel_warning", state.get("analysis", {}).get("fuel_model", {}), cooldown_s=90.0)
         wear = max(state.get("tyre", {}).get("wear", [0]) or [0])
-        if wear >= 65:
+        if not in_garage and wear >= 65:
             self._enqueue("tyre_wear", {"wear_fl_fr_rl_rr": state.get("tyre", {}).get("wear"), "strategy": self._urgent_strategy(state)}, critical=wear >= 82, cooldown_s=60.0)
 
         penalties, warnings = int(state.get("penalties_s", 0)), int(state.get("corner_cutting_warnings", 0))
-        if penalties > self._last_penalties:
+        if in_garage:
+            pass
+        elif penalties > self._last_penalties:
             self._enqueue("penalty", {"penalties_s": penalties}, critical=True, cooldown_s=0.0)
         elif warnings >= 2 and warnings > self._last_warnings:
             self._enqueue("warning", {"corner_cutting_warnings": warnings}, critical=True, cooldown_s=0.0)
@@ -1102,8 +1200,14 @@ class ProactiveEngineer:
         # has six "box for gearbox inspection" calls in fifteen laps, all
         # reporting the same unactionable damage.
         band = (maximum // 20) * 20
+        # Damage going down (a front-wing change, a flashback, a fresh car
+        # after the garage) re-arms the tracker, so the next real hit is
+        # reported rather than compared against a level that no longer exists.
+        self._reported_damage_band = min(self._reported_damage_band, band)
+        # A fault that cleared is news again if it comes back.
+        self._reported_damage_faults &= set(faults)
         new_fault = any(fault not in self._reported_damage_faults for fault in faults)
-        if (band > self._reported_damage_band and maximum > 10) or new_fault:
+        if not in_garage and ((band > self._reported_damage_band and maximum > 10) or new_fault):
             self._reported_damage_band = max(band, self._reported_damage_band)
             self._reported_damage_faults.update(faults)
             self._enqueue(
@@ -1174,7 +1278,7 @@ class ProactiveEngineer:
             int(state.get("unserved_drive_through_penalties", 0)),
             int(state.get("unserved_stop_go_penalties", 0)),
         )
-        if (
+        if not in_garage and (
             any(
                 current > previous
                 for current, previous in zip(
@@ -1628,6 +1732,7 @@ class ProactiveEngineer:
 
         with contextlib.suppress(ValueError):
             self.pending.remove(event)
+        self._refresh_payload(event, state)
         await self.store.mutate(lambda s: s.proactive.update({"queued": len(self.pending), "delivery_state": "generating"}))
         text = await self._narrate(event, state)
         # Different event types can converge on the same content: a real
@@ -1660,6 +1765,42 @@ class ProactiveEngineer:
                 open_window = getattr(self.voice, "open_reply_window", None)
                 if open_window is not None:
                     await open_window("engineer asked a question")
+
+    # Events whose payload carries the strategy call alongside their own news.
+    _STRATEGY_BEARING = frozenset(
+        {
+            "rival_pitted", "undercut_threat", "penalty_service",
+            "compound_requirement", "race_control",
+        }
+    )
+
+    def _refresh_payload(self, event: dict[str, Any], state: dict[str, Any]) -> None:
+        """Replace strategy advice queued with the event by the current call.
+
+        A call waits in the queue for a safe moment, often a minute or more,
+        and the plan can move meanwhile. At Sakhir the driver pitted for hards
+        under the safety car and the engine went to "stay out"; the progress
+        update spoken ninety seconds later still said "box lap 18 for hards",
+        from the payload it had been queued with.
+        """
+        kind = str(event.get("type", ""))
+        payload = event.get("payload")
+        if not isinstance(payload, dict):
+            return
+        if kind in {"progress_update", "tyre_wear"} and "strategy" in payload:
+            payload["strategy"] = self._urgent_strategy(state)
+        elif kind in self._STRATEGY_BEARING and payload.get("strategy"):
+            # An empty strategy was a deliberate omission (suppressed advice);
+            # only a call that carried advice gets the current advice.
+            payload["strategy"] = state.get("strategy", {}).get("recommended", {}) or {}
+        elif kind == "strategy_change":
+            current = state.get("strategy", {}).get("recommended", {}) or {}
+            if current and self._call_signature(current) == self._call_signature(payload):
+                released = payload.get("hold_released_reason")
+                payload.update(current)
+                if released:
+                    payload["hold_released_reason"] = released
+                    payload["instruction"] = current.get("instruction")
 
     _REPEAT_STOPWORDS = frozenset(
         "a an and are at be but for in is it its no not of on or so the "
