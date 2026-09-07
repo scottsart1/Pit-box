@@ -28,6 +28,7 @@ from fastapi.responses import (
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
+from . import __version__
 from .analysis import AnalysisEngine
 from .analysis_jobs import AnalysisJobService
 from .api.analysis import create_analysis_router
@@ -599,7 +600,10 @@ async def lifespan(app: FastAPI):
         )
 
 
-app = FastAPI(title="Your Pit Box", version="4.9.2", lifespan=lifespan)
+# The one version string lives in pitwall/__init__.py. /api/health reports
+# app.version, and a hand-copied literal here shipped a 4.9.3 build whose
+# health endpoint still answered 4.9.2.
+app = FastAPI(title="Your Pit Box", version=__version__, lifespan=lifespan)
 app.add_middleware(
     LanAccessMiddleware,
     enabled=settings.web_lan_access,

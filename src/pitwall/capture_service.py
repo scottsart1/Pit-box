@@ -8,6 +8,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from . import __version__
 from .capture import (
     CapturedDatagram,
     CaptureFormatError,
@@ -171,7 +172,7 @@ class CaptureService:
         destination = self._safe_destination(relative_path)
         destination.parent.mkdir(parents=True, exist_ok=True)
         capture_metadata = {
-            "app_version": "4.9.2",
+            "app_version": __version__,
             "created_utc": datetime.now(UTC).isoformat(),
             "privacy_mode": "private",
             **(metadata or {}),
