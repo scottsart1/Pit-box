@@ -14,6 +14,7 @@ from .database import PitWallDatabase
 from .race_plan import plan_matches, remaining_plan
 from .setup_model import setup_effects
 from .state import StateStore
+from .tyre_learning import exclusion_reason, finite, wear_deltas
 
 # Green-flag drive-through loss estimates. IDs follow f1-packets 2026 TRACKS.
 PIT_LOSS_SECONDS = {
@@ -312,9 +313,7 @@ class StrategyEngine:
         return [
             lap
             for lap in state.get("completed_laps", [])
-            if lap.get("valid")
-            and lap.get("lap_time_ms", 0) > 0
-            and not lap.get("pit_status")
+            if not exclusion_reason({"mode_profile": state.get("mode_profile", ""), **lap})
         ]
 
     @staticmethod
@@ -782,23 +781,9 @@ class StrategyEngine:
 
     @staticmethod
     def _live_wear_samples(state: dict[str, Any], compound: str) -> list[float]:
-        samples: list[float] = []
-        for lap in StrategyEngine._valid_laps(state)[-10:]:
-            if str(lap.get("compound", "")).upper() != compound:
-                continue
-            start = lap.get("wear_start") or []
-            end = lap.get("wear_end") or []
-            if len(start) == 4 and len(end) == 4:
-                # Strategy is constrained by the most worn corner, not the
-                # four-tyre average. This catches driving styles that load one
-                # axle or one side heavily (for example Spa rear wear).
-                samples.append(
-                    max(
-                        max(0.0, float(after) - float(before))
-                        for before, after in zip(start, end)
-                    )
-                )
-        return samples
+        return [max(rates) for lap in StrategyEngine._valid_laps(state)[-12:]
+                if str(lap.get("compound", "")).upper() == compound
+                and (rates := wear_deltas(lap))]
 
     @staticmethod
     def _driver_wear_factor(
@@ -809,14 +794,14 @@ class StrategyEngine:
         severity = TRACK_TYRE_SEVERITY.get(int(state.get("track_id", -1)), 1.0)
         default = DEFAULT_WEAR_PER_LAP.get(current, 3.2) * severity
         live_samples = StrategyEngine._live_wear_samples(state, current)
-        observed: float | None = float(median(live_samples)) if live_samples else None
+        observed: float | None = float(median(live_samples)) if len(live_samples) >= 3 else None
         source = "live_lap_wear"
         sample_size = len(live_samples)
 
         if observed is None:
             history_model = historical.get("compounds", {}).get(current, {})
             value = history_model.get("max_wear_per_lap_pct")
-            if value is not None:
+            if value is not None and int(history_model.get("wear_sample_size", 0)) >= 2:
                 observed = float(value)
                 source = "personal_track_history"
                 sample_size = int(history_model.get("wear_sample_size", 0))
@@ -907,36 +892,29 @@ class StrategyEngine:
             return value * factor, source + suffix, sample_size
 
         live = StrategyEngine._live_wear_samples(state, compound)
-        if live:
-            return apply_feedback(float(median(live)), "live_lap_wear", len(live))
         model = historical.get("compounds", {}).get(compound, {})
-        condition_adjusted = model.get("condition_adjusted_wear_per_lap_pct")
-        if condition_adjusted is not None and int(model.get("wear_sample_size", 0)) >= 6:
-            return apply_feedback(
-                float(condition_adjusted),
-                "condition_adjusted_personal_regression",
-                int(model.get("wear_sample_size", 0)),
-            )
-        value = model.get("max_wear_per_lap_pct")
-        if value is not None and int(model.get("wear_sample_size", 0)) >= 2:
-            return apply_feedback(
-                float(value),
-                "personal_track_history",
-                int(model.get("wear_sample_size", 0)),
-            )
-        inferred = model.get("inferred_wear_per_lap_pct")
-        if inferred is not None and float(inferred) > 0:
-            return apply_feedback(
-                float(inferred) * style_factor,
-                f"inferred_from_{'_'.join(model.get('inferred_from', []) or ['observed'])}".lower(),
-                0,
-            )
+        sample = int(model.get("wear_sample_size", 0))
+        adjusted = finite(model.get("condition_adjusted_wear_per_lap_pct"))
+        measured = finite(model.get("max_wear_per_lap_pct"))
+        inferred = finite(model.get("inferred_wear_per_lap_pct"))
         severity = TRACK_TYRE_SEVERITY.get(int(state.get("track_id", -1)), 1.0)
-        return apply_feedback(
-            DEFAULT_WEAR_PER_LAP.get(compound, 3.0) * severity * style_factor,
-            "style_adjusted_track_default",
-            0,
-        )
+        value = DEFAULT_WEAR_PER_LAP.get(compound, 3.0) * severity * style_factor
+        source, samples = "style_adjusted_track_default", 0
+        if adjusted is not None and 0 < adjusted <= 15 and sample >= 6:
+            value, source, samples = adjusted, "condition_adjusted_personal_regression", sample
+        elif measured is not None and 0 < measured <= 15 and sample >= 2:
+            value, source, samples = measured, "personal_track_history", sample
+        elif inferred is not None and 0 < inferred <= 15:
+            # Inference already carries this driver's wear. Scaling it again
+            # by their style factor double-counts the same evidence.
+            value = inferred
+            source = f"inferred_from_{'_'.join(model.get('inferred_from', []) or ['observed'])}".lower()
+        if len(live) >= 3:
+            weight = min(1.0, len(live) / 6.0)
+            value += weight * (float(median(live)) - value)
+            source = "live_lap_wear" if weight == 1 else "blended_live_wear+" + source
+            samples = len(live)
+        return apply_feedback(value, source, samples)
 
     @staticmethod
     def _deg_for(
@@ -951,38 +929,25 @@ class StrategyEngine:
             suffix = "+driver_feedback" if feedback["active"] else ""
             return value * factor, source + suffix, sample_size
 
-        model = state.get("analysis", {}).get("deg_model", {})
-        live = (
-            model.get("compounds", {}).get(compound, {})
-            if isinstance(model, dict)
-            else {}
-        )
-        value = live.get("slope_s_per_lap")
-        sample = int(live.get("sample_size", 0))
-        if value is not None and sample >= 3 and -0.1 <= float(value) <= 1.5:
-            return apply_feedback(max(0.0, float(value)), "live_fuel_corrected_fit", sample)
+        live = (state.get("analysis", {}).get("deg_model", {}) or {}).get("compounds", {}).get(compound, {})
         prior = historical.get("compounds", {}).get(compound, {})
-        condition_adjusted = prior.get("condition_adjusted_deg_s_per_lap")
-        sample = int(prior.get("sample_size", 0))
-        if condition_adjusted is not None and sample >= 6 and -0.1 <= float(condition_adjusted) <= 1.5:
-            return apply_feedback(max(0.0, float(condition_adjusted)), "condition_adjusted_personal_regression", sample)
-        value = prior.get("slope_s_per_lap")
-        if value is not None and sample >= 3 and -0.1 <= float(value) <= 1.5:
-            return apply_feedback(max(0.0, float(value)), "personal_track_history", sample)
-        # Never run this compound, but the compounds that were run measured
-        # how this car treats a step of hardness. That beats a generic track
-        # default, and ranks below any real lap on the compound itself.
-        inferred = prior.get("inferred_deg_s_per_lap")
-        if inferred is not None and -0.1 <= float(inferred) <= 1.5:
-            return apply_feedback(
-                max(0.0, float(inferred)),
-                f"inferred_from_{'_'.join(prior.get('inferred_from', []) or ['observed'])}".lower(),
-                0,
-            )
         severity = TRACK_TYRE_SEVERITY.get(int(state.get("track_id", -1)), 1.0)
-        return apply_feedback(
-            DEFAULT_DEG.get(compound, 0.08) * severity, "track_default", 0
-        )
+        value, source, samples = DEFAULT_DEG.get(compound, 0.08) * severity, "track_default", 0
+        measured = finite(prior.get("slope_s_per_lap"))
+        inferred = finite(prior.get("inferred_deg_s_per_lap"))
+        prior_samples = int(prior.get("sample_size", 0))
+        if measured is not None and -0.1 <= measured <= 1.5 and prior_samples >= 3:
+            value, source, samples = max(0.0, measured), "personal_track_history", prior_samples
+        elif inferred is not None and -0.1 <= inferred <= 1.5:
+            value = max(0.0, inferred)
+            source = f"inferred_from_{'_'.join(prior.get('inferred_from', []) or ['observed'])}".lower()
+        observed, live_samples = finite(live.get("slope_s_per_lap")), int(live.get("sample_size", 0))
+        if observed is not None and -0.1 <= observed <= 1.5 and live_samples >= 3:
+            weight = min(1.0, live_samples / 8.0)
+            value += weight * (max(0.0, observed) - value)
+            source = "live_fuel_corrected_fit" if weight == 1 else "blended_live_pace+" + source
+            samples = live_samples
+        return apply_feedback(value, source, samples)
 
     @staticmethod
     def _pit_entry_status(state: dict[str, Any]) -> str:
@@ -1559,17 +1524,10 @@ class StrategyEngine:
     def _live_wheel_wear_samples(
         state: dict[str, Any], compound: str
     ) -> list[list[float]]:
-        wheel_samples: list[list[float]] = [[], [], [], []]
-        for lap in StrategyEngine._valid_laps(state)[-12:]:
-            if str(lap.get("compound", "")).upper() != compound:
-                continue
-            start = lap.get("wear_start") or []
-            end = lap.get("wear_end") or []
-            if len(start) != 4 or len(end) != 4:
-                continue
-            for index, (before, after) in enumerate(zip(start, end)):
-                wheel_samples[index].append(max(0.0, float(after) - float(before)))
-        return wheel_samples
+        deltas = [rates for lap in StrategyEngine._valid_laps(state)[-12:]
+                  if str(lap.get("compound", "")).upper() == compound
+                  and (rates := wear_deltas(lap))]
+        return [[row[i] for row in deltas] for i in range(4)]
 
     def _wheel_wear_rates(
         self,
@@ -1578,56 +1536,41 @@ class StrategyEngine:
         historical: dict[str, Any],
         style_factor: float,
     ) -> tuple[list[float], str, int, dict[str, Any]]:
-        live = self._live_wheel_wear_samples(state, compound)
-        if any(live):
-            fallback, _, _ = self._wear_rate(state, compound, historical, style_factor)
-            # Samples are clamped at zero when collected, so a lap whose wear
-            # did not tick over contributes 0.0. Taking that as the rate gives
-            # a tyre that never wears; fall back to the prior for that wheel.
-            rates = [
-                float(median(values))
-                if values and float(median(values)) > 0.0
-                else fallback
-                for values in live
-            ]
-            return rates, "live_per_wheel_wear", min(len(v) for v in live if v), setup_effects(state.get("car_setup", {}), int(state.get("track_id", -1)))
-
+        effects = setup_effects(state.get("car_setup", {}), int(state.get("track_id", -1)))
+        # Build the prior without live laps, then blend measured corner rates.
+        # The old corner path bypassed both condition corrections and feedback.
+        prior_state = {**state, "completed_laps": [], "driver_tyre_feedback": {}}
+        scalar, source, samples = self._wear_rate(prior_state, compound, historical, style_factor)
         history = historical.get("compounds", {}).get(compound, {})
         history_rates = history.get("wheel_wear_per_lap_pct") or []
         history_samples = int(history.get("wear_sample_size", 0))
-        # Match the sample discipline the scalar path already applies: one
-        # observation is noise, not a rate. Without this a single sample was
-        # trusted outright, and a lap whose wear did not tick over produced a
-        # 0%/lap tyre. A stint on it then projected 0% wear at the finish,
-        # which both looked perfect to the ranking and reached the radio.
         if len(history_rates) == 4 and history_samples >= 2:
-            fallback = float(
-                history.get("max_wear_per_lap_pct")
-                or DEFAULT_WEAR_PER_LAP.get(compound, 3.0)
-            )
-            # A tyre that wears nothing per lap does not exist, so a
-            # non-positive rate is a data artifact rather than a measurement.
-            rates = [
-                float(value)
-                if value is not None and float(value) > 0.0
-                else fallback
-                for value in history_rates
-            ]
-            if any(rate > 0.0 for rate in rates):
-                return (
-                    rates,
-                    "personal_per_wheel_history",
-                    history_samples,
-                    setup_effects(
-                        state.get("car_setup", {}), int(state.get("track_id", -1))
-                    ),
-                )
-
-        scalar, source, sample_size = self._wear_rate(state, compound, historical, style_factor)
-        effects = setup_effects(state.get("car_setup", {}), int(state.get("track_id", -1)))
-        multipliers = effects.get("wheel_wear_multipliers", [1.0, 1.0, 1.0, 1.0])
-        rates = [scalar * float(multiplier) for multiplier in multipliers]
-        return rates, f"{source}+setup_prior", sample_size, effects
+            raw = [finite(value) for value in history_rates]
+            baseline = finite(history.get("max_wear_per_lap_pct")) or scalar
+            rates = [value if value is not None and 0 < value <= 15 else baseline for value in raw]
+            # Preserve the measured limiting corner while applying the same
+            # condition adjustment as the scalar path.
+            scale = scalar / max(rates) if "condition_adjusted" in source else 1.0
+            rates = [value * scale for value in rates]
+            source = ("condition_adjusted_per_wheel_history" if
+                      "condition_adjusted" in source else "personal_per_wheel_history")
+            samples = history_samples
+        else:
+            rates = [scalar * float(m) for m in effects.get("wheel_wear_multipliers", [1.0] * 4)]
+            source += "+setup_prior"
+        live = self._live_wheel_wear_samples(state, compound)
+        count = min((len(v) for v in live), default=0)
+        if count >= 3:
+            weight = min(1.0, count / 6.0)
+            rates = [prior + weight * ((float(median(values)) or prior) - prior)
+                     for prior, values in zip(rates, live)]
+            source = "live_per_wheel_wear" if weight == 1 else "blended_live_per_wheel+" + source
+            samples = count
+        feedback = self._driver_feedback_adjustment(state, compound)
+        if feedback["active"]:
+            rates = [value * float(feedback["wear_factor"]) for value in rates]
+            source += "+driver_feedback"
+        return rates, source, samples, effects
 
     def _simulate_stint(
         self,
@@ -2771,15 +2714,11 @@ class StrategyEngine:
                 + tyre_reason
             )
 
-        evidence_samples = max(
-            int(style_evidence.get("sample_size", 0)),
-            max(
-                (
-                    int(stint.get("deg_sample_size", 0))
-                    for stint in best.get("stint_models", [])
-                ),
-                default=0,
-            ),
+        # A long run on mediums cannot certify an untested hard final stint.
+        evidence_samples = min(
+            (min(int(stint.get("wear_sample_size", 0)), int(stint.get("deg_sample_size", 0)))
+             for stint in best.get("stint_models", []) if int(stint.get("laps", 0)) > 0),
+            default=0,
         )
         confidence = (
             "high"
@@ -2840,6 +2779,9 @@ class StrategyEngine:
         model_summary = {
             "confidence": confidence,
             "evidence_samples": evidence_samples,
+            "confidence_basis": "Least-supported tyre stint in the selected plan; requires both wear and pace evidence.",
+            "learning_policy": "Practice and race laps; time trials, qualifying, pit laps and recorded neutralisations excluded.",
+            "learning_excluded_laps": historical.get("excluded_laps", {}),
             "personal_style_factor": style_evidence.get("factor", 1.0),
             "personal_style_source": style_evidence.get("source", "track_default"),
             "limiting_wear_per_lap_pct": style_evidence.get(
@@ -2934,7 +2876,7 @@ class StrategyEngine:
                 "Plans are ranked by projected finishing position first; elapsed time only breaks classification ties.",
                 f"Risk appetite is {risk_appetite}; it selects the distribution used between plans with the same central finish.",
                 f"Overtaking difficulty is {overtaking_difficulty:.2f}; unknown circuits use 0.60 with lower confidence.",
-                "Live and historical personal wear/deg data override track defaults as samples accumulate.",
+                "Clean live wear and fuel-corrected stint pace blend with personal history as samples accumulate; untested tyres keep low confidence.",
                 "A dry Race plan must finish with at least two different dry visual compounds unless inters or wets are used.",
                 "SC/VSC loss is an estimate; pit-entry position, traffic and field compression are recalculated from live state.",
             ],
@@ -3192,28 +3134,38 @@ class StrategyEngine:
                 "available": False,
                 "reason": "Choose a race distance of at least two laps.",
             }
-        historical = await self.database.tyre_history_model(
-            resolved_track, context=state
-        )
-        historical = infer_unrun_compounds(historical)
-
-        # A grid start: lap zero, full fuel, a fresh set, nothing worn.
-        planning_state = dict(state)
+        # A new race cannot inherit a prior session's compound compliance,
+        # used sets, live fits, penalties or safety car. In particular, a wet
+        # practice lap must not waive the compound rule for a dry race plan.
+        planning_state = await StateStore().snapshot_analysis()
+        for key in ("strategy_risk_appetite", "driver_preferences"):
+            planning_state[key] = state.get(key, planning_state.get(key))
+        if resolved_track == int(state.get("track_id", -1)):
+            for key in ("car_setup", "track_temp_c", "air_temp_c"):
+                planning_state[key] = state.get(key, planning_state.get(key))
         planning_state.update(
             {
                 "track_id": resolved_track,
                 "total_laps": laps,
                 "current_lap": 0,
                 "mode_profile": "race",
+                "session_type": "Race",
                 "race_control_phase": "green",
+                "weather": "Clear",
                 "tyre": {
-                    **dict(state.get("tyre", {}) or {}),
+                    **dict(planning_state.get("tyre", {}) or {}),
                     "compound": str(start_compound or "MEDIUM").upper(),
                     "age_laps": 0,
                     "wear": [0.0, 0.0, 0.0, 0.0],
                 },
             }
         )
+        # No active session is excluded here: completed practice runs should
+        # teach the future race, even before the game changes its session UID.
+        historical = await self.database.tyre_history_model(
+            resolved_track, context=planning_state
+        )
+        historical = infer_unrun_compounds(historical)
         computed = self.compute(planning_state, historical)
         plans = [
             plan
@@ -3239,7 +3191,10 @@ class StrategyEngine:
                 "deg_s_per_lap": _reported_deg(model),
                 "wear_per_lap_pct": model.get("max_wear_per_lap_pct")
                 or model.get("inferred_wear_per_lap_pct"),
-                "laps_observed": int(model.get("sample_size", 0) or 0),
+                "laps_observed": int(model.get("laps_observed", model.get("sample_size", 0)) or 0),
+                "pace_laps_observed": int(model.get("sample_size", 0) or 0),
+                "wear_laps_observed": int(model.get("wear_sample_size", 0) or 0),
+                "stint_count": int(model.get("stint_count", 0) or 0),
                 "inference_basis": model.get("inference_basis"),
                 "inferred_from": model.get("inferred_from"),
             }
@@ -3262,6 +3217,7 @@ class StrategyEngine:
             "pit_loss_s": computed.get("pit_loss_s"),
             "compound_rule": computed.get("compound_rule"),
             "basis": (
+                "Dry race from fresh sets, with no assumed rival gaps. "
                 "Stored tyre evidence for this track. Compounds you have not "
                 "run are extrapolated from the ones you have and are labelled "
                 "as inferred."

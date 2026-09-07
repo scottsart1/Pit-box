@@ -17,6 +17,7 @@ from .setup_insights import (
 )
 from .state import StateStore
 from .strategy import StrategyEngine
+from .tyre_learning import exclusion_reason, stint_pace_model, wear_deltas
 
 if TYPE_CHECKING:
     from .trace_archive import TraceArchiveService
@@ -446,84 +447,36 @@ class AnalysisEngine:
         """Fuel-corrected personal degradation and wear estimates.
 
         Later laps are lighter on fuel, which can hide tyre degradation. The
-        fit normalizes every lap back toward the heaviest fuel state in the
-        current sample before applying the robust Theil-Sen slope.
+        fit corrects fuel using a fixed prior, then compares ages within each
+        stint so refuelling, setup changes and separate runs cannot bias it.
         """
         grouped: dict[str, list[dict[str, Any]]] = {}
+        excluded: dict[str, int] = {}
         for lap in state.get("completed_laps", []):
-            if (
-                not lap.get("valid")
-                or not lap.get("lap_time_ms")
-                or lap.get("pit_status")
-            ):
+            candidate = {"mode_profile": state.get("mode_profile", ""), **lap}
+            reason = exclusion_reason(candidate)
+            if reason:
+                excluded[reason] = excluded.get(reason, 0) + 1
                 continue
             compound = str(lap.get("compound", "UNKNOWN")).upper()
-            grouped.setdefault(compound, []).append(lap)
+            grouped.setdefault(compound, []).append(candidate)
 
-        result: dict[str, Any] = {"compounds": {}}
+        result: dict[str, Any] = {"compounds": {}, "excluded_laps": excluded}
         for compound, laps in grouped.items():
-            max_fuel = max(
-                (
-                    (
-                        float(lap.get("fuel_start_kg", 0))
-                        + float(lap.get("fuel_end_kg", 0))
-                    )
-                    / 2
-                    for lap in laps
-                ),
-                default=0.0,
-            )
-            points: list[tuple[float, float]] = []
-            wear_rates: list[float] = []
-            max_wear_rates: list[float] = []
-            for lap in laps:
-                fuel_avg = (
-                    float(lap.get("fuel_start_kg", 0))
-                    + float(lap.get("fuel_end_kg", 0))
-                ) / 2
-                normalized_time = (
-                    float(lap["lap_time_ms"]) / 1000
-                    + max(0.0, max_fuel - fuel_avg) * 0.030
-                )
-                age = float(lap.get("tyre_age_end", 0))
-                if age > 0:
-                    points.append((age, normalized_time))
-                start_wear = lap.get("wear_start", []) or []
-                end_wear = lap.get("wear_end", []) or []
-                if len(start_wear) == 4 and len(end_wear) == 4:
-                    deltas = [
-                        max(0.0, float(end) - float(start))
-                        for start, end in zip(start_wear, end_wear)
-                    ]
-                    wear_rates.append(sum(deltas) / 4)
-                    max_wear_rates.append(max(deltas))
-
-            fit = theil_sen(points)
-            model: dict[str, Any] = {
-                "sample_size": len(points),
-                "wear_sample_size": len(wear_rates),
-                "wear_per_lap_pct": round(float(median(wear_rates)), 3)
-                if wear_rates
-                else None,
-                "max_wear_per_lap_pct": round(float(median(max_wear_rates)), 3)
-                if max_wear_rates
-                else None,
-                "source": "live_fuel_corrected_fit",
-            }
-            if fit:
-                slope, intercept = fit
-                model.update(
-                    {
-                        "slope_s_per_lap": round(max(-0.1, min(1.5, slope)), 3),
-                        "intercept_s": round(intercept, 3),
-                    }
-                )
+            model = stint_pace_model(laps)
+            deltas = [rates for lap in laps if (rates := wear_deltas(lap))]
+            model.update({
+                "wear_sample_size": len(deltas),
+                "wear_per_lap_pct": round(float(median([sum(r) / 4 for r in deltas])), 3) if deltas else None,
+                "max_wear_per_lap_pct": round(float(median([max(r) for r in deltas])), 3) if deltas else None,
+                "source": "live_fuel_corrected_stint_fit",
+            })
             result["compounds"][compound] = model
 
         current = str(state.get("tyre", {}).get("compound", "UNKNOWN")).upper()
         current_fit = result["compounds"].get(current, {})
         wear = max(state.get("tyre", {}).get("wear", [0]) or [0])
-        slope = float(current_fit.get("slope_s_per_lap", 0.0) or 0.0)
+        slope = current_fit.get("slope_s_per_lap")
         wear_per_lap = current_fit.get("max_wear_per_lap_pct")
         if wear_per_lap is None:
             age = max(1, int(state.get("tyre", {}).get("age_laps", 0)))

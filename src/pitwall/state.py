@@ -776,12 +776,27 @@ class StateStore:
                     setattr(self.state, key, value)
                     changed = True
             if changed:
+                self._mark_learning_context_locked()
                 self.state.state_revision += 1
 
     async def mutate(self, callback: Callable[[SessionState], Any]) -> None:
         async with self._lock:
             callback(self.state)
+            self._mark_learning_context_locked()
             self.state.state_revision += 1
+
+    def _mark_learning_context_locked(self) -> None:
+        """Remember interruptions even if the lap ends under green again."""
+        state = self.state
+        if not state.current_lap_started:
+            return
+        reasons = state.current_lap_started.setdefault("learning_exclusions", [])
+        if state.pit_status and "pit_lap" not in reasons:
+            reasons.append("pit_lap")
+        if ("neutralised_lap" not in reasons and (
+                state.safety_car not in ("none", "") or state.red_flag_active
+                or state.fia_flag in {"yellow", "red"})):
+            reasons.append("neutralised_lap")
 
     async def mark_packet(
         self,
@@ -998,6 +1013,7 @@ class StateStore:
         async with self._lock:
             state = self.state
             old_lap = state.current_lap
+            self._mark_learning_context_locked()
             if old_lap and new_lap > old_lap and state.traces:
                 start = state.current_lap_started or {}
                 completed = {
@@ -1030,6 +1046,7 @@ class StateStore:
                     "position": position,
                     "pit_status": pit_status,
                     "pit_lane_time_ms": pit_lane_time_ms,
+                    "learning_exclusions": list(start.get("learning_exclusions", [])),
                     "setup": copy.deepcopy(state.car_setup),
                     "trace": copy.deepcopy(state.traces),
                     "created_at": time.time(),
@@ -1051,7 +1068,9 @@ class StateStore:
                     "tyre_age": state.tyre.age_laps,
                     "wear": list(state.tyre.wear),
                     "position": position,
+                    "learning_exclusions": ["pit_lap"] if pit_status else [],
                 }
+                self._mark_learning_context_locked()
 
         if completed is not None:
             try:

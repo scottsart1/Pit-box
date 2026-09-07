@@ -22,8 +22,8 @@ android {
         applicationId = "com.yourpitbox.app"
         minSdk = 24
         targetSdk = 35
-        versionCode = 6
-        versionName = "4.9.1-android.6"
+        versionCode = 7
+        versionName = "4.9.2-android.7"
         ndk {
             // 64-bit phones and tablets, plus the x86_64 emulator.
             abiFilters += listOf("arm64-v8a", "x86_64")

@@ -52,6 +52,18 @@ function post(path, body) {
 
 /* ---- Current call --------------------------------------------------------- */
 
+function evidenceSource(source) {
+  const text = String(source || "");
+  let label = text.startsWith("blended_live") ? "live laps blended with prior evidence"
+    : text.startsWith("live_") ? "live laps"
+    : text.includes("condition_adjusted") ? "history adjusted for conditions"
+    : text.includes("personal") ? "your past runs"
+    : text.includes("inferred") ? "estimated from other compounds"
+    : "track estimate";
+  if (text.includes("driver_feedback")) label += ", including your tyre report";
+  return label;
+}
+
 function renderCall(s) {
   const st = s.strategy || {};
   const rec = st.recommended || {};
@@ -77,6 +89,10 @@ function renderCall(s) {
   byId("stratMeta").textContent = st.available
     ? `Projected finish P${rec.projected_finish_position ?? "—"} · ${rec.projected_points ?? 0} pts · rejoin P${rec.projected_rejoin_position ?? "—"} · P75 ${mc.p75_s ?? rec.risk_adjusted_time_s ?? "—"}s · uncertainty ${mc.uncertainty_s ?? "—"}s`
     : "";
+  const model = st.model_summary || {};
+  byId("stratLearning").textContent = st.available
+    ? `Least-tested stint: ${model.evidence_samples ?? 0} supporting laps. Final stint: ${model.selected_stint_wear_per_lap_pct ?? "—"}% wear/lap from ${evidenceSource(model.selected_stint_wear_source)}; ${model.selected_stint_deg_s_per_lap ?? "—"}s degradation/lap from ${evidenceSource(model.selected_stint_deg_source)}.`
+    : "";
   const rule = st.compound_rule || {};
   const ruleNode = byId("stratRule");
   ruleNode.textContent = rule.applies
@@ -98,6 +114,11 @@ function planKey(plan) {
     (plan.box_laps || []).join(","),
     plan.feasible,
     plan.projected_finish_position,
+    plan.projected_points,
+    plan.monte_carlo?.p75_s,
+    plan.risk_adjusted_time_s,
+    plan.projected_max_wear_pct,
+    plan.verdict,
   ].join("|");
 }
 
@@ -537,12 +558,9 @@ async function loadPlannerTracks() {
 function describeEvidence(evidence) {
   const parts = [];
   for (const [compound, model] of Object.entries(evidence || {})) {
-    if (model.deg_s_per_lap == null) continue;
-    const measured = (model.laps_observed || 0) > 0;
+    const measured = (model.pace_laps_observed ?? model.laps_observed ?? 0) > 0;
     parts.push(
-      `${compound}: ${Number(model.deg_s_per_lap).toFixed(3)}s/lap ${
-        measured ? `measured over ${model.laps_observed} laps` : `inferred from ${(model.inferred_from || []).join(" + ") || "observed compounds"}`
-      }`,
+      `${compound}: ${model.deg_s_per_lap == null ? "pace still learning" : `${Number(model.deg_s_per_lap).toFixed(3)}s/lap ${measured ? `from ${model.pace_laps_observed ?? model.laps_observed} clean laps in ${model.stint_count ?? "—"} stints` : `inferred from ${(model.inferred_from || []).join(" + ") || "observed compounds"}`}`}${model.wear_per_lap_pct == null ? "" : ` · ${Number(model.wear_per_lap_pct).toFixed(2)}% wear/lap`}`,
     );
   }
   return parts.join(" · ");
@@ -700,4 +718,4 @@ if (HAS_DOM) {
   });
 }
 
-export { planKey, COMPOUND_COLORS };
+export { planKey, describeEvidence, COMPOUND_COLORS };

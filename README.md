@@ -93,6 +93,39 @@ dashboard. Bind the web host to `0.0.0.0`, set a long
 `PITWALL_WEB_ACCESS_TOKEN`, and keep it on a trusted LAN. Your Pit Box never opens a
 router or firewall to the public internet automatically.
 
+## What changed in 4.9.2
+
+4.9.2 makes the race strategy's tyre learning trustworthy on real captures.
+`docs/STRATEGY_LEARNING.md` describes the rules; the summary:
+
+- **Degradation is fitted within a stint, not across it.** Fuel mass and tyre
+  age are almost perfectly correlated inside a stint, so the old fit could
+  not tell them apart and returned a negative slope on a pair of runs whose
+  true degradation was +0.20 s/lap. Pace is now fuel-corrected with the
+  existing 0.030 s/kg prior and compared only within one run; session, set
+  change, lap gaps, compound, weather and setup changes start a new run,
+  and the median of the usable run slopes is the compound estimate.
+- **Only clean laps teach.** Time trials and qualifying are excluded before
+  the history limit, so a long time-trial session cannot crowd out practice
+  and race data. Invalid laps, pit laps, and laps under a yellow, red,
+  safety car or VSC are excluded; an interruption is remembered for the
+  whole lap even when it ends under green, and stored with the lap
+  (schema migration 4901, additive, behind the usual pre-migration backup).
+- **Wear needs evidence, not a packet.** A wear rate needs four finite
+  corner readings within 0–100 %; a set change, an unchanged packet or an
+  implausible jump no longer becomes a zero-wear tyre. Live wear starts
+  replacing the prior at three usable laps and fully at six; live pace at
+  three and eight. A single noisy lap cannot displace established history.
+- **Confidence is graded on the weakest stint.** Eight measured laps on
+  mediums no longer make an untested hard final stint "high" confidence.
+  The Strategy screen shows the supporting lap count and where the final
+  stint's wear and pace estimates came from, and an unknown live
+  degradation reads as unavailable rather than zero.
+- **Pre-race plans start clean.** The planner starts a dry race from fresh
+  sets; a previous session's compound usage, neutralisations, rival gaps,
+  penalties and live fits no longer carry into it, while completed practice
+  runs are counted even before the game moves to the next session.
+
 ## What changed in 4.9.1
 
 4.9.1 fixes the packaged Windows build crashing before its first-run window.
