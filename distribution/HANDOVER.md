@@ -353,6 +353,15 @@ is the reference. The shape of it:
 `distribution/tests/test_android_project.py` keeps the APK's pip list in
 step with `pyproject.toml`.
 
+## Tyre learning (4.9.2)
+
+`src/pitwall/tyre_learning.py` holds the evidence rules shared by the live
+analysis and the stored-history model: which laps are excluded (time trial,
+qualifying, invalid, pit, neutralised), what counts as a wear increment, and
+the fuel-corrected within-stint pace fit. `docs/STRATEGY_LEARNING.md` is the
+reference. Migration 4901 adds `laps.learning_exclusions_json`; older builds
+cannot read the newer schema, so a rollback uses the pre-migration backup.
+
 ## Releasing without the Windows PC
 
 `release_windows.ps1` needs Windows for one step, the PyInstaller and Inno

@@ -754,8 +754,8 @@ class PitWallDatabase:
                     track_temp_c, air_temp_c, weather, mode_profile,
                     fuel_start_kg, fuel_end_kg, position,
                     s1_ms, s2_ms, s3_ms, pit_status, pit_lane_time_ms,
-                    setup_json, trace_json, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    setup_json, trace_json, created_at, learning_exclusions_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(session_uid, lap_num) DO UPDATE SET
                     lap_time_ms=excluded.lap_time_ms,
                     valid=excluded.valid,
@@ -778,7 +778,8 @@ class PitWallDatabase:
                     pit_status=excluded.pit_status,
                     pit_lane_time_ms=excluded.pit_lane_time_ms,
                     setup_json=excluded.setup_json,
-                    trace_json=excluded.trace_json
+                    trace_json=excluded.trace_json,
+                    learning_exclusions_json=excluded.learning_exclusions_json
                 """,
                 (
                     _session_uid_to_sqlite(lap["session_uid"]),
@@ -809,6 +810,7 @@ class PitWallDatabase:
                     json.dumps(lap.get("setup", {})),
                     json.dumps(lap.get("trace", []), separators=(",", ":")),
                     float(lap.get("created_at", time.time())),
+                    json.dumps(lap.get("learning_exclusions", [])),
                 ),
             )
             self._write_corner_rows_sync(
@@ -1622,7 +1624,7 @@ class PitWallDatabase:
         """Return condition-aware personal tyre evidence from prior valid laps.
 
         The regression is intentionally small and transparent: ridge regression
-        uses tyre age, fuel, temperatures, session profile and setup values. It
+        uses conditions to adjust wear; pace is fitted within fuel-corrected stints. It
         complements deterministic safety limits rather than replacing them.
         """
         async with self._lock:
@@ -1673,11 +1675,15 @@ class PitWallDatabase:
     ) -> dict[str, Any]:
         from statistics import median
 
+        from .tyre_learning import exclusion_reason, stint_pace_model, wear_deltas
+
         try:
             with self._connect() as db:
                 rows = db.execute(
                     """
-                    SELECT l.compound, l.tyre_age_start, l.tyre_age_end,
+                    SELECT l.session_uid, l.lap_num, l.session_type, l.valid, l.pit_status,
+                           l.pit_lane_time_ms, l.weather, l.learning_exclusions_json,
+                           l.compound, l.tyre_age_start, l.tyre_age_end,
                            l.wear_start_json, l.wear_end_json, l.lap_time_ms,
                            l.fuel_start_kg, l.fuel_end_kg, l.track_temp_c, l.air_temp_c,
                            COALESCE(NULLIF(l.mode_profile, ''), s.mode_profile, '') AS mode_profile,
@@ -1685,10 +1691,15 @@ class PitWallDatabase:
                     FROM laps AS l
                     LEFT JOIN sessions AS s ON s.session_uid=l.session_uid
                     WHERE l.track_id=? AND l.valid=1 AND l.lap_time_ms>0 AND l.pit_status=0
+                    AND LOWER(COALESCE(NULLIF(l.mode_profile, ''), s.mode_profile, ''))
+                        NOT IN ('time_trial', 'qualifying')
+                      AND LOWER(l.session_type) NOT LIKE '%time trial%'
+                      AND LOWER(l.session_type) NOT LIKE '%qualifying%'
+                      AND l.session_uid != ?
                     ORDER BY l.created_at DESC
                     LIMIT ?
                     """,
-                    (track_id, limit),
+                    (track_id, _session_uid_to_sqlite(context.get("session_uid", 0) or 0), limit),
                 ).fetchall()
         except sqlite3.OperationalError:
             # A database whose schema has not been created yet (the endpoint
@@ -1697,6 +1708,7 @@ class PitWallDatabase:
             rows = []
 
         grouped: dict[str, list[dict[str, Any]]] = {}
+        excluded: dict[str, int] = {}
         for raw in rows:
             item = dict(raw)
             compound = str(item.get("compound") or "UNKNOWN").upper()
@@ -1706,8 +1718,13 @@ class PitWallDatabase:
                 item["wear_start"] = json.loads(item.get("wear_start_json") or "[]")
                 item["wear_end"] = json.loads(item.get("wear_end_json") or "[]")
                 item["setup"] = json.loads(item.get("setup_json") or "{}")
+                item["learning_exclusions"] = json.loads(item.get("learning_exclusions_json") or "[]")
             except (json.JSONDecodeError, TypeError):
                 item["wear_start"], item["wear_end"], item["setup"] = [], [], {}
+            reason = exclusion_reason(item)
+            if reason:
+                excluded[reason] = excluded.get(reason, 0) + 1
+                continue
             grouped.setdefault(compound, []).append(item)
 
         tyre = context.get("tyre", {})
@@ -1727,7 +1744,9 @@ class PitWallDatabase:
         ]
         result: dict[str, Any] = {
             "track_id": track_id, "compounds": {},
-            "model": "personal_condition_ridge_v1",
+            "model": "personal_stint_learning_v2",
+            "excluded_laps": excluded,
+            "session_policy": "practice_and_race_only; current_session_uses_live_model",
         }
         for compound, laps in grouped.items():
             wear_rates: list[float] = []
@@ -1735,13 +1754,9 @@ class PitWallDatabase:
             wheel_wear_rates: list[list[float]] = [[], [], [], []]
             features: list[list[float]] = []
             wear_targets: list[float] = []
-            pace_targets: list[float] = []
             for lap in laps:
-                age_delta = max(1, int(lap.get("tyre_age_end") or 0) - int(lap.get("tyre_age_start") or 0))
-                start_wear, end_wear = lap.get("wear_start") or [], lap.get("wear_end") or []
-                deltas: list[float] = []
-                if len(start_wear) == 4 and len(end_wear) == 4:
-                    deltas = [max(0.0, float(b) - float(a)) / age_delta for a, b in zip(start_wear, end_wear)]
+                deltas = wear_deltas(lap)
+                if deltas:
                     wear_rates.append(sum(deltas) / 4.0)
                     max_wear_rates.append(max(deltas))
                     for index, delta in enumerate(deltas):
@@ -1759,27 +1774,46 @@ class PitWallDatabase:
                 if deltas:
                     features.append(feature)
                     wear_targets.append(max(deltas))
-                    pace_targets.append(float(lap.get("lap_time_ms") or 0) / 1000.0)
 
             query = list(current_query_base)
             # Missing pre-migration context values use the compound sample median.
             for index in (1, 2, 3, 7, 8, 9):
                 if query[index] == 0.0 and features:
                     query[index] = float(median([row[index] for row in features]))
+            # Never extrapolate the condition model beyond the observed envelope.
+            if features:
+                query = [max(min(row[i] for row in features),
+                             min(max(row[i] for row in features), value))
+                         for i, value in enumerate(query)]
             wear_prediction, _wear_coeffs, wear_rmse = self._ridge_fit_predict(features, wear_targets, query)
-            _pace_prediction, pace_coeffs, pace_rmse = self._ridge_fit_predict(features, pace_targets, query)
-            deg_slope = pace_coeffs[0] if pace_coeffs else None
+            if wear_prediction is not None and max_wear_rates:
+                typical = float(median(max_wear_rates))
+                if (not 0 < wear_prediction <= 15
+                        or wear_rmse is None or wear_rmse > max(0.5, typical * 0.35)):
+                    wear_prediction = None
+                else:
+                    # A short multivariate fit should supplement the measured median.
+                    weight = len(features) / (len(features) + 6)
+                    wear_prediction = typical + weight * (wear_prediction - typical)
+            pace = stint_pace_model(laps)
+            deg_slope = pace["slope_s_per_lap"]
             result["compounds"][compound] = {
-                "sample_size": len(laps),
+                "sample_size": pace["sample_size"],
+                "laps_observed": len(laps),
+                "stint_count": pace["stint_count"],
+                "age_span_laps": pace["age_span_laps"],
+                "slope_spread_s_per_lap": pace["slope_spread_s_per_lap"],
+                "fuel_correction_s_per_kg": pace["fuel_correction_s_per_kg"],
                 "wear_sample_size": len(wear_rates),
                 "wear_per_lap_pct": round(float(median(wear_rates)), 3) if wear_rates else None,
                 "max_wear_per_lap_pct": round(float(median(max_wear_rates)), 3) if max_wear_rates else None,
                 "wheel_wear_per_lap_pct": [round(float(median(values)), 3) if values else None for values in wheel_wear_rates],
                 "condition_adjusted_wear_per_lap_pct": round(max(0.0, float(wear_prediction)), 3) if wear_prediction is not None else None,
-                "condition_adjusted_deg_s_per_lap": round(max(-0.1, min(1.5, float(deg_slope))), 4) if deg_slope is not None else None,
+                "condition_adjusted_deg_s_per_lap": None,
                 "slope_s_per_lap": round(max(-0.1, min(1.5, float(deg_slope))), 4) if deg_slope is not None else None,
                 "regression_rmse_wear": round(float(wear_rmse), 3) if wear_rmse is not None else None,
-                "regression_rmse_pace_s": round(float(pace_rmse), 3) if pace_rmse is not None else None,
+                "pace_fit_error_s": pace["fit_error_s"],
+                "pace_source": "personal_fuel_corrected_stint_fit",
                 "source": "condition_adjusted_personal_regression" if wear_prediction is not None else "personal_track_history",
             }
         return result

@@ -356,9 +356,19 @@ V4_2_ARCHIVE_PROVENANCE = Migration(
 )
 
 
+V4_9_2_TYRE_LEARNING = Migration(
+    version=4901,
+    app_version="4.9.2",
+    statements=(
+        "ALTER TABLE laps ADD COLUMN learning_exclusions_json TEXT NOT NULL DEFAULT '[]'",
+    ),
+)
+
+
 MIGRATIONS: tuple[Migration, ...] = (
     V4_2_CATALOG,
     V4_2_COMPARISON_RESULTS,
     V4_2_ARCHIVE_PROVENANCE,
+    V4_9_2_TYRE_LEARNING,
 )
 LATEST_SCHEMA_VERSION = MIGRATIONS[-1].version
