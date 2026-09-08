@@ -93,6 +93,31 @@ dashboard. Bind the web host to `0.0.0.0`, set a long
 `PITWALL_WEB_ACCESS_TOKEN`, and keep it on a trusted LAN. Your Pit Box never opens a
 router or firewall to the public internet automatically.
 
+## What changed in 4.9.4
+
+### Brutal mode
+
+A **Brutal** toggle on the DRIVE page's Proactive engineer card. Switch it on
+and the engineer drops the professional register: very direct, impatient, and
+swearing at you in statements. It is also on the Settings page as
+"Brutal mode", and `PITWALL_BRUTAL_MODE=true` sets the installation default.
+
+- **A deterministic pace call.** Every analysed race or sprint lap in which
+  you are classified in the bottom five, or lapped slower than the target by
+  more than the tolerance (`PITWALL_BRUTAL_PACE_TOLERANCE_S`, default 0.4 s),
+  earns a `pace_roast` call: "Bitch, do you mind driving faster? That lap was
+  0.8 slower than target." The line always carries the fact that earned it,
+  the position or the lap delta, and rotates by lap so consecutive roasts
+  differ. It is not made under a safety car, in the garage, or after you
+  retire, and switching the toggle off drops any roast still queued.
+- **Every other call changes tone, not content.** The brutal brief sits after
+  the custom persona and before the safety anchor, so the model swears but
+  still quotes only the numbers in the payload, and safety, penalty, flag and
+  pit calls say exactly what the data says. Insults are aimed at the driving,
+  never at who the driver is: no slurs.
+- Saying "stop roasting me" over the radio silences the pace call like any
+  other standing instruction; the toggle is the normal way to turn it off.
+
 ## What changed in 4.9.3
 
 4.9.3 fixes what two real race weekends, Suzuka and Sakhir, exposed in the
@@ -821,6 +846,12 @@ becoming infeasible. The dashboard exposes the `strategy.stability` reason.
 
 Say “keep your answers short.” The terse preference persists across laps and
 sessions. Set `PITWALL_RADIO_VERBOSITY=terse` in `.env` to make it the default.
+
+### The engineer is swearing at me
+
+Brutal mode is on. Untick **Brutal** on the DRIVE page's Proactive engineer
+card, or turn off "Brutal mode" on the Settings page. The setting is saved in
+the app, so it survives a restart until you switch it off.
 
 ## Verification
 

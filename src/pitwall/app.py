@@ -508,6 +508,8 @@ async def lifespan(app: FastAPI):
     await voice.initialize()
     proactive = ProactiveEngineer(store, brain, voice, setup_advisor, strategy)
     await proactive.start()
+    # The DRIVE toggle reads the saved value from state; settings own it.
+    await store.update(brutal_mode=bool(settings.brutal_mode))
     listener_config = network_service.listener_snapshot()
     if settings.raw_capture != "off":
         try:
@@ -1253,6 +1255,8 @@ async def save_app_settings(changes: dict[str, object]) -> dict[str, object]:
         # Forgive provider circuits on a switch: a provider that cooled down
         # while it was the primary must take the first call as the fallback.
         _rebind_provider_clients()
+    if "brutal_mode" in coerced:
+        await store.update(brutal_mode=bool(settings.brutal_mode))
     saved = await database.load_preference(APP_SETTINGS_KEY, None)
     return {
         "results": results,
