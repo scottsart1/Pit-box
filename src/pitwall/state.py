@@ -344,6 +344,9 @@ class SessionState:
     temperature_unit: str = "c"
     # Driver-selected spoken length persists across sessions, just like units.
     radio_verbosity: str = "standard"
+    # Mirror of settings.brutal_mode so the DRIVE toggle reflects the saved
+    # value; the setting itself is the source of truth.
+    brutal_mode: bool = False
     # Standing instructions the driver has given the engineer ("stop telling me
     # about engine damage", "don't call gaps in quali"). These were previously
     # answered once and forgotten, so the driver had to repeat them.
@@ -555,6 +558,7 @@ class StateStore:
             llm_last_error=previous.llm_last_error,
             temperature_unit=previous.temperature_unit,
             radio_verbosity=previous.radio_verbosity,
+            brutal_mode=previous.brutal_mode,
             strategy_spoken_signature="",
             proactive=proactive,
             session_mode_override="auto",

@@ -286,6 +286,15 @@ class Settings(BaseSettings):
     engineer_name: str = "Mark"
     engineer_persona: str = ""
     radio_verbosity: str = "standard"  # terse | standard | chatty
+    # Brutal mode: the engineer drops the professional register and becomes
+    # blunt, sweary and impatient about pace. It changes tone and adds a
+    # deterministic "drive faster" call when the driver is in the bottom five
+    # or lapping slower than the target; every number and every safety call
+    # is unchanged. Toggled from the DRIVE page and persisted in the app
+    # settings store. brutal_pace_tolerance_s is how far off the target lap a
+    # lap must be before it earns a roast.
+    brutal_mode: bool = False
+    brutal_pace_tolerance_s: float = 0.4
 
     strategy_monte_carlo_samples: int = 320
     strategy_risk_quantile: float = 0.75

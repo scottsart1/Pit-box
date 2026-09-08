@@ -92,6 +92,12 @@ SUPPRESSIBLE_SUBJECTS: dict[str, frozenset[str]] = {
     "update": frozenset({"progress_update"}),
     "updates": frozenset({"progress_update"}),
     "progress": frozenset({"progress_update"}),
+    # Brutal-mode pace calls. The toggle on DRIVE is the normal way to stop
+    # them; "stop roasting me" over the radio works too.
+    "roast": frozenset({"pace_roast"}),
+    "roasting": frozenset({"pace_roast"}),
+    "swearing": frozenset({"pace_roast"}),
+    "brutal": frozenset({"pace_roast"}),
 }
 # Calls that concern safety, legality or the car being about to stop. A driver
 # may silence a topic; they may not silence a penalty or a red flag.
@@ -151,6 +157,9 @@ EVENT_PRIORITY = {
     "component_wear": IMPORTANT,
     "quali_clear_air": IMPORTANT,
     "warning": IMPORTANT,
+    # Important rather than routine: a roast that waits out the routine
+    # spacing interval arrives a lap late and lands as a non sequitur.
+    "pace_roast": IMPORTANT,
     "progress_update": ROUTINE,
     "corner_coaching": ROUTINE,
 }
@@ -164,6 +173,36 @@ NEUTRALISED_PHASES = frozenset(
         "vsc_ending",
         "formation_ending",
     }
+)
+
+# Brutal-mode pace calls. Spoken verbatim when narration is off or the model
+# fails, and the register the model is asked to match when it is on. Each
+# line carries the fact that earned it: the position for a bottom-five call,
+# the lap delta for a slow lap. Selected by lap number so consecutive roasts
+# differ and the same lap always produces the same line.
+#
+# Profanity is aimed at the driving. Nothing here is about who the driver is.
+ROAST_LINES_BOTTOM_FIVE: tuple[str, ...] = (
+    "Bitch, do you mind driving faster? You are P{position} of {cars}.",
+    "P{position} of {cars}. That is the bottom five. Get your fucking foot down.",
+    "You are P{position}. There are {behind} cars behind you and they are shit. Drive.",
+    "Bottom five, P{position}. Stop pissing about and put a lap together.",
+    "P{position} of {cars}. My nan could hold that position. Faster. Now.",
+    "We are P{position}. If you are waiting for permission to push, this is it. Fucking go.",
+)
+ROAST_LINES_SLOW_LAP: tuple[str, ...] = (
+    "Bitch, do you mind driving faster? That lap was {delta:.1f} slower than target.",
+    "{delta:.1f} seconds off target. Where the fuck did that go? Hit {target}.",
+    "That was shit. {delta:.1f} off the target of {target}. Sort it out this lap.",
+    "{delta:.1f} slow. The car is fine, the tyres are fine, so it is you. Push.",
+    "Target is {target}. You did {lap_time}. That is {delta:.1f} of pure laziness.",
+    "Another {delta:.1f} down the drain. Stop driving like a bitch and hit {target}.",
+)
+ROAST_LINES_BOTH: tuple[str, ...] = (
+    "Bitch, do you mind driving faster? P{position} and {delta:.1f} off target.",
+    "P{position} of {cars} and {delta:.1f} slow. That is not a bad lap, that is a habit. Push.",
+    "Bottom five and {delta:.1f} off {target}. Get your arse into the throttle.",
+    "P{position}, {delta:.1f} down on target. Every car behind you is laughing. Fucking drive.",
 )
 
 
@@ -221,6 +260,9 @@ class ProactiveEngineer:
         self._engine_failure_alerted = False
         self._energy_alert_lap = 0
         self._race_start_done = False
+        # Last analysed lap that earned a brutal-mode roast, so each lap is
+        # judged once however many detection passes see it.
+        self._last_roast_lap = 0
         # Stint key -> the box lap the check was asked about. A dict rather
         # than a set so the check re-arms when the window MOVES: in a real race
         # the first (wrong) window was lap 5, the check fired at lap 2, and
@@ -458,7 +500,7 @@ class ProactiveEngineer:
             # news. Leaving these uncoalesced filled the queue with stale stops
             # that then aged out unspoken.
             "rival_pace", "engine_failure", "rival_pitted",
-            "driver_check",
+            "driver_check", "pace_roast",
         }
         if event_type in coalesced:
             kept: list[dict[str, Any]] = []
@@ -526,6 +568,7 @@ class ProactiveEngineer:
         self._engine_failure_alerted = False
         self._energy_alert_lap = 0
         self._race_start_done = False
+        self._last_roast_lap = 0
         self._driver_check_stints = {}
         self._cooldowns.clear()
         self._safe_since = 0.0
@@ -850,6 +893,12 @@ class ProactiveEngineer:
                 and 1 <= int(box_lap) - current_lap <= 3
                 and str(state.get("race_control_phase", "green")) == "green"
             )
+        if kind == "pace_roast":
+            # Switching brutal mode off drops anything already queued, and a
+            # roast is not spoken over a safety car it was queued before.
+            return bool(settings.brutal_mode) and str(
+                state.get("race_control_phase", "green")
+            ) == "green"
         return True
 
     def _safe_to_speak(self, state: dict[str, Any], event: dict[str, Any]) -> bool:
@@ -1066,6 +1115,73 @@ class ProactiveEngineer:
             expires_s=90.0,
         )
 
+    @staticmethod
+    def _bottom_five_position(state: dict[str, Any]) -> tuple[int, int] | None:
+        """(position, active cars) when the player is classified in the bottom five.
+
+        Needs a real field: with fewer than six cars everyone is in the bottom
+        five, and a position of 0 is a garaged or retired car, not last place.
+        """
+        position = int(state.get("player_position", 0) or 0)
+        cars = int(state.get("active_cars", 0) or 0)
+        if cars < 6 or position <= 0 or position > cars:
+            return None
+        if position > cars - 5:
+            return position, cars
+        return None
+
+    def _detect_pace_roast(self, state: dict[str, Any], analyzed_lap: int) -> None:
+        """Brutal mode: demand pace when the driver is slow or near the back.
+
+        Judged once per analysed lap, from the same progress record the
+        two-lap update reads, so the delta the engineer shouts is the delta
+        the dashboard shows. Only in a race or sprint (a practice lap is not
+        "slow" in any useful sense), only under green (a car crawling behind
+        the safety car is doing what it was told) and never at a car that is
+        garaged, retired or classified.
+        """
+        if not bool(settings.brutal_mode):
+            return
+        if state.get("mode_profile") not in {"race", "sprint"}:
+            return
+        if analyzed_lap <= 0 or analyzed_lap == self._last_roast_lap:
+            return
+        if str(state.get("race_control_phase", "green")) != "green":
+            return
+        if self._player_in_garage(state) or not self._car_moving(state):
+            return
+        progress = state.get("analysis", {}).get("progress", {}) or {}
+        # A stale progress record belongs to an earlier lap and was already
+        # judged; roast this lap only once its own analysis has landed.
+        if int(progress.get("lap_num", analyzed_lap) or analyzed_lap) != analyzed_lap:
+            return
+        self._last_roast_lap = analyzed_lap
+        delta = progress.get("delta_to_target_s")
+        slow = (
+            isinstance(delta, (int, float))
+            and float(delta) >= float(settings.brutal_pace_tolerance_s)
+        )
+        bottom = self._bottom_five_position(state)
+        if not slow and bottom is None:
+            return
+        reason = "both" if slow and bottom else "bottom_five" if bottom else "slow_lap"
+        self._enqueue(
+            "pace_roast",
+            {
+                "lap": analyzed_lap,
+                "reason": reason,
+                "position": bottom[0] if bottom else int(state.get("player_position", 0) or 0),
+                "active_cars": bottom[1] if bottom else int(state.get("active_cars", 0) or 0),
+                "bottom_five": bottom is not None,
+                "delta_to_target_s": round(float(delta), 3) if slow else None,
+                "target": progress.get("target"),
+                "lap_time": progress.get("lap_time"),
+                "tolerance_s": float(settings.brutal_pace_tolerance_s),
+            },
+            cooldown_s=40.0,
+            expires_s=45.0,
+        )
+
     async def _detect(self, state: dict[str, Any]) -> None:
         if not state.get("connected") or state.get("game_paused"):
             return
@@ -1117,6 +1233,7 @@ class ProactiveEngineer:
             await self.store.mutate(lambda s: s.proactive.update({
                 "last_queued_lap": analyzed_lap, "next_due_lap": analyzed_lap + cadence,
             }))
+        self._detect_pace_roast(state, analyzed_lap)
 
         flagged = state.get("analysis", {}).get("flagged_corners", [])
         if flagged:
@@ -1609,7 +1726,35 @@ class ProactiveEngineer:
                 f"{abs(float(payload.get('gap_to_player_s', 0.0))):.1f} seconds back "
                 "and closing. Protect the tyres you will need to defend."
             )
+        if kind == "pace_roast":
+            return ProactiveEngineer.roast_text(payload)
         return "Engineer update available on the dashboard."
+
+    @staticmethod
+    def roast_text(payload: dict[str, Any]) -> str:
+        """The deterministic brutal-mode line for a pace_roast payload."""
+        reason = str(payload.get("reason", "slow_lap"))
+        delta = payload.get("delta_to_target_s")
+        slow = isinstance(delta, (int, float))
+        if reason == "both" and slow:
+            pool = ROAST_LINES_BOTH
+        elif reason in {"bottom_five", "both"}:
+            pool = ROAST_LINES_BOTTOM_FIVE
+        elif slow:
+            pool = ROAST_LINES_SLOW_LAP
+        else:
+            return "Bitch, do you mind driving faster?"
+        position = int(payload.get("position", 0) or 0)
+        cars = int(payload.get("active_cars", 0) or 0)
+        line = pool[int(payload.get("lap", 0) or 0) % len(pool)]
+        return line.format(
+            position=position,
+            cars=cars,
+            behind=max(0, cars - position),
+            delta=float(delta) if slow else 0.0,
+            target=payload.get("target") or "the target",
+            lap_time=payload.get("lap_time") or "that",
+        )
 
     @staticmethod
     def is_suppressed(event_type: str, standing_instructions: list[Any] | None) -> bool:

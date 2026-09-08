@@ -60,6 +60,15 @@ SETTINGS_SPEC: dict[str, dict[str, Any]] = {
         "label": "Radio verbosity",
         "description": "How much the engineer says when he calls you.",
     },
+    "brutal_mode": {
+        "group": "Engineer", "type": "bool",
+        "label": "Brutal mode",
+        "description": (
+            "The engineer gets blunt and swears at you when you are in the "
+            "bottom five or lapping slower than the target. Same numbers, "
+            "same safety calls, no manners."
+        ),
+    },
     "voice": {
         "group": "Engineer", "type": "choice", "choices": OPENAI_VOICES,
         "label": "Engineer voice",
