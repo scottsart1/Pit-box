@@ -239,7 +239,6 @@ td.no { color: var(--muted); }
   display: grid;
   place-items: center;
 }
-.handle { font-family: var(--mono); font-weight: 700; }
 
 /* ---------- code entry ---------- */
 
