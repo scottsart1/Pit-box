@@ -122,11 +122,21 @@ def test_comments_discussing_placeholders_do_not_trip_the_check(tmp_path, monkey
 
 
 def test_the_real_contact_details_are_in_place():
-    # These were the other two placeholders; they must not regress.
-    assert "@scott-v-sv" in INDEX
+    # This was the other placeholder; it must not regress.
     assert "vale.scott00@gmail.com" in INDEX
     assert "vale.scott00@gmail.com" in EULA
     assert "example.com" not in INDEX
+
+
+def test_the_venmo_handle_is_gone():
+    # The Venmo route was removed at the owner's request: its handle was the
+    # one place a personal name was printed on the page. PayPal is the only
+    # way to send a coffee now, and its link text names neither a person nor
+    # an account. A stray copy on any page would put the name straight back.
+    for page in (INDEX, GUIDE, EULA, DIAGNOSTICS):
+        assert "Venmo" not in page
+        assert "scott-v-sv" not in page
+    assert "https://paypal.me/" in INDEX
 
 
 def test_the_partner_link_is_gone():

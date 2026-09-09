@@ -40,8 +40,9 @@ SCANNED = PAGES + ("download.js", "reviews.js")
 # Every value that must be replaced before the site is public. Each is paired
 # with what to do about it, because "placeholder found" alone is not actionable.
 PLACEHOLDERS: dict[str, str] = {
-    # Empty: the Venmo handle, contact email and governing-law clause are all
-    # settled. Add an entry here if a new fill-in-later value is introduced.
+    # Empty: the contact email and governing-law clause are settled, and the
+    # Venmo handle is gone. Add an entry here if a new fill-in-later value is
+    # introduced.
 }
 
 # Catches placeholder *shapes* rather than known strings, so a value added

@@ -239,7 +239,6 @@ td.no { color: var(--muted); }
   display: grid;
   place-items: center;
 }
-.handle { font-family: var(--mono); font-weight: 700; }
 
 /* ---------- code entry ---------- */
 
@@ -498,7 +497,11 @@ details p { color: var(--ink-2); margin: .7rem 0 0; max-width: 70ch; }
 }
 /* Fill every star up to the one chosen. The inputs sit before their labels
    in source, so the checked star and the ones after it are colored, and the
-   row is reversed so that "after" reads as "lower". */
+   row is reversed so that "after" reads as "lower".
+   This REQUIRES the inputs to be listed in descending order (5 first, 1 last);
+   the reversed row then puts them back on screen as 1..5 left to right. List
+   them ascending and the scale silently inverts: the rightmost star lights all
+   five and submits 1. */
 .star-options { flex-direction: row-reverse; justify-content: flex-end; }
 .star-options input:checked ~ label,
 .star-options label:hover,

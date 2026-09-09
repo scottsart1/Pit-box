@@ -8,6 +8,8 @@ must agree on the table.
 
 from __future__ import annotations
 
+import re
+
 from pathlib import Path
 
 SERVER = Path(__file__).resolve().parents[1] / "activation-server"
@@ -54,3 +56,36 @@ def test_schema_and_migration_agree_on_the_reviews_table():
         assert column in schema and column in migration
     assert "CHECK (rating BETWEEN 1 AND 5)" in migration
     assert "approved     INTEGER NOT NULL DEFAULT 0" in migration
+
+
+def test_the_star_rating_reads_one_to_five_from_the_left():
+    """The scale must not silently invert.
+
+    The stars are a CSS trick: the labels follow their inputs in source, so
+    `input:checked ~ label` can only colour the checked star and the ones
+    AFTER it. To make that read as "fill up to the one chosen", the row is
+    reversed on screen, which means the inputs have to be listed in
+    DESCENDING order. Listed ascending, the whole scale flips: the rightmost
+    star lights all five and submits 1, and a happy reviewer files one star.
+    That shipped once, so pin both halves of the arrangement together.
+    """
+    site = Path(__file__).resolve().parents[1] / "website"
+    markup = (site / "index.html").read_text(encoding="utf-8")
+    styles = (site / "styles.css").read_text(encoding="utf-8")
+
+    options = markup.split('class="star-options"')[1].split("</div>")[0]
+    values = re.findall(r'name="rating" value="(\d)"', options)
+    assert values == ["5", "4", "3", "2", "1"], (
+        f"star inputs must be listed 5 down to 1, found {values}"
+    )
+
+    # The descending order is only correct because the row is reversed; if the
+    # reversal ever goes, this ordering becomes the bug instead of the fix.
+    assert re.search(
+        r"\.star-options\s*\{[^}]*flex-direction:\s*row-reverse", styles
+    ), "the reversed row is what puts the descending inputs back in 1..5 order"
+
+    # Each star still announces its own value to a screen reader, which reads
+    # source order and so is unaffected by the visual reversal.
+    for n in range(1, 6):
+        assert f'<span class="sr-only">{n} out of 5</span>' in options
