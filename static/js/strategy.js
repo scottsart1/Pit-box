@@ -441,8 +441,8 @@ function handleTimelineClick(event) {
     return;
   }
 
-  // Click on a stint bar in the top row: cycle that stint's dry compound,
-  // skipping choices that would put two identical stints back to back.
+  // Adjacent stints may use distinct sets of the same compound. The engine
+  // checks physical inventory and race legality for the resulting plan.
   if (y >= row.y && y <= row.y + row.height) {
     const bounds_ = [row.startLap, ...boxLaps, geometry.totalLaps];
     let stint = -1;
@@ -451,13 +451,7 @@ function handleTimelineClick(event) {
     }
     if (stint < 0 || stint >= compounds.length) return;
     const current = compounds[stint];
-    const left = stint > 0 ? compounds[stint - 1] : null;
-    const right = stint + 1 < compounds.length ? compounds[stint + 1] : null;
-    let candidate = current;
-    for (let step = 1; step <= DRY_CYCLE.length; step += 1) {
-      const next = DRY_CYCLE[(DRY_CYCLE.indexOf(current) + step + DRY_CYCLE.length) % DRY_CYCLE.length];
-      if (next !== left && next !== right) { candidate = next; break; }
-    }
+    const candidate = DRY_CYCLE[(DRY_CYCLE.indexOf(current) + 1 + DRY_CYCLE.length) % DRY_CYCLE.length];
     if (candidate === current) return;
     compounds[stint] = candidate;
     commitTimelinePlan(

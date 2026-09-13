@@ -18,6 +18,7 @@ quietly does something else.
 
 from __future__ import annotations
 
+from itertools import pairwise
 from typing import Any
 
 DRY_COMPOUNDS = ("SOFT", "MEDIUM", "HARD")
@@ -74,22 +75,13 @@ def normalise_plan(raw: Any, total_laps: int = 0) -> dict[str, Any]:
         )
     if any(lap < 1 for lap in box_laps):
         raise PlanError("Box laps start at lap 1.")
-    if any(later <= earlier for earlier, later in zip(box_laps, box_laps[1:])):
+    if any(later <= earlier for earlier, later in pairwise(box_laps)):
         raise PlanError("Each stop has to come after the one before it.")
     if total_laps and box_laps and box_laps[-1] >= total_laps:
         raise PlanError(f"The race is {total_laps} laps; the last stop is too late.")
 
-    # Refitting the tyre you just took off is never a plan, it is a typo.
-    repeated = next(
-        (
-            item
-            for item, following in zip(compounds, compounds[1:])
-            if item == following
-        ),
-        None,
-    )
-    if repeated:
-        raise PlanError(f"Two {repeated.lower()} stints back to back is not a stop.")
+    # Two stints on the same compound can use distinct physical sets. Actual
+    # stock and dry-compound compliance are evaluated by the strategy engine.
 
     tolerance = raw.get("lap_tolerance", DEFAULT_LAP_TOLERANCE)
     try:

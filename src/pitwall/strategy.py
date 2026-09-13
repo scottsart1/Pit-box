@@ -17,6 +17,7 @@ from .database import PitWallDatabase
 from .race_plan import plan_matches, remaining_plan
 from .setup_model import setup_effects
 from .state import StateStore
+from .tyre_inventory import TyreInventory
 from .tyre_learning import exclusion_reason, finite, wear_deltas
 
 # Green-flag drive-through loss estimates. IDs follow f1-packets 2026 TRACKS.
@@ -837,7 +838,11 @@ class StrategyEngine:
     def _available_sets(state: dict[str, Any]) -> dict[str, dict[str, Any]]:
         best: dict[str, dict[str, Any]] = {}
         for tyre in state.get("tyre_sets", []):
-            if not tyre.get("available"):
+            if (
+                not tyre.get("available") or tyre.get("fitted")
+                or (tyre.get("index") is not None
+                    and tyre.get("index") == state.get("fitted_tyre_set_idx", -1))
+            ):
                 continue
             compound = str(tyre.get("compound", "UNKNOWN")).upper()
             if compound not in DRY_COMPOUNDS | WET_COMPOUNDS:
@@ -859,7 +864,7 @@ class StrategyEngine:
                 )
                 if candidate_key < current_key:
                     best[compound] = candidate
-        if not best:
+        if not best and not state.get("tyre_sets"):
             best = {
                 compound: {
                     "compound": compound,
@@ -869,7 +874,7 @@ class StrategyEngine:
                     "lap_delta_ms": 0,
                     "source": "fallback",
                 }
-                for compound in ("SOFT", "MEDIUM", "HARD")
+                for compound in ("SOFT", "MEDIUM", "HARD", "INTER", "WET")
             }
         return best
 
@@ -1835,7 +1840,8 @@ class StrategyEngine:
         # new tyre (starting_age == 0) pays this; continuing the current stint
         # does not. Full penalty on the out-lap, half on the following lap.
         cold_penalty_s = (
-            settings.strategy_cold_tyre_penalty_s if starting_age == 0 else 0.0
+            settings.strategy_cold_tyre_penalty_s
+            if starting_age == 0 or (set_info and not set_info.get("fitted")) else 0.0
         )
         for offset in range(max(0, laps)):
             age = starting_age + offset
@@ -1874,14 +1880,16 @@ class StrategyEngine:
                 feasible = False
                 expected += 18.0 + (peak_wear - 92.0) * 2.0
                 conservative += 30.0 + (peak_wear - 92.0) * 3.0
-        if usable_life > 0 and laps > usable_life + 1:
+        if "usable_life_laps" in set_info and starting_age + laps > usable_life:
             feasible = False
-            conservative += (laps - usable_life) * 8.0
-        if life_span > 0 and starting_age + laps > life_span + 2:
+            conservative += (starting_age + laps - usable_life) * 8.0
+        # EA lifespan is laps LEFT on this set, not its original lifetime.
+        # Subtracting the fitted tyre's age again rejected usable old sets.
+        if "life_span_laps" in set_info and laps > life_span:
             feasible = False
-            conservative += (starting_age + laps - life_span) * 5.0
+            conservative += (laps - life_span) * 5.0
         operational_limit = OPERATIONAL_WEAR_LIMIT.get(compound, 85.0)
-        if peak_wear > operational_limit:
+        if laps > 0 and peak_wear > operational_limit:
             feasible = False
             conservative += 12.0 + (peak_wear - operational_limit) * 1.75
         # Wear is a percentage of a consumed tyre: 100 is fully worn and there
@@ -2430,6 +2438,7 @@ class StrategyEngine:
         base_lap_s = self._estimate_base_lap_s(state)
         effective_pit_loss = float(neutralisation["effective_pit_loss_s"])
         available_sets = self._available_sets(state)
+        inventory = TyreInventory(state, available_sets)
         compounds = list(available_sets)
         weather_crossover = self._weather_crossover(
             state,
@@ -2470,6 +2479,11 @@ class StrategyEngine:
             )
         )
         plans: list[dict[str, Any]] = []
+        inventory_rejected = 0
+
+        def append_plan(plan: dict[str, Any] | None) -> None:
+            if plan is not None:
+                plans.append(plan)
         simulation_cache: dict[tuple[Any, ...], dict[str, Any]] = {}
         baseline_simulation_cache: dict[tuple[Any, ...], dict[str, Any]] = {}
         feedback_free_state = dict(state)
@@ -2487,6 +2501,8 @@ class StrategyEngine:
             set_info: dict[str, Any] | None = None,
             start_offset: int = 0,
         ) -> dict[str, Any]:
+            if set_info is None:
+                set_info = inventory.fitted
             wear_key = (
                 tuple(round(float(value), 3) for value in starting_wear)
                 if isinstance(starting_wear, list)
@@ -2516,6 +2532,11 @@ class StrategyEngine:
                     wetness_trajectory, start_offset, expected_weather_penalties,
                 )
             result = dict(simulation_cache[key])
+            result["tyre_set_index"] = (set_info or {}).get("index")
+            result["starting_wear_pct"] = max(
+                float((set_info or {}).get("wear_pct", 0)),
+                max(starting_wear) if isinstance(starting_wear, list) else float(starting_wear),
+            )
             if feedback_adjustment.get("active"):
                 if key not in baseline_simulation_cache:
                     baseline_simulation_cache[key] = self._simulate_stint(
@@ -2535,6 +2556,15 @@ class StrategyEngine:
                 result["without_driver_feedback"] = baseline_simulation_cache[key]
             return result
 
+        def simulate_allocated(compound: str, laps: int, start: int, item: dict[str, Any]) -> dict[str, Any]:
+            # EA does not report a spare set's age. Its measured wear, pace
+            # delta and remaining life are available; do not invent age by
+            # subtracting remaining life from the compound recommendation.
+            model = simulate(state, compound, laps, 0, 0.0, base_lap_s,
+                             historical, style_factor, item, start)
+            model["set_age_source"] = "not_reported_for_spare"
+            return model
+
         def make_plan(
             *,
             stops: int,
@@ -2543,7 +2573,13 @@ class StrategyEngine:
             stints: list[dict[str, Any]],
             reason: str,
             weather: dict[str, Any] | None = None,
-        ) -> dict[str, Any]:
+        ) -> dict[str, Any] | None:
+            nonlocal inventory_rejected
+            allocated = inventory.allocate(stints, compounds_in_plan, simulate_allocated)
+            if allocated is None:
+                inventory_rejected += 1
+                return None
+            stints = allocated
             pit_costs = self._pit_stop_costs(state, box_laps, neutralisation)
             total_pit_cost = sum(pit_costs)
             traffic_cost, projected_rejoin = self._traffic_cost(
@@ -2593,6 +2629,9 @@ class StrategyEngine:
                     for index, lap in enumerate(box_laps)
                 ],
                 "total_pit_cost_s": round(total_pit_cost, 3),
+                "inventory_status": inventory.status,
+                "inventory_feasible": True if inventory.known or not stops else None,
+                "tyre_set_indices": [stint.get("tyre_set_index") for stint in stints[1:]],
                 "box_laps": box_laps,
                 "compounds": compounds_in_plan,
                 "projected_time_s": round(expected, 2),
@@ -2645,7 +2684,7 @@ class StrategyEngine:
             style_factor,
             None,
         )
-        plans.append(
+        append_plan(
             make_plan(
                 stops=0,
                 box_laps=[],
@@ -2656,18 +2695,30 @@ class StrategyEngine:
         )
 
         red_flag_change = neutralisation["phase"] == "red_flag"
-        earliest_box_lap = current_lap
+        earliest_box_lap = current_lap if red_flag_change else max(1, current_lap)
         if neutralisation["pit_entry_status"] == "passed" and not red_flag_change:
             earliest_box_lap += 1
+
+        def laps_before_stop(box_lap: int) -> int:
+            return 0 if red_flag_change and box_lap == current_lap else box_lap - max(1, current_lap) + 1
+
+        def reported_life(item: dict[str, Any], age: int = 0) -> int:
+            bounds = []
+            if "life_span_laps" in item:
+                bounds.append(int(item["life_span_laps"]))
+            if "usable_life_laps" in item:
+                bounds.append(int(item["usable_life_laps"]) - age)
+            return max(0, min(bounds)) if bounds else 0
+
+        spare_lives = {reported_life(item) for items in inventory.groups.values() for item in items}
+        spare_lives.discard(0)
+        fitted_life = reported_life(inventory.fitted or {}, current_age)
+
         for box_lap in range(earliest_box_lap, total_laps):
             # A normal stop at the end of the current lap still consumes that
             # lap on the fitted tyre. A red-flag change happens during the
             # suspension and therefore consumes zero additional racing laps.
-            pre_laps = (
-                0
-                if red_flag_change and box_lap == current_lap
-                else box_lap - current_lap + 1
-            )
+            pre_laps = laps_before_stop(box_lap)
             post_laps = remaining - pre_laps
             if post_laps <= 0:
                 continue
@@ -2683,8 +2734,6 @@ class StrategyEngine:
                 None,
             )
             for compound in compounds:
-                if compound == current_compound and len(compounds) > 1:
-                    continue
                 post = simulate(
                     state,
                     compound,
@@ -2702,7 +2751,7 @@ class StrategyEngine:
                     if neutralisation["phase"] == "red_flag"
                     else f"Box lap {box_lap} for {compound}"
                 )
-                plans.append(
+                append_plan(
                     make_plan(
                         stops=1,
                         box_laps=[box_lap],
@@ -2712,11 +2761,23 @@ class StrategyEngine:
                     )
                 )
 
-        if remaining >= 18 and not red_flag_change:
-            for first_box_lap in range(earliest_box_lap, total_laps - 6, 2):
-                first_laps = first_box_lap - current_lap + 1
-                for second_box_lap in range(first_box_lap + 5, total_laps, 3):
-                    middle_laps = second_box_lap - first_box_lap
+        if remaining >= 3 and settings.strategy_max_stops >= 2:
+            first_candidates = sorted({
+                *range(earliest_box_lap, total_laps - 1, 1 if remaining <= 18 else 2),
+                *([max(1, current_lap) + fitted_life - 1] if fitted_life else []),
+            })
+            for first_box_lap in first_candidates:
+                if not earliest_box_lap <= first_box_lap < total_laps - 1:
+                    continue
+                first_laps = laps_before_stop(first_box_lap)
+                second_candidates = sorted({
+                    *range(first_box_lap + 1, total_laps, 1 if remaining <= 18 else 3),
+                    *(max(1, current_lap) - 1 + first_laps + life for life in spare_lives),
+                })
+                for second_box_lap in second_candidates:
+                    if not first_box_lap < second_box_lap < total_laps:
+                        continue
+                    middle_laps = laps_before_stop(second_box_lap) - first_laps
                     # Derived from what is left to run, as the one-stop branch
                     # does, rather than from total_laps. Counting down from the
                     # race distance assumes the current lap is in progress; on
@@ -2728,7 +2789,7 @@ class StrategyEngine:
                         continue
                     for middle in compounds:
                         for final in compounds:
-                            if middle == current_compound or final == middle:
+                            if not inventory.supports([middle, final]):
                                 continue
                             first = simulate(
                                 state,
@@ -2765,7 +2826,7 @@ class StrategyEngine:
                                 available_sets.get(final),
                                 first_laps + middle_laps,
                             )
-                            plans.append(
+                            append_plan(
                                 make_plan(
                                     stops=2,
                                     box_laps=[first_box_lap, second_box_lap],
@@ -2777,27 +2838,49 @@ class StrategyEngine:
 
         if (
             settings.strategy_max_stops >= 3
-            and remaining >= 28
-            and not red_flag_change
+            and remaining >= 4
+            and (not inventory.known or sum(map(len, inventory.groups.values())) >= 3)
         ):
-            # Coarse but complete three-stop search. It is intentionally sampled
-            # rather than lap-by-lap to keep live recomputes fast.
-            first_candidates = range(earliest_box_lap + 4, total_laps - 15, 4)
+            # Sample long horizons, but retain urgent first stops and every
+            # reported set-life boundary. Calling a sampled grid complete hid
+            # the only safe plan when the fitted tyre had three laps left.
+            first_candidates = sorted({
+                *range(earliest_box_lap, min(earliest_box_lap + 4, total_laps - 2)),
+                *range(earliest_box_lap + 4, total_laps - 2, 4),
+                *([max(1, current_lap) + fitted_life - 1] if fitted_life else []),
+            })
             for first_box_lap in first_candidates:
-                first_laps = first_box_lap - current_lap + 1
-                for second_box_lap in range(first_box_lap + 6, total_laps - 8, 5):
-                    middle1_laps = second_box_lap - first_box_lap
-                    for third_box_lap in range(second_box_lap + 6, total_laps, 5):
-                        middle2_laps = third_box_lap - second_box_lap
+                first_laps = laps_before_stop(first_box_lap)
+                if not earliest_box_lap <= first_box_lap < total_laps - 2:
+                    continue
+                if not simulate(state, current_compound, first_laps, current_age,
+                                current_wear, base_lap_s, historical, style_factor)["feasible"]:
+                    continue
+                second_candidates = sorted({
+                    *range(first_box_lap + 1, total_laps - 1, 5),
+                    *(max(1, current_lap) - 1 + first_laps + life for life in spare_lives),
+                })
+                for second_box_lap in second_candidates:
+                    if not first_box_lap < second_box_lap < total_laps - 1:
+                        continue
+                    middle1_laps = laps_before_stop(second_box_lap) - first_laps
+                    third_candidates = sorted({
+                        *range(second_box_lap + 1, total_laps, 5),
+                        *(second_box_lap + life for life in spare_lives),
+                    })
+                    for third_box_lap in third_candidates:
+                        if not second_box_lap < third_box_lap < total_laps:
+                            continue
+                        middle2_laps = laps_before_stop(third_box_lap) - laps_before_stop(second_box_lap)
                         # From what remains, not from the race distance - see
                         # the two-stop branch above for why.
                         final_laps = remaining - first_laps - middle1_laps - middle2_laps
-                        if min(first_laps, middle1_laps, middle2_laps, final_laps) <= 0:
+                        if first_laps < 0 or min(middle1_laps, middle2_laps, final_laps) <= 0:
                             continue
                         for compound1 in compounds:
                             for compound2 in compounds:
                                 for compound3 in compounds:
-                                    if compound1 == current_compound or compound2 == compound1 or compound3 == compound2:
+                                    if not inventory.supports([compound1, compound2, compound3]):
                                         continue
                                     stints = [
                                         simulate(state, current_compound, first_laps, current_age, current_wear, base_lap_s, historical, style_factor, None),
@@ -2805,7 +2888,7 @@ class StrategyEngine:
                                         simulate(state, compound2, middle2_laps, 0, 0.0, base_lap_s, historical, style_factor, available_sets.get(compound2), first_laps + middle1_laps),
                                         simulate(state, compound3, final_laps, 0, 0.0, base_lap_s, historical, style_factor, available_sets.get(compound3), first_laps + middle1_laps + middle2_laps),
                                     ]
-                                    plans.append(
+                                    append_plan(
                                         make_plan(
                                             stops=3,
                                             box_laps=[first_box_lap, second_box_lap, third_box_lap],
@@ -2857,9 +2940,9 @@ class StrategyEngine:
                 weather=weather_crossover,
             )
             # Wet use waives the dry-compound requirement.
-            weather_plan["feasible"] = bool(pre["feasible"] and post["feasible"])
-            weather_plan["legal"] = True
-            plans.append(weather_plan)
+            if weather_plan is not None:
+                weather_plan["legal"] = True
+                append_plan(weather_plan)
 
         track_id = int(state.get("track_id", -1))
         difficulty_known = track_id in TRACK_OVERTAKING_DIFFICULTY
@@ -3225,6 +3308,9 @@ class StrategyEngine:
 
         # A long run on mediums cannot certify an untested hard final stint.
         evidence_samples, confidence = self._plan_confidence(best)
+        if not inventory.known and best.get("stops_remaining"):
+            confidence = "low"
+            instruction += " Confirm a spare set is available; tyre inventory has not arrived."
         stay_out_plan = plans[0]
         stay_out_comparable = bool(
             stay_out_plan.get("feasible") and stay_out_plan.get("legal")
@@ -3318,6 +3404,19 @@ class StrategyEngine:
         return {
             "available": True,
             "laps_remaining": remaining,
+            "tyre_inventory": {
+                "status": inventory.status,
+                "spare_set_count": sum(len(items) for items in inventory.groups.values()) if inventory.known else None,
+                "rejected_unallocated_plans": inventory_rejected,
+                "refit_projected_used_sets_supported": False,
+                "note": "Each stop uses a distinct available physical set; reported wear and life are retained."
+                if inventory.known else "Tyre inventory has not arrived; stop plans require confirmation of spare sets.",
+            },
+            "search_coverage": {
+                "one_stop": "all_laps",
+                "two_stop": "all_laps" if remaining <= 18 else "sampled",
+                "three_stop": "sampled_with_urgent_stops_and_set_life_boundaries",
+            },
             "pit_loss_s": round(effective_pit_loss, 1),
             "neutralisation": neutralisation,
             # Surfaced even when no stop is called. A driver on slicks in the

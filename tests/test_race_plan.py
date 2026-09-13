@@ -53,7 +53,6 @@ def test_a_no_stop_plan_is_a_plan() -> None:
         ({"compounds": ["MEDIUM", "HARD"], "box_laps": []}, "box lap"),
         ({"compounds": ["MEDIUM", "HARD"], "box_laps": [18, 30]}, "box lap"),
         ({"compounds": ["MEDIUM", "HARD", "SOFT"], "box_laps": [30, 18]}, "after the one before"),
-        ({"compounds": ["MEDIUM", "MEDIUM"], "box_laps": [18]}, "back to back"),
         ({"compounds": ["MEDIUM", "HARD"], "box_laps": [0]}, "start at lap 1"),
         ({"compounds": ["MEDIUM", "HARD"], "box_laps": [57]}, "too late"),
     ],
