@@ -79,7 +79,7 @@ if ($LASTEXITCODE -ne 0) {
   exit 1
 }
 
-# Distribution tests need private release assets and are run by the release script.
+# Distribution packaging tests are run separately by the release script.
 Write-Host "Running application self-tests..." -ForegroundColor Cyan
 & .\.venv\Scripts\python.exe -m pytest -q tests
 if ($LASTEXITCODE -ne 0) {
