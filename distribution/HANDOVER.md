@@ -178,28 +178,43 @@ It is now confirmed fixed from the deployed site: a cross-origin POST returns
 503 and **the body is readable**, which is only possible with the header
 present.
 
-### The release that published a page for a build it had not uploaded (4.9.5)
+### The release script did nothing, silently, and said it was live (4.9.5)
 
-`release_windows.ps1` announced "Release 4.9.5 is live" while
-`/installer` still served the 4.9.4 build from eight days earlier. Both
-halves of the guard failed:
+`release_windows.ps1` announced "Release 4.9.5 is live" while `/installer`
+still served the 4.9.4 build from eight days earlier.
 
-- `wrangler r2 object put` did nothing and said nothing. The Cloudflare
-  login stored on the machine had `workers`, `pages`, `d1` and a dozen
-  other scopes, but **not `r2`**, so the Worker and the site deployed
-  normally while the upload silently went nowhere. `npx wrangler` also
-  exits 255 on success here, so the exit-code check in `Run` cannot be
-  relied on to catch it.
-- The gate before the site deploy only asked for HTTP 200 and more than a
-  megabyte. The stale object was 34 MB and answered 200.
+The cause is one line. `Invoke-Wrangler` splatted the automatic `@args`
+straight into a native command:
 
-The gate now fetches `/installer` and compares its SHA-256 to the build
-that was just made, and aborts before the site goes out if they differ.
-Size is not identity: check the hash a visitor would get.
+```powershell
+npx --yes wrangler @args        # passes NOTHING under Windows PowerShell 5.1
+```
 
-If an upload fails this way, `wrangler whoami` lists the token's scopes.
-An `r2`-scoped API token in `CLOUDFLARE_API_TOKEN` overrides the stored
-OAuth login for the `r2 object put`.
+Under 5.1 that passes no arguments at all. wrangler starts bare, prints
+its top-level help, and **exits 0**, so the `$LASTEXITCODE` check in
+`Run` sees success. Every wrangler step in the release behaved that way:
+no installer was uploaded, no Worker deployed, no D1 migration applied —
+and the script reported each one as done. PowerShell 7 passes `@args`
+correctly, which is why this survived as long as releases were cut from
+`pwsh`. Copying to a local array first (`$argv = @($args)`) fixes it in
+both.
+
+Verify with a one-liner before trusting a release from a new machine:
+
+```powershell
+function T { npx --yes wrangler @args }; T r2 bucket list
+```
+
+If that prints wrangler's help instead of the bucket list, the shell is
+dropping the arguments.
+
+Two guards were wrong on top of it. The R2 round-trip check read the
+object back and found nothing, which was already downgraded to a warning
+because wrangler reads are known to serve stale objects. And the gate
+before the site deploy asked only for HTTP 200 and more than a megabyte
+— the eight-day-old object was 34 MB and answered 200. That gate now
+fetches `/installer` and compares its SHA-256 to the build just made, and
+aborts before the site goes out if they differ. Size is not identity.
 
 ### How the installer is served
 

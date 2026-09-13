@@ -41,9 +41,20 @@ function Run([string]$What, [scriptblock]$Command) {
 
 # wrangler if installed, npx otherwise. Both use the Cloudflare login already
 # stored on this machine; if a browser opens asking to authorise, approve it.
+#
+# $args is copied into $argv before being splatted, and that copy is the whole
+# point. Splatting the automatic @args straight into a native command silently
+# passes nothing under Windows PowerShell 5.1: wrangler is started with no
+# arguments at all, prints its top-level help, and exits 0. Every step here
+# then "succeeds" while doing nothing - the 4.9.5 release uploaded no
+# installer, deployed no Worker and ran no migration, and still announced
+# itself live. PowerShell 7 passes @args correctly, which is why this went
+# unnoticed for as long as releases were cut from pwsh.
 function Invoke-Wrangler {
-  if (Get-Command wrangler -ErrorAction SilentlyContinue) { wrangler @args }
-  elseif (Get-Command npx -ErrorAction SilentlyContinue) { npx --yes wrangler @args }
+  $argv = @($args)
+  if ($argv.Count -eq 0) { throw "Invoke-Wrangler called with no arguments." }
+  if (Get-Command wrangler -ErrorAction SilentlyContinue) { wrangler @argv }
+  elseif (Get-Command npx -ErrorAction SilentlyContinue) { npx --yes wrangler @argv }
   else { throw "Neither wrangler nor npx is available. Install Node.js, then re-run." }
 }
 
@@ -116,7 +127,7 @@ try {
       # production path: the Worker's /installer route, or the R2 object in
       # the Cloudflare dashboard. Warn, do not abort the release on an
       # untrusted reader.
-      Write-Host "WARNING: wrangler read back '$remote', not $sha. wrangler reads are known to serve stale objects, and an empty read back usually means the put never happened - check that the stored Cloudflare login has r2 write with 'wrangler whoami'. The release is not allowed to reach the site on this alone: the download gate below fetches and hashes the file a visitor would get." -ForegroundColor Yellow
+      Write-Host "WARNING: wrangler read back '$remote', not $sha. wrangler reads are known to serve stale objects, and an empty read back usually means the put never happened - see distribution\HANDOVER.md. The release is not allowed to reach the site on this alone: the download gate below fetches and hashes the file a visitor would get." -ForegroundColor Yellow
     } else {
       Write-Host "R2 round-trip verified: downloads get exactly this build." -ForegroundColor Green
     }
@@ -172,7 +183,7 @@ try {
     # so this gate waved it through. The only check worth making here is the
     # one a visitor makes - fetch the file and hash it.
     if ($length -ne $bytes) {
-      throw "$ActivationApi/installer serves $length bytes, not the $bytes just built. The upload did not land - check that the Cloudflare login has r2 write (wrangler whoami) - and do not deploy the site."
+      throw "$ActivationApi/installer serves $length bytes, not the $bytes just built. The upload did not land; do not deploy the site. distribution\HANDOVER.md lists the causes seen so far."
     }
     $served = Join-Path $env:TEMP "pitwall-release-served.exe"
     Remove-Item $served -Force -ErrorAction SilentlyContinue
