@@ -42,7 +42,7 @@ from itertools import pairwise
 from statistics import median
 from typing import Any, TypedDict
 
-from .tyre_learning import finite
+from .tyre_learning import exclusion_reason, finite
 
 # --- The wetness scale -----------------------------------------------------
 # Anchored to the two crossovers wet strategy is called on. See the module
@@ -340,6 +340,27 @@ def _reference_sectors(laps: Sequence[dict[str, Any]]) -> list[float] | None:
     return [float(median(column)) for column in columns]
 
 
+def _neutralised(record: dict[str, Any]) -> bool:
+    return (
+        record.get("safety_car") not in (None, "none", "")
+        or bool(record.get("red_flag_active"))
+        or record.get("race_control_phase") in {
+            "safety_car", "safety_car_ending", "vsc", "vsc_ending",
+            "formation", "red_flag",
+        }
+        or "neutralised_lap" in (record.get("learning_exclusions") or [])
+    )
+
+
+def _field_pace_block_reason(state: dict[str, Any]) -> str | None:
+    if _neutralised(state):
+        return "neutralised_current_state"
+    completed = state.get("completed_laps") or []
+    if completed and _neutralised(completed[-1]):
+        return "awaiting_clean_lap_after_neutralisation"
+    return None
+
+
 def player_pace_observation(
     state: dict[str, Any],
     dry_base_lap_s: float | None,
@@ -369,8 +390,7 @@ def player_pace_observation(
         lap
         for lap in laps
         if equilibrium_wetness(str(lap.get("weather", ""))) <= 0.0
-        and lap.get("valid")
-        and not lap.get("pit_status")
+        and exclusion_reason(lap) is None
     ]
     # The benchmark has to be a *dry* lap. Passing in the driver's current rolling
     # pace makes the ratio 1.0 by construction in a wet race — the channel then
@@ -383,7 +403,7 @@ def player_pace_observation(
         clean = [
             float(lap["lap_time_ms"]) / 1000.0
             for lap in laps
-            if lap.get("valid") and not lap.get("pit_status")
+            if exclusion_reason(lap) is None
         ]
         if clean:
             base, benchmark = min(clean), "session_best"
@@ -393,10 +413,10 @@ def player_pace_observation(
         return None
     reference_sectors = _reference_sectors(dry[-8:]) if dry else None
     excluded = {int(value) for value in incident_laps}
-    usable: list[float] = []
+    usable: list[dict[str, Any]] = []
     dropped = 0
     for lap in laps[-3:]:
-        if not lap.get("valid") or lap.get("pit_status") or lap.get("pit_lane_time_ms"):
+        if exclusion_reason(lap) is not None:
             dropped += 1
             continue
         if int(lap.get("lap_num", 0) or 0) in excluded:
@@ -405,7 +425,7 @@ def player_pace_observation(
         if _sector_shape_is_an_incident(lap, reference_sectors):
             dropped += 1
             continue
-        usable.append(float(lap["lap_time_ms"]) / 1000.0)
+        usable.append(lap)
     observation = {
         "source": "player",
         "compound": str(state.get("tyre", {}).get("compound", "UNKNOWN")).upper(),
@@ -417,9 +437,16 @@ def player_pace_observation(
     }
     if not usable:
         return observation
-    observation["ratio"] = round(usable[-1] / base, 4)
+    latest = usable[-1]
+    # The last completed lap may precede a tyre change. Current tyres cannot
+    # retroactively identify the tyre that produced its lap time. Old captures
+    # without lap-compound metadata retain the previous current-tyre fallback.
+    observation["compound"] = str(latest.get("compound") or observation["compound"]).upper()
+    observation["ratio"] = round(float(latest["lap_time_ms"]) / 1000.0 / base, 4)
     observation["samples"] = len(usable)
-    observation["recent_median_ratio"] = round(float(median(usable)) / base, 4)
+    observation["recent_median_ratio"] = round(
+        float(median(float(lap["lap_time_ms"]) / 1000.0 for lap in usable)) / base, 4
+    )
     return observation
 
 
@@ -450,6 +477,12 @@ def field_pace_observations(
     the dry does not read as a wet track.
     """
     observations: list[dict[str, Any]] = []
+    # The game's rival history contains lap times but no historical SC/VSC
+    # flags. A field-wide slowdown is therefore not independent evidence while
+    # neutralised, or during the first lap after a recorded interruption. This
+    # conservative gate cannot reconstruct unknown older per-rival flags.
+    if _field_pace_block_reason(state):
+        return observations
     player_idx = int(state.get("player_car_index", -1))
     for driver in state.get("drivers", []):
         if not driver.get("active") or int(driver.get("car_idx", -1)) == player_idx:
@@ -759,6 +792,7 @@ def estimate_wetness(
         "track_temp_c": int(track_temp) if track_temp is not None else None,
         "player_pace": player,
         "field_pace_cars": len(field),
+        "field_pace_exclusion": _field_pace_block_reason(state),
         "field_reference_ratio": round(
             float(median([float(item["ratio"]) for item in field])), 4
         )
@@ -875,14 +909,20 @@ def project_wetness_scenarios(
     """
     lap_count = max(0, int(remaining_laps))
     lap_minutes = max(0.2, float(base_lap_s) / 60.0)
+    captured = finite(state.get("weather_forecast_session_time_s"))
+    now = finite(state.get("session_time_s"))
+    age_minutes = (
+        max(0.0, now - captured) / 60.0
+        if captured is not None and now is not None else 0.0
+    )
     forecast = sorted(
         [
-            sample
+            {**sample, "due_min": float(sample["time_offset_min"]) - age_minutes}
             for sample in state.get("weather_forecast", []) or []
             if 0 < (finite(sample.get("time_offset_min")) or 0)
-            <= lap_count * lap_minutes
+            <= lap_count * lap_minutes + age_minutes
         ],
-        key=lambda item: float(item["time_offset_min"]),
+        key=lambda item: float(item["due_min"]),
     )
     track_temp = finite(state.get("track_temp_c"))
     active_cars = int(state.get("active_cars", 0) or 0)
@@ -901,33 +941,45 @@ def project_wetness_scenarios(
         sample_index = 0
         current_sample = None
         for index in range(lap_count):
-            minutes = (index + 1) * lap_minutes
+            cursor = index * lap_minutes
+            end = (index + 1) * lap_minutes
             while (
                 sample_index < len(forecast)
-                and float(forecast[sample_index]["time_offset_min"]) <= minutes
+                and float(forecast[sample_index]["due_min"]) <= cursor
             ):
                 current_sample = forecast[sample_index]
                 sample_index += 1
-            target, sample_temp = now_target, track_temp
-            if rank is not None and current_sample is not None:
-                if rank < probability(current_sample):
-                    # A dry/unknown label with a nonzero chance supplies no
-                    # rain severity. Use light rain as an explicit scenario
-                    # fallback; the percentage still never sets its intensity.
-                    target = (
-                        equilibrium_wetness(str(current_sample.get("weather", "")))
-                        or _EQUILIBRIUM_WETNESS["light rain"]
-                    )
-                else:
-                    target = 0.0
-                sample_temp = finite(current_sample.get("track_temp_c"))
-                if sample_temp is None:
-                    sample_temp = track_temp
-            # Carry the correction supported by observed pace into each path.
-            wet = step_wetness(
-                wet, clamp_wetness(target + equilibrium_bias),
-                track_temp_c=sample_temp, active_cars=active_cars,
-            )
+            while cursor < end:
+                boundary = end
+                if sample_index < len(forecast):
+                    boundary = min(end, float(forecast[sample_index]["due_min"]))
+                target, sample_temp = now_target, track_temp
+                if rank is not None and current_sample is not None:
+                    if rank < probability(current_sample):
+                        # Probability chooses a physical rain/no-rain path; it
+                        # never scales the selected category's intensity.
+                        target = (
+                            equilibrium_wetness(str(current_sample.get("weather", "")))
+                            or _EQUILIBRIUM_WETNESS["light rain"]
+                        )
+                    else:
+                        target = 0.0
+                    sample_temp = finite(current_sample.get("track_temp_c"))
+                    if sample_temp is None:
+                        sample_temp = track_temp
+                # Integrate the old conditions until the actual forecast
+                # boundary, then the new conditions for the remaining fraction
+                # of the lap. A forecast at the flag cannot affect earlier laps.
+                wet = step_wetness(
+                    wet, clamp_wetness(target + equilibrium_bias),
+                    laps=(boundary - cursor) / lap_minutes,
+                    track_temp_c=sample_temp, active_cars=active_cars,
+                )
+                cursor = boundary
+                while (sample_index < len(forecast)
+                       and float(forecast[sample_index]["due_min"]) <= cursor):
+                    current_sample = forecast[sample_index]
+                    sample_index += 1
             trajectory.append(round(wet, 4))
         return trajectory
 
@@ -1052,7 +1104,10 @@ def evaluate(
     trajectory = _mean_trajectory(scenarios)
 
     candidates = {str(item).upper() for item in (available_compounds or ())}
-    candidates.update({"INTER", "WET"})
+    # The caller's known stock is a constraint, including an explicitly empty
+    # list. Only an omitted inventory permits the legacy conditional fallback.
+    if available_compounds is None:
+        candidates.update({"INTER", "WET"})
     if current and current != "UNKNOWN":
         candidates.add(current)
     penalties = expected_lap_penalties(sorted(candidates | {current}), scenarios)

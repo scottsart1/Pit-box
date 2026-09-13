@@ -108,11 +108,14 @@ def test_changing_future_chances_preserves_marginals_and_surface_memory():
     state = _state(weather_forecast=[_forecast(20, minutes=3), _forecast(80, minutes=6), _forecast(0, minutes=9)])
     scenarios = rain.project_wetness_scenarios(state, 0, 12, 90)
     assert len(scenarios) == 3
-    assert sum(item["probability"] for item in scenarios if item["trajectory"][1] > 0) == pytest.approx(0.2)
-    assert sum(item["probability"] for item in scenarios if item["trajectory"][3] > 0) == pytest.approx(0.8)
+    # Samples are due at 3/6/9 minutes. Conditions affect the next interval,
+    # never the whole preceding 90-second lap ending at that boundary.
+    assert all(item["trajectory"][1] == 0 for item in scenarios)
+    assert sum(item["probability"] for item in scenarios if item["trajectory"][2] > 0) == pytest.approx(0.2)
+    assert sum(item["probability"] for item in scenarios if item["trajectory"][4] > 0) == pytest.approx(0.8)
     for item in scenarios:
-        if item["trajectory"][4] > 0:
-            assert 0 < item["trajectory"][5] < item["trajectory"][4]
+        if item["trajectory"][5] > 0:
+            assert 0 < item["trajectory"][6] < item["trajectory"][5]
 
 
 def test_future_only_and_beyond_finish_forecasts_cannot_become_current_rain():
@@ -167,7 +170,7 @@ async def test_strategy_stints_use_expected_scenario_costs_at_their_lap_offset(s
     def simulate(trajectory, penalties=None):
         return strategy._simulate_stint(
             state, "INTER", 5, 2, 10.0, 90, {}, 1.0,
-            wetness_trajectory=trajectory, start_offset=4,
+            wetness_trajectory=trajectory, start_offset=5,
             expected_weather_penalties=penalties,
         )["expected_time_s"]
     mixed = simulate(crossover["trajectory"], crossover["expected_lap_penalties"])

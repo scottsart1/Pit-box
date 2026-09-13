@@ -1814,6 +1814,8 @@ class PitWallDatabase:
                 "regression_rmse_wear": round(float(wear_rmse), 3) if wear_rmse is not None else None,
                 "pace_fit_error_s": pace["fit_error_s"],
                 "pace_source": "personal_fuel_corrected_stint_fit",
+                "pace_excluded_laps": pace["excluded_laps"],
+                "pace_learning_policy": pace["pace_learning_policy"],
                 "source": "condition_adjusted_personal_regression" if wear_prediction is not None else "personal_track_history",
             }
         return result

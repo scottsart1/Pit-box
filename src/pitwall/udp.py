@@ -1122,6 +1122,10 @@ class F1DatagramProtocol(asyncio.DatagramProtocol):
                 "rain_pct": int(sample.rain_percentage),
             }
             for sample in samples
+            # EA includes the forecast's session type. A later qualifying/race
+            # forecast is not weather due during the session currently driven.
+            # Zero remains the documented unknown/legacy fallback.
+            if int(sample.session_type) in (0, int(packet.session_type))
         ]
 
         def rain_at(minutes: int) -> int:
@@ -1260,6 +1264,7 @@ class F1DatagramProtocol(asyncio.DatagramProtocol):
             total_laps=int(packet.total_laps),
             weather=WEATHER.get(int(packet.weather), "Unknown"),
             weather_forecast=forecast,
+            weather_forecast_session_time_s=float(packet.header.session_time),
             rain_now_pct=rain_now(),
             rain_next_15_pct=rain_at(15),
             rain_next_30_pct=rain_at(30),

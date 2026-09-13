@@ -78,6 +78,7 @@ def stint_pace_model(laps: list[dict[str, Any]]) -> dict[str, Any]:
     clamped into seemingly precise measurements.
     """
     runs: list[list[tuple[float, float]]] = []
+    excluded_laps: dict[str, int] = {}
     previous: dict[str, Any] | None = None
     previous_key: tuple[Any, ...] | None = None
     for lap in sorted(
@@ -110,6 +111,19 @@ def stint_pace_model(laps: list[dict[str, Any]]) -> dict[str, Any]:
             runs.append([])
         previous, previous_key = lap, key
         if exclusion_reason(lap):
+            previous = None
+            continue
+        # Lap time alone cannot distinguish tyre degradation from a surface
+        # that is wetting/drying under an unchanged sky label. There is no
+        # independent measured surface state in these saved laps yet. Keep
+        # measured wear usable, but decline intrinsic wet-pace fits instead of
+        # teaching the weather slope as tyre degradation. Missing legacy sky
+        # metadata retains the previous policy rather than erasing old evidence.
+        if str(lap.get("weather") or "").strip().lower() in {
+            "light rain", "heavy rain", "storm",
+        }:
+            reason = "unresolved_wet_conditions"
+            excluded_laps[reason] = excluded_laps.get(reason, 0) + 1
             previous = None
             continue
         # Standing starts and cold out-laps do not measure degradation.
@@ -162,4 +176,6 @@ def stint_pace_model(laps: list[dict[str, Any]]) -> dict[str, Any]:
         else None,
         "fuel_correction_s_per_kg": FUEL_SECONDS_PER_KG,
         "source": "fuel_corrected_stint_fit",
+        "excluded_laps": excluded_laps,
+        "pace_learning_policy": "dry_or_legacy_weather; wet_surface_change_unresolved",
     }

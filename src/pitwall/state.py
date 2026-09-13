@@ -251,6 +251,8 @@ class SessionState:
     wheel_slip_angle: list[float] = field(default_factory=lambda: [0.0] * 4)
     weather: str = "Unknown"
     weather_forecast: list[dict[str, Any]] = field(default_factory=list)
+    # Session-clock origin of the relative offsets; absent in older captures.
+    weather_forecast_session_time_s: float | None = None
     # Forecast chances of rain (EA m_rainPercentage), including offset zero.
     # Kept under the existing names for saved-state/API compatibility. Actual
     # conditions come from `weather`; none of these percentages is intensity.
