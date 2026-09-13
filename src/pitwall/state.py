@@ -178,6 +178,9 @@ class SessionState:
     packet_format: int = 0
     game_year: int = 0
     session_uid: int = 0
+    # Packet event time, independent of host/replay speed. None means no
+    # authoritative packet clock has been received yet.
+    session_time_s: float | None = None
     restart_epoch: int = 0
     timeline_epoch: int = 0
     source_mode: str = "live"
@@ -607,6 +610,7 @@ class StateStore:
                     "game_year": self.state.game_year,
                     "frame_identifier": self.state.frame_identifier,
                     "overall_frame_identifier": self.state.overall_frame_identifier,
+                    "session_time_s": self.state.session_time_s,
                     "last_packet_at": self.state.last_packet_at,
                     "packets_received": self.state.packets_received,
                     "packet_rate_hz": self.state.packet_rate_hz,
@@ -834,6 +838,7 @@ class StateStore:
         packet_id: int | None = None,
         frame_identifier: int | None = None,
         overall_frame_identifier: int | None = None,
+        session_time_s: float | None = None,
     ) -> None:
         now = time.monotonic()
         async with self._lock:
@@ -856,6 +861,8 @@ class StateStore:
             self.state.packet_format = int(packet_format)
             self.state.game_year = int(game_year)
             self.state.session_uid = int(session_uid)
+            if session_time_s is not None and math.isfinite(session_time_s) and session_time_s >= 0:
+                self.state.session_time_s = float(session_time_s)
             if frame_identifier is not None:
                 self.state.frame_identifier = int(frame_identifier)
             if overall_frame_identifier is not None:

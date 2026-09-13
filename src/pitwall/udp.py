@@ -568,6 +568,7 @@ class F1DatagramProtocol(asyncio.DatagramProtocol):
             int(getattr(header, "packet_id", -1)),
             int(getattr(header, "frame_identifier", 0)),
             int(getattr(header, "overall_frame_identifier", 0)),
+            getattr(header, "session_time", None),
         )
         name = packet.__class__.__name__
         if self.session_assembler is not None:

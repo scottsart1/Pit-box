@@ -364,9 +364,10 @@ class StrategyEngine:
         # stability hold can find a held plan that is no longer in the top
         # five. See _stabilize_radio_plan.
         self._candidate_pool: list[dict[str, Any]] = []
-        # (radio signature, monotonic first seen) of a faster plan that has
+        # (radio signature, first seen race time) of a faster plan that has
         # not yet been the faster plan for long enough to be spoken.
         self._pending_switch: tuple[tuple[Any, ...], float] | None = None
+        self._pending_switch_context: tuple[Any, ...] | None = None
 
     @staticmethod
     def _valid_laps(state: dict[str, Any]) -> list[dict[str, Any]]:
@@ -1961,29 +1962,70 @@ class StrategyEngine:
         samples: int,
     ) -> dict[str, Any]:
         samples = max(80, min(1200, int(samples)))
+        # Compare every candidate against the same race draws. A different
+        # box-lap label must not buy a lucky Monte Carlo result. Epochs keep a
+        # restarted/rewound race separate, while the current lap keeps draws
+        # stable between telemetry ticks within one decision opportunity.
         seed_material = repr(
             (
                 int(state.get("session_uid", 0)),
+                int(state.get("restart_epoch", 0)),
+                int(state.get("timeline_epoch", 0)),
                 int(state.get("current_lap", 0)),
-                tuple(plan.get("box_laps", [])),
-                tuple(plan.get("compounds", [])),
             )
         ).encode("utf-8")
         seed = zlib.crc32(seed_material) & 0xFFFFFFFF
         rng = np.random.default_rng(seed)
         expected = float(plan.get("projected_time_s", 0.0))
-        stints = plan.get("stint_models", [])
-        evidence = max((int(s.get("wear_sample_size", 0)) + int(s.get("deg_sample_size", 0)) for s in stints), default=0)
-        uncertainty_scale = 0.45 if evidence >= 8 else 0.85 if evidence >= 3 else 1.35
-        laps = sum(len(s.get("lap_times_s", [])) for s in stints)
-        tyre_sigma = uncertainty_scale * math.sqrt(max(1, laps)) * 0.18
-        pit_sigma = max(0.15, effective_pit_loss_s * (0.015 if state.get("race_control_phase") == "green" else 0.04)) * max(1, int(plan.get("stops_remaining", 0)))
+        stints = plan.get("stint_models", []) or []
+        stint_evidence = []
+        tyre_variance = 0.0
+        for stint in stints:
+            laps = len(stint.get("lap_times_s", []) or [])
+            if not laps:
+                laps = max(0, int(stint.get("laps", 0) or 0))
+            if not laps:
+                continue
+            # Wear and pace may come from the same laps: adding their counts
+            # double-counts evidence. Neither can replace a missing estimate.
+            observed = min(
+                max(0, int(stint.get("wear_sample_size", 0) or 0)),
+                max(0, int(stint.get("deg_sample_size", 0) or 0)),
+            )
+            scale = 0.45 if observed >= 8 else 0.85 if observed >= 3 else 1.35
+            tyre_variance += laps * (scale * 0.18) ** 2
+            stint_evidence.append(observed)
+        evidence = min(stint_evidence, default=0)
+        tyre_sigma = math.sqrt(tyre_variance)
+        stops = max(0, int(plan.get("stops_remaining", 0) or 0))
+        stop_costs = plan.get("pit_stop_costs_s")
+        if not isinstance(stop_costs, (list, tuple)) or len(stop_costs) != stops:
+            stop_costs = [effective_pit_loss_s] * stops
+        pit_fraction = 0.015 if state.get("race_control_phase") == "green" else 0.04
+        # Independent stop-event errors accumulate as variance; there is no
+        # pit-event uncertainty when no pit event is planned.
+        pit_sigma = math.sqrt(sum(
+            max(0.15, max(0.0, float(cost)) * pit_fraction) ** 2
+            for cost in stop_costs
+        ))
         traffic_sigma = 0.35 * max(0, int(plan.get("projected_rejoin_position", state.get("player_position", 1))) - int(state.get("player_position", 1)))
-        outcomes = expected + rng.normal(0.0, tyre_sigma, samples) + rng.normal(0.0, pit_sigma, samples) + np.abs(rng.normal(0.0, traffic_sigma, samples))
+        # One row per simulated outcome preserves matching draws even when
+        # a caller changes the simulation sample budget.
+        draws = rng.normal(size=(samples, 3))
+        outcomes = (expected + draws[:, 0] * tyre_sigma
+                    + draws[:, 1] * pit_sigma
+                    + np.abs(draws[:, 2]) * traffic_sigma)
         if not plan.get("feasible", True):
-            outcomes += rng.uniform(12.0, 35.0, samples)
+            outcomes += np.random.default_rng(seed ^ 0xA57E).uniform(12.0, 35.0, samples)
         return {
             "samples": samples,
+            "simulation_samples": samples,
+            "uncertainty_basis": "heuristic_per_stint_model",
+            "calibrated": False,
+            "sampling_basis": "shared_race_draws",
+            "stint_evidence_samples": stint_evidence,
+            "tyre_uncertainty_s": round(tyre_sigma, 4),
+            "pit_uncertainty_s": round(pit_sigma, 4),
             "p25_s": round(float(np.quantile(outcomes, 0.25)), 2),
             "p50_s": round(float(np.quantile(outcomes, 0.50)), 2),
             "p75_s": round(float(np.quantile(outcomes, 0.75)), 2),
@@ -2028,8 +2070,15 @@ class StrategyEngine:
         new_rec.setdefault("committed_at_lap", current_lap)
         new_rec["source_compound"] = current_compound
         new_rec["neutralisation_phase"] = phase
+        epoch = [int(state.get(key, 0) or 0)
+                 for key in ("session_uid", "restart_epoch", "timeline_epoch")]
+        new_rec["session_epoch"] = epoch
         candidate["recommended"] = new_rec
         candidate["stability"] = {"held": False, "reason": "initial or material recommendation"}
+        if old_rec.get("session_epoch") is not None and old_rec["session_epoch"] != epoch:
+            self._pending_switch = None
+            candidate["stability"] = {"held": False, "reason": "race timeline changed"}
+            return candidate
         new_override = new_rec.get("driver_override", {})
         old_override = old_rec.get("driver_override", {}) if old_rec else {}
         if new_override.get("active") and new_override != old_override:
@@ -2093,7 +2142,7 @@ class StrategyEngine:
             # Carlo pass, and at Sakhir the call swung between a one-stop on
             # hards and a two-stop on softs several times a lap on gains that
             # were real for a second at a time.
-            if self._switch_confirmed(self._radio_signature(new_rec)):
+            if self._switch_confirmed(self._radio_signature(new_rec), state):
                 candidate["stability"] = {
                     "held": False,
                     "reason": "new plan materially faster",
@@ -2121,6 +2170,7 @@ class StrategyEngine:
         held["committed_at_lap"] = committed_at
         held["source_compound"] = current_compound
         held["neutralisation_phase"] = phase
+        held["session_epoch"] = epoch
         self._refresh_held_plan_details(state, candidate, held, pool)
         candidate["raw_recommended"] = new_rec
         candidate["recommended"] = held
@@ -2249,18 +2299,33 @@ class StrategyEngine:
         confidence = "high" if evidence_samples >= 8 else "medium" if evidence_samples >= 3 else "low"
         return evidence_samples, confidence
 
-    def _switch_confirmed(self, signature: tuple[Any, ...]) -> bool:
+    def _switch_confirmed(
+        self, signature: tuple[Any, ...], state: dict[str, Any] | None = None
+    ) -> bool:
         """Whether a faster plan has been the faster plan for long enough.
 
         The first time a new signature wins it is only noted; it has to keep
         winning for ``strategy_switch_confirm_s`` before the spoken call
-        follows it. A different winner in between starts the clock again.
+        follows it. Use the packet's race clock so a pause cannot confirm a
+        switch and replay speed cannot change the decision. Sources without
+        packet time retain a monotonic fallback. A different winner, clock
+        source, session epoch or time rollback starts the clock again.
         """
         confirm_s = float(settings.strategy_switch_confirm_s)
-        now = time.monotonic()
+        state = state or {}
+        packet_time = finite(state.get("session_time_s"))
+        use_race_time = packet_time is not None and packet_time >= 0
+        now = float(packet_time) if use_race_time else time.monotonic()
+        context = (
+            "session_time" if use_race_time else "monotonic_fallback",
+            *(int(state.get(key, 0) or 0)
+              for key in ("session_uid", "restart_epoch", "timeline_epoch")),
+        )
         pending = self._pending_switch
-        if pending is None or pending[0] != signature:
+        if (pending is None or pending[0] != signature
+                or context != self._pending_switch_context or now < pending[1]):
             self._pending_switch = (signature, now)
+            self._pending_switch_context = context
             return confirm_s <= 0.0
         return now - pending[1] >= confirm_s
 
