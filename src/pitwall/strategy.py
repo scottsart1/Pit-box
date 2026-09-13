@@ -2563,6 +2563,8 @@ class StrategyEngine:
             current_compound = planned_start
             current_age = 0
             current_wear = [0.0, 0.0, 0.0, 0.0]
+            state = {**state, "tyre": {**state.get("tyre", {}),
+                     "compound": current_compound, "age_laps": 0, "wear": current_wear}}
         game = state.get("strategy", {})
         game_ideal = int(game.get("game_ideal_lap", game.get("ideal_lap", 0)) or 0)
         game_latest = int(game.get("game_latest_lap", game.get("latest_lap", 0)) or 0)
@@ -2601,6 +2603,16 @@ class StrategyEngine:
         effective_pit_loss = float(neutralisation["effective_pit_loss_s"])
         available_sets = self._available_sets(state)
         inventory = TyreInventory(state, available_sets)
+        if planned_start:
+            if not inventory.reserve_start(planned_start):
+                self._candidate_pool = []
+                return {"available": False,
+                        "reason": f"The requested {planned_start} starting set is unavailable. Choose an available starting tyre.",
+                        "tyre_inventory": {"status": inventory.status},
+                        "compound_rule": base_rule, "neutralisation": neutralisation,
+                        "recommended": {}, "plans": []}
+            available_sets = {name: min(items, key=lambda item: float(item.get("wear_pct", 0)))
+                              for name, items in inventory.groups.items()}
         compounds = list(available_sets)
         weather_crossover = self._weather_crossover(
             state,
@@ -2723,14 +2735,34 @@ class StrategyEngine:
                 result["without_driver_feedback"] = baseline_simulation_cache[key]
             return result
 
+        allocated_stint_cache: dict[tuple[Any, ...], dict[str, Any]] = {}
+
         def simulate_allocated(compound: str, laps: int, start: int, item: dict[str, Any]) -> dict[str, Any]:
+            key = (compound, laps, start if wetness_trajectory else 0, item.get("index"))
+            if key in allocated_stint_cache:
+                return allocated_stint_cache[key]
             # EA does not report a spare set's age. Its measured wear, pace
             # delta and remaining life are available; do not invent age by
             # subtracting remaining life from the compound recommendation.
             model = simulate(state, compound, laps, 0, 0.0, base_lap_s,
                              historical, style_factor, item, start)
             model["set_age_source"] = "not_reported_for_spare"
+            allocated_stint_cache[key] = model
             return model
+
+        runnable_cache: dict[tuple[int, int], list[str]] = {}
+
+        def runnable_compounds(laps: int, start: int) -> list[str]:
+            key = (laps, start if wetness_trajectory else 0)
+            if key not in runnable_cache:
+                runnable_cache[key] = []
+                for compound in compounds:
+                    for item in inventory.groups[compound]:
+                        model = simulate_allocated(compound, laps, start, item)
+                        if model.get("without_driver_feedback", model)["feasible"]:
+                            runnable_cache[key].append(compound)
+                            break
+            return runnable_cache[key]
 
         def make_plan(
             *,
@@ -2747,6 +2779,12 @@ class StrategyEngine:
                 inventory_rejected += 1
                 return None
             stints = allocated
+            # One-stop alternatives remain available to explain an impossible
+            # finish. A multistop containing an already-infeasible stint cannot
+            # repair it; prune it before field/uncertainty work, without losing
+            # any physically feasible schedule.
+            if stops >= 2 and any(not stint.get("without_driver_feedback", stint)["feasible"] for stint in stints):
+                return None
             pit_costs = self._pit_stop_costs(state, box_laps, neutralisation)
             total_pit_cost = sum(pit_costs)
             traffic_cost, projected_rejoin = self._traffic_cost(
@@ -2937,6 +2975,10 @@ class StrategyEngine:
                 if not earliest_box_lap <= first_box_lap < total_laps - 1:
                     continue
                 first_laps = laps_before_stop(first_box_lap)
+                first = simulate(state, current_compound, first_laps, current_age,
+                                 current_wear, base_lap_s, historical, style_factor)
+                if not first.get("without_driver_feedback", first)["feasible"]:
+                    continue
                 second_candidates = sorted({
                     *range(first_box_lap + 1, total_laps, 1 if remaining <= 18 else 3),
                     *(max(1, current_lap) - 1 + first_laps + life for life in spare_lives),
@@ -2954,8 +2996,8 @@ class StrategyEngine:
                     final_laps = remaining - first_laps - middle_laps
                     if final_laps <= 0:
                         continue
-                    for middle in compounds:
-                        for final in compounds:
+                    for middle in runnable_compounds(middle_laps, first_laps):
+                        for final in runnable_compounds(final_laps, first_laps + middle_laps):
                             if not inventory.supports([middle, final]):
                                 continue
                             first = simulate(
@@ -3044,9 +3086,9 @@ class StrategyEngine:
                         final_laps = remaining - first_laps - middle1_laps - middle2_laps
                         if first_laps < 0 or min(middle1_laps, middle2_laps, final_laps) <= 0:
                             continue
-                        for compound1 in compounds:
-                            for compound2 in compounds:
-                                for compound3 in compounds:
+                        for compound1 in runnable_compounds(middle1_laps, first_laps):
+                            for compound2 in runnable_compounds(middle2_laps, first_laps + middle1_laps):
+                                for compound3 in runnable_compounds(final_laps, first_laps + middle1_laps + middle2_laps):
                                     if not inventory.supports([compound1, compound2, compound3]):
                                         continue
                                     stints = [

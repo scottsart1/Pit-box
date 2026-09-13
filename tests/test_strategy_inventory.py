@@ -165,3 +165,33 @@ async def test_red_flag_zero_lap_old_stint_can_remove_an_exhausted_set(stack):
     rec = result["recommended"]
     assert rec["feasible"] and rec["tyre_set_indices"] == [1], rec
     assert rec["stint_models"][0]["laps"] == 0
+
+
+@pytest.mark.asyncio
+async def test_grid_start_choice_reserves_the_correct_physical_set(stack):
+    engine, state, history = await race(stack, sets=[
+        set_info(0, "MEDIUM", 30, fitted=True), set_info(1, "SOFT", 10)])
+    state.update(current_lap=0, total_laps=18, completed_laps=[], fitted_tyre_set_idx=0,
+                 strategy_override={"enabled": True, "start_compound_explicit": True,
+                                    "start_compound": "SOFT"})
+    state["tyre"].update(age_laps=0, wear=[0] * 4)
+    result = engine.compute(state, history)
+    rec = result["recommended"]
+    assert rec["stint_models"][0]["tyre_set_index"] == 1, rec
+    assert rec["compounds"][0] == "SOFT"
+    assert rec["legal"] and rec["feasible"], rec
+    assert rec["tyre_set_indices"] == [0], rec
+    assert state["tyre"]["compound"] == "MEDIUM", "A planning scenario must not mutate telemetry."
+
+
+@pytest.mark.asyncio
+async def test_unavailable_grid_start_is_reported_without_inventing_a_set(stack):
+    engine, state, history = await race(stack, sets=[set_info(0, "MEDIUM", 30, fitted=True)])
+    state.update(current_lap=0, total_laps=18, fitted_tyre_set_idx=0,
+                 strategy_override={"enabled": True, "start_compound_explicit": True,
+                                    "start_compound": "SOFT"})
+    state["tyre"].update(age_laps=0, wear=[0] * 4)
+    result = engine.compute(state, history)
+    assert result["available"] is False
+    assert "SOFT starting set is unavailable" in result["reason"]
+    assert not result["plans"]

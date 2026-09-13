@@ -51,6 +51,34 @@ class TyreInventory:
             for name, count in Counter(compounds).items()
         )
 
+    def reserve_start(self, compound: str) -> bool:
+        """Reserve a proposed grid set without changing the live packet.
+
+        A never-raced fitted set can become a spare during grid planning. That
+        is different from unsupported future reuse of a consumed racing set.
+        """
+        if not self.known:
+            self.fitted = None
+            return True
+        if self.fitted and self.fitted["compound"] == compound:
+            return True
+        choices = self.groups.get(compound, [])
+        if not choices:
+            return False
+        selected = min(choices, key=lambda item: (
+            float(item.get("wear_pct", 0)),
+            int(item.get("lap_delta_ms", 0)),
+            int(item.get("index", 0)),
+        ))
+        choices.remove(selected)
+        if not choices:
+            self.groups.pop(compound, None)
+        if self.fitted and self.fitted.get("available"):
+            previous = dict(self.fitted, fitted=False)
+            self.groups[previous["compound"]].append(previous)
+        self.fitted = dict(selected, fitted=True)
+        return True
+
     def allocate(
         self,
         stints: list[dict[str, Any]],
