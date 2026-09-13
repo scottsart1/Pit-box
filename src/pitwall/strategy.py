@@ -1442,6 +1442,85 @@ class StrategyEngine:
         ][-5:]
         return (float(median(values)), len(values)) if values else (None, 0)
 
+    @staticmethod
+    def _rival_pace_reference(driver: dict[str, Any], degradation: float) -> dict[str, Any]:
+        """Anchor observations to the rival's own current tyre stint.
+
+        A median of older laps is not pace at the tyre's present age. Where
+        lap numbering and current tyre age identify the stint, remove the
+        explicit rival degradation prior at each observation's end age. This
+        estimates no fuel-corrected rival slope from bare session-history laps.
+        """
+        current_lap = finite(driver.get("current_lap"))
+        current_age = finite(driver.get("tyre_age"))
+        reference: dict[str, Any] = {
+            "source": "unmatched_recent_laps_fallback",
+            "observed_lap_s": None,
+            "normalized_lap_s": None,
+            "reference_age_laps": None,
+            "age_end_reference": False,
+            "sample_size": 0,
+            "lap_numbers": [],
+            "assumptions": [
+                "Rival degradation is a separate circuit/compound prior, not the player's learned slope.",
+                "Rival fuel, traffic and weather changes are not normalized by this reference.",
+            ],
+        }
+        if current_lap is None or current_lap < 1 or current_age is None or current_age < 0:
+            pace, samples = StrategyEngine._recent_driver_pace_s(driver)
+            reference.update(observed_lap_s=pace, sample_size=samples)
+            reference["assumptions"].append("Lap-age matching is unavailable; legacy recent-pace timing is retained.")
+            return reference
+
+        reference["source"] = "no_matching_current_stint"
+        start_lap = current_lap - current_age
+        compound = str(driver.get("tyre_compound") or "").upper()
+        if start_lap < 1 or current_age < 2 or not compound or compound == "UNKNOWN":
+            return reference
+        stints = driver.get("tyre_stints") or []
+        if stints:
+            current = stints[-1]
+            start = finite(current.get("start_lap"))
+            end = finite(current.get("end_lap"))
+            if (
+                str(current.get("compound") or "").upper() != compound
+                or start != start_lap
+                or end is None or (end < current_lap and end != 255)
+            ):
+                # Status and history packets can straddle a stop. Never price
+                # the new set with laps that still describe the removed one.
+                return reference
+
+        by_lap: dict[int, tuple[float, float]] = {}
+        for lap in driver.get("lap_history") or []:
+            number = finite(lap.get("lap_num"))
+            milliseconds = finite(lap.get("lap_ms"))
+            flags = finite(lap.get("valid_flags", 1))
+            if (
+                number is None or not number.is_integer()
+                or not start_lap < number < current_lap
+                or milliseconds is None or milliseconds <= 0
+                or flags is None or not int(flags) & 1
+                or (lap.get("compound") and str(lap["compound"]).upper() != compound)
+            ):
+                continue
+            age = current_age - (current_lap - 1 - number)
+            by_lap[int(number)] = (milliseconds / 1000.0, age)
+        numbers = sorted(by_lap)[-5:]
+        if not numbers:
+            return reference
+        observations = [by_lap[number] for number in numbers]
+        reference.update(
+            source="matched_current_stint_age",
+            observed_lap_s=float(median(pace for pace, _ in observations)),
+            normalized_lap_s=float(median(pace - degradation * age for pace, age in observations)),
+            reference_age_laps=float(median(age for _, age in observations)),
+            age_end_reference=True,
+            sample_size=len(observations),
+            lap_numbers=numbers,
+        )
+        return reference
+
     def _project_rival_finish_times(
         self,
         state: dict[str, Any],
@@ -1476,8 +1555,13 @@ class StrategyEngine:
                 "retired", "did not finish", "disqualified", "not classified"
             }:
                 continue
-            pace, pace_samples = self._recent_driver_pace_s(driver)
             compound = str(driver.get("tyre_compound", "MEDIUM")).upper()
+            deg, deg_source, deg_samples = self._deg_for(
+                clean_state, compound, {}
+            )
+            pace_reference = self._rival_pace_reference(driver, deg)
+            pace = pace_reference["observed_lap_s"]
+            pace_samples = int(pace_reference["sample_size"])
             if pace is None:
                 # No lap times for this car yet, so fall back to what their
                 # tyre is worth in the conditions everyone is sharing. On a wet
@@ -1486,9 +1570,6 @@ class StrategyEngine:
                 pace = base_lap_s + compound_pace_delta_s(
                     compound, "MEDIUM", base_lap_s, wetness
                 )
-            deg, deg_source, deg_samples = self._deg_for(
-                clean_state, compound, {}
-            )
             age = max(0, int(driver.get("tyre_age", 0) or 0))
             typical = max(6, int(TYPICAL_STINT_LAPS.get(compound, 18)))
             running_time = 0.0
@@ -1500,10 +1581,16 @@ class StrategyEngine:
                 if offset > 0 and future_age >= typical:
                     stop_offsets.append(offset)
                     future_age = 0
-                # Recent pace already includes the current tyre's age.
-                # A fresh replacement removes that contribution; clamping
-                # the difference to zero erased its fresh-tyre benefit.
-                running_time += max(1.0, pace + deg * (future_age - age))
+                if pace_reference["age_end_reference"]:
+                    # History records completed laps. The in-progress lap ends
+                    # one age beyond current telemetry; after a stop the next
+                    # completed fresh-set lap ends at age one.
+                    lap_time = float(pace_reference["normalized_lap_s"]) + deg * (future_age + 1)
+                else:
+                    # Legacy data without an identifiable observation age
+                    # retains its prior numeric behavior, explicitly labelled.
+                    lap_time = pace + deg * (future_age - age)
+                running_time += max(1.0, lap_time)
                 future_age += 1
             stops = len(stop_offsets)
             box_laps = [int(state.get("current_lap", 0)) + offset - 1 for offset in stop_offsets]
@@ -1524,6 +1611,7 @@ class StrategyEngine:
                     "current_gap_s": round(float(gap), 3),
                     "pace_s": round(float(pace), 3),
                     "pace_samples": pace_samples,
+                    "pace_reference": pace_reference,
                     "compound": compound,
                     "tyre_age": age,
                     "likely_remaining_stops": stops,
