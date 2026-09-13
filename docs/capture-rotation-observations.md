@@ -31,11 +31,25 @@ overflow cannot silently relabel another session's packets. Rotation-overflow
 and packet-drop counters report those separate events. This is bounded
 buffering, not an unbounded-lossless or overload-retention guarantee.
 
-Six deterministic regressions in `tests/test_capture_rotation_handoff.py`
+Nine deterministic regressions in `tests/test_capture_rotation_handoff.py`
 verify the 202-packet catalog pause, a paused writer-open followed by shutdown,
 rapid UID/epoch-labelled boundaries, packet-capacity overflow, rotation-capacity
-overflow and direct service finalization after a queued boundary. All six pass;
-the combined capture lifecycle/service/format/replay suites pass **36 tests**.
+overflow and direct service finalization after a queued boundary. Three
+follow-up checks cover a zero-timeout stop during writer rotation with another
+boundary blocked on a full queue, normal stop with three pending boundaries,
+and a synthetic writer-open failure. The timeout and open-failure regressions
+failed before the follow-up: completion futures remained unresolved and open
+failure left `write_errors` at zero. Admission tasks are now tracked and
+settled before shutdown removes queue entries, every outstanding boundary
+receives a completion or failure, and rotation I/O failures increment the
+error counter. The combined capture lifecycle/service/format/replay suites
+pass **39 tests**.
+
+The drain timeout bounds waiting for queued work. Finalization still requires
+an in-flight OS file operation to return; Python cannot cancel disk I/O already
+running in a thread. Cancelled rotation closes await their disk completion,
+and a writer created during cancellation is closed instead of leaking its
+temporary-file handle. This does not promise a hard filesystem deadline.
 
 Ownership is exact relative to `observe_session()`. The existing receiver
 captures raw datagrams before asynchronous normalized-session observation;

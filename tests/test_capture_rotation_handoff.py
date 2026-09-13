@@ -180,3 +180,65 @@ async def test_service_stop_waits_for_boundary_and_closes_final_writer(tmp_path)
     assert [[frame.data for frame in CaptureReader(path)] for path in paths] == [[b"a"], [b"b"]]
     assert all(scan_capture(path).valid and scan_capture(path).clean_close for path in paths)
     assert not list(tmp_path.rglob("*.tmp"))
+
+
+@pytest.mark.asyncio
+async def test_timed_out_stop_settles_pending_boundaries_and_queue(tmp_path, monkeypatch):
+    service = CaptureService(tmp_path, queue_size=1)
+    await service.start(metadata={"session_id": "startup"})
+    entered, release = asyncio.Event(), asyncio.Event()
+    original = service._open_writer
+    async def blocked_open(**kwargs):
+        entered.set()
+        await release.wait()
+        await original(**kwargs)
+    monkeypatch.setattr(service, "_open_writer", blocked_open)
+    opening = service.request_rotation(metadata={"session_id": "a"})
+    await asyncio.wait_for(entered.wait(), 5)
+    assert offer(service, "a-buffered")
+    pending = service.request_rotation(metadata={"session_id": "b"})
+    await asyncio.wait_for(service.stop(drain_timeout_s=0), 5)
+    release.set()
+    assert opening.done() and pending.done()
+    assert all(isinstance(value, Exception) for value in await asyncio.gather(
+        opening, pending, return_exceptions=True))
+    assert service.queue.empty()
+    await asyncio.wait_for(service.queue.join(), 1)
+    assert service.snapshot().queue_drops == 1
+    assert not service.running
+    assert service._pending_boundaries == 0
+    assert not service._boundary_tasks
+
+
+@pytest.mark.asyncio
+async def test_rotation_open_failure_is_visible_in_write_errors(tmp_path, monkeypatch):
+    service = CaptureService(tmp_path, queue_size=4)
+    await service.start(metadata={"session_id": "startup"})
+    async def failed_open(**kwargs):
+        raise OSError("synthetic disk open failure")
+    monkeypatch.setattr(service, "_open_writer", failed_open)
+    completed = service.request_rotation(metadata={"session_id": "a"})
+    with pytest.raises(OSError, match="synthetic disk"):
+        await completed
+    snapshot = service.snapshot()
+    await service.stop()
+    assert snapshot.state == "error"
+    assert snapshot.write_errors == 1
+    assert "synthetic disk" in snapshot.last_error
+
+
+@pytest.mark.asyncio
+async def test_normal_stop_drains_pending_boundary_puts_in_order(tmp_path):
+    service = CaptureService(tmp_path, queue_size=1)
+    await service.start(metadata={"session_id": "startup"})
+    completions = [service.request_rotation(metadata={"session_id": name})
+                   for name in ("a", "b", "c")]
+    final = await service.stop()
+    paths = [*(await asyncio.gather(*completions)), final]
+    assert [CaptureReader(path).metadata["session_id"] for path in paths] == [
+        "startup", "a", "b", "c"]
+    assert all(scan_capture(path).valid and scan_capture(path).clean_close for path in paths)
+    await asyncio.wait_for(service.queue.join(), 1)
+    assert not service._boundary_tasks
+    assert service._pending_boundaries == 0
+    assert service.snapshot().queue_drops == service.snapshot().write_errors == 0

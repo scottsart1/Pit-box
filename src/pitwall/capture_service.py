@@ -87,6 +87,9 @@ class CaptureService:
         self._pending_boundaries = 0
         self._admission_paused = False
         self._stopping = False
+        self._boundary_tasks: set[asyncio.Task[None]] = set()
+        self._boundary_futures: set[asyncio.Future[Path]] = set()
+        self._held_boundary: _CaptureBoundary | None = None
 
     @property
     def running(self) -> bool:
@@ -199,10 +202,17 @@ class CaptureService:
             "privacy_mode": "private",
             **(metadata or {}),
         }
+        opening = asyncio.create_task(asyncio.to_thread(
+            CaptureWriter, destination, metadata=capture_metadata
+        ))
         try:
-            writer = await asyncio.to_thread(
-                CaptureWriter, destination, metadata=capture_metadata
-            )
+            writer = await asyncio.shield(opening)
+        except asyncio.CancelledError:
+            # Python cannot cancel an OS file operation already in a thread.
+            # Reclaim the writer it creates instead of leaking its temp handle.
+            writer = await opening
+            await asyncio.to_thread(writer.close)
+            raise
         except Exception as exc:
             self._state = "error"
             self._last_error = f"{type(exc).__name__}: {exc}"
@@ -227,6 +237,8 @@ class CaptureService:
         if not self.running or self._stopping:
             raise RuntimeError("capture service is not running")
         completed: asyncio.Future[Path] = asyncio.get_running_loop().create_future()
+        self._boundary_futures.add(completed)
+        completed.add_done_callback(self._boundary_futures.discard)
         boundary = _CaptureBoundary(dict(metadata), completed)
         self._admission_paused = False
         try:
@@ -237,12 +249,16 @@ class CaptureService:
             self._pending_boundaries += 1
 
             async def enqueue() -> None:
-                try:
-                    await self.queue.put(boundary)
-                finally:
-                    self._pending_boundaries -= 1
+                await self.queue.put(boundary)
 
-            asyncio.create_task(enqueue(), name="pitwall-capture-boundary-admission")
+            task = asyncio.create_task(enqueue(), name="pitwall-capture-boundary-admission")
+            self._boundary_tasks.add(task)
+
+            def admitted(done: asyncio.Task[None]) -> None:
+                self._boundary_tasks.discard(done)
+                self._pending_boundaries -= 1
+
+            task.add_done_callback(admitted)
         return completed
 
     async def _rotate_writer(self, boundary: _CaptureBoundary) -> None:
@@ -252,9 +268,21 @@ class CaptureService:
         try:
             if writer is None:
                 raise RuntimeError("capture writer is not open")
-            path = await asyncio.to_thread(writer.close)
+            closing = asyncio.create_task(asyncio.to_thread(writer.close))
+            try:
+                path = await asyncio.shield(closing)
+            except asyncio.CancelledError:
+                # Finalization must finish before shutdown can relinquish the
+                # writer; cancelling to_thread alone does not stop disk I/O.
+                await closing
+                raise
             await self._open_writer(metadata=boundary.metadata)
+        except asyncio.CancelledError:
+            if not boundary.completed.done():
+                boundary.completed.set_exception(TimeoutError("capture rotation interrupted by shutdown"))
+            raise
         except Exception as exc:  # noqa: BLE001 - optional capture reports failure
+            self._write_errors += 1
             self._state = "error"
             self._last_error = f"{type(exc).__name__}: {exc}"
             if not boundary.completed.done():
@@ -317,10 +345,12 @@ class CaptureService:
             first = pending if pending is not None else await self.queue.get()
             pending = None
             if isinstance(first, _CaptureBoundary):
+                self._held_boundary = first
                 try:
                     await self._rotate_writer(first)
                 finally:
                     self.queue.task_done()
+                    self._held_boundary = None
                 continue
             batch = [first]
             while len(batch) < 256:
@@ -330,6 +360,7 @@ class CaptureService:
                     break
                 if isinstance(item, _CaptureBoundary):
                     pending = item
+                    self._held_boundary = item
                     break
                 batch.append(item)
             writer = self._writer
@@ -378,11 +409,40 @@ class CaptureService:
             return None
         self._stopping = True
         self._state = "finalizing"
+
+        async def drain() -> None:
+            # A boundary blocked on queue.put is not yet represented by
+            # queue.join's unfinished count. Admit all of them before waiting.
+            if self._boundary_tasks:
+                await asyncio.gather(*tuple(self._boundary_tasks))
+            await self.queue.join()
+
+        timed_out = False
         try:
             await asyncio.wait_for(
-                self.queue.join(), timeout=max(0.0, float(drain_timeout_s))
+                drain(), timeout=max(0.0, float(drain_timeout_s))
             )
         except TimeoutError:
+            timed_out = True
+            self._last_error = "capture_drain_timeout"
+        # Stop every potential producer before draining/cancelling the writer.
+        # No pending put may repopulate a queue whose worker has been stopped.
+        admission_tasks = tuple(self._boundary_tasks)
+        for admission in admission_tasks:
+            admission.cancel()
+        if admission_tasks:
+            await asyncio.gather(*admission_tasks, return_exceptions=True)
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+        if self._held_boundary is not None:
+            # Batching can hold the next boundary while an earlier disk write
+            # is in flight. Cancelling that batch must settle its queue token.
+            self.queue.task_done()
+            self._held_boundary = None
+        if timed_out:
             while True:
                 try:
                     item = self.queue.get_nowait()
@@ -394,11 +454,12 @@ class CaptureService:
                         item.completed.set_exception(TimeoutError("capture shutdown before boundary"))
                 else:
                     self._queue_drops += 1
-        task.cancel()
-        try:
-            await task
-        except asyncio.CancelledError:
-            pass
+            pending_futures = tuple(self._boundary_futures)
+            for completed in pending_futures:
+                if not completed.done():
+                    completed.set_exception(TimeoutError("capture shutdown before boundary completed"))
+            if pending_futures:
+                await asyncio.gather(*pending_futures, return_exceptions=True)
         self._worker_task = None
         writer = self._writer
         self._writer = None
