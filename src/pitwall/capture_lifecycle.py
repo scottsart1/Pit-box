@@ -49,7 +49,7 @@ class SessionCaptureCoordinator:
         self.service = service
         self.catalog = catalog
         self.capture_root = Path(capture_root).resolve()
-        self._queue: asyncio.Queue[str] = asyncio.Queue(
+        self._queue: asyncio.Queue[tuple[str, asyncio.Future[Path]]] = asyncio.Queue(
             maxsize=max(1, int(queue_size))
         )
         self._worker: asyncio.Task[None] | None = None
@@ -60,6 +60,7 @@ class SessionCaptureCoordinator:
         self._rotation_drops = 0
         self._rotations_completed = 0
         self._last_error: str | None = None
+        self._deferred_session_id: str | None = None
 
     @property
     def running(self) -> bool:
@@ -85,32 +86,38 @@ class SessionCaptureCoordinator:
         if not self.running or not key or key == self._last_requested_session_id:
             return
         self._last_requested_session_id = key
-        try:
-            self._queue.put_nowait(key)
-        except asyncio.QueueFull:
-            # Keep the newest identity: it is safer for all following packets.
-            try:
-                self._queue.get_nowait()
-                self._queue.task_done()
-            except asyncio.QueueEmpty:
-                pass
+        if self._queue.full():
+            # Retain already admitted boundaries in their original order.
+            # Until the newest identity can be inserted, reject and count
+            # packets rather than putting them in a different session's file.
+            self._deferred_session_id = key
             self._rotation_drops += 1
-            try:
-                self._queue.put_nowait(key)
-            except asyncio.QueueFull:
-                self._rotation_drops += 1
+            self.service.pause_admission()
+            return
+        self._deferred_session_id = None
+        self._schedule(key)
+
+    def _schedule(self, key: str) -> None:
+        completed = self.service.request_rotation(
+            metadata={**self._base_metadata, "session_id": key}
+        )
+        self._queue.put_nowait((key, completed))
 
     async def _rotation_worker(self) -> None:
         while True:
-            key = await self._queue.get()
+            key, completed = await self._queue.get()
             try:
-                await self._rotate(key)
+                await self._rotate(key, completed)
             except asyncio.CancelledError:
                 raise
             except Exception as exc:  # noqa: BLE001 - capture remains optional
                 self._last_error = f"{type(exc).__name__}: {exc}"
                 log.warning("Raw capture rotation failed: %s", exc)
             finally:
+                if self._deferred_session_id is not None and not self._queue.full():
+                    deferred = self._deferred_session_id
+                    self._deferred_session_id = None
+                    self._schedule(deferred)
                 self._queue.task_done()
 
     async def _register(self, path: Path, session_id: str | None) -> None:
@@ -118,19 +125,13 @@ class SessionCaptureCoordinator:
         relative = path.resolve().relative_to(self.capture_root).as_posix()
         await self.catalog.register_raw_capture(session_id, relative, report)
 
-    async def _rotate(self, session_id: str) -> None:
+    async def _rotate(self, session_id: str, completed: asyncio.Future[Path]) -> None:
         async with self._lock:
-            if session_id == self._active_session_id:
-                return
             previous = self._active_session_id
-            path = await self.service.stop()
-            if path is not None:
-                await self._register(path, previous)
-            await self.service.start(
-                metadata={**self._base_metadata, "session_id": session_id}
-            )
+            path = await completed
             self._active_session_id = session_id
             self._rotations_completed += 1
+            await self._register(path, previous)
             self._last_error = None
 
     async def wait_idle(self) -> None:

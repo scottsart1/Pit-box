@@ -45,6 +45,12 @@ class CaptureRecoverySummary:
     unresolved: tuple[tuple[str, str], ...]
 
 
+@dataclass(slots=True)
+class _CaptureBoundary:
+    metadata: dict[str, Any]
+    completed: asyncio.Future[Path]
+
+
 class CaptureService:
     """Bounded asynchronous bridge from the UDP hot path to PWCAP storage."""
 
@@ -58,7 +64,7 @@ class CaptureService:
     ) -> None:
         self.root = root.resolve()
         self.root.mkdir(parents=True, exist_ok=True)
-        self.queue: asyncio.Queue[CapturedDatagram] = asyncio.Queue(
+        self.queue: asyncio.Queue[CapturedDatagram | _CaptureBoundary] = asyncio.Queue(
             maxsize=max(1, int(queue_size))
         )
         self.max_file_bytes = (
@@ -78,6 +84,9 @@ class CaptureService:
         self._last_write_at: float | None = None
         self._last_error: str | None = None
         self._current_datagram_bytes = 0
+        self._pending_boundaries = 0
+        self._admission_paused = False
+        self._stopping = False
 
     @property
     def running(self) -> bool:
@@ -165,6 +174,19 @@ class CaptureService:
         if self.running:
             assert self._relative_path is not None
             return self._relative_path
+        await self._open_writer(relative_path=relative_path, metadata=metadata)
+        self._admission_paused = False
+        self._stopping = False
+        self._worker_task = asyncio.create_task(
+            self._worker(), name="pitwall-raw-capture-writer"
+        )
+        assert self._relative_path is not None
+        return self._relative_path
+
+    async def _open_writer(
+        self, *, relative_path: str | Path | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> None:
         if relative_path is None:
             year = datetime.now(UTC).strftime("%Y")
             stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S.%fZ")
@@ -190,10 +212,56 @@ class CaptureService:
         self._state = "recording"
         self._last_error = None
         self._current_datagram_bytes = 0
-        self._worker_task = asyncio.create_task(
-            self._worker(), name="pitwall-raw-capture-writer"
-        )
-        return self._relative_path
+
+    def pause_admission(self) -> None:
+        """Fail closed when a session boundary cannot yet be scheduled."""
+        self._admission_paused = True
+
+    def request_rotation(self, *, metadata: dict[str, Any]) -> asyncio.Future[Path]:
+        """Insert a session boundary before any subsequent admitted datagram.
+
+        The coordinator bounds outstanding requests. If this FIFO is full,
+        admit no newer packets until all pending boundaries enter it; rejected
+        packets are counted instead of being assigned to the preceding session.
+        """
+        if not self.running or self._stopping:
+            raise RuntimeError("capture service is not running")
+        completed: asyncio.Future[Path] = asyncio.get_running_loop().create_future()
+        boundary = _CaptureBoundary(dict(metadata), completed)
+        self._admission_paused = False
+        try:
+            if self._pending_boundaries:
+                raise asyncio.QueueFull
+            self.queue.put_nowait(boundary)
+        except asyncio.QueueFull:
+            self._pending_boundaries += 1
+
+            async def enqueue() -> None:
+                try:
+                    await self.queue.put(boundary)
+                finally:
+                    self._pending_boundaries -= 1
+
+            asyncio.create_task(enqueue(), name="pitwall-capture-boundary-admission")
+        return completed
+
+    async def _rotate_writer(self, boundary: _CaptureBoundary) -> None:
+        self._state = "rotating"
+        writer = self._writer
+        self._writer = None
+        try:
+            if writer is None:
+                raise RuntimeError("capture writer is not open")
+            path = await asyncio.to_thread(writer.close)
+            await self._open_writer(metadata=boundary.metadata)
+        except Exception as exc:  # noqa: BLE001 - optional capture reports failure
+            self._state = "error"
+            self._last_error = f"{type(exc).__name__}: {exc}"
+            if not boundary.completed.done():
+                boundary.completed.set_exception(exc)
+        else:
+            if not boundary.completed.done():
+                boundary.completed.set_result(path)
 
     def submit(
         self,
@@ -204,7 +272,11 @@ class CaptureService:
         wall_ns: int | None = None,
     ) -> bool:
         """Offer an immutable original datagram without awaiting disk I/O."""
-        if not self.running or self._state != "recording":
+        if not self.running:
+            return False
+        if (self._state not in {"recording", "rotating"}
+                or self._pending_boundaries or self._admission_paused or self._stopping):
+            self._queue_drops += 1
             return False
         try:
             item = CapturedDatagram(
@@ -220,13 +292,6 @@ class CaptureService:
             self._write_errors += 1
             self._last_error = f"invalid_datagram: {exc}"
             return False
-        if self.queue.full():
-            try:
-                self.queue.get_nowait()
-                self.queue.task_done()
-                self._queue_drops += 1
-            except asyncio.QueueEmpty:
-                pass
         try:
             self.queue.put_nowait(item)
         except asyncio.QueueFull:
@@ -247,14 +312,26 @@ class CaptureService:
             )
 
     async def _worker(self) -> None:
+        pending: _CaptureBoundary | None = None
         while True:
-            first = await self.queue.get()
+            first = pending if pending is not None else await self.queue.get()
+            pending = None
+            if isinstance(first, _CaptureBoundary):
+                try:
+                    await self._rotate_writer(first)
+                finally:
+                    self.queue.task_done()
+                continue
             batch = [first]
             while len(batch) < 256:
                 try:
-                    batch.append(self.queue.get_nowait())
+                    item = self.queue.get_nowait()
                 except asyncio.QueueEmpty:
                     break
+                if isinstance(item, _CaptureBoundary):
+                    pending = item
+                    break
+                batch.append(item)
             writer = self._writer
             try:
                 if writer is None:
@@ -296,10 +373,10 @@ class CaptureService:
 
     async def stop(self, *, drain_timeout_s: float = 5.0) -> Path | None:
         task = self._worker_task
-        writer = self._writer
-        if task is None or writer is None:
+        if task is None:
             self._state = "off"
             return None
+        self._stopping = True
         self._state = "finalizing"
         try:
             await asyncio.wait_for(
@@ -308,18 +385,26 @@ class CaptureService:
         except TimeoutError:
             while True:
                 try:
-                    self.queue.get_nowait()
+                    item = self.queue.get_nowait()
                 except asyncio.QueueEmpty:
                     break
                 self.queue.task_done()
-                self._queue_drops += 1
+                if isinstance(item, _CaptureBoundary):
+                    if not item.completed.done():
+                        item.completed.set_exception(TimeoutError("capture shutdown before boundary"))
+                else:
+                    self._queue_drops += 1
         task.cancel()
         try:
             await task
         except asyncio.CancelledError:
             pass
         self._worker_task = None
+        writer = self._writer
         self._writer = None
+        if writer is None:
+            self._state = "off"
+            return None
         try:
             path = await asyncio.to_thread(writer.close)
             report = await asyncio.to_thread(scan_capture, path)
