@@ -79,12 +79,12 @@ jobs:
 
       - name: Smoke-test the installed Windows artifact
         id: smoke
-        timeout-minutes: 10
+        timeout-minutes: 15
         shell: pwsh
         run: |
-          python -m distribution.packaging.smoke_installer --installer "${{ steps.installer.outputs.path }}" --version "${{ steps.version.outputs.version }}"
+          python -m distribution.packaging.smoke_installer --installer "${{ steps.installer.outputs.path }}" --version "${{ steps.version.outputs.version }}" --stress-telemetry
           if ($LASTEXITCODE -ne 0) { throw "Installed Windows artifact smoke test failed" }
-          "`n- Installed artifact smoke: install, frozen startup, UDP, persistence, shutdown, uninstall/data retention passed." >> $env:GITHUB_STEP_SUMMARY
+          "`n- Installed artifact smoke: install, frozen startup, 25-lap UDP stress, full SQLite integrity, persistence/restart, shutdown, uninstall/data retention passed." >> $env:GITHUB_STEP_SUMMARY
 
       - name: Preserve installer-smoke diagnostics
         if: ${{ always() && steps.smoke.outputs.diagnostics != '' }}

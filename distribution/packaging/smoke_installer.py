@@ -16,6 +16,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 import os
 import shutil
 import socket
@@ -253,15 +254,158 @@ def save_json(path: Path, payload: dict) -> None:
     path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
-def verify_persistence(data_dir: Path) -> tuple[str, list[Path]]:
+def assert_stress_strategy(state: dict) -> bool:
+    """Check internal claims, allowing honestly conditional/unfeasible plans."""
+    strategy = state.get("strategy") or {}
+    rec = strategy.get("recommended") or {}
+    if strategy.get("available") is not True or not rec:
+        return False
+    projected = rec.get("projected_time_s")
+    if not isinstance(projected, (int, float)) or not math.isfinite(projected):
+        raise SmokeFailure("Stress strategy has a missing/nonfinite projected time")
+    if rec.get("finish_projection_valid") is True and (
+        rec.get("feasible") is not True or rec.get("legal") is not True
+    ):
+        raise SmokeFailure("Stress strategy claims a valid finish for an infeasible/illegal plan")
+    if (rec.get("inventory_status") == "unknown" and rec.get("stops_remaining", 0) > 0
+            and (rec.get("inventory_feasible") is not None or strategy.get("confidence") != "low")):
+        raise SmokeFailure("Stress strategy presents unknown spare inventory as confirmed")
+    rule = rec.get("compound_rule") or {}
+    if rule.get("conditional_on_future_wet_use") and rule.get("wet_waiver"):
+        raise SmokeFailure("Stress strategy counts planned wet use as already completed")
+    for name in ("position_probabilities", "outcome_distribution"):
+        probabilities = rec.get(name) or {}
+        if probabilities:
+            values = list(probabilities.values())
+            if (any(not isinstance(value, (int, float)) or not math.isfinite(value)
+                    or not 0 <= value <= 1 for value in values)
+                    or not math.isclose(sum(values), 1.0, abs_tol=0.005)):
+                raise SmokeFailure(f"Stress strategy has an incoherent {name}")
+    stints = rec.get("stint_models") or []
+    if stints and sum(int(stint.get("laps", 0)) for stint in stints) != strategy.get("laps_remaining"):
+        raise SmokeFailure("Stress strategy stint lengths do not cover its stated remaining distance")
+    return True
+
+
+def exercise_stress_telemetry(
+    process, web_port: int, udp_port: int, version: str, data_dir: Path,
+    diagnostics: Path, *, timeout: float = 240,
+) -> dict:
+    """Run a complete synthetic race against the already-running owned EXE.
+
+    Only the emitter imports checkout source. It never starts a second server
+    or points at a pre-existing data directory. Every process handle is owned.
+    """
+    checkout = Path(__file__).resolve().parents[2]
+    report = {"result": "running", "laps": 25, "speed": 25, "circuit": "monza",
+              "samples": [], "strategy_samples": 0}
+    emitter = None
+    started = time.monotonic()
+    deadline = started + timeout
+    uid = None
+    latencies = []
+    try:
+        baseline = request_json(web_port, "/api/state")
+        received_before = int(baseline.get("packets_received", 0))
+        env = isolated_environment(data_dir, web_port, udp_port)
+        env.update(PYTHONUNBUFFERED="1", PYTHONIOENCODING="utf-8")
+        command = [sys.executable, "-m", "tools.replay_demo", "--host", "127.0.0.1",
+                   "--port", str(udp_port), "--laps", "25", "--speed", "25",
+                   "--circuit", "monza", "--seed", "7"]
+        with (diagnostics / "stress-emitter.log").open("w", encoding="utf-8") as log:
+            emitter = subprocess.Popen(command, cwd=checkout, env=env, stdout=log, stderr=subprocess.STDOUT)
+            while time.monotonic() < deadline:
+                if process.poll() is not None:
+                    raise SmokeFailure("Installed app exited during stress telemetry")
+                poll_started = time.monotonic()
+                assert_health(request_json(web_port, "/api/health"), version, data_dir)
+                state = request_json(web_port, "/api/state")
+                latencies.append(time.monotonic() - poll_started)
+                received = int(state.get("packets_received", 0))
+                # This is the application's counter, not proof of zero UDP
+                # loss in the OS/network (the wire protocol has no ACK).
+                dropped = int(state.get("packets_dropped", 0))
+                if dropped:
+                    raise SmokeFailure(f"Installed app reported dropped {dropped} packets during stress telemetry")
+                current_uid = state.get("session_uid")
+                if current_uid and current_uid != SESSION_UID:
+                    if uid is None:
+                        uid = current_uid
+                    if current_uid != uid or state.get("track_id") != 11 or state.get("packet_format") != 2026:
+                        raise SmokeFailure("Stress telemetry changed session identity or wire/circuit fixture")
+                    report["strategy_samples"] += int(assert_stress_strategy(state))
+                    report["samples"].append({
+                        "elapsed_s": round(time.monotonic() - started, 3),
+                        "lap": int(state.get("current_lap", 0)), "packets": received,
+                        "reported_drops": dropped, "request_latency_s": round(latencies[-1], 4),
+                    })
+                    report.update(session_uid=uid, packets_received=received,
+                                  packets_increase=received - received_before, reported_drops=dropped)
+                exit_code = emitter.poll()
+                if exit_code is not None:
+                    report["emitter_exit_code"] = exit_code
+                    if exit_code != 0:
+                        raise SmokeFailure(f"Synthetic stress emitter exited with code {exit_code}")
+                    if (uid is not None and state.get("current_lap", 0) >= 25
+                            and received - received_before >= 1000 and report["strategy_samples"] >= 3):
+                        save_json(diagnostics / "stress-final-state.json", state)
+                        report["result"] = "passed"
+                        return report
+                time.sleep(0.5)
+        raise SmokeFailure(f"Stress telemetry did not complete a verified 25-lap race within {timeout}s")
+    except Exception as exc:
+        report.update(result="failed", error=str(exc))
+        raise
+    finally:
+        cleanup_error = None
+        if emitter is not None:
+            try:
+                if emitter.poll() is None:
+                    emitter.terminate()
+                    try:
+                        emitter.wait(timeout=10)
+                    except subprocess.TimeoutExpired:
+                        emitter.kill()
+                        emitter.wait(timeout=10)
+                report["emitter_exit_code"] = emitter.returncode
+            except Exception as exc:  # noqa: BLE001 - keep the primary gate failure and diagnostics
+                cleanup_error = str(exc)
+                report.update(result="failed", emitter_cleanup_error=cleanup_error)
+        report["elapsed_s"] = round(time.monotonic() - started, 3)
+        if latencies:
+            ordered = sorted(latencies)
+            report["request_latency_max_s"] = round(ordered[-1], 4)
+            report["request_latency_p95_s"] = round(ordered[math.ceil(len(ordered)*0.95)-1], 4)
+        save_json(diagnostics / "stress-summary.json", report)
+        if cleanup_error and "error" not in report:
+            raise SmokeFailure(f"Could not stop owned stress emitter: {cleanup_error}")
+
+
+def verify_persistence(
+    data_dir: Path, session_uid: int = SESSION_UID, *, require_strategy: bool = False,
+    diagnostics: Path | None = None, report: dict | None = None,
+) -> tuple[str, list[Path]]:
     """An empty but valid startup schema is not proof that telemetry persisted."""
     database = data_dir / "pitwall.sqlite3"
     with sqlite3.connect(database.as_uri() + "?mode=ro", uri=True) as connection:
-        if connection.execute("PRAGMA quick_check").fetchone() != ("ok",):
-            raise SmokeFailure("Recorded database failed SQLite quick_check")
+        try:
+            integrity = connection.execute("PRAGMA integrity_check").fetchall()
+        except sqlite3.DatabaseError as exc:
+            if diagnostics is not None:
+                save_json(diagnostics / "database-integrity.json", {
+                    "check": "PRAGMA integrity_check", "result": "failed", "error": str(exc),
+                })
+            raise SmokeFailure(f"Recorded database failed SQLite integrity_check: {exc}") from exc
+        if diagnostics is not None:
+            save_json(diagnostics / "database-integrity.json", {
+                "check": "PRAGMA integrity_check", "rows": [list(row) for row in integrity],
+                "result": "passed" if integrity == [("ok",)] else "failed",
+            })
+        if integrity != [("ok",)]:
+            raise SmokeFailure(f"Recorded database failed SQLite integrity_check: {integrity[:5]}")
         session = connection.execute(
             "SELECT id, track_id, packet_format FROM recorded_sessions WHERE game_session_uid=?",
-            (str(SESSION_UID),),
+            (str(session_uid),),
         ).fetchone()
         if not session or session[1:] != (11, 2026):
             raise SmokeFailure("Transmitted session was not persisted with its track and packet format")
@@ -272,6 +416,15 @@ def verify_persistence(data_dir: Path) -> tuple[str, list[Path]]:
         ).fetchall()
         if not captures:
             raise SmokeFailure("Transmitted session has no finalized nonempty raw capture")
+        if require_strategy:
+            snapshots = connection.execute(
+                "SELECT count(*) FROM strategy_snapshots WHERE session_uid=?", (session_uid,),
+            ).fetchone()[0]
+            if snapshots < 5:
+                raise SmokeFailure(f"Stress session persisted only {snapshots} strategy snapshots; expected at least five")
+            if report is not None:
+                report.update(persisted_session_id=session[0], strategy_snapshot_count=snapshots,
+                              finalized_capture_count=len(captures))
     capture_root = (data_dir / "captures").resolve()
     paths = [(capture_root / row[0]).resolve() for row in captures]
     for path in paths:
@@ -289,7 +442,10 @@ def stop_owned_server(process, web_port: int, version: str, data_dir: Path) -> N
         raise SmokeFailure(f"Installed app shutdown exit code: {process.returncode}")
 
 
-def run_smoke(installer: Path, version: str, runner_temp: Path, timeout: float = 120) -> Path:
+def run_smoke(
+    installer: Path, version: str, runner_temp: Path, timeout: float = 120,
+    *, stress_telemetry: bool = False,
+) -> Path:
     """Run after require_disposable_runner; return durable-in-job diagnostics."""
     installer = installer.resolve(strict=True)
     root = Path(tempfile.mkdtemp(prefix="pitwall-installed-smoke-", dir=runner_temp)).resolve()
@@ -336,22 +492,41 @@ def run_smoke(installer: Path, version: str, runner_temp: Path, timeout: float =
         state = exercise_telemetry(process, web_port, udp_port)
         save_json(diagnostics / "telemetry-state.json", state)
         summary["checks"].append("real_f1_2026_udp_to_live_state")
+        stress = None
+        if stress_telemetry:
+            stress = exercise_stress_telemetry(process, web_port, udp_port, version, data_dir, diagnostics)
+            summary["checks"].append("complete_25_lap_stress_telemetry")
         stop_owned_server(process, web_port, version, data_dir)
         summary["checks"].append("graceful_dashboard_shutdown")
-        session_id, captures = verify_persistence(data_dir)
+        session_id, captures = verify_persistence(data_dir, diagnostics=diagnostics)
         summary["session_id"] = session_id
         summary["checks"].append("persisted_session_and_finalized_capture")
+        sessions_to_reopen = [(session_id, SESSION_UID, "reopened-session.json")]
+        if stress is not None:
+            stress_id, stress_captures = verify_persistence(
+                data_dir, int(stress["session_uid"]), require_strategy=True,
+                diagnostics=diagnostics, report=stress,
+            )
+            captures.extend(stress_captures)
+            sessions_to_reopen.append((stress_id, int(stress["session_uid"]), "reopened-stress-session.json"))
+            save_json(diagnostics / "stress-summary.json", stress)
+            summary["stress"] = {key: value for key, value in stress.items() if key != "samples"}
+            summary["checks"].append("stress_database_integrity_and_strategy_persistence")
         # Reload through the installed product's API, not just a direct SQLite
         # query. Do not transmit anything on this second launch.
         process = subprocess.Popen([str(executable)], cwd=install_dir, env=env)
         wait_for_health(process, web_port, version, data_dir, timeout)
-        reopened = request_json(web_port, f"/api/v1/sessions/{session_id}")
-        save_json(diagnostics / "reopened-session.json", reopened)
-        session = reopened.get("session", {})
-        if str(session.get("game_session_uid")) != str(SESSION_UID) or session.get("track_id") != 11:
-            raise SmokeFailure("Installed app did not reload the recorded fixture session")
+        for recorded_id, expected_uid, filename in sessions_to_reopen:
+            reopened = request_json(web_port, f"/api/v1/sessions/{recorded_id}")
+            save_json(diagnostics / filename, reopened)
+            session = reopened.get("session", {})
+            if str(session.get("game_session_uid")) != str(expected_uid) or session.get("track_id") != 11:
+                raise SmokeFailure("Installed app did not reload the recorded fixture session")
         stop_owned_server(process, web_port, version, data_dir)
         summary["checks"].append("relaunch_and_read_recorded_session")
+        # Restart can also write the catalog. Recheck the whole database after
+        # the second graceful exit, before declaring retention safe.
+        verify_persistence(data_dir, diagnostics=diagnostics)
         database = data_dir / "pitwall.sqlite3"
         preserved[database] = file_digest(database)
         for path in captures:
@@ -425,6 +600,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--installer", type=Path, required=True)
     parser.add_argument("--version", required=True)
     parser.add_argument("--startup-timeout", type=float, default=120)
+    parser.add_argument("--stress-telemetry", action="store_true",
+                        help="Gate on a complete 25-lap synthetic race and full SQLite integrity")
     args = parser.parse_args(argv)
     # Python writes this console in the code page Windows hands it, which on a
     # runner is cp1252. Anything outside it raises while being printed, so a
@@ -435,7 +612,8 @@ def main(argv: list[str] | None = None) -> int:
         if hasattr(stream, "reconfigure"):
             stream.reconfigure(encoding="utf-8", errors="backslashreplace")
     runner_temp = require_disposable_runner()
-    run_smoke(args.installer, args.version, runner_temp, args.startup_timeout)
+    run_smoke(args.installer, args.version, runner_temp, args.startup_timeout,
+              stress_telemetry=args.stress_telemetry)
     return 0
 
 
