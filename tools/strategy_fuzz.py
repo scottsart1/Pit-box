@@ -759,11 +759,13 @@ def check_weather_call(sc: Scenario, plan: dict[str, Any]) -> list[Violation]:
                 f"({cheapest['total_s']}s)",
             )
 
-    # Full wets are a standing-water tyre. *Fitting* them anywhere else is the
-    # single most expensive wet-weather mistake available. Staying on a set
-    # already bolted on is a different question — there the pit loss is the
-    # argument, not the compound — so only a called change is checked.
-    if str(crossover.get("compound")) == "WET" and crossover.get("worth_stopping"):
+    # When an intermediate is offered, full wets below the crossover need
+    # scrutiny. With no intermediate available, a wet may be the least costly
+    # executable alternative to slicks. An unavailable ideal tyre is not an
+    # oracle: check the actual offered-option costs above in that case.
+    intermediate_offered = any(str(item.get("compound")) == "INTER" for item in options)
+    if (intermediate_offered and str(crossover.get("compound")) == "WET"
+            and crossover.get("worth_stopping")):
         if str(sc.setup.get("tyre_compound", "")).upper() != "WET":
             projected = list(crossover.get("trajectory") or [wetness])
             if max(projected) < rain.WETNESS_INTER_WET:

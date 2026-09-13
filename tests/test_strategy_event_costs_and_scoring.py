@@ -220,3 +220,35 @@ async def test_infeasible_finish_is_not_spoken_as_a_safe_finish(stack):
     assert result["recommended"]["feasible"] is False
     assert "no feasible" in result["recommended"]["instruction"].lower()
     assert "protects projected" not in result["recommended"]["rationale"].lower()
+
+
+@pytest.mark.asyncio
+async def test_planned_second_compound_is_not_reported_as_already_used(stack):
+    store, _, engine, *_ = stack
+    await store.mutate(_race)
+    state = await store.snapshot_analysis()
+    state["completed_laps"] = []
+    result = engine.compute(state)
+    assert result["recommended"]["legal"]
+    assert result["observed_compound_rule"]["dry_count"] == 1
+    assert result["observed_compound_rule"]["change_outstanding"] is True
+    assert result["compound_rule"]["conditional_on_future_use"] is True
+
+
+@pytest.mark.asyncio
+async def test_forecast_wet_plan_keeps_waiver_conditional_and_radio_honest(stack):
+    import random
+
+    from tools.strategy_fuzz import apply, build_scenario
+
+    store, _, engine, *_ = stack
+    # Frozen observed fuzz failure: SOFT -> SOFT -> WET was spoken as
+    # "a second compound is mandatory -- box for SOFT"; no wets had run.
+    sc = build_scenario(303, random.Random(20260913 * 100003 + 303))
+    await store.mutate(lambda s: apply(s, sc.setup))
+    result = engine.compute(await store.snapshot_analysis())
+    assert "WET" in result["recommended"]["compounds"][1:]
+    assert not result["observed_compound_rule"]["wet_waiver"]
+    assert result["compound_rule"]["conditional_on_future_wet_use"]
+    assert "only if" in result["recommended"]["instruction"].lower()
+    assert "second compound is mandatory" not in result["recommended"]["instruction"].lower()

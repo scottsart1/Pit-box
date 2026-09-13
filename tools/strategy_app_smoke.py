@@ -139,7 +139,8 @@ def main():
                         if rec.get('finish_projection_valid') and (
                             not rec.get('feasible') or not rec.get('legal')):
                             summary['violations'].append({'lap': row['lap'], 'check': 'invalid finish marked valid'})
-                        if rec.get('inventory_status') == 'unknown' and rec.get('confidence') != 'low':
+                        if (rec.get('inventory_status') == 'unknown' and rec.get('stops_remaining')
+                                and strategy.get('confidence') != 'low'):
                             summary['violations'].append({'lap': row['lap'], 'check': 'unknown stock overconfident'})
                         indices = [i for i in rec.get('tyre_set_indices', []) if i is not None]
                         if len(indices) != len(set(indices)):

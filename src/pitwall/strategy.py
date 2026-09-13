@@ -950,6 +950,10 @@ class StrategyEngine:
         dry_used = sorted({item for item in all_compounds if item in DRY_COMPOUNDS})
         applies = str(state.get("mode_profile", "idle")) == "race" and not wet_used
         compliant = (not applies) or len(dry_used) >= 2
+        observed_wet = any(item in WET_COMPOUNDS for item in used)
+        observed_dry = {item for item in used if item in DRY_COMPOUNDS}
+        observed_compliant = (str(state.get("mode_profile", "idle")) != "race"
+                              or observed_wet or len(observed_dry) >= 2)
         return {
             "applies": applies,
             "wet_waiver": wet_used,
@@ -958,6 +962,11 @@ class StrategyEngine:
             "dry_count": len(dry_used),
             "required_dry_count": 2 if applies else 0,
             "compliant": compliant,
+            "conditional_on_future_use": compliant and not observed_compliant,
+            "conditional_on_future_wet_use": (
+                compliant and not observed_compliant and wet_used
+                and len(dry_used) < 2
+            ),
             "change_outstanding": applies and not compliant,
             "eligible_next_compounds": sorted(DRY_COMPOUNDS - set(dry_used))
             if applies
@@ -3560,9 +3569,11 @@ class StrategyEngine:
         if best["stops_remaining"]:
             box_lap = best["box_laps"][0]
             fit = best["compounds"][1]
+            next_fit_serves_rule = fit in self._compound_rule(state)["eligible_next_compounds"]
             if neutralisation["phase"] == "red_flag" and box_lap == current_lap:
                 instruction = f"During the red flag, fit {fit} for the restart."
-            elif not plans[0].get("legal", True) and not best.get("weather_crossover"):
+            elif (not plans[0].get("legal", True) and next_fit_serves_rule
+                  and not best.get("weather_crossover")):
                 # The stop exists because the rules demand a second compound.
                 # Saying only "Box lap 6 for SOFT" made a legality stop read as
                 # a (baffling) pace call in a real race; the driver judged it
@@ -3587,6 +3598,12 @@ class StrategyEngine:
             fit = None
             instruction = "Stay out to the finish."
             tyre_reason = f"Current {current_compound.lower()}s project to {best['projected_finish_wear_pct']:.0f}% at the finish."
+        projected_rule = self._compound_rule(state, best.get("compounds", [])[1:])
+        if projected_rule["conditional_on_future_wet_use"]:
+            instruction += (
+                " This plan meets the compound requirement only if the planned wet/intermediate"
+                " running actually happens; if it stays dry, a different dry compound is required."
+            )
         # Any recommendation that cannot satisfy the mandatory compound change
         # ends the race in disqualification. That applies whether the plan
         # stays out or stops: a stop that refits the same dry compound serves
@@ -3739,7 +3756,8 @@ class StrategyEngine:
                 if weather_crossover is not None
                 else {}
             ),
-            "compound_rule": self._compound_rule(state, best.get("compounds", [])[1:]),
+            "compound_rule": projected_rule,
+            "observed_compound_rule": self._compound_rule(state),
             "game_window": {
                 "ideal_lap": game_ideal,
                 "latest_lap": game_latest,
