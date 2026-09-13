@@ -18,10 +18,12 @@ working end to end before it reaches a real session.
 from __future__ import annotations
 
 import argparse
+import json
 import math
 import random
 import socket
 import time
+from pathlib import Path
 
 from f1.packets import (
     PacketCarDamageData,
@@ -487,7 +489,8 @@ def build_event(code: str, session_time: float, frame: int, **fields) -> bytes:
     return bytes(packet)
 
 
-def run(host: str, port: int, total_laps: int, speed: float, seed: int) -> None:
+def run(host: str, port: int, total_laps: int, speed: float, seed: int,
+        *, summary_output: Path | None = None) -> None:
     random.seed(seed)
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     target = (host, port)
@@ -606,9 +609,25 @@ def run(host: str, port: int, total_laps: int, speed: float, seed: int) -> None:
 
     frame += 1
     sock.sendto(build_lap_positions(cars, session_time, frame), target)
-    sock.sendto(
-        build_final_classification(cars, session_time, frame, total_laps), target
-    )
+    final_bytes = build_final_classification(cars, session_time, frame, total_laps)
+    sock.sendto(final_bytes, target)
+    if summary_output is not None:
+        # Record exactly the packet just sent, independently of what the app
+        # later claims to have received. This is emitter evidence, not a server
+        # API write or injected success state.
+        packet = PacketFinalClassificationData.unpack(final_bytes)
+        result = packet.classification_data[packet.header.player_car_index]
+        summary_output.write_text(json.dumps({
+            "session_uid": int(packet.header.session_uid),
+            "packet_format": int(packet.header.packet_format),
+            "player_car_index": int(packet.header.player_car_index),
+            "final_classification": {
+                "position": int(result.position), "laps": int(result.num_laps),
+                "grid_position": int(result.grid_position), "points": int(result.points),
+                "pit_stops": int(result.num_pit_stops), "best_lap_ms": int(result.best_lap_time_in_ms),
+                "total_race_time_s": float(result.total_race_time), "penalties_s": int(result.penalties_time),
+            },
+        }, indent=2) + "\n", encoding="utf-8")
     print("\nRace complete; final classification sent for the race report.")
 
 
@@ -619,6 +638,8 @@ def main() -> None:
     parser.add_argument("--laps", type=int, default=30)
     parser.add_argument("--speed", type=float, default=25.0, help="time compression")
     parser.add_argument("--seed", type=int, default=7)
+    parser.add_argument("--summary-output", type=Path,
+                        help="write the actual emitted final-classification packet as JSON")
     parser.add_argument(
         "--circuit", default="suzuka", choices=sorted(CIRCUITS),
         help="circuit to run the synthetic race on",
@@ -631,7 +652,8 @@ def main() -> None:
     select_circuit(arguments.circuit)
     if arguments.driver:
         select_driver(arguments.driver)
-    run(arguments.host, arguments.port, arguments.laps, arguments.speed, arguments.seed)
+    run(arguments.host, arguments.port, arguments.laps, arguments.speed, arguments.seed,
+        summary_output=arguments.summary_output)
 
 
 if __name__ == "__main__":

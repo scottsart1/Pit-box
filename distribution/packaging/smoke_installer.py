@@ -311,7 +311,8 @@ def exercise_stress_telemetry(
         env.update(PYTHONUNBUFFERED="1", PYTHONIOENCODING="utf-8")
         command = [sys.executable, "-m", "tools.replay_demo", "--host", "127.0.0.1",
                    "--port", str(udp_port), "--laps", "25", "--speed", "25",
-                   "--circuit", "monza", "--seed", "7"]
+                   "--circuit", "monza", "--seed", "7",
+                   "--summary-output", str(diagnostics / "stress-emitter-summary.json")]
         with (diagnostics / "stress-emitter.log").open("w", encoding="utf-8") as log:
             emitter = subprocess.Popen(command, cwd=checkout, env=env, stdout=log, stderr=subprocess.STDOUT)
             while time.monotonic() < deadline:
@@ -346,9 +347,22 @@ def exercise_stress_telemetry(
                     report["emitter_exit_code"] = exit_code
                     if exit_code != 0:
                         raise SmokeFailure(f"Synthetic stress emitter exited with code {exit_code}")
+                    emitted = json.loads((diagnostics / "stress-emitter-summary.json").read_text(encoding="utf-8"))
+                    expected_final = emitted.get("final_classification") or {}
+                    if (emitted.get("session_uid") != uid or emitted.get("packet_format") != 2026
+                            or emitted.get("player_car_index") != state.get("player_car_index")):
+                        raise SmokeFailure("Stress final packet identity does not match the observed session/player")
+                    if (expected_final.get("laps") != 25 or not 1 <= int(expected_final.get("position", 0)) <= 20):
+                        raise SmokeFailure("Stress emitter did not send a classified 25-lap player finish")
+                    actual_final = state.get("final_classification") or {}
+                    if actual_final and actual_final != expected_final:
+                        raise SmokeFailure("Stress final classification differs from the actual emitted packet")
                     if (uid is not None and state.get("current_lap", 0) >= 25
-                            and received - received_before >= 1000 and report["strategy_samples"] >= 3):
+                            and received - received_before >= 1000 and report["strategy_samples"] >= 3
+                            and actual_final == expected_final):
                         save_json(diagnostics / "stress-final-state.json", state)
+                        report["final_classification"] = actual_final
+                        report["classification_received"] = True
                         report["result"] = "passed"
                         return report
                 time.sleep(0.5)
@@ -384,6 +398,7 @@ def exercise_stress_telemetry(
 def verify_persistence(
     data_dir: Path, session_uid: int = SESSION_UID, *, require_strategy: bool = False,
     diagnostics: Path | None = None, report: dict | None = None,
+    expected_classification: dict | None = None,
 ) -> tuple[str, list[Path]]:
     """An empty but valid startup schema is not proof that telemetry persisted."""
     database = data_dir / "pitwall.sqlite3"
@@ -409,6 +424,18 @@ def verify_persistence(
         ).fetchone()
         if not session or session[1:] != (11, 2026):
             raise SmokeFailure("Transmitted session was not persisted with its track and packet format")
+        if expected_classification is not None:
+            completed = connection.execute(
+                "SELECT status, ended_at FROM recorded_sessions WHERE id=?", (session[0],),
+            ).fetchone()
+            legacy = connection.execute(
+                "SELECT result_position, total_laps, ended_at FROM sessions WHERE session_uid=?", (session_uid,),
+            ).fetchone()
+            if (not completed or completed[0] != "complete" or not completed[1]
+                    or not legacy or legacy[:2] != (expected_classification["position"], 25) or not legacy[2]):
+                raise SmokeFailure("Stress final classification was not persisted as a completed session/result")
+            if report is not None:
+                report["classification_persisted"] = True
         captures = connection.execute(
             "SELECT relative_path FROM raw_captures WHERE session_id=? "
             "AND packet_count>0 AND byte_count>0 AND clean_close=1",
@@ -506,6 +533,7 @@ def run_smoke(
             stress_id, stress_captures = verify_persistence(
                 data_dir, int(stress["session_uid"]), require_strategy=True,
                 diagnostics=diagnostics, report=stress,
+                expected_classification=stress["final_classification"],
             )
             captures.extend(stress_captures)
             sessions_to_reopen.append((stress_id, int(stress["session_uid"]), "reopened-stress-session.json"))
@@ -522,11 +550,22 @@ def run_smoke(
             session = reopened.get("session", {})
             if str(session.get("game_session_uid")) != str(expected_uid) or session.get("track_id") != 11:
                 raise SmokeFailure("Installed app did not reload the recorded fixture session")
+            if (stress is not None and expected_uid == int(stress["session_uid"])
+                    and (session.get("status") != "complete" or not session.get("ended_at"))):
+                raise SmokeFailure("Installed app did not reload the stress session as classified/complete")
         stop_owned_server(process, web_port, version, data_dir)
         summary["checks"].append("relaunch_and_read_recorded_session")
         # Restart can also write the catalog. Recheck the whole database after
         # the second graceful exit, before declaring retention safe.
         verify_persistence(data_dir, diagnostics=diagnostics)
+        if stress is not None:
+            verify_persistence(
+                data_dir, int(stress["session_uid"]), require_strategy=True,
+                diagnostics=diagnostics, expected_classification=stress["final_classification"],
+            )
+            stress["classification_read_back"] = True
+            save_json(diagnostics / "stress-summary.json", stress)
+            summary["stress"] = {key: value for key, value in stress.items() if key != "samples"}
         database = data_dir / "pitwall.sqlite3"
         preserved[database] = file_digest(database)
         for path in captures:
