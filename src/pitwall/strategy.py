@@ -1874,33 +1874,56 @@ class StrategyEngine:
         rejoin = int(plan.get("projected_rejoin_position", 1) or 1)
         recovery = math.floor(float(plan.get("expected_positions_recovered", 0.0)))
         cap = max(1, rejoin - recovery)
-        positions: list[int] = []
-        for outcome in outcome_times:
-            raw = (
-                1
-                + StrategyEngine._unobserved_cars_ahead(state, rival_projections)
-                + sum(
-                    1
-                    for rival in rival_projections
-                    if float(rival.get("finish_time_s", 1e9)) < float(outcome)
-                )
-                if rival_projections
-                else int(state.get("player_position", 1) or 1)
-            )
-            if int(plan.get("stops_remaining", 0) or 0) > 0:
-                penalty_recovered = StrategyEngine._penalty_positions_recovered(plan, rival_projections, float(outcome))
-                raw = max(raw, max(1, cap - penalty_recovered))
-            positions.append(max(1, min(active, raw)))
-        counts = {position: positions.count(position) for position in sorted(set(positions))}
+        outcomes = np.asarray(outcome_times, dtype=float)
+        # Every outcome shares the same field and rejoin facts. Compare the
+        # bounded field (at most 24 cars) with all 80-1200 samples at once,
+        # instead of rebuilding those facts for every sample in every plan.
+        if rival_projections:
+            missing = StrategyEngine._unobserved_cars_ahead(state, rival_projections)
+            rival_times = np.asarray([
+                float(rival.get("finish_time_s", 1e9)) for rival in rival_projections
+            ])
+            raw = 1 + missing + np.count_nonzero(rival_times[:, None] < outcomes[None, :], axis=0)
+        else:
+            raw = np.full(outcomes.shape, int(state.get("player_position", 1) or 1), dtype=int)
+        if int(plan.get("stops_remaining", 0) or 0) > 0:
+            # The same strict finish comparison and inclusive physical-time
+            # boundary as _penalty_positions_recovered. Select eligible rivals
+            # once; only their reversal of classification varies by outcome.
+            penalized = [rival for rival in rival_projections
+                         if 0 < int(rival.get("position", 0)) <= int(plan.get("projected_rejoin_position", 1))
+                         and float(rival.get("pending_finish_penalty_s", 0)) > 0]
+            penalty_recovered: int | np.ndarray = 0
+            if penalized:
+                before_penalties = np.asarray([
+                    float(rival.get("finish_time_before_penalties_s", rival.get("finish_time_s", 0)))
+                    for rival in penalized
+                ])
+                classified = np.asarray([float(rival.get("finish_time_s", 0)) for rival in penalized])
+                # Python's scalar comparisons treat NaN as false. NumPy does
+                # too; suppress only the warning from an inf-inf subtraction.
+                with np.errstate(invalid="ignore"):
+                    physical = outcomes - float(plan.get("pending_finish_penalty_s", 0))
+                    penalty_recovered = np.count_nonzero(
+                        (before_penalties[:, None] <= physical[None, :])
+                        & (classified[:, None] > outcomes[None, :]), axis=0,
+                    )
+            raw = np.maximum(raw, np.maximum(1, cap - penalty_recovered))
+        positions = np.clip(raw, 1, active)
+        unique, frequencies = np.unique(positions, return_counts=True)
+        counts = {int(position): int(count) for position, count in zip(unique, frequencies)}
         total = max(1, len(positions))
         bands = {
-            "P1-3": sum(1 for value in positions if value <= 3) / total,
-            "P4-6": sum(1 for value in positions if 4 <= value <= 6) / total,
-            "P7-10": sum(1 for value in positions if 7 <= value <= 10) / total,
-            "P11-15": sum(1 for value in positions if 11 <= value <= 15) / total,
-            "P16+": sum(1 for value in positions if value >= 16) / total,
+            "P1-3": int(np.count_nonzero(positions <= 3)) / total,
+            "P4-6": int(np.count_nonzero((4 <= positions) & (positions <= 6))) / total,
+            "P7-10": int(np.count_nonzero((7 <= positions) & (positions <= 10))) / total,
+            "P11-15": int(np.count_nonzero((11 <= positions) & (positions <= 15))) / total,
+            "P16+": int(np.count_nonzero(positions >= 16)) / total,
         }
-        expected_points = sum(points_for_position(value, str(state.get("mode_profile", "race"))) for value in positions) / total
+        mode = str(state.get("mode_profile", "race"))
+        expected_points = sum(points_for_position(position, mode) * count for position, count in counts.items()) / total
+        upside = int(np.quantile(positions, 0.10, method="nearest"))
+        downside = int(np.quantile(positions, 0.90, method="nearest"))
         return {
             "outcome_distribution": {
                 key: round(value, 4) for key, value in bands.items()
@@ -1910,12 +1933,12 @@ class StrategyEngine:
             },
             "points_expected": round(expected_points, 3),
             "expected_finish_position": round(float(np.mean(positions)), 2),
-            "upside_p90": int(np.quantile(positions, 0.10, method="nearest")),
-            "downside_p10": int(np.quantile(positions, 0.90, method="nearest")),
+            "upside_p90": upside,
+            "downside_p10": downside,
             # Unambiguous aliases for callers that use percentile direction
             # rather than the specification's upside/downside labels.
-            "upside_p10_position": int(np.quantile(positions, 0.10, method="nearest")),
-            "downside_p90_position": int(np.quantile(positions, 0.90, method="nearest")),
+            "upside_p10_position": upside,
+            "downside_p90_position": downside,
         }
 
     @staticmethod
