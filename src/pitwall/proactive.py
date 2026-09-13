@@ -275,6 +275,7 @@ class ProactiveEngineer:
         self._last_spoken_text = ""
         self._cooldowns: dict[str, float] = {}
         self._safe_since = 0.0
+        self._wide_safe_since = 0.0
         # Refreshed each detection pass so _enqueue can honour them.
         self._standing_instructions: list[Any] = []
 
@@ -573,6 +574,7 @@ class ProactiveEngineer:
         self._driver_check_stints = {}
         self._cooldowns.clear()
         self._safe_since = 0.0
+        self._wide_safe_since = 0.0
         await self.store.mutate(lambda s: s.proactive.update({
             "queued": 0, "last_spoken_lap": 0, "last_call": "",
             "last_queued_lap": 0, "next_due_lap": int(s.proactive.get("cadence_laps", 2)),
@@ -911,34 +913,94 @@ class ProactiveEngineer:
             ) == "green"
         return True
 
-    def _safe_to_speak(self, state: dict[str, Any], event: dict[str, Any]) -> bool:
+    def _engine_block_reason(self, state: dict[str, Any]) -> str | None:
+        """What stops *every* call this tick, whatever the call is.
+
+        Separated from the per-call checks because the two behave completely
+        differently when the queue backs up. These conditions are properties of
+        the car and the radio, so if one holds, no call can be spoken and there
+        is no point looking at the rest of the queue. Everything in
+        ``_safe_to_speak`` varies from call to call, and giving up on the whole
+        queue because the first one failed is what silenced the others.
+        """
         if not state.get("connected") or state.get("game_paused"):
-            self._safe_since = 0.0
-            self._mark_blocked(event, "disconnected or paused")
-            return False
+            return "disconnected or paused"
+        if state.get("ptt_pressed"):
+            return "driver holding push-to-talk"
         # An open speech session makes the controller "busy" for the whole of its
         # lifetime. Treating that as a blanket block suppressed red flags,
         # penalties, damage and safety-car-delta warnings for up to the maximum
         # session length, by which time they had all expired unspoken. A live
         # conversation can be spoken into — the session itself delivers the line
         # — so only genuine capture (the driver talking) blocks a critical call.
-        conversation_open = bool(getattr(self.voice, "realtime_active", False))
-        engineer_busy = self.voice.is_busy and not conversation_open
-        if state.get("ptt_pressed") or engineer_busy:
-            self._safe_since = 0.0
+        if self.voice.is_busy and not bool(
+            getattr(self.voice, "realtime_active", False)
+        ):
             # Name the latch. "Driver or engineer busy" covers the driver
             # holding the radio button and six unrelated states of the voice
             # controller, which is no help at all when the queue has stopped.
-            self._mark_blocked(
-                event,
-                "driver holding push-to-talk"
-                if state.get("ptt_pressed")
-                else f"engineer busy: {self.voice.busy_reason or 'unknown'}",
-            )
+            return f"engineer busy: {self.voice.busy_reason or 'unknown'}"
+        return None
+
+    @staticmethod
+    def _baseline_safe(state: dict[str, Any]) -> bool:
+        """Whether the driving itself is calm enough to be spoken into."""
+        return int(state.get("speed_kph", 0)) < 75 or (
+            float(state.get("brake", 0)) <= settings.proactive_max_brake
+            and abs(float(state.get("lateral_g", 0))) <= settings.proactive_max_lateral_g
+            and float(state.get("throttle", 0)) >= 0.45
+        )
+
+    @staticmethod
+    def _wide_safe(state: dict[str, Any]) -> bool:
+        """The wider straight-line window a battery call may use.
+
+        Never heavy braking or a high-G corner, but it does not insist on the
+        full throttle the strict window wants: a call about the battery is worth
+        making while the driver is attacking.
+        """
+        return (
+            float(state.get("throttle", 0)) >= 0.25
+            and float(state.get("brake", 0)) <= 0.22
+            and abs(float(state.get("lateral_g", 0))) <= 1.55
+        )
+
+    def _update_safe_window(self, state: dict[str, Any]) -> None:
+        """Track how long each safety window has been open, once per tick.
+
+        These are properties of the car, not of any particular call, and they
+        have to be measured that way. The clock used to be reset inside the
+        per-call check, so a call that failed the strict window reset it for the
+        call behind that had a wider one. It was also always measured against
+        the *strict* window, so a call could satisfy its own wider window and
+        still be told to wait out one it was never asked to meet. The battery
+        call carries exactly such a widening, and was delivered nine times in a
+        hundred.
+        """
+        now = time.monotonic()
+        baseline = self._baseline_safe(state)
+        self._safe_since = (self._safe_since or now) if baseline else 0.0
+        wide = baseline or self._wide_safe(state)
+        self._wide_safe_since = (self._wide_safe_since or now) if wide else 0.0
+
+    def _safe_to_speak(self, state: dict[str, Any], event: dict[str, Any]) -> bool:
+        """Whether *this* call can be spoken now. Callers check the engine first.
+
+        Every condition here varies from call to call: a critical call may be
+        spoken into an open conversation, an overdue one accepts a rougher
+        stretch of road, and a battery call has a window of its own. That is
+        why a blocked call must not stop the queue — the next one may hold a
+        relaxation this one does not.
+        """
+        blocked = self._engine_block_reason(state)
+        if blocked is not None:
+            self._safe_since = self._wide_safe_since = 0.0
+            self._mark_blocked(event, blocked)
             return False
-        if conversation_open and self._priority_of(event) != CRITICAL:
+        if bool(getattr(self.voice, "realtime_active", False)) and self._priority_of(
+            event
+        ) != CRITICAL:
             # Non-critical chatter still waits for the driver to finish talking.
-            self._safe_since = 0.0
             self._mark_blocked(event, "conversation open")
             return False
         now = time.time()
@@ -947,24 +1009,22 @@ class ProactiveEngineer:
         lat_g = abs(float(state.get("lateral_g", 0)))
         speed = int(state.get("speed_kph", 0))
         throttle = float(state.get("throttle", 0))
-        safe = speed < 75 or (brake <= settings.proactive_max_brake and lat_g <= settings.proactive_max_lateral_g and throttle >= 0.45)
-        if event.get("type") == "energy_low" and self._priority_of(event) <= IMPORTANT:
-            # Battery calls matter while attacking. They may use a wider straight-
-            # line window, but never heavy braking or a high-G corner.
-            safe = safe or (
-                throttle >= 0.25
-                and brake <= 0.22
-                and lat_g <= 1.55
-            )
+        safe = self._baseline_safe(state)
+        uses_wide = (
+            event.get("type") == "energy_low"
+            and self._priority_of(event) <= IMPORTANT
+        )
+        if uses_wide:
+            safe = safe or self._wide_safe(state)
         # Deadline fallback still refuses heavy braking/high-G, but no longer waits
         # forever for full throttle on tracks with short straights.
         if overdue:
             safe = speed < 90 or (brake < 0.35 and lat_g < 1.85)
         if not safe:
-            self._safe_since = 0.0
             # Carry the numbers that closed the window. A driver whose calls
             # never arrive needs to be able to see whether the engineer is
-            # waiting for a straight that this lap never offers.
+            # waiting for a straight that this lap never offers. The shared
+            # clock is not touched here: _update_safe_window owns it.
             self._mark_blocked(
                 event,
                 f"unsafe driving phase (speed {speed}, throttle {throttle:.2f}, "
@@ -973,9 +1033,13 @@ class ProactiveEngineer:
             return False
         if event.get("critical") or overdue:
             return True
-        if not self._safe_since:
-            self._safe_since = time.monotonic()
-        ready = time.monotonic() - self._safe_since >= settings.proactive_safe_hold_s
+        self._update_safe_window(state)
+        # Hold the window this call is actually using, not a stricter one it was
+        # never asked to meet.
+        held_since = self._wide_safe_since if uses_wide else self._safe_since
+        ready = bool(held_since) and (
+            time.monotonic() - held_since >= settings.proactive_safe_hold_s
+        )
         if not ready:
             self._mark_blocked(event, "safe window not held")
         return ready
@@ -990,8 +1054,13 @@ class ProactiveEngineer:
         # call was ever blocked for stays at the end of it forever. Keep the
         # reason that applies *now* separately, so a queue that has stopped
         # moving can say what is holding it rather than what once did.
+        # Stamped only when the reason changes. Delivery re-judges the queue
+        # ten times a second, so refreshing this on every pass would report
+        # every call as having been blocked for no time at all — which is the
+        # opposite of what a stalled queue needs to say.
+        if event.get("blocked_reason") != reason:
+            event["blocked_at"] = time.time()
         event["blocked_reason"] = reason
-        event["blocked_at"] = time.time()
 
     @staticmethod
     def _relevance_reason(
@@ -1908,6 +1977,18 @@ class ProactiveEngineer:
         the queue could hold up a safety-car delta warning behind it until both
         expired.
         """
+        self._prune(state)
+        candidates = self._candidates(state)
+        return candidates[0] if candidates else None
+
+    def _prune(self, state: dict[str, Any]) -> None:
+        """Drop calls that are no longer worth making.
+
+        Kept separate from selection because delivery needs the queue pruned
+        even on the ticks where it never gets as far as choosing a call: a stale
+        call left in place is re-reported to the database on every pass and goes
+        on occupying one of the twenty-four slots that a live call needs.
+        """
         standing = state.get("standing_instructions", [])
         kept: list[dict[str, Any]] = []
         for event in list(self.pending):
@@ -1919,11 +2000,21 @@ class ProactiveEngineer:
                 continue
             kept.append(event)
         self.pending = deque(kept, maxlen=24)
-        if not self.pending:
-            return None
-        return min(
+
+    def _candidates(self, state: dict[str, Any]) -> list[dict[str, Any]]:
+        """Everything still worth saying, most important first.
+
+        ``_select`` returns the head of this list. Delivery walks the whole of
+        it, because a call the driving phase rules out does not rule out the one
+        behind it: the next may be critical, overdue, or carry a wider window of
+        its own.
+        """
+        return sorted(
             self.pending,
-            key=lambda event: (self._priority_of(event), float(event.get("queued_at", 0.0))),
+            key=lambda event: (
+                self._priority_of(event),
+                float(event.get("queued_at", 0.0)),
+            ),
         )
 
     async def _deliver(self, state: dict[str, Any]) -> None:
@@ -1942,22 +2033,48 @@ class ProactiveEngineer:
                     state, event, reason, False
                 )
 
-        event = self._select(state)
+        self._prune(state)
+        if not self.pending:
+            return
+
+        # Nothing can be spoken while the car is disconnected or the radio is
+        # held, so the queue is left alone and told why.
+        engine_blocked = self._engine_block_reason(state)
+        if engine_blocked is not None:
+            self._safe_since = self._wide_safe_since = 0.0
+            for held in self.pending:
+                self._mark_blocked(held, engine_blocked)
+            return
+
+        # Otherwise walk the queue in priority order and speak the first call
+        # that can be spoken. Stopping at the first blocked call was the bug
+        # this replaces: every condition left in _safe_to_speak varies from
+        # call to call, so the one at the head being unspeakable said nothing
+        # about the rest. A battery warning with a deliberately wider window, a
+        # critical call allowed into an open conversation, an overdue call that
+        # accepts a rougher stretch of road — each of them sat behind a call
+        # that could not use its relaxation, and waited there until it expired.
+        self._update_safe_window(state)
+        event = None
+        for candidate in self._candidates(state):
+            if not self._safe_to_speak(state, candidate):
+                continue
+            # Only routine chatter waits out the full spacing interval; an
+            # important call gets a much shorter one so it is still current
+            # when spoken.
+            if self._priority_of(candidate) != CRITICAL:
+                interval = (
+                    settings.proactive_min_interval_s
+                    if self._priority_of(candidate) == ROUTINE
+                    else settings.proactive_important_interval_s
+                )
+                if time.monotonic() - self._last_spoken_at < interval:
+                    self._mark_blocked(candidate, "minimum interval")
+                    continue
+            event = candidate
+            break
         if event is None:
             return
-        if not self._safe_to_speak(state, event):
-            return
-        # Only routine chatter waits out the full spacing interval; an important
-        # call gets a much shorter one so it is still current when spoken.
-        if self._priority_of(event) != CRITICAL:
-            interval = (
-                settings.proactive_min_interval_s
-                if self._priority_of(event) == ROUTINE
-                else settings.proactive_important_interval_s
-            )
-            if time.monotonic() - self._last_spoken_at < interval:
-                self._mark_blocked(event, "minimum interval")
-                return
 
         with contextlib.suppress(ValueError):
             self.pending.remove(event)
