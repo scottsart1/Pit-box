@@ -22,11 +22,11 @@ The definite defect is narrower and directly observable: all four finite-invento
 
 Two sequential runs re-evaluated the actual model on the wear and fitted set resulting from each previous lap. They completed 30 checkpoints without physical failure or a future recommendation change before execution. Their finite regret was 14.190192 s (linear) and 13.055792 s (wear cliff). This exercises lap-by-lap model decisions; it does not test the wall-clock radio hold, database learning, UDP handling or the user interface.
 
-The baseline's P95 single-checkpoint model runtime was 44.084 ms in this shared Linux environment. This is a small-sample responsiveness measurement, not a worst-case bound or a Windows claim.
+The corrected baseline's P95 single-checkpoint model runtime was 43.745 ms in this shared Linux environment. This is a small-sample responsiveness measurement, not a worst-case bound or a Windows claim.
 
 ## Harness validation and reproduction
 
-Seventeen evaluator tests passed. They verify exact stop arithmetic, actual-lap weather exposure, hard physical wear/life and unique-set constraints, a necessary two-stop finish over six laps, and agreement of dynamic programming with an independent exhaustive enumeration for every family. They also check explicit versus legacy set allocation, no silent omission of impossible cases, scoring consistency and actual closed-loop set execution. Ruff passed for the added files.
+Eighteen evaluator tests passed. They verify exact stop arithmetic, actual-lap weather exposure, hard physical wear/life and unique-set constraints, a necessary two-stop finish over six laps, and agreement of dynamic programming with an independent exhaustive enumeration for every family. They also check explicit versus legacy set allocation, no silent omission of impossible cases, scoring consistency, actual closed-loop set execution and the correct EA remaining-life versus total-life field mapping. Ruff passed for the added files.
 
 Run the same evaluator file against each revision in a new process:
 
@@ -38,8 +38,14 @@ python -m pytest tests/test_strategy_validation.py -q
 
 `--only finite_sets` reproduces the resource failures. `--skip-closed-loop` omits sequential runs. Every report contains all generated worlds, ordinary observations, historical summaries, emitted recommendations, oracle stop assignments, failure reasons, runtime, revision and evaluator/manifest digests. The program exits successfully when it produces a report; findings inside the report must be inspected by the release gate.
 
-Baseline evidence file: `strategy-validation-baseline.json`, SHA-256 `dde04f50e921db7415528e47a100a3e7447126f074f3328e9b802c4bf672acad`.
+Current baseline evidence file: `strategy-validation-baseline-protocol-corrected.json`, SHA-256 `d2549463d5e6406d94fed2a59c1e2189ded09c358c6dbb34a4618054baec0ce0`.
 Manifest SHA-256: `e64e4bc36c829a07073d746ba7e4822221be02794a19e357344207a6a8bd51fe`.
-Evaluator SHA-256: `a22eabea73ea0bcdf136df741ee3922a3caccdf1454bf15bf8e76930373f94a2`.
+Evaluator SHA-256: `a8f76f8d5a0592f2f85340240026a7748a5375369c76000577c97112445b41f4`.
+
+### Protocol adapter correction
+
+The first artifact, `strategy-validation-baseline.json` (SHA-256 `dde04f50e921db7415528e47a100a3e7447126f074f3328e9b802c4bf672acad`), is superseded for comparisons. Review of the [official EA 2026 telemetry structures](https://forums.ea.com/t5/s/tghpe58374/attachments/tghpe58374/f1-games-game-info-hub-en/61/8/2026%20Season%20Pack%20Telemetry%20Output%20Structures%20%281%29.txt) established that `m_lifeSpan` is laps left in the physical set, while `m_usableLife` is the recommended total compound stint length. The original adapter had mapped them in reverse for an aged fitted set. It now maps world remaining life to `life_span_laps`, and age plus remaining life to `usable_life_laps`.
+
+This correction changes only the ordinary telemetry adapter, not generated physical worlds, oracle, scoring, seeds, split or acceptance expectations. The released baseline was rerun with the corrected evaluator. All 24 physical worlds, all oracle answers, and all 24 emitted recommendations are identical to the first run; only adapter fields and runtime/provenance change. Candidate comparisons must use this same corrected evaluator. This is a protocol-fixture repair, not tuning worlds after seeing a failure.
 
 No user database, account, provider, capture or installation was accessed. Candidate results must use these unchanged worlds and scoring rules; failed heldout cases are evidence to disclose, not a reason to alter the manifest or tune hidden-world parameters.

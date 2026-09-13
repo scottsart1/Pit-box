@@ -250,8 +250,10 @@ def world_state(world: World) -> tuple[dict[str, Any], dict[str, Any]]:
                  "wear": [fitted.wear] * 4, "inner_temps_c": [92] * 4},
         "tyre_sets": [{"index": tyre.index, "compound": tyre.compound,
                        "available": True, "fitted": index == 0, "wear_pct": tyre.wear,
-                       "usable_life_laps": tyre.usable_laps,
-                       "life_span_laps": tyre.usable_laps + tyre.age,
+                       # EA lifeSpan is laps LEFT on this physical set;
+                       # usableLife is the recommended TOTAL compound stint.
+                       "usable_life_laps": tyre.usable_laps + tyre.age,
+                       "life_span_laps": tyre.usable_laps,
                        "lap_delta_ms": 0} for index, tyre in enumerate(world.sets)],
         "drivers": drivers, "car_setup": {}, "analysis": {},
         "completed_laps": [{"lap_num": 1, "lap_time_ms": 90000, "compound": "HARD", "valid": True},

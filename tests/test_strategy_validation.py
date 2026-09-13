@@ -19,6 +19,7 @@ from tools.strategy_validation import (
     score_assignment,
     score_plan,
     summarize,
+    world_state,
 )
 
 
@@ -153,3 +154,13 @@ def test_contradictory_infeasible_finish_instruction_is_recorded():
                                "box_laps": [], "stops_remaining": 0}}
     errors = output_contracts(result, {"current_lap": 1, "total_laps": 2, "mode_profile": "race"})
     assert "infeasible recommendation carries an unconditional finish instruction" in errors
+
+
+def test_adapter_maps_remaining_life_and_total_recommendation_to_ea_fields():
+    world = small_world()
+    world = replace(world, sets=(replace(world.sets[0], age=5, usable_laps=2), world.sets[1]))
+    state, _ = world_state(world)
+    fitted = state["tyre_sets"][0]
+    assert fitted["life_span_laps"] == 2  # EA: laps left in this tyre set.
+    assert fitted["usable_life_laps"] == 7  # EA: max recommended total laps.
+    assert world.sets[0].usable_laps == 2  # Physical scoring remains unchanged.
