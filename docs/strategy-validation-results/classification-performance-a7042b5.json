@@ -1,0 +1,94 @@
+{
+  "scope": "Exact-output primary strategy performance optimization; replay gate measured separately",
+  "baseline_model_commit": "a71c062bdbcc6dd54fbb45498e6bf82627290eb6",
+  "optimized_model_commit": "a7042b51c4ee860bf45553a411eb713b2431d763",
+  "evaluator_sha256": "e4a84bf83900a571ad44c135898e6214b331e4462f799b301a2582aa4e18f1f4",
+  "manifest_sha256": "e64e4bc36c829a07073d746ba7e4822221be02794a19e357344207a6a8bd51fe",
+  "complete_compute_outputs_identical": true,
+  "complete_compute_output_sha256_by_world": {
+    "2026091301-linear": "cd7a5de7543eec01eb84b68c905532364695784b3015b6a46d590a358b2dc92b",
+    "2026091301-finite_sets": "381dd17f149b82ea689f2c5e0d784287667c7f325fc86aa81d4f518b1a0d77b1",
+    "2026091301-traffic": "aff76ca166248921ae1105159fae02b5a47bf07e6d94d380ec994e7b6037a24f",
+    "2026091301-quadratic": "7efd59f488616129c9011744b7b79d333785c552db7a249bc46559b50c2ce837",
+    "2026091301-wear_cliff": "1303d1680710e9482bea0eff2d907050c97f93abb536b0de2632eb3ce06a598e",
+    "2026091301-weather": "b88f281c6b6fe51afbd7ddbbceb50bb8a8ef65f0dcfbdb7d039509afe3fd1ba1",
+    "2026091302-linear": "5b1961b8596e476e0eaa3c815248e5adaef2660a4e2f27ae54b4f091b827bfc7",
+    "2026091302-finite_sets": "f16684a7db12eaaf89c9fa4967735bded6128ff698924ae150349b44c0d320ec",
+    "2026091302-traffic": "a6fbd4e5bcf0daaa52bb469f56d95933c3340cac873358d478088844f726790e",
+    "2026091302-quadratic": "431e20540edea20309f7bf0de9d3cbdeb736845da1e6411723e241ce4fcf6581",
+    "2026091302-wear_cliff": "f2720b80d90a8ee2aba4ac1bd886741fe100f01be41ea2bf09ef12e5f2c741a0",
+    "2026091302-weather": "726efef5f95d0bc4ee2d02b6d44d52eb97394ee783ce4582f8935d836d657cbd",
+    "2026091391-linear": "f7743c8581ec2d7b11e8e8aabf939e5bfd55f20b59c0e85a2322bbbc4a74797b",
+    "2026091391-finite_sets": "1459b2b8ceef5703417a5ce883b66820e247896283ac38dc15cfe1b950a9db47",
+    "2026091391-traffic": "71ce2e78f6793f499edf126e539277b14f0c79cfb67a00fd9eeb3b9eed493e72",
+    "2026091391-quadratic": "f4957c9d512021aa5a2bb3267803cfbc34d91902a4621cb016e8fca7415629b3",
+    "2026091391-wear_cliff": "3202ccbb106c322bc9e716c96e25dd8f913d406d485c10c977e8a3dd7feedd0e",
+    "2026091391-weather": "1936145d2b150432597ccb332943a9e002ab4e729b1e459f585aa230f0d60aad",
+    "2026091392-linear": "d557e65d7996de7abfe2a53f566a52c4300489cf2dc58531cee0d3451c4ade41",
+    "2026091392-finite_sets": "cd401bfd7cf99bd71dc3e2b286ada90a492c45b4cc547426b797e89a4a08f233",
+    "2026091392-traffic": "fb6743f447208c2fdacbf4de3d5e7e729fa0f1d895274752448eb7ef7d24c0c8",
+    "2026091392-quadratic": "a34f7d75ddbf18338f278832d12762b6815d7e5b87618755ba96af3ac4b50e38",
+    "2026091392-wear_cliff": "d88d90122cd619a229360e602dda8ecf579a0a09c3a08bdfe26fd0b08f8ed044",
+    "2026091392-weather": "37e919e472cf37cce1dd1eed8e43f31ce1e568911b726f5d691cdf6777039840"
+  },
+  "closed_loop_checkpoints_identical": 30,
+  "scalar_equivalence_cases_passed": 41,
+  "focused_regression_tests_passed": 96,
+  "profile": {
+    "before": {
+      "total_profiled_seconds": 5.8289,
+      "functions": {
+        "_position_distribution": {
+          "calls": 1061,
+          "self_s": 0.515883,
+          "cumulative_s": 2.297127
+        },
+        "compute": {
+          "calls": 24,
+          "self_s": 0.092037,
+          "cumulative_s": 5.780784
+        },
+        "_penalty_positions_recovered": {
+          "calls": 347517,
+          "self_s": 0.266631,
+          "cumulative_s": 0.654504
+        },
+        "_unobserved_cars_ahead": {
+          "calls": 66376,
+          "self_s": 0.108073,
+          "cumulative_s": 0.160016
+        }
+      }
+    },
+    "after": {
+      "total_profiled_seconds": 3.651754,
+      "functions": {
+        "_position_distribution": {
+          "calls": 1061,
+          "self_s": 0.037384,
+          "cumulative_s": 0.17043
+        },
+        "compute": {
+          "calls": 24,
+          "self_s": 0.092068,
+          "cumulative_s": 3.604188
+        },
+        "_penalty_positions_recovered": {
+          "calls": 15677,
+          "self_s": 0.015491,
+          "cumulative_s": 0.035507
+        },
+        "_unobserved_cars_ahead": {
+          "calls": 3214,
+          "self_s": 0.005566,
+          "cumulative_s": 0.008417
+        }
+      }
+    }
+  },
+  "unprofiled_before_p95_ms": 158.761,
+  "unprofiled_after_p95_ms": 124.061,
+  "unprofiled_after_max_ms": 132.617,
+  "no_physics_sampling_or_threading_change": true,
+  "replay_packet_retention_claim": false
+}
