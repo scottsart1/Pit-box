@@ -93,6 +93,43 @@ dashboard. Bind the web host to `0.0.0.0`, set a long
 `PITWALL_WEB_ACCESS_TOKEN`, and keep it on a trusted LAN. Your Pit Box never opens a
 router or firewall to the public internet automatically.
 
+## What changed in 4.9.6
+
+### Rain probability is a chance, not an intensity
+
+EA's `m_rainPercentage` is the chance that it rains, not how hard it is
+falling. It was being read as an intensity multiplier on track wetness, so the
+same sky produced a different surface — and a different tyre call — purely
+because the forecast number moved. A "light rain" sample at 40% was treated as
+a passing shower and at 100% as a steady soaking, when both describe the same
+rain falling on the same track.
+
+- **Observation and forecast are now separate channels.** The current surface
+  estimate and the lap-by-lap history come from the weather category, the
+  surface lag, measured pace and driver grip feedback. A probability cannot
+  scale them, and it can no longer stand in for a missing observation: the
+  session's own weather reading takes precedence over the offset-zero forecast
+  category, and a future sample is never substituted for the present one.
+- **Future weather is priced as scenarios rather than averaged first.** Heavy
+  rain at 20% is a heavy-rain outcome weighted at 20%, not a fifth of a wet
+  track. Each scenario keeps its full physical wetness, tyre costs are
+  evaluated inside it, and only then are the costs combined — because the cost
+  of being on the wrong tyre is not linear in wetness, so pricing the average
+  surface is not the same as averaging the prices.
+- **One set of costs runs the whole plan.** The weather call and every stint in
+  the main plan are priced on the same expected costs at the same lap offsets,
+  so the stop the weather asks for and the plans it is ranked among cannot
+  disagree.
+- **An approximate forecast is diluted in weight, not in rain.** Its outcomes
+  keep their physical wetness and lose probability to a continued-current
+  scenario, instead of being softened into a half-wet track that never occurs.
+
+Marginal chances are all the game provides, so the projection holds one shared
+probability rank across the forecast horizon: rain persists within a scenario
+rather than being redrawn each lap. That preserves every sample's marginal
+chance with at most one path per forecast boundary instead of an exponential
+tree, and it is a modelling assumption rather than something the game reports.
+
 ## What changed in 4.9.5
 
 ### Wet-weather strategy
