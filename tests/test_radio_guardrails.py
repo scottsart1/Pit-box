@@ -4,7 +4,6 @@ import pytest
 
 from pitwall.brain import EngineerBrain
 from pitwall.config import settings
-from pitwall.state import DriverState
 
 
 async def _brain(stack):
@@ -180,10 +179,12 @@ async def test_strategy_stability_holds_small_plan_changes(stack) -> None:
             {
                 "box_laps": [21], "compounds": ["HARD", "SOFT"],
                 "stops_remaining": 1, "risk_adjusted_time_s": 1800.2,
+                "feasible": True, "legal": True,
             },
             {
                 "box_laps": [17], "compounds": ["HARD", "MEDIUM"],
                 "stops_remaining": 1, "risk_adjusted_time_s": 1801.0,
+                "feasible": True, "legal": True,
             },
         ],
     }

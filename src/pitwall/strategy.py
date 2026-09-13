@@ -2973,6 +2973,7 @@ class StrategyEngine:
             stints: list[dict[str, Any]],
             reason: str,
             weather: dict[str, Any] | None = None,
+            evaluate_requested: bool = False,
         ) -> dict[str, Any] | None:
             nonlocal inventory_rejected
             allocated = inventory.allocate(stints, compounds_in_plan, simulate_allocated)
@@ -2984,7 +2985,7 @@ class StrategyEngine:
             # finish. A multistop containing an already-infeasible stint cannot
             # repair it; prune it before field/uncertainty work, without losing
             # any physically feasible schedule.
-            if stops >= 2 and any(not stint.get("without_driver_feedback", stint)["feasible"] for stint in stints):
+            if not evaluate_requested and stops >= 2 and any(not stint.get("without_driver_feedback", stint)["feasible"] for stint in stints):
                 return None
             pit_costs = self._pit_stop_costs(state, box_laps, neutralisation)
             total_pit_cost = sum(pit_costs)
@@ -3308,6 +3309,55 @@ class StrategyEngine:
                                         )
                                     )
 
+        # A driver's exact schedule is one bounded extra evaluation, not a
+        # reason to expand the automatic search. Otherwise a legal, feasible
+        # three-stop request can fall between sampled laps and disappear.
+        requested_plan_evaluation: dict[str, Any] | None = None
+        requested_plan_rejection = ""
+        request_control = state.get("strategy_override") or {}
+        request_plan = request_control.get("plan") or {}
+        if request_control.get("enabled") and request_control.get("locked") and request_plan.get("compounds"):
+            requested_tail = remaining_plan(request_plan, self._completed_stops(state), current_lap)
+            requested_boxes = list(requested_tail.get("box_laps") or [])
+            requested_compounds = [current_compound, *(requested_tail.get("compounds") or [])[1:]]
+            if requested_boxes and len(requested_boxes) <= 3:
+                offsets = [laps_before_stop(int(lap)) for lap in requested_boxes]
+                lengths = [offsets[0], *(end - start for start, end in pairwise(offsets)), remaining - offsets[-1]]
+                if requested_boxes[0] < earliest_box_lap or lengths[0] < 0 or min(lengths[1:]) <= 0:
+                    requested_plan_rejection = "The requested stop schedule is not reachable within the remaining race distance."
+                elif not inventory.supports(requested_compounds[1:]):
+                    requested_plan_rejection = "Your plan needs more distinct available tyre sets than the reported inventory contains."
+                else:
+                    requested_stints = [simulate(
+                        state, current_compound, lengths[0], current_age, current_wear,
+                        base_lap_s, historical, style_factor,
+                    )]
+                    for index, compound in enumerate(requested_compounds[1:], 1):
+                        requested_stints.append(simulate_allocated(
+                            compound, lengths[index], offsets[index-1], available_sets[compound],
+                        ))
+                    evaluated = make_plan(
+                        stops=len(requested_boxes), box_laps=requested_boxes,
+                        compounds_in_plan=requested_compounds, stints=requested_stints,
+                        reason="Driver-requested exact stop schedule", evaluate_requested=True,
+                    )
+                    if evaluated is not None:
+                        requested_plan_evaluation = {
+                            "box_laps": requested_boxes, "compounds": requested_compounds,
+                            "feasible": evaluated["feasible"], "legal": evaluated["legal"],
+                            "tyre_set_indices": evaluated["tyre_set_indices"],
+                            "projected_max_wear_pct": evaluated["projected_max_wear_pct"],
+                        }
+                        if evaluated["feasible"] and evaluated["legal"]:
+                            if not any(plan["box_laps"] == requested_boxes and plan["compounds"] == requested_compounds for plan in plans):
+                                append_plan(evaluated)
+                        else:
+                            requested_plan_rejection = (
+                                "Your requested plan is outside the operational wear or tyre-life margin."
+                                if evaluated["legal"]
+                                else "Your requested plan does not serve the mandatory compound change."
+                            )
+
         weather_plan: dict[str, Any] | None = None
         # A crossover that cannot repay its pit loss still describes the
         # conditions, but it is not a stop: it must not become a plan.
@@ -3579,8 +3629,10 @@ class StrategyEngine:
                     )
                 else:
                     override_warning = (
-                        "The race has moved past your plan; running the best "
-                        "available strategy instead."
+                        requested_plan_rejection
+                        or ("The race has moved past your plan; running the best available strategy instead."
+                            if plan_tail.get("missed_stops")
+                            else "No executable plan matches the requested remaining stops; running the best available strategy instead.")
                     )
 
         if (
@@ -3635,6 +3687,7 @@ class StrategyEngine:
                 "honored": bool(override_match is not None),
                 "requested": driver_override,
                 "warning": override_warning,
+                **({"requested_plan_evaluation": requested_plan_evaluation} if requested_plan_evaluation is not None else {}),
                 "delta_vs_automatic_s": round(
                     float(best.get("risk_adjusted_time_s", 0.0))
                     - float(automatic_best.get("risk_adjusted_time_s", 0.0)), 2

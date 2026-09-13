@@ -60,10 +60,13 @@ def _commit(plan_dict, total_laps=57):
 async def test_a_committed_two_stop_is_what_gets_recommended(stack):
     store, _, strategy, _, _, _ = stack
 
-    await store.mutate(lambda state: _race(state, current_lap=5))
+    # Ten final soft laps are inside the explicit default wear envelope.
+    # The old57-lap fixture demanded21 soft laps (~118% consumed) and was
+    # accidentally testing acceptance of an impossible plan.
+    await store.mutate(lambda state: _race(state, current_lap=5, total_laps=46))
     await store.update(
         strategy_override=_commit(
-            {"compounds": ["MEDIUM", "HARD", "SOFT"], "box_laps": [18, 36]}
+            {"compounds": ["MEDIUM", "HARD", "SOFT"], "box_laps": [18, 36]}, total_laps=46
         )
     )
 
@@ -75,6 +78,47 @@ async def test_a_committed_two_stop_is_what_gets_recommended(stack):
     assert best["stops_remaining"] == 2
     assert best["fit_compound"] == "HARD"
     assert abs(int(best["box_lap"]) - 18) <= 2
+
+
+@pytest.mark.asyncio
+async def test_unsafe_future_driver_plan_explains_wear_not_elapsed_race(stack):
+    store, _, strategy, *_ = stack
+    await store.mutate(lambda state: _race(state, current_lap=5))
+    await store.update(strategy_override=_commit(
+        {"compounds": ["MEDIUM", "HARD", "SOFT"], "box_laps": [18, 36]}))
+    result = await strategy.recompute()
+    override = result["recommended"]["driver_override"]
+    assert override["following_plan"] is False
+    assert "wear" in override["warning"].lower()
+    assert "moved past" not in override["warning"]
+    assert override["requested_plan_evaluation"]["feasible"] is False
+
+
+@pytest.mark.asyncio
+async def test_exact_safe_three_stop_request_survives_sampled_search(stack):
+    store, _, strategy, *_ = stack
+    await store.mutate(lambda state: _race(state, current_lap=5, total_laps=32))
+    await store.update(strategy_override=_commit(
+        {"compounds": ["MEDIUM", "HARD", "SOFT", "MEDIUM"],
+         "box_laps": [8, 17, 24], "lap_tolerance": 0}, total_laps=32))
+    result = await strategy.recompute()
+    rec = result["recommended"]
+    assert rec["driver_override"]["following_plan"] is True
+    assert rec["box_laps"] == [8, 17, 24]
+    assert rec["feasible"] and rec["legal"]
+
+
+@pytest.mark.asyncio
+async def test_driver_plan_cannot_reuse_one_available_set_twice(stack):
+    store, _, strategy, *_ = stack
+    await store.mutate(lambda state: _race(state, current_lap=5, total_laps=32))
+    await store.update(strategy_override=_commit(
+        {"compounds": ["MEDIUM", "HARD", "MEDIUM", "HARD"],
+         "box_laps": [8, 17, 24], "lap_tolerance": 0}, total_laps=32))
+    result = await strategy.recompute()
+    override = result["recommended"]["driver_override"]
+    assert override["following_plan"] is False
+    assert "distinct available tyre sets" in override["warning"]
 
 
 @pytest.mark.asyncio
