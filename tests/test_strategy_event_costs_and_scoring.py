@@ -164,9 +164,10 @@ async def test_pit_cycle_recovery_does_not_require_on_track_overtakes(stack):
 
 
 @pytest.mark.asyncio
-async def test_partial_field_does_not_invent_a_podium_or_high_confidence(stack):
+@pytest.mark.parametrize("active_cars", [0, 3, 24])
+async def test_partial_field_does_not_invent_a_podium_or_high_confidence(stack, active_cars):
     _, _, engine, *_ = stack
-    state = {"player_position": 18, "active_cars": 24, "current_lap": 10}
+    state = {"player_position": 18, "active_cars": active_cars, "current_lap": 10}
     rivals = [{"position": p, "finish_time_s": 900, "confidence": "high"}
               for p in [1, 2]]
     plan = {"stops_remaining": 0, "projected_time_s": 1000,
@@ -176,6 +177,19 @@ async def test_partial_field_does_not_invent_a_podium_or_high_confidence(stack):
     assert plan["finish_projection_confidence"] == "low"
     dist = engine._position_distribution(plan, state, rivals, np.full(80, 1000))
     assert dist["expected_finish_position"] == 18
+    assert plan["field_size_source"] == ("reported" if active_cars == 24 else "observed_lower_bound")
+
+
+@pytest.mark.asyncio
+async def test_unknown_field_count_cannot_claim_high_confidence_even_with_p1(stack):
+    _, _, engine, *_ = stack
+    state = {"player_position": 1, "active_cars": 0}
+    rivals = [{"position": 2, "finish_time_s": 1100, "confidence": "high"}]
+    plan = {"stops_remaining": 0, "projected_time_s": 1000, "projected_rejoin_position": 1}
+    engine._annotate_finish_projection(plan, state, rivals, 0.4, True)
+    assert plan["projected_finish_position"] == 1
+    assert plan["finish_projection_confidence"] == "low"
+    assert plan["field_size_source"] == "observed_lower_bound"
 
 
 @pytest.mark.asyncio

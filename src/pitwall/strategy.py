@@ -1580,6 +1580,22 @@ class StrategyEngine:
         return max(0, current - 1 - len(observed_ahead))
 
     @staticmethod
+    def _projection_field_size(
+        state: dict[str, Any], rivals: list[dict[str, Any]],
+    ) -> tuple[int, str]:
+        # Before the roster packet arrives, its zero count says nothing about
+        # field size. A partial or lagging count must not turn a known P18 into
+        # P3 simply because only two rivals have timing data.
+        lower_bound = max(
+            1, int(state.get("player_position", 0) or 0), len(rivals) + 1,
+            max((int(r.get("position", 0) or 0) for r in rivals), default=0),
+        )
+        reported = int(state.get("active_cars", 0) or 0)
+        if reported >= lower_bound:
+            return reported, "reported"
+        return lower_bound, "observed_lower_bound"
+
+    @staticmethod
     def _expected_positions_recovered(
         plan: dict[str, Any],
         state: dict[str, Any],
@@ -1666,9 +1682,7 @@ class StrategyEngine:
             if int(plan.get("stops_remaining", 0) or 0) > 0
             else raw_position
         )
-        active = int(state.get("active_cars", 0) or 0) or max(
-            1, len(rival_projections) + 1
-        )
+        active, field_size_source = self._projection_field_size(state, rival_projections)
         projected_position = max(1, min(active, projected_position))
         current = int(state.get("player_position", 1) or 1)
         plan.update(
@@ -1680,12 +1694,14 @@ class StrategyEngine:
                 "pit_cycle_positions_recovered": self._pit_cycle_positions_recovered(plan, state, rival_projections),
                 "observed_rival_count": len(rival_projections),
                 "expected_rival_count": max(0, active - 1),
+                "field_size_source": field_size_source,
                 "missing_field_assumption": "Unobserved cars ahead retain their order; their pace and pit schedule are unknown.",
                 "overtaking_difficulty": round(difficulty, 2),
                 "overtaking_difficulty_known": difficulty_known,
                 "finish_projection_confidence": (
                     "low"
                     if not difficulty_known
+                    or field_size_source != "reported"
                     or len(rival_projections) < max(0, active - 1)
                     or any(item.get("confidence") == "low" for item in rival_projections)
                     else "medium"
@@ -1702,9 +1718,7 @@ class StrategyEngine:
         rival_projections: list[dict[str, Any]],
         outcome_times: np.ndarray,
     ) -> dict[str, Any]:
-        active = int(state.get("active_cars", 0) or 0) or max(
-            1, len(rival_projections) + 1
-        )
+        active, _ = StrategyEngine._projection_field_size(state, rival_projections)
         rejoin = int(plan.get("projected_rejoin_position", 1) or 1)
         recovery = math.floor(float(plan.get("expected_positions_recovered", 0.0)))
         cap = max(1, rejoin - recovery)
