@@ -501,7 +501,10 @@ def test_multi_provider_claims_carry_the_voice_caveat():
     assert "Claude, DeepSeek or Kimi" in GUIDE
 
 
-@pytest.mark.parametrize("page", [INDEX, GUIDE, DIAGNOSTICS, EULA])
+@pytest.mark.parametrize(
+    "page", [INDEX, GUIDE, DIAGNOSTICS, EULA],
+    ids=["index", "guide", "diagnostics", "eula"],
+)
 def test_pages_are_accessible_and_responsive(page):
     assert 'lang="en"' in page
     assert 'name="viewport"' in page

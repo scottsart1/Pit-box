@@ -52,11 +52,8 @@ try {
   if (-not (Test-Path ".venv\Scripts\python.exe")) { throw "No .venv found. Run install_windows.ps1 first." }
   $python = ".\.venv\Scripts\python.exe"
 
-  # A fresh clone is missing two gitignored things previous releases relied
-  # on. Failing here, with names, beats twelve confusing test failures later.
-  if (-not (Test-Path "distribution\.secrets\signing_key.ed25519")) {
-    throw "distribution\.secrets\signing_key.ed25519 is missing. Copy the .secrets folder from your previous Pit-box clone - the licensing tests sign with the real production key."
-  }
+  # Licensing tests generate temporary keys. The production private key is
+  # only needed to issue paid licences, never to test or build the app.
 
   Step "Check the branch" {
     $branch = & git branch --show-current

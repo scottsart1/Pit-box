@@ -923,8 +923,9 @@ run the same suite):
 
 Release maintainers can run all tests with `-m pytest -q`. The additional
 `distribution/tests` suite requires distribution dependencies (included in
-`.[dev]`) and private release assets, including the signing key; it is not
-part of a normal source installation's self-check.
+`.[dev]`) and packaging tools such as PyInstaller; it is not part of a normal
+source installation's self-check. Licensing tests generate temporary signing
+keys, so testing and releasing do not require the production private key.
 
 The 3.5.1 regression coverage includes reasoning-leak filtering, persistent
 short-answer and temperature preferences, evidence-based cars-ahead trends,
