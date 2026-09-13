@@ -60,6 +60,13 @@ def test_numpy_is_pinned_to_a_version_chaquopy_provides():
     assert 'install("numpy==1.26.2")' in GRADLE
 
 
+def test_socks_proxy_extra_is_installed_on_android_too():
+    # Merely comparing base package names would accept plain httpx and miss
+    # the optional transport which prevents the saved-key startup crash.
+    assert "httpx[socks]>=0.28" in _desktop_dependencies()
+    assert "httpx[socks]>=0.28" in _android_installs()
+
+
 def test_the_rust_wheels_are_built_for_the_versions_the_apk_installs():
     # pydantic pins pydantic-core exactly, so the cross-compiled wheel has to
     # be the version pip resolves; the build script carries those pins.

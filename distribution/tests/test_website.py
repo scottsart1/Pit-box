@@ -8,7 +8,10 @@ dishonest rather than merely stale.
 
 from __future__ import annotations
 
+import json
 import re
+import shutil
+import subprocess
 import sys
 from pathlib import Path
 
@@ -168,9 +171,142 @@ def test_the_bridge_code_panel_is_hidden_until_the_worker_asks_for_it():
     assert 'id="freeCode"' in INDEX
     assert "/installer-info" in DOWNLOAD_JS
     assert "needs_code" in DOWNLOAD_JS
-    # The panel explains itself, and the guide covers the window it leads to.
+    # The bridge remains valid for an explicitly code-gated installer, but the
+    # guide must not promise that the panel exists for the no-code release.
     assert "built before Your Pit Box went free" in INDEX
-    assert "Activate Your Pit Box" in GUIDE and "shared code" in GUIDE
+    assert "if (info.needs_code && info.code)" in DOWNLOAD_JS
+
+
+def test_an_old_activation_window_has_an_actionable_no_code_upgrade_path():
+    # A visitor with a cached installer used to be sent looking for a shared
+    # code that /installer-info correctly stopped displaying after 4.9.
+    step = GUIDE.split('id="step-4"', 1)[1].split("</section>", 1)[0]
+    help_text = GUIDE.split('id="activation-code-help"', 1)[1].split("</details>", 1)[0]
+    for section in (step, help_text):
+        assert 'href="index.html#download"' in section
+        assert "fresh <code>PitWall-Setup.exe</code>" in section
+        assert "same Windows account" in section
+        assert "sessions and settings are kept" in section
+        assert "Start Menu" in section
+    assert "needs no activation code" in step
+    assert "do not uninstall or delete your data folder" in step
+    assert "current download needs no code" in help_text
+    assert "do not delete the <code>PitWallData</code> folder" in help_text
+    assert "shared code" not in GUIDE
+    assert "online for a short while" not in GUIDE
+    description = re.search(r'<meta name="description" content="([^"]+)"', GUIDE).group(1)
+    assert "no-code Windows download" in description
+    assert "activation-code download" not in description
+
+
+def test_historical_activation_diagnostics_are_separate_from_current_setup():
+    help_text = GUIDE.split('id="activation-code-help"', 1)[1].split("</details>", 1)[0]
+    assert "For historical installs only" in help_text
+    assert "already have a code" in help_text
+    assert "do not issue a new code" in help_text
+    assert "not needed for the current download" in help_text
+    assert 'href="diagnostics.html"' in help_text
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="JavaScript behavior test requires Node")
+@pytest.mark.parametrize(
+    "info, failure, expected_code, expected_warning",
+    [
+        ({"needs_code": False, "code": None}, None, None, False),
+        ({"needs_code": True, "code": "PITW-XXXXX-XXXXX-XXXXX"}, None,
+         "PITW-XXXXX-XXXXX-XXXXX", False),
+        (None, "network", None, True),
+        (None, "http", None, True),
+        (None, "timeout", None, True),
+        (None, "json", None, True),
+        (None, None, None, True),
+        ({"needs_code": True, "code": None}, None, None, True),
+        ({"needs_code": True, "code": {"value": "not-a-code"}}, None, None, True),
+    ],
+    ids=["free-installer", "legacy-bridge", "network-error", "http-error", "timeout",
+         "invalid-json", "null-info", "missing-code", "invalid-code-type"],
+)
+def test_download_behavior_matches_installer_info(info, failure, expected_code, expected_warning):
+    # Execute the actual script against a minimal DOM, without a browser or
+    # external network. The initially stale code simulates a repeat download
+    # after the free release replaced an earlier activation-gated installer.
+    harness = r"""
+const qaElements = {
+  downloadStatus: { textContent: "", dataset: {} },
+  codePanel: { hidden: false },
+  freeCode: { textContent: "STALE-CODE" },
+};
+const document = { getElementById: (id) => qaElements[id] || null };
+const window = { location: { href: "" } };
+let qaTimeoutMs = null;
+let qaTimeoutCleared = false;
+let qaAborted = false;
+let qaFetchCalls = 0;
+// Advance only the metadata timeout: no actual five-second wait is needed.
+const setTimeout = (callback, milliseconds) => {
+  qaTimeoutMs = milliseconds;
+  if (qaFailure === "timeout") queueMicrotask(callback);
+  return "metadata-timer";
+};
+const clearTimeout = (timer) => { qaTimeoutCleared = timer === "metadata-timer"; };
+const fetch = async (url, options) => {
+  qaFetchCalls++;
+  if (qaFailure === "timeout") return new Promise((resolve, reject) => {
+    options.signal.addEventListener("abort", () => {
+      qaAborted = true;
+      reject(new DOMException("Request aborted", "AbortError"));
+    }, { once: true });
+  });
+  if (qaFailure === "network") throw new Error("offline");
+  return { ok: qaFailure !== "http", json: async () => {
+    if (qaFailure === "json") throw new SyntaxError("invalid JSON");
+    return qaInfo;
+  } };
+};
+"""
+    assertions = r"""
+startDownload("Your download is starting.", "success").then(() => {
+  process.stdout.write(JSON.stringify({
+    url: window.location.href,
+    hidden: qaElements.codePanel.hidden,
+    code: qaElements.freeCode.textContent,
+    message: qaElements.downloadStatus.textContent,
+    timeoutMs: qaTimeoutMs,
+    timeoutCleared: qaTimeoutCleared,
+    aborted: qaAborted,
+    fetchCalls: qaFetchCalls,
+  }));
+}).catch((error) => { console.error(error); process.exitCode = 1; });
+"""
+    result = subprocess.run(
+        [shutil.which("node")],
+        input=(f"const qaInfo = {json.dumps(info)};\n"
+               f"const qaFailure = {json.dumps(failure)};\n"
+               + harness + DOWNLOAD_JS + assertions),
+        text=True,
+        capture_output=True,
+        check=True,
+        timeout=10,
+    )
+    observed = json.loads(result.stdout)
+    endpoint = re.search(r'const ACTIVATION_API = "([^"]+)";', DOWNLOAD_JS).group(1)
+    assert observed["url"] == endpoint + "/installer"
+    # Only metadata uses a request/deadline. The large installer remains a
+    # normal browser navigation, with download progress and resume support.
+    assert observed["fetchCalls"] == 1
+    assert 0 < observed["timeoutMs"] <= 5000
+    assert observed["timeoutCleared"] is True
+    assert observed["aborted"] is (failure == "timeout")
+    assert observed["hidden"] is (expected_code is None)
+    assert observed["code"] == (expected_code or "")
+    if expected_code:
+        assert "use the one shown below" in observed["message"]
+    elif expected_warning:
+        assert "Installer details could not be checked" in observed["message"]
+        assert "setup guide's upgrade steps or contact support" in observed["message"]
+        assert "will show you one" not in observed["message"]
+    else:
+        assert "activation code" not in observed["message"]
 
 
 def test_the_email_prompt_is_optional_and_says_what_it_is_for():

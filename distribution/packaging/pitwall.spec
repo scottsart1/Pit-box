@@ -31,6 +31,9 @@ datas = [
 # the build driver writes it into the finished app directory afterwards.
 
 hiddenimports = [
+    # HTTPX imports its optional SOCKS transport lazily. Ship it explicitly so
+    # system SOCKS proxies work in the frozen app as well as source installs.
+    "socksio",
     # Tk is only imported inside functions in first_run.py, so the analysis
     # cannot see it.
     "tkinter",

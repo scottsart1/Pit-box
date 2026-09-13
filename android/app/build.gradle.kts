@@ -77,6 +77,8 @@ chaquopy {
             // websockets; cross-compiled like the Rust packages.
             install("websockets")
             install("openai>=2.45,<3")
+            // Match desktop proxy support; SOCKS needs this pure-Python extra.
+            install("httpx[socks]>=0.28")
             install("pydantic>=2.8")
             install("pydantic-settings>=2.4")
             install("python-multipart>=0.0.9")

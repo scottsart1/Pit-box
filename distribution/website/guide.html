@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Set up Your Pit Box — illustrated customer guide</title>
-<meta name="description" content="Set up Your Pit Box from your activation-code download and OpenAI API key through PS5 / PC telemetry and your first live race-engineer radio check.">
+<meta name="description" content="Set up Your Pit Box from the free, no-code Windows download and your OpenAI API key through PS5 / PC telemetry and your first live race-engineer radio check.">
 <link rel="canonical" href="https://yourpitbox.com/guide">
 <link rel="stylesheet" href="styles.css">
 </head>
@@ -140,7 +140,7 @@
           <li>Paste your OpenAI API key and select <strong>Continue</strong> — or select <strong>Skip for now</strong> and add it later.</li>
         </ol>
         <div class="guide-tip">The welcome window appears once. The API key can be added or changed at any time under <strong>Connection</strong>, but entering it here is the shortest path. Nothing is activated and nothing is sent anywhere: the key is stored only on this PC.</div>
-        <div class="guide-warning"><strong>Is the window called Activate Your Pit Box, with an activation-code field?</strong> Then you have the installer built before Your Pit Box went free, which is online for a short while after the switch. Use the shared code the <a href="index.html#download">download page</a> shows under its Download button: it works on any PC and needs no purchase. Everything else in this guide is the same.</div>
+        <div class="guide-warning"><strong>Is the window called Activate Your Pit Box, with an activation-code field?</strong> Close that older window and download a fresh <code>PitWall-Setup.exe</code> from the <a href="index.html#download">Download</a> section. Run it over the existing installation using the same Windows account; do not uninstall or delete your data folder. Your sessions and settings are kept, and the current version needs no activation code. Start Your Pit Box from the Start Menu after setup finishes.</div>
         <div class="guide-tip"><strong>Your Pit Box takes 20–30 seconds to start, every time.</strong> After the welcome window — and on every launch from then on — there is a pause before the dashboard opens while the strategy engine, telemetry socket and audio device come up. It opens the browser itself once it is ready, so there is nothing to click and nothing has gone wrong. Allow longer on the first start after installing, or if the PC is busy with something else.</div>
       </div>
       <figure class="guide-figure">
@@ -234,10 +234,11 @@
           <p>That is deliberate. The dashboard is only a window onto Your Pit Box; the app itself keeps running so it can carry on recording telemetry and answering on the radio while the browser is closed. There is no console window and no tray icon, so nothing visible tells you it is still there.</p>
           <p>To stop it, open the dashboard and use <strong>Quit Your Pit Box</strong> in the top-right corner. It finishes and saves any session being recorded first, then closes. Allow about <strong>20 seconds</strong> for it to shut down fully before starting it again.</p>
         </details>
-        <details>
+        <details id="activation-code-help">
           <summary>It asks for an activation code</summary>
-          <p>Only versions from before 4.9 do that; the current download needs no code. Download the installer from the <a href="index.html#download">Download</a> section and run it over the top — your sessions and settings are kept, and the welcome window replaces the activation one.</p>
-          <p>If you would rather stay on an earlier version and its code is rejected, the <a href="diagnostics.html">activation diagnostics</a> check whether the server is reachable and whether the code is recognised, without using it up.</p>
+          <p>That is an older version; the current download needs no code. Close its activation window, download a fresh <code>PitWall-Setup.exe</code> from the <a href="index.html#download">Download</a> section, and install it over the existing version using the same Windows account. You do not need to uninstall first. Your sessions and settings are kept; do not delete the <code>PitWallData</code> folder.</p>
+          <p>After setup, launch Your Pit Box from the Start Menu rather than reopening an older downloaded copy. If an activation window still appears, contact support with the exact window title and installer filename. Do not include your API key.</p>
+          <p><strong>For historical installs only:</strong> if you deliberately keep an earlier version and already have a code, the <a href="diagnostics.html">activation diagnostics</a> check server reachability and whether that existing code is recognised, without using it up. They do not issue a new code and are not needed for the current download.</p>
         </details>
       </div>
       <div class="guide-finish">

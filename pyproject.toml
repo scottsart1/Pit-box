@@ -7,6 +7,9 @@ dependencies = [
   "fastapi>=0.115",
   "uvicorn[standard]>=0.30",
   "openai>=2.45,<3",
+  # Provider clients honor system proxies, including SOCKS VPNs. Without
+  # this extra a saved API key can make HTTPX crash during app startup.
+  "httpx[socks]>=0.28",
   "pydantic>=2.8",
   "pydantic-settings>=2.4",
   "python-multipart>=0.0.9",
@@ -22,7 +25,6 @@ dependencies = [
 dev = [
   "pytest>=8.2",
   "pytest-asyncio>=0.24",
-  "httpx>=0.27",
   "ruff>=0.6",
   "cryptography",
   "openpyxl",

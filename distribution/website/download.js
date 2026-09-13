@@ -11,6 +11,7 @@
 const ACTIVATION_API = "https://pitwall-activation.sarthakvij123450.workers.dev";
 const INSTALLER_URL = `${ACTIVATION_API}/installer`;
 const INSTALLER_INFO_URL = `${ACTIVATION_API}/installer-info`;
+const INSTALLER_INFO_TIMEOUT_MS = 5000;
 
 const button = document.getElementById("downloadButton");
 const status = document.getElementById("downloadStatus");
@@ -35,12 +36,23 @@ function say(element, message, tone) {
 // nobody is stranded at that window. Once a free-edition installer is
 // uploaded the Worker answers needs_code:false and the panel never appears.
 async function installerInfo() {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), INSTALLER_INFO_TIMEOUT_MS);
   try {
-    const response = await fetch(INSTALLER_INFO_URL);
-    if (!response.ok) return { needs_code: false, code: null };
-    return await response.json();
+    const response = await fetch(INSTALLER_INFO_URL, { signal: controller.signal });
+    if (!response.ok) return { needs_code: false, code: null, unknown: true };
+    const info = await response.json();
+    if (info && info.needs_code === false) return { needs_code: false, code: null };
+    if (info && info.needs_code === true && typeof info.code === "string" && info.code.trim()) {
+      return { needs_code: true, code: info.code.trim() };
+    }
+    // Metadata is advisory: a malformed reply must not stop the download or
+    // display a value that is not actually an activation code.
+    return { needs_code: false, code: null, unknown: true };
   } catch {
     return { needs_code: false, code: null, unknown: true };
+  } finally {
+    clearTimeout(timeout);
   }
 }
 
@@ -55,12 +67,16 @@ function showCode(code) {
 // download navigation leaves the page in place, so the code panel stays
 // readable while the file arrives.
 async function startDownload(message, tone) {
+  // A repeat download may see a newly published installer. Do not retain a
+  // bridge code from an earlier response when this download needs none.
+  if (codePanel) codePanel.hidden = true;
+  if (codeOutput) codeOutput.textContent = "";
   const info = await installerInfo();
   if (info.needs_code && info.code) {
     showCode(info.code);
     message += " The installer asks for an activation code the first time it starts: use the one shown below.";
   } else if (info.unknown) {
-    message += " If the installer asks for an activation code on first start, reload this page and it will show you one.";
+    message += " Installer details could not be checked. If it asks for an activation code, follow the setup guide's upgrade steps or contact support.";
   }
   say(status, message, tone);
   window.location.href = INSTALLER_URL;

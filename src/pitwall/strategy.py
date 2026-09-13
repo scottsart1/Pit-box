@@ -2026,22 +2026,24 @@ class StrategyEngine:
         else:
             self._pending_switch = None
 
-        held = dict(old_rec)
+        # Hold the radio call, not its old numerical snapshot. Copying a list
+        # of projection keys onto old_rec let new probability distributions
+        # coexist with stale expected positions, percentile aliases, points
+        # and confidence. Start from the complete current evaluation instead,
+        # so optional or future projection fields cannot leak across ticks.
+        held = dict(old_ranked)
         for key in (
-            "projected_finish_wear_pct", "projected_finish_wear_fl_fr_rl_rr_pct",
-            "risk_adjusted_time_s", "projected_time_s", "monte_carlo",
-            "projected_rejoin_position", "projected_finish_position",
-            "positions_lost_by_stopping", "positions_gained_vs_stay_out",
-            "expected_positions_recovered", "outcome_distribution",
-            "position_probabilities", "points_expected", "downside_p10",
-            "upside_p90", "driver_feedback_factor", "driver_feedback_lap",
-            "feedback_conflict", "stint_models", "feasible", "legal",
+            "box_lap", "fit_compound", "instruction",
+            "call_changes_if", "change_condition",
         ):
-            if key in old_ranked:
-                held[key] = old_ranked[key]
+            if key in old_rec:
+                held[key] = old_rec[key]
+        if new_override:
+            held["driver_override"] = dict(new_override)
         held["committed_at_lap"] = committed_at
         held["source_compound"] = current_compound
         held["neutralisation_phase"] = phase
+        self._refresh_held_plan_details(state, candidate, held, pool)
         candidate["raw_recommended"] = new_rec
         candidate["recommended"] = held
         candidate["stability"] = {
@@ -2056,6 +2058,118 @@ class StrategyEngine:
             "required_gain_s": settings.strategy_change_min_gain_s,
         }
         return candidate
+
+    def _refresh_held_plan_details(
+        self,
+        state: dict[str, Any],
+        candidate: dict[str, Any],
+        held: dict[str, Any],
+        pool: list[dict[str, Any]],
+    ) -> None:
+        """Make numerical prose and confidence describe the held evaluation.
+
+        These fields decorate the selected plan in compute(), rather than
+        belonging to every ranked plan. They must also be refreshed when
+        stability selects a different member of the current candidate pool.
+        """
+        alternate = candidate["recommended"]
+        held["delta_to_next_s"] = round(
+            float(alternate.get("risk_adjusted_time_s", 0.0))
+            - float(held.get("risk_adjusted_time_s", 0.0)), 2
+        )
+        held["position_delta_to_next"] = int(
+            alternate.get("projected_finish_position", 0) or 0
+        ) - int(held.get("projected_finish_position", 0) or 0)
+        stay_out = next(
+            # The selection pool excludes unsafe/illegal plans, but the
+            # stay-out comparison must retain them: that is precisely when
+            # its wear or compound-rule violation explains why a stop exists.
+            (plan for plan in pool + self._candidate_pool
+             if not plan.get("stops_remaining")), {}
+        )
+        held["net_gain_vs_stay_out_s"] = (
+            round(float(stay_out["risk_adjusted_time_s"])
+                  - float(held.get("risk_adjusted_time_s", 0.0)), 2)
+            if stay_out.get("feasible") and stay_out.get("legal")
+            else None
+        )
+        held["stop_required_reason"] = (
+            "mandatory compound change"
+            if stay_out and not stay_out.get("legal")
+            else "current tyre cannot reach the finish inside the operational wear margin"
+            if stay_out and not stay_out.get("feasible")
+            else "best projected finishing position and expected-points outcome"
+        )
+        finish_wear = float(held.get("projected_finish_wear_pct", 0.0))
+        if held.get("stops_remaining"):
+            held["tyre_reason"] = (
+                str(held["weather_crossover"]["reason"])
+                if held.get("weather_crossover")
+                else (
+                    "Your current wear model projects "
+                    f"{float(stay_out.get('projected_finish_wear_pct', 0.0)):.0f}% "
+                    f"by the finish; the {str(held.get('fit_compound', '')).lower()} "
+                    f"stint projects {finish_wear:.0f}%."
+                )
+            )
+            held["rationale"] = (
+                f"Projects P{held.get('projected_finish_position')} after rejoining "
+                f"P{held.get('projected_rejoin_position')}, with about "
+                f"{held.get('expected_positions_recovered', 0)} positions recoverable."
+            )
+            held["defence"] = {}
+        else:
+            compound = str(state.get("tyre", {}).get("compound", "UNKNOWN")).lower()
+            held["tyre_reason"] = (
+                f"Current {compound}s project to {finish_wear:.0f}% at the finish."
+            )
+            best_stop = next(
+                (plan for plan in candidate.get("plans", []) if plan.get("stops_remaining")), {}
+            )
+            held["rationale"] = (
+                f"Staying out protects projected P{held.get('projected_finish_position')} "
+                f"and avoids losing {int(best_stop.get('positions_lost_by_stopping', 0) or 0)} "
+                "positions in the lane."
+            )
+            held["defence"] = candidate.get("defence", {})
+        feedback = self._driver_feedback_adjustment(
+            state, str(state.get("tyre", {}).get("compound", "UNKNOWN")).upper()
+        )
+        if feedback.get("active"):
+            held["rationale"] += (
+                f" Driver report from lap {feedback.get('lap')} is weighted "
+                f"at {float(feedback.get('weight', 0.0)):.0%}."
+            )
+        if "compound_rule" in held:
+            candidate["compound_rule"] = held["compound_rule"]
+        evidence_samples, confidence = self._plan_confidence(held)
+        candidate["confidence"] = confidence
+        stints = held.get("stint_models", [])
+        selected_stint = stints[-1] if stints else {}
+        candidate["model_summary"] = {
+            **candidate.get("model_summary", {}),
+            "confidence": confidence,
+            "evidence_samples": evidence_samples,
+            "selected_stint_wear_per_lap_pct": round(
+                float(selected_stint.get("wear_per_lap_pct", 0.0)), 3
+            ),
+            "selected_stint_wear_source": selected_stint.get("wear_source"),
+            "selected_stint_deg_s_per_lap": round(
+                float(selected_stint.get("deg_s_per_lap", 0.0)), 3
+            ),
+            "selected_stint_deg_source": selected_stint.get("deg_source"),
+        }
+
+    @staticmethod
+    def _plan_confidence(plan: dict[str, Any]) -> tuple[int, str]:
+        # Both wear and pace evidence are needed for every nonempty stint.
+        evidence_samples = min(
+            (min(int(stint.get("wear_sample_size", 0)), int(stint.get("deg_sample_size", 0)))
+             for stint in plan.get("stint_models", []) if int(stint.get("laps", 0)) > 0),
+            default=0,
+        )
+        confidence = "high" if evidence_samples >= 8 else "medium" if evidence_samples >= 3 else "low"
+        return evidence_samples, confidence
 
     def _switch_confirmed(self, signature: tuple[Any, ...]) -> bool:
         """Whether a faster plan has been the faster plan for long enough.
@@ -2954,18 +3068,7 @@ class StrategyEngine:
             )
 
         # A long run on mediums cannot certify an untested hard final stint.
-        evidence_samples = min(
-            (min(int(stint.get("wear_sample_size", 0)), int(stint.get("deg_sample_size", 0)))
-             for stint in best.get("stint_models", []) if int(stint.get("laps", 0)) > 0),
-            default=0,
-        )
-        confidence = (
-            "high"
-            if evidence_samples >= 8
-            else "medium"
-            if evidence_samples >= 3
-            else "low"
-        )
+        evidence_samples, confidence = self._plan_confidence(best)
         stay_out_plan = plans[0]
         stay_out_comparable = bool(
             stay_out_plan.get("feasible") and stay_out_plan.get("legal")

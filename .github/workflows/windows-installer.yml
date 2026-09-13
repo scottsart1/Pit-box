@@ -1,8 +1,8 @@
 # Build the Windows installer on a GitHub-hosted Windows runner.
 #
 # release_windows.ps1 is the full release and runs on the owner's PC. This
-# workflow covers the one step of it that needs Windows, the PyInstaller and
-# Inno Setup build, so a fixed installer can be produced without that PC.
+# workflow builds with PyInstaller/Inno Setup and smoke-tests the installed
+# artifact on a disposable Windows runner before anything can be published.
 # The installer is uploaded as a workflow artifact and attached to a GitHub
 # Release tagged with the app version, from where the R2 upload and the site
 # deploy can be run from anywhere with wrangler and a Cloudflare token.
@@ -76,6 +76,24 @@ jobs:
           "path=$installer" >> $env:GITHUB_OUTPUT
           "sha256=$sha" >> $env:GITHUB_OUTPUT
           "## PitWall-Setup.exe ${{ steps.version.outputs.version }}`n`n- $bytes bytes`n- SHA-256 ``$sha``" >> $env:GITHUB_STEP_SUMMARY
+
+      - name: Smoke-test the installed Windows artifact
+        id: smoke
+        timeout-minutes: 10
+        shell: pwsh
+        run: |
+          python -m distribution.packaging.smoke_installer --installer "${{ steps.installer.outputs.path }}" --version "${{ steps.version.outputs.version }}"
+          if ($LASTEXITCODE -ne 0) { throw "Installed Windows artifact smoke test failed" }
+          "`n- Installed artifact smoke: install, frozen startup, UDP, persistence, shutdown, uninstall/data retention passed." >> $env:GITHUB_STEP_SUMMARY
+
+      - name: Preserve installer-smoke diagnostics
+        if: ${{ always() && steps.smoke.outputs.diagnostics != '' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: PitWall-installer-smoke-${{ steps.version.outputs.version }}
+          path: ${{ steps.smoke.outputs.diagnostics }}
+          if-no-files-found: error
+          retention-days: 7
 
       - uses: actions/upload-artifact@v4
         with:
