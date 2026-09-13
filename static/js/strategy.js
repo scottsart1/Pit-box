@@ -64,6 +64,35 @@ function evidenceSource(source) {
   return label;
 }
 
+function canAdopt(plan) {
+  return plan.feasible === true && plan.legal === true;
+}
+
+function finishDisplay(plan) {
+  if (plan.legal === false) {
+    return { supported: false, position: "Not eligible", points: "0", verdict: "illegal",
+      message: "Finish projection unavailable: this plan is illegal · 0 eligible points." };
+  }
+  if (plan.feasible !== true || plan.finish_projection_valid === false) {
+    return { supported: false, position: "Unsupported", points: "—",
+      verdict: plan.feasible === false ? (plan.verdict || "not feasible") : "finish unsupported",
+      message: "Finish projection unavailable: this plan has no supported finish estimate." };
+  }
+  if (plan.legal !== true) {
+    return { supported: false, position: "Unconfirmed", points: "—", verdict: "legality unconfirmed",
+      message: "Finish projection unavailable until this plan's legality is confirmed." };
+  }
+  const conditional = plan.stops_remaining > 0
+    && (plan.inventory_status === "unknown" || plan.inventory_feasible === null);
+  const position = plan.projected_finish_position != null ? `P${plan.projected_finish_position}` : "—";
+  const points = String(plan.projected_points ?? "—");
+  return { supported: true, conditional,
+    position: `${position}${conditional ? " (conditional)" : ""}`,
+    points: `${points}${conditional ? " (conditional)" : ""}`,
+    verdict: conditional ? "conditional — confirm spare tyres" : "feasible",
+    message: `Estimated finish ${position} · ${points} pts${conditional ? " · conditional on the spare tyres being available" : ""}` };
+}
+
 function renderCall(s) {
   const st = s.strategy || {};
   const rec = st.recommended || {};
@@ -86,14 +115,17 @@ function renderCall(s) {
     ? `Changes if: ${rec.change_condition}`
     : "";
   const mc = rec.monte_carlo || {};
+  const finish = finishDisplay(rec);
   byId("stratMeta").textContent = st.available
-    ? `Projected finish P${rec.projected_finish_position ?? "—"} · ${rec.projected_points ?? 0} pts · rejoin P${rec.projected_rejoin_position ?? "—"} · P75 ${mc.p75_s ?? rec.risk_adjusted_time_s ?? "—"}s · uncertainty ${mc.uncertainty_s ?? "—"}s`
+    ? finish.supported
+      ? `${finish.message} · rejoin P${rec.projected_rejoin_position ?? "—"} · P75 ${mc.p75_s ?? rec.risk_adjusted_time_s ?? "—"}s · uncertainty ${mc.uncertainty_s ?? "—"}s${mc.calibrated !== true ? " · forecast range is not yet calibrated" : ""}`
+      : finish.message
     : "";
   const model = st.model_summary || {};
   byId("stratLearning").textContent = st.available
     ? `Least-tested stint: ${model.evidence_samples ?? 0} supporting laps. Final stint: ${model.selected_stint_wear_per_lap_pct ?? "—"}% wear/lap from ${evidenceSource(model.selected_stint_wear_source)}; ${model.selected_stint_deg_s_per_lap ?? "—"}s degradation/lap from ${evidenceSource(model.selected_stint_deg_source)}.`
     : "";
-  const rule = st.compound_rule || {};
+  const rule = st.observed_compound_rule || st.compound_rule || {};
   const ruleNode = byId("stratRule");
   ruleNode.textContent = rule.applies
     ? `Compound rule: ${rule.dry_count || 0}/2 dry compounds used${rule.change_outstanding ? " — a change is still required" : ""}`
@@ -113,6 +145,10 @@ function planKey(plan) {
     (plan.compounds || []).join(">"),
     (plan.box_laps || []).join(","),
     plan.feasible,
+    plan.legal,
+    plan.finish_projection_valid,
+    plan.inventory_status,
+    plan.inventory_feasible,
     plan.projected_finish_position,
     plan.projected_points,
     plan.monte_carlo?.p75_s,
@@ -123,6 +159,11 @@ function planKey(plan) {
 }
 
 function adoptPlan(plan, statusNode) {
+  if (!canAdopt(plan)) {
+    statusNode.textContent = "Only feasible, legal plans can be adopted.";
+    statusNode.dataset.tone = "error";
+    return;
+  }
   const compounds = (plan.compounds || []).map((c) => String(c).toUpperCase());
   const boxLaps = (plan.box_laps || []).map(Number);
   statusNode.textContent = "Committing plan…";
@@ -172,13 +213,14 @@ function renderPlans(s) {
     const firstCompound = String((plan.compounds || [])[1] || (plan.compounds || [])[0] || "").toUpperCase();
     const isRecommended = index === 0 || `${firstBox}|${firstCompound}` === recKey;
     if (index === 0) row.className = "plan-row-recommended";
+    const finish = finishDisplay(plan);
     const cells = [
       `${index + 1}${index === 0 ? " ★" : ""} · ${plan.stops_remaining}-stop`,
       (plan.compounds || []).map((c) => esc(c)).join(" → "),
       (plan.box_laps || []).join(", ") || "none",
-      plan.projected_finish_position != null ? `P${plan.projected_finish_position}` : "—",
-      plan.projected_points ?? "—",
-      `${plan.monte_carlo?.p75_s ?? plan.risk_adjusted_time_s ?? "—"}s`,
+      finish.position,
+      finish.points,
+      finish.supported ? `${plan.monte_carlo?.p75_s ?? plan.risk_adjusted_time_s ?? "—"}s` : "—",
       `${plan.projected_max_wear_pct ?? "—"}%`,
     ];
     for (const text of cells) {
@@ -187,15 +229,15 @@ function renderPlans(s) {
       row.appendChild(cell);
     }
     const verdict = document.createElement("td");
-    verdict.textContent = plan.feasible ? "feasible" : plan.verdict || "rejected";
-    verdict.className = plan.feasible ? "good" : "warn";
+    verdict.textContent = finish.verdict;
+    verdict.className = finish.supported && !finish.conditional ? "good" : "warn";
     row.appendChild(verdict);
     const action = document.createElement("td");
     const adopt = document.createElement("button");
     adopt.type = "button";
     adopt.className = "button ghost";
     adopt.textContent = "Adopt";
-    adopt.disabled = !plan.feasible;
+    adopt.disabled = !canAdopt(plan);
     adopt.addEventListener("click", () => adoptPlan(plan, byId("stratPlanStatus")));
     action.appendChild(adopt);
     row.appendChild(action);
@@ -611,6 +653,7 @@ async function buildRacePlans(event) {
       load.type = "button";
       load.className = "button ghost";
       load.textContent = "Load";
+      load.disabled = !canAdopt(plan);
       load.addEventListener("click", () => adoptPlan(plan, status));
       action.appendChild(load);
       row.appendChild(action);
@@ -712,4 +755,4 @@ if (HAS_DOM) {
   });
 }
 
-export { planKey, describeEvidence, COMPOUND_COLORS };
+export { planKey, describeEvidence, renderCall, renderPlans, COMPOUND_COLORS };
