@@ -258,7 +258,30 @@ async def test_neutralisation_and_red_flag_pit_loss_models(stack):
     )
     assert red["neutralisation"]["effective_pit_loss_s"] == 0
     assert red["neutralisation"]["red_flag_tyre_change"] is True
-    assert "red flag" in red["recommended"]["instruction"].lower()
+    current_changes = future_changes = 0
+    for plan in strategy._candidate_pool:
+        if not plan["stops_remaining"]:
+            continue
+        # Only an immediate suspension change is free. A selected future stop
+        # must not be described as a change made during today's red flag.
+        expected = [23.0] * plan["stops_remaining"]  # Spa green loss.
+        if plan["box_laps"][0] == 10:
+            current_changes += 1
+            expected[0] = 0.0
+        else:
+            future_changes += 1
+        assert plan["pit_stop_costs_s"] == pytest.approx(expected)
+    assert current_changes > 0 and future_changes > 0
+    immediate = red["recommended"].get("box_lap") == 10
+    assert ("red flag" in red["recommended"]["instruction"].lower()) is immediate
+
+    # With a worn fitted set the current free change becomes the actual call,
+    # so the positive radio path is exercised as well as the future-stop path.
+    await store.mutate(lambda state: setattr(state.tyre, "wear", [75] * 4))
+    immediate_red = await strategy.recompute()
+    assert immediate_red["recommended"]["box_lap"] == 10
+    assert immediate_red["recommended"]["pit_stop_costs_s"][0] == 0
+    assert "red flag" in immediate_red["recommended"]["instruction"].lower()
 
 
 def test_a_compound_never_run_is_inferred_from_the_ones_that_were():
