@@ -217,9 +217,13 @@ def _inno_compiler() -> Path | None:
     if found:
         return Path(found)
 
+    # Read the Program Files locations from the environment rather than
+    # hard-coding C:, both because Windows does not guarantee that drive and
+    # so a test can describe a machine with no system-wide install. The
+    # defaults are what those variables hold on a stock system.
     roots = [
-        Path(r"C:\Program Files (x86)"),
-        Path(r"C:\Program Files"),
+        Path(os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)")),
+        Path(os.environ.get("ProgramFiles", r"C:\Program Files")),
     ]
     local = os.environ.get("LOCALAPPDATA")
     if local:

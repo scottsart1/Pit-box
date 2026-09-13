@@ -270,6 +270,12 @@ def test_inno_setup_is_found_where_winget_actually_puts_it(tmp_path, monkeypatch
     """
     monkeypatch.setattr(build.shutil, "which", lambda _name: None)
     monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
+    # Point the system-wide roots at empty directories too. Without this the
+    # test only describes a clean machine on a host that happens to have no
+    # system-wide Inno Setup, and asserts the opposite on one that does --
+    # which is what the windows-latest runner image became.
+    monkeypatch.setenv("ProgramFiles(x86)", str(tmp_path / "pf-x86"))
+    monkeypatch.setenv("ProgramFiles", str(tmp_path / "pf"))
 
     assert build._inno_compiler() is None, "nothing installed yet"
 
