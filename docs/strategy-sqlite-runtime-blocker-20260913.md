@@ -218,3 +218,77 @@ Additional stopped-process forensic copies are at:
 
 All paths above are QA evidence, not user data. The individual runtime
 directories are transient; the factual findings are preserved in this report.
+
+## Final integrated candidate: observed release blockers
+
+The final sequential controls used frozen source
+`eebfac4bec11331b2bda39365ecfc15d77bf20e8`, which includes the classification
+performance change and capture FIFO/timeout fixes. The input remained the
+31,930-frame capture with SHA-256
+`c713ee4391e5f22755c16c240a4ae7a75bfc5c5aa599d6c6bc625f98d88cc436`.
+Other heavy tests were held during these replays. From the detached checkout
+`/workspace/scratch/f60f47f45c6d/strategy-final-replay-source`, the exact first
+command was:
+
+```bash
+/workspace/scratch/f60f47f45c6d/pit-box-e2e/.venv/bin/python tools/strategy_app_smoke.py --capture /workspace/scratch/f60f47f45c6d/pitbox-fixed-e2e-bor7s4b6/data/captures/2026/capture-20260913T202845.564489Z.pwcap --speed 1 --output-parent /dev/shm
+```
+
+After it completed and its stopped data was copied/audited, the same command
+ran with only `--output-parent /workspace/scratch/f60f47f45c6d` changed.
+No further application variants were run.
+
+| Observed result | Tmpfs `iwdjaodb` | Overlay `iu3tk1gk` |
+| --- | ---: | ---: |
+| Input frames sent | 31,930 | 31,930 |
+| Parsed frames / finalized captured frames | 25,470 / 25,470 | 25,203 / 25,203 |
+| Missing source frames in captured multiset | 6,460 (20.23%) | 6,727 (21.07%) |
+| Foreign or excess captured frames | 0 | 0 |
+| Reported packet/capture queue drops | 0 / 0 | 0 / 0 |
+| Live snapshots / contract violations | 177 / 0 | 179 / 0 |
+| HTTP latency p95 / maximum | 0.7838 / 1.3615 s | 0.7021 / 1.8204 s |
+| Copied database integrity | `ok` | Failed: 12 diagnostic rows |
+| Shutdown / relaunch / sentinel | Passed / passed / retained | Shutdown completed / blocked by integrity gate / retained |
+
+The capture fix is visible in both complete output-file audits: every parsed
+frame was retained, unlike the earlier 202-frame capture-specific gaps. This
+does **not** certify lossless reception: the independent source comparison
+still finds thousands of absent input frames despite zero reported drops.
+The input and output contain no FinalClassification packet (ID 8); neither run
+is evidence of a classified finish, and that absence was not treated as an
+unexpected failure.
+
+On tmpfs, 25 persisted strategy snapshots cover laps 1–25 and satisfy the
+probability-mean, finish-validity, inventory, physical-set and pit-cost ledger
+contracts; the final copied database contains 24 player laps and 172 recorded
+laps. On overlay, readable strategy rows likewise produced no contract
+violations, but structural corruption means their completeness cannot be
+trusted. The integrity diagnostics include an out-of-order rowid, a second
+reference to page 876, index entry-count mismatches and invalid stored values.
+The server logged an orderly shutdown at 23:10:31 UTC without an earlier
+SQLite error. The post-shutdown integrity check caught what live observation
+alone had missed and correctly prevented reopening.
+
+An offline audit of the unchanged input shows bursty arrival timing at 1x:
+320.61 frames/second averaged over 99.589909 seconds; fixed 100-ms bins have
+138 frames at p95 and a maximum of 182, with 547 of 996 bins empty. Fixed
+one-second bins have 512 frames at p95 and a maximum of 706. Bins start at the
+first recorded frame. These are recorded synthetic replay characteristics,
+not a measured real-game capacity limit or proof of the loss mechanism.
+
+**Persistence corruption and incomplete upstream reception remain observed
+blockers.** The matching released-build failure and filesystem controls narrow
+the evidence but do not identify a proven underlying cause. No speculative
+production database or networking workaround was applied.
+
+Complete stopped-run files, copied database-query files, persisted strategy
+rows and independent audits are preserved at:
+
+- `/workspace/scratch/f60f47f45c6d/pitbox-final-tmpfs-evidence-2drw60j6`
+- `/workspace/scratch/f60f47f45c6d/pitbox-final-overlay-evidence-c51w2jr6`
+
+The independent [tmpfs audit](qa/strategy-final-replay-20260913/tmpfs-audit.json),
+[overlay audit](qa/strategy-final-replay-20260913/overlay-audit.json) and
+[full burst-bin counts](qa/strategy-final-replay-20260913/input-burst-audit.json)
+are also committed with this report. Both audits verify the original input
+hash remained unchanged. Every directory involved contains isolated QA data.
