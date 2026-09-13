@@ -1,4 +1,9 @@
-# Your Pit Box 4.9 — AI race engineer for PS5 and Windows
+# Your Pit Box 4.10.0 candidate — AI race engineer for PS5 and Windows
+
+This strategy candidate is **unpublished**. Model tests pass, but observed
+reception and persistence failures and the pending Windows artifact gate block
+release. See the [final validation record](docs/strategy-final-validation-2026-09.md)
+and [release handoff](docs/strategy-release-handoff.md).
 
 Your Pit Box receives **F1 26** telemetry (UDP format **2026**) from a PS5, runs deterministic
 strategy/corner/setup analysis locally, keeps persistent SQLite history, answers spoken questions,
