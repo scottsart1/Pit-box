@@ -365,9 +365,9 @@ V4_9_2_TYRE_LEARNING = Migration(
 )
 
 
-V4_9_6_RAW_SESSION_TYPE = Migration(
+V4_9_7_RAW_SESSION_TYPE = Migration(
     version=4902,
-    app_version="4.9.6",
+    app_version="4.9.7",
     statements=(
         "ALTER TABLE recorded_sessions ADD COLUMN raw_session_type_id INTEGER",
         # Repair the rows the full-field writer already overwrote. It wrote the
@@ -419,6 +419,6 @@ MIGRATIONS: tuple[Migration, ...] = (
     V4_2_COMPARISON_RESULTS,
     V4_2_ARCHIVE_PROVENANCE,
     V4_9_2_TYRE_LEARNING,
-    V4_9_6_RAW_SESSION_TYPE,
+    V4_9_7_RAW_SESSION_TYPE,
 )
 LATEST_SCHEMA_VERSION = MIGRATIONS[-1].version

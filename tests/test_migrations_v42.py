@@ -148,7 +148,7 @@ def test_v42_network_and_capture_settings_validate_and_keep_legacy_udp_alias(
 
 
 @pytest.mark.asyncio
-async def test_v496_repairs_session_names_the_archive_overwrote_with_enums(
+async def test_v497_repairs_session_names_the_archive_overwrote_with_enums(
     tmp_path, monkeypatch
 ) -> None:
     """Issue #33: catalogued races already read "15" and "16" in the field.

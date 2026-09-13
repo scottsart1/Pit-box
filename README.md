@@ -93,6 +93,24 @@ dashboard. Bind the web host to `0.0.0.0`, set a long
 `PITWALL_WEB_ACCESS_TOKEN`, and keep it on a trusted LAN. Your Pit Box never opens a
 router or firewall to the public internet automatically.
 
+## What changed in 4.9.7
+
+### Session Review names the session again
+
+A recorded session could end up catalogued as `15` or `16` instead of `Race` or
+`Race 2`. The live classifier always wrote the name correctly; the full-field
+archive writer, which runs asynchronously and only ever sees the raw protocol
+enum from `PacketSessionData`, then overwrote it with that number as soon as
+the first lap batch flushed. Anything reading the catalog — Session Review,
+filters, summaries, exports — lost the session's type with it.
+
+The enum now has a column of its own, and the archive no longer writes to the
+name or the mode. The classifier owns those, as it has to: the effective label
+depends on the manual override and on the shape of the weekend as well as the
+enum, because a `Race` slot can be the Sprint. History already recorded with a
+number in place of a name is repaired on upgrade; the repair only touches a
+session type that is entirely digits, which no real session name is.
+
 ## What changed in 4.9.6
 
 ### Rain probability is a chance, not an intensity
