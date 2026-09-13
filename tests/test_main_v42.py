@@ -14,12 +14,21 @@ def test_local_dashboard_url_never_uses_bind_wildcard() -> None:
     assert local_dashboard_url("192.168.1.42", 9000) == "http://192.168.1.42:9000"
 
 
-def _free_port() -> int:
-    probe = socket.socket()
-    probe.bind(("127.0.0.1", 0))
-    port = int(probe.getsockname()[1])
-    probe.close()
-    return port
+def _reserved_port() -> socket.socket:
+    """A socket holding a port, not yet answering on it.
+
+    Probing for a port and closing it again leaves a window in which the
+    machine can hand the same port to something else, and the test then talks
+    to a stranger: either the browser opens against whatever took the port, or
+    -- with SO_REUSEADDR, which on Windows permits binding a port another
+    socket already holds -- two sockets share it and which one answers is
+    undefined. Holding the socket from the start removes the window. A bound
+    socket that has not called listen() still refuses connections, which is
+    precisely the "the server is not up yet" the waiter has to wait through.
+    """
+    listener = socket.socket()
+    listener.bind(("127.0.0.1", 0))
+    return listener
 
 
 def test_the_dashboard_is_not_opened_before_the_server_answers(monkeypatch) -> None:
@@ -31,24 +40,24 @@ def test_the_dashboard_is_not_opened_before_the_server_answers(monkeypatch) -> N
     """
     opened: list[str] = []
     monkeypatch.setattr(main_module.webbrowser, "open", lambda url: opened.append(url))
-    port = _free_port()
+    listener = _reserved_port()
+    port = int(listener.getsockname()[1])
 
-    waiter = threading.Thread(
-        target=open_dashboard_when_ready,
-        args=("0.0.0.0", port),
-        kwargs={"timeout_s": 20.0, "poll_s": 0.05},
-        daemon=True,
-    )
-    waiter.start()
-    time.sleep(0.6)
-    assert opened == [], "the browser was opened before anything was listening"
-
-    listener = socket.socket()
-    listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    listener.bind(("127.0.0.1", port))
-    listener.listen(1)
     try:
-        waiter.join(timeout=10)
+        waiter = threading.Thread(
+            target=open_dashboard_when_ready,
+            args=("0.0.0.0", port),
+            kwargs={"timeout_s": 30.0, "poll_s": 0.05},
+            daemon=True,
+        )
+        waiter.start()
+        time.sleep(0.6)
+        assert opened == [], "the browser was opened before anything was listening"
+
+        # The server comes up.
+        listener.listen(8)
+        waiter.join(timeout=15)
+        assert not waiter.is_alive(), "the waiter never noticed the server answering"
     finally:
         listener.close()
 
@@ -59,9 +68,19 @@ def test_a_server_that_never_starts_opens_nothing(monkeypatch) -> None:
     # Bounded, and it must not open a tab onto a page that cannot load.
     opened: list[str] = []
     monkeypatch.setattr(main_module.webbrowser, "open", lambda url: opened.append(url))
+    # Held, never listening: nothing else can take the port and answer for it.
+    listener = _reserved_port()
 
     started = time.monotonic()
-    open_dashboard_when_ready("0.0.0.0", _free_port(), timeout_s=1.0, poll_s=0.05)
+    try:
+        open_dashboard_when_ready(
+            "0.0.0.0",
+            int(listener.getsockname()[1]),
+            timeout_s=1.0,
+            poll_s=0.05,
+        )
+    finally:
+        listener.close()
     elapsed = time.monotonic() - started
 
     assert opened == []
