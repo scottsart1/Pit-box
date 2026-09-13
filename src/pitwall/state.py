@@ -248,6 +248,10 @@ class SessionState:
     wheel_slip_angle: list[float] = field(default_factory=lambda: [0.0] * 4)
     weather: str = "Unknown"
     weather_forecast: list[dict[str, Any]] = field(default_factory=list)
+    # Rain intensity on track right now, from the zero-offset forecast sample.
+    # The rain_next_* fields are all forecasts; none of them says what is
+    # falling at this moment, which is what a wet-tyre call starts from.
+    rain_now_pct: int = 0
     rain_next_15_pct: int = 0
     rain_next_30_pct: int = 0
     rain_next_60_pct: int = 0
@@ -369,6 +373,12 @@ class SessionState:
         }
     )
     driver_tyre_feedback: dict[str, Any] = field(default_factory=dict)
+    # What the driver last said about the *surface* rather than their tyres, and
+    # which laps they reported a mistake on. The first is evidence about the
+    # track; the second stops a lap lost to a spin being read as evidence of
+    # rain. Both feed the wet-weather model in ``rain.py``.
+    driver_grip_feedback: dict[str, Any] = field(default_factory=dict)
+    driver_lap_incidents: list[dict[str, Any]] = field(default_factory=list)
     strategy_risk_appetite: str = "balanced"
     # Driver-owned plan constraints. When enabled, strategy ranks legal plans
     # inside these constraints instead of silently replacing the driver's call.
@@ -719,8 +729,16 @@ class StateStore:
                 data[name] = copy.deepcopy(value[-10:])
             elif name == "strategy" and profile == "live":
                 compact = copy.deepcopy(value)
-                if isinstance(compact, dict) and len(compact.get("plans", [])) > 3:
-                    compact["plans"] = compact["plans"][:3]
+                if isinstance(compact, dict):
+                    if len(compact.get("plans", [])) > 3:
+                        compact["plans"] = compact["plans"][:3]
+                    # The wetness projection runs to the flag, which is a value
+                    # per remaining lap on every frame of a 4 Hz feed. The
+                    # dashboard only needs enough of it to show where the track
+                    # is going; the engine reads the full one in process.
+                    crossover = compact.get("weather_crossover")
+                    if isinstance(crossover, dict) and crossover.get("trajectory"):
+                        crossover["trajectory"] = crossover["trajectory"][:12]
                 data[name] = compact
             elif is_dataclass(value):
                 data[name] = asdict(value)
@@ -1045,6 +1063,11 @@ class StateStore:
                     "track_temp_c": int(state.track_temp_c),
                     "air_temp_c": int(state.air_temp_c),
                     "weather": state.weather,
+                    # Rain intensity, not just the weather label: "light rain"
+                    # at 30% and at 100% put very different amounts of water on
+                    # the track, and the wetness model integrates the
+                    # difference lap by lap.
+                    "rain_pct": int(state.rain_now_pct),
                     "fuel_start_kg": float(start.get("fuel_kg", state.fuel_kg)),
                     "fuel_end_kg": state.fuel_kg,
                     "position": position,

@@ -51,29 +51,54 @@ async def test_qualifying_has_no_race_strategy(stack):
     assert result["available"] is False
 
 
+def _rain_on_slicks(state, rain_pct: int) -> None:
+    state.session_type = "Race"
+    state.mode_profile = "race"
+    state.current_lap = 8
+    state.total_laps = 20
+    state.player_position = 5
+    state.active_cars = 20
+    state.weather = "Light rain"
+    state.rain_now_pct = rain_pct
+    state.rain_next_15_pct = rain_pct
+    state.tyre.compound = "MEDIUM"
+    state.tyre.age_laps = 7
+    state.tyre.wear = [30, 31, 28, 29]
+
+
 @pytest.mark.asyncio
 async def test_live_rain_creates_explicit_inter_stop(stack):
+    """Rain that is clearly past the crossover produces a named stop."""
     store, _, strategy, _, _, _ = stack
 
-    def setup(state):
-        state.session_type = "Race"
-        state.mode_profile = "race"
-        state.current_lap = 8
-        state.total_laps = 20
-        state.player_position = 5
-        state.active_cars = 20
-        state.weather = "Light rain"
-        state.rain_next_15_pct = 70
-        state.tyre.compound = "MEDIUM"
-        state.tyre.age_laps = 7
-        state.tyre.wear = [30, 31, 28, 29]
-
-    await store.mutate(setup)
+    await store.mutate(lambda state: _rain_on_slicks(state, 100))
     result = await strategy.recompute()
     recommendation = result["recommended"]
     assert recommendation["box_lap"] == 8
     assert recommendation["fit_compound"] == "INTER"
     assert "Box lap 8 for INTER" in recommendation["instruction"]
+
+
+@pytest.mark.asyncio
+async def test_rain_on_the_crossover_asks_the_driver_rather_than_guessing(stack):
+    """Marginal conditions are a question, not a call.
+
+    Light rain barely past the crossover with twelve laps to run puts the
+    intermediate about a second up on the whole remaining race — less than the
+    error in the estimate. Boxing on that is a coin toss with a pit stop
+    attached, so the engineer asks the one person who can see the track.
+    """
+    store, _, strategy, _, _, _ = stack
+
+    await store.mutate(lambda state: _rain_on_slicks(state, 70))
+    result = await strategy.recompute()
+    crossover = result["weather_crossover"]
+
+    assert crossover["compound"] == "INTER", "the right tyre must still be named"
+    assert crossover["worth_stopping"] is False
+    assert crossover["ask_driver"] is True
+    assert crossover["driver_question"].endswith("?")
+    assert float(crossover["margin_s"]) <= float(crossover["uncertainty_s"])
 
 
 @pytest.mark.asyncio
