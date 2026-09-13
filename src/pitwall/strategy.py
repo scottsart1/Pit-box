@@ -2001,12 +2001,15 @@ class StrategyEngine:
         stop_costs = plan.get("pit_stop_costs_s")
         if not isinstance(stop_costs, (list, tuple)) or len(stop_costs) != stops:
             stop_costs = [effective_pit_loss_s] * stops
-        pit_fraction = 0.015 if state.get("race_control_phase") == "green" else 0.04
+        stop_phases = plan.get("pit_stop_phases")
+        if not isinstance(stop_phases, (list, tuple)) or len(stop_phases) != stops:
+            stop_phases = [state.get("race_control_phase", "green")] * stops
         # Independent stop-event errors accumulate as variance; there is no
         # pit-event uncertainty when no pit event is planned.
         pit_sigma = math.sqrt(sum(
-            max(0.15, max(0.0, float(cost)) * pit_fraction) ** 2
-            for cost in stop_costs
+            (max(0.15, float(cost) * (0.015 if phase == "green" else 0.04)) ** 2
+             if float(cost) > 0 else 0.0)
+            for cost, phase in zip(stop_costs, stop_phases)
         ))
         traffic_sigma = 0.35 * max(0, int(plan.get("projected_rejoin_position", state.get("player_position", 1))) - int(state.get("player_position", 1)))
         # One row per simulated outcome preserves matching draws even when
@@ -2583,6 +2586,12 @@ class StrategyEngine:
             return {
                 "stops_remaining": stops,
                 "pit_stop_costs_s": pit_costs,
+                "pit_stop_phases": [
+                    neutralisation["phase"]
+                    if index == 0 and lap == current_lap and neutralisation["pit_this_lap_available"]
+                    else "green"
+                    for index, lap in enumerate(box_laps)
+                ],
                 "total_pit_cost_s": round(total_pit_cost, 3),
                 "box_laps": box_laps,
                 "compounds": compounds_in_plan,
@@ -3258,6 +3267,16 @@ class StrategyEngine:
                 f" Driver report from lap {feedback_adjustment.get('lap')} is weighted "
                 f"at {float(feedback_adjustment.get('weight', 0.0)):.0%}."
             )
+        if not best.get("feasible", False):
+            confidence = "low"
+            best["finish_projection_confidence"] = "low"
+            instruction = (
+                "No feasible finish is supported by the current tyre data. "
+                + (instruction if best.get("stops_remaining") or not best.get("legal", True)
+                   else "Check tyre availability; the fitted tyres exceed their modelled life.")
+            )
+            rationale = "The displayed finish is conditional on a tyre plan outside its known limits; it is not a supported finish prediction."
+        best["finish_projection_valid"] = bool(best.get("feasible") and best.get("legal"))
         change_condition = (
             "The call changes for a safety car, red flag, wet crossover, new damage, "
             "or a hard tyre-wear limit breach."
@@ -3272,6 +3291,12 @@ class StrategyEngine:
             "confidence_basis": "Least-supported tyre stint in the selected plan; requires both wear and pace evidence.",
             "learning_policy": "Practice and race laps; time trials, qualifying, pit laps and recorded neutralisations excluded.",
             "learning_excluded_laps": historical.get("excluded_laps", {}),
+            "pace_learning_excluded_laps": {
+                compound: model.get("pace_excluded_laps", {})
+                for compound, model in historical.get("compounds", {}).items()
+                if model.get("pace_excluded_laps")
+            },
+            "pace_learning_policy": "Intrinsic degradation requires clean dry evidence; wet wear increments remain learnable separately.",
             "personal_style_factor": style_evidence.get("factor", 1.0),
             "personal_style_source": style_evidence.get("source", "track_default"),
             "limiting_wear_per_lap_pct": style_evidence.get(

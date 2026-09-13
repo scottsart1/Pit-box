@@ -192,3 +192,16 @@ async def test_player_personal_degradation_is_not_rival_evidence(stack):
     after = engine._project_rival_finish_times(state, personal, 10, 90, 24)[0]
     assert after["finish_time_s"] == before["finish_time_s"]
     assert after["deg_samples"] == 0
+
+
+@pytest.mark.asyncio
+async def test_infeasible_finish_is_not_spoken_as_a_safe_finish(stack):
+    store, _, engine, *_ = stack
+    await store.mutate(_race)
+    state = await store.snapshot_analysis()
+    state["tyre"]["wear"] = [99]*4
+    state["tyre_sets"] = [{"compound": "HARD", "available": False}]
+    result = engine.compute(state)
+    assert result["recommended"]["feasible"] is False
+    assert "no feasible" in result["recommended"]["instruction"].lower()
+    assert "protects projected" not in result["recommended"]["rationale"].lower()
