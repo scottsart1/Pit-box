@@ -913,12 +913,18 @@ the app, so it survives a restart until you switch it off.
 
 ## Verification
 
-Run the full dependency-backed suite after installation:
+Run the application self-tests after installation (the installer and updater
+run the same suite):
 
 ```powershell
 .\.venv\Scripts\python.exe -m compileall -q .\src
-.\.venv\Scripts\python.exe -m pytest -q
+.\.venv\Scripts\python.exe -m pytest -q tests
 ```
+
+Release maintainers can run all tests with `-m pytest -q`. The additional
+`distribution/tests` suite requires distribution dependencies (included in
+`.[dev]`) and private release assets, including the signing key; it is not
+part of a normal source installation's self-check.
 
 The 3.5.1 regression coverage includes reasoning-leak filtering, persistent
 short-answer and temperature preferences, evidence-based cars-ahead trends,

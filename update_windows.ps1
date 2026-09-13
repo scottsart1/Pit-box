@@ -69,8 +69,9 @@ if ($LASTEXITCODE -ne 0) {
   exit 1
 }
 
-Write-Host "Running self-tests..." -ForegroundColor Cyan
-& .\.venv\Scripts\python.exe -m pytest -q
+# Distribution tests need private release assets and are run by the release script.
+Write-Host "Running application self-tests..." -ForegroundColor Cyan
+& .\.venv\Scripts\python.exe -m pytest -q tests
 if ($LASTEXITCODE -ne 0) {
   Write-Host "Update installed, but self-tests failed. Copy the output before closing." -ForegroundColor Red
   Read-Host "Press Enter to close"
