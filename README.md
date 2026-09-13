@@ -93,6 +93,64 @@ dashboard. Bind the web host to `0.0.0.0`, set a long
 `PITWALL_WEB_ACCESS_TOKEN`, and keep it on a trusted LAN. Your Pit Box never opens a
 router or firewall to the public internet automatically.
 
+## What changed in 4.9.5
+
+### Wet-weather strategy
+
+The rain call was decided by the weather label alone: raining plus slicks meant
+box for a wet tyre, and the tyre was picked from how hard it was raining. That
+gets both edges of a wet race wrong, because a track lags the sky in both
+directions — rain starts and the surface is still quick on slicks for a lap or
+two; rain stops and the surface stays wet long after the cloud has gone.
+
+`pitwall/rain.py` replaces it with a continuous **track wetness** estimate,
+projected forward over the laps that are actually left, with every available
+compound priced against that projection. The recommendation is whichever tyre
+spends the least time over the rest of the race.
+
+- **Four sources of evidence, weighted by how much each has earned.** The
+  declared conditions; a surface model that soaks fast and dries slowly, scaled
+  by track temperature and traffic; the measured pace of the driver and the
+  field against their dry benchmarks; and what the driver says about the track.
+  Lap times outrank the forecast once there are enough of them, because they
+  measure the track instead of predicting it.
+- **The field is the control group.** Every running car's current lap is read
+  against its own dry benchmark, and when the field is split across compounds
+  the gap between the groups is the crossover measured rather than guessed —
+  the one signal that carries no error from anybody's reference lap, and so the
+  one weighted highest.
+- **A slow lap is attributed before it is believed.** Rain slows a whole lap; a
+  spin slows one sector. A lap whose loss sits in a single sector while the
+  others hold dry pace is read as a mistake and dropped, as is any lap the
+  driver reports going off, locking up or having a moment on.
+- **The forecast is read against the remaining distance.** A shower forty
+  minutes out is weather; in a race with eight laps to run it is not strategy.
+  An approximate forecast is trusted less than a perfect one, and whatever the
+  declared conditions have been getting wrong about this track is assumed to
+  keep being wrong.
+- **Which lap to box on is part of the question.** Every box lap from here to
+  the flag is priced, and the stop is only called when this lap is the best one
+  — so rain two laps away names the lap it arrives on instead of justifying
+  intermediates today.
+- **Marginal calls ask the driver.** When the gain is inside the model's own
+  uncertainty the engineer asks what only the driver can see — whether there is
+  standing water, whether a dry line is coming through — instead of committing
+  a pit stop to a coin toss. Answers on the radio feed straight back in.
+- **Full wets are treated as the standing-water tyre they are.** They cost
+  several seconds a lap against intermediates in anything short of flooding,
+  which is why teams almost never fit them, and the model no longer reaches for
+  them every time the sky says heavy rain.
+- Intermediates and full wets are no longer priced by a fixed table that made
+  them look seven and twelve seconds a lap slower whatever the weather, so
+  wet-weather plans are ranked on their merits alongside the dry ones instead
+  of having to bypass the ranking entirely.
+- The two crossovers the model is anchored to are the figures wet strategy is
+  actually called on: slicks to intermediates where the achievable lap reaches
+  112% of dry pace, intermediates to full wets at 118%. Both are pinned by
+  tests.
+- DRIVE's weather readout now shows the track state and which way it is going
+  beside the sky and the rain percentage.
+
 ## What changed in 4.9.4
 
 ### Brutal mode

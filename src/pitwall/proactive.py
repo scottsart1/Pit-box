@@ -8,6 +8,7 @@ import time
 from collections import deque
 from typing import Any
 
+from . import rain
 from .analysis import fmt_ms
 from .brain import EngineerBrain
 from .config import settings
@@ -830,7 +831,16 @@ class ProactiveEngineer:
         if kind == "race_control":
             return state.get("race_control_phase") != "green" or event.get("payload", {}).get("to") == "green"
         if kind == "weather_crossover":
-            return int(state.get("rain_next_15_pct", 0)) >= 55
+            # Still worth saying while the surface is over the crossover, or
+            # while the model is still asking for the stop or the driver's read.
+            # A queued call must not be dropped just because the forecast
+            # percentage eased while the track stayed soaked.
+            published = (state.get("strategy", {}) or {}).get("weather_crossover") or {}
+            return (
+                rain.surface_is_wet(state)
+                or bool(published.get("worth_stopping"))
+                or bool(published.get("ask_driver"))
+            )
         if kind == "fuel_warning":
             return float(state.get("fuel_laps_delta", 1.0)) < 0.3
         if kind == "tyre_wear":
@@ -995,6 +1005,12 @@ class ProactiveEngineer:
         signature = repr((
             int(state.get("current_lap", 0)), state.get("race_control_phase"),
             state.get("weather"), int(state.get("rain_next_15_pct", 0)),
+            # The wet model reads the rain falling now, the driver's report on
+            # the surface and the lap times behind it, so a change in any of
+            # them has to be able to move the call.
+            int(state.get("rain_now_pct", 0) or 0),
+            int(state.get("last_lap_ms", 0) or 0),
+            tuple(sorted((state.get("driver_grip_feedback", {}) or {}).items())),
             state.get("tyre", {}).get("compound"), int(state.get("tyre", {}).get("age_laps", 0)),
             tuple(round(float(x), 1) for x in state.get("tyre", {}).get("wear", [])),
             tuple(sorted((state.get("driver_tyre_feedback", {}) or {}).items())),
@@ -1015,9 +1031,16 @@ class ProactiveEngineer:
         phase = str(state.get("race_control_phase", "green"))
         if phase != str(baseline.get("race_control_phase", "green")):
             return f"race control changed to {phase.replace('_', ' ')}"
-        wet_now = int(state.get("rain_next_15_pct", 0) or 0) >= 55
-        if wet_now and not bool(baseline.get("wet")):
-            return "the weather crossed the wet-strategy threshold"
+        wet_now = rain.surface_is_wet(state)
+        if wet_now != bool(baseline.get("wet")):
+            # Both directions are material. A track drying out under a hold is
+            # exactly as much a reason to speak as one getting wet, and only the
+            # wetting half used to count.
+            return (
+                "the track crossed the wet-strategy threshold"
+                if wet_now
+                else "the track dried back below the wet-strategy threshold"
+            )
         if str(state.get("tyre", {}).get("compound")) != str(
             baseline.get("compound")
         ):
@@ -1279,9 +1302,34 @@ class ProactiveEngineer:
                     expires_s=20.0,
                 )
 
-        wet = int(state.get("rain_next_15_pct", 0)) >= 60
+        # The conditions call comes from the wetness model, not from a rain
+        # percentage. A forecast crossing 60% is not news on a track that is
+        # already soaked, and a track drying under a 70% forecast is news the
+        # percentage alone would never have reported.
+        crossover = (state.get("strategy", {}) or {}).get("weather_crossover") or {}
+        wet = bool(crossover) and (
+            bool(crossover.get("worth_stopping"))
+            or bool(crossover.get("ask_driver"))
+            or float(crossover.get("wetness", 0.0) or 0.0) >= rain.WETNESS_SLICK_INTER
+        )
         if wet and not self._last_weather_alert:
-            self._enqueue("weather_crossover", {"rain_15_pct": state.get("rain_next_15_pct"), "forecast": state.get("weather_forecast", [])}, critical=True, cooldown_s=0.0)
+            self._enqueue(
+                "weather_crossover",
+                {
+                    "rain_15_pct": state.get("rain_next_15_pct"),
+                    "wetness": crossover.get("wetness"),
+                    "trend": crossover.get("trend"),
+                    "compound": crossover.get("compound"),
+                    "box_lap": crossover.get("box_lap"),
+                    "worth_stopping": crossover.get("worth_stopping"),
+                    "ask_driver": crossover.get("ask_driver"),
+                    "driver_question": crossover.get("driver_question"),
+                    "reason": crossover.get("reason"),
+                    "forecast": state.get("weather_forecast", []),
+                },
+                critical=True,
+                cooldown_s=0.0,
+            )
         self._last_weather_alert = wet
 
         # Fuel, tyre, penalty and damage calls describe a car being driven.
@@ -1675,6 +1723,20 @@ class ProactiveEngineer:
         if kind == "compound_requirement":
             return "You still owe a second dry compound. We must fit a different compound before the finish."
         if kind == "weather_crossover":
+            # Three different things to say, and the difference matters to a
+            # driver: we are boxing, we need you to tell us something before we
+            # decide, or we have looked and we are staying out.
+            if payload.get("ask_driver") and payload.get("driver_question"):
+                return (
+                    f"{payload.get('reason')} It is close enough that your read decides it. "
+                    f"{payload.get('driver_question')}"
+                )
+            if payload.get("worth_stopping") and payload.get("compound"):
+                box = payload.get("box_lap")
+                where = f"Box lap {box}" if box else "Box this lap"
+                return f"{payload.get('reason')} {where} for {payload.get('compound')}."
+            if payload.get("reason"):
+                return str(payload["reason"])
             return (
                 f"Rain risk is {payload.get('rain_15_pct')} percent within fifteen minutes. "
                 "Stand by for a crossover call."
