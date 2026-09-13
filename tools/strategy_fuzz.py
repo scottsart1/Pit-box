@@ -41,15 +41,15 @@ ALL_COMPOUNDS = DRY_COMPOUNDS + WET_COMPOUNDS
 TRACKS = [
     (0, "Melbourne", 58, 80.0),
     (2, "Shanghai", 56, 94.0),
-    (4, "Baku", 51, 103.0),
-    (6, "Monaco", 78, 73.0),
-    (7, "Montreal", 70, 74.0),
-    (9, "Silverstone", 52, 88.0),
-    (12, "Spa", 44, 106.0),
-    (13, "Monza", 53, 82.0),
-    (14, "Singapore", 62, 98.0),
+    (20, "Baku", 51, 103.0),
+    (5, "Monaco", 78, 73.0),
+    (6, "Montreal", 70, 74.0),
+    (7, "Silverstone", 52, 88.0),
+    (10, "Spa", 44, 106.0),
+    (11, "Monza", 53, 82.0),
+    (12, "Singapore", 62, 98.0),
     (19, "Mexico", 71, 78.0),
-    (20, "Interlagos", 71, 71.0),
+    (16, "Interlagos", 71, 71.0),
 ]
 
 WEATHERS = [
