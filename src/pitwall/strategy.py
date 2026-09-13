@@ -1880,7 +1880,7 @@ class StrategyEngine:
                 feasible = False
                 expected += 18.0 + (peak_wear - 92.0) * 2.0
                 conservative += 30.0 + (peak_wear - 92.0) * 3.0
-        if "usable_life_laps" in set_info and starting_age + laps > usable_life:
+        if laps > 0 and "usable_life_laps" in set_info and starting_age + laps > usable_life:
             feasible = False
             conservative += (starting_age + laps - usable_life) * 8.0
         # EA lifespan is laps LEFT on this set, not its original lifetime.

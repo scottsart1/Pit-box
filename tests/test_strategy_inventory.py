@@ -153,3 +153,15 @@ async def test_red_flag_change_can_be_followed_by_a_later_stop(stack):
     assert candidates, result["recommended"]
     assert all(p["stint_models"][0]["laps"] == 0 for p in candidates)
     assert all(sum(s["laps"] for s in p["stint_models"]) == 22 for p in candidates)
+
+
+@pytest.mark.asyncio
+async def test_red_flag_zero_lap_old_stint_can_remove_an_exhausted_set(stack):
+    engine, state, history = await race(stack, remaining=8, wear=95, sets=[
+        set_info(0, "MEDIUM", 0, fitted=True, usable_life_laps=3),
+        set_info(1, "HARD", 8)])
+    state.update(fitted_tyre_set_idx=0, red_flag_active=True, race_control_phase="red_flag")
+    result = engine.compute(state, history)
+    rec = result["recommended"]
+    assert rec["feasible"] and rec["tyre_set_indices"] == [1], rec
+    assert rec["stint_models"][0]["laps"] == 0
