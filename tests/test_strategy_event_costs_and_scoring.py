@@ -252,3 +252,53 @@ async def test_forecast_wet_plan_keeps_waiver_conditional_and_radio_honest(stack
     assert result["compound_rule"]["conditional_on_future_wet_use"]
     assert "only if" in result["recommended"]["instruction"].lower()
     assert "second compound is mandatory" not in result["recommended"]["instruction"].lower()
+
+
+@pytest.mark.asyncio
+async def test_renaming_and_permuting_the_field_does_not_change_strategy(stack):
+    from copy import deepcopy
+
+    store, _, engine, *_ = stack
+    await store.mutate(_race)
+    state = await store.snapshot_analysis()
+    state["drivers"] = [{
+        "car_idx": 0 if p == 7 else p + 10, "name": f"Driver {p}",
+        "position": p, "tyre_compound": "MEDIUM", "tyre_age": 9,
+        "gap_to_player_s": (p - 7) * 1.7,
+        "lap_history": [{"lap_ms": 90000 + p * 100, "valid_flags": 1}],
+    } for p in range(1, 21)]
+    before = engine.compute(state)["recommended"]
+    renamed = deepcopy(state)
+    renamed["player_car_index"] = 71
+    for driver in renamed["drivers"]:
+        driver["car_idx"] = 71 - driver["car_idx"]
+        driver["name"] = f"Renamed {driver['car_idx']}"
+    renamed["drivers"].reverse()
+    after = engine.compute(renamed)["recommended"]
+    for key in ("box_laps", "compounds", "projected_time_s", "projected_finish_position",
+                "points_expected", "position_probabilities"):
+        assert after[key] == before[key], key
+
+
+@pytest.mark.asyncio
+async def test_five_seconds_more_pit_loss_is_counted_once_per_stop(stack, monkeypatch):
+    store, _, engine, *_ = stack
+    await store.mutate(_race)
+    state = await store.snapshot_analysis()
+    engine.compute(state)
+    def key(plan):
+        return tuple(plan["box_laps"]), tuple(plan["compounds"])
+    before = {key(p): p for p in engine._candidate_pool}
+    original = StrategyEngine._base_pit_loss
+    monkeypatch.setattr(StrategyEngine, "_base_pit_loss", staticmethod(lambda s: original(s) + 5))
+    engine.compute(state)
+    checked_stops = set()
+    for plan in engine._candidate_pool:
+        previous = before.get(key(plan))
+        if previous is None:
+            continue
+        extra = ((plan["projected_time_s"] - plan["traffic_cost_s"])
+                 - (previous["projected_time_s"] - previous["traffic_cost_s"]))
+        assert extra == pytest.approx(5 * plan["stops_remaining"], abs=.02)
+        checked_stops.add(plan["stops_remaining"])
+    assert {0, 1, 2}.issubset(checked_stops)
