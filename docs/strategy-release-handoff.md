@@ -22,6 +22,21 @@ and complete source can be recovered without replaying the patches. Compare the
 resulting tree with the manifest. If upstream has moved, integrate in an isolated
 branch and repeat the affected validation; do not overwrite newer work.
 
+From the extracted archive directory, the self-contained bundle can be opened
+without a network fetch:
+
+```bash
+git clone --branch codex/strategy-refinement-20260913 pitbox-strategy.bundle pitbox-strategy-review
+cd pitbox-strategy-review
+git rev-parse HEAD
+git rev-parse HEAD^{tree}
+```
+
+Alternatively, apply `strategy-refinement.mbox` with `git am` on a new branch
+at the base SHA in an existing repository. Patch application can change commit
+identities through committer timestamps; the resulting tree must still match
+the manifest. Bundle cloning preserves the original commit identities.
+
 Start with `strategy-scenarios-2026-09.md`, then
 `strategy-coverage-2026-09.md`, `strategy-qa-findings-2026-09.md` and the
 independent validation reports. The coverage ledger contains 51 covered,
