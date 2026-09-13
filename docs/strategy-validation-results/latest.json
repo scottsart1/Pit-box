@@ -1,10 +1,10 @@
 {
   "scope": "Independent primary strategy model validation; release gates remain separate",
   "candidate_version": "4.10.0",
-  "candidate_commit": "a7042b51c4ee860bf45553a411eb713b2431d763",
+  "candidate_commit": "eebfac4bec11331b2bda39365ecfc15d77bf20e8",
   "baseline_commit": "daa029ad41ce29c101254e54a53ade5dbaf8b852",
-  "paired_evidence": "daa029a-vs-a7042b5.json",
-  "paired_evidence_sha256": "66772c2f1438730d03b19e6e7959a100566ebf9077cedcae74bcbeaf858fbae1",
+  "paired_evidence": "daa029a-vs-eebfac4.json",
+  "paired_evidence_sha256": "ec79294a5394654b9af069d3f6e97e1226718c04f8a49bb17be31a9f396b1edf",
   "performance_evidence": "classification-performance-a7042b5.json",
   "evaluator_sha256": "e4a84bf83900a571ad44c135898e6214b331e4462f799b301a2582aa4e18f1f4",
   "manifest_sha256": "e64e4bc36c829a07073d746ba7e4822221be02794a19e357344207a6a8bd51fe",
@@ -21,5 +21,6 @@
   "closed_loop_physical_failures": 0,
   "physical_decisions_identical_to_3ed73b9": true,
   "complete_outputs_identical_to_a71c062": true,
+  "complete_outputs_identical_to_a7042b5": true,
   "real_race_calibration_claim": false
 }
