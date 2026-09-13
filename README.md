@@ -93,6 +93,51 @@ dashboard. Bind the web host to `0.0.0.0`, set a long
 `PITWALL_WEB_ACCESS_TOKEN`, and keep it on a trusted LAN. Your Pit Box never opens a
 router or firewall to the public internet automatically.
 
+## What changed in 4.9.8
+
+### A saved API key no longer crashes startup behind a SOCKS proxy
+
+The provider clients honour the system proxy settings, and on a machine
+routing through a SOCKS VPN that path needs an optional HTTPX extra that was
+never declared. With a key saved, the app could fail during startup before the
+dashboard ever appeared. `httpx[socks]` is now a runtime dependency, the
+frozen build ships `socksio` explicitly because HTTPX imports it lazily, and
+the Android dependency list matches the desktop one.
+
+### The held strategy call no longer mixes old numbers with new ones
+
+When a pit call is held for stability, the numbers beside it are refreshed as
+a set. The held plan previously kept the old recommendation and had a
+hand-maintained list of projection fields copied onto it, so a freshly
+computed probability distribution could sit next to a stale expected finishing
+position, percentile, points figure or confidence — and any projection field
+missing from that list silently carried across ticks. The held call now starts
+from the complete current evaluation and keeps only the committed instruction:
+the box lap, the fitted compound and the conditions that would change the
+call. The prose, confidence and wear explanations are recomputed to describe
+what is actually being shown.
+
+### The download button tolerates a slow or broken metadata check
+
+The advisory installer-details request is capped at five seconds, a malformed
+reply is treated as no reply, and a stale code panel is cleared before each
+download. A failed check can no longer hold up or block the installer, which
+has no artificial timeout of its own. The setup guide's activation-code advice
+is replaced with current upgrade instructions: install over the top, keep your
+sessions and settings, no code needed.
+
+### The release is gated on the installed artifact, not the checkout
+
+The Windows build workflow now silently installs the exact artifact it just
+built into a disposable directory, launches the frozen executable, checks its
+health and version against an isolated database, sends real F1 2026 telemetry
+and asserts the live state matches, verifies the session and capture were
+persisted, restarts and reads the session back through the product's own API,
+then uninstalls and confirms existing data survived. Publication is blocked
+unless all of that passes, and diagnostics are uploaded when it does not. The
+gate refuses to run anywhere but a disposable GitHub-hosted runner, and
+refuses outright if an installation is already registered on the machine.
+
 ## What changed in 4.9.7
 
 ### Session Review names the session again
