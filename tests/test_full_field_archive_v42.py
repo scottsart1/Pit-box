@@ -313,3 +313,105 @@ async def test_an_out_of_scope_car_is_not_archived(tmp_path: Path) -> None:
     assert snapshot.persisted_laps == 0
     with sqlite3.connect(database.path) as db:
         assert db.execute("SELECT COUNT(*) FROM recorded_laps").fetchone()[0] == 0
+
+
+@pytest.mark.parametrize(
+    "raw_type_id,live_label",
+    [(16, "Race 2"), (15, "Race")],
+)
+@pytest.mark.asyncio
+async def test_archive_keeps_the_catalog_session_name_and_files_the_enum_apart(
+    tmp_path: Path, raw_type_id: int, live_label: str
+) -> None:
+    """Issue #33: the archive must not overwrite the name with the enum.
+
+    The full-field writer only ever sees ``PacketSessionData.session_type``.
+    It used to write that integer straight into the catalog's semantic
+    ``session_type``, so a row the live classifier had correctly recorded as
+    "Race 2" became "16" as soon as one lap batch flushed, and Session Review
+    showed a protocol number where the session name belongs.
+    """
+    database = PitWallDatabase(tmp_path / "pitwall.sqlite3")
+    await database.initialize()
+    trace_store = TraceStore(tmp_path / "traces")
+    archive = FullFieldArchiveService(database.path, trace_store, queue_size=8)
+    await archive.start()
+    assembler = SessionAssembler(batch_sink=archive.submit, field_trace_hz=20)
+
+    def stamp(frame: int, time_s: float) -> EventStamp:
+        return EventStamp(
+            777, frame, frame, time_s, frame * 1_000_000, frame * 1_000_000
+        )
+
+    assembler.consume(
+        SessionEvent(
+            stamp(1, 0.1),
+            track_id=4,
+            layout_signature="f1:2026:4:5000",
+            session_type=raw_type_id,
+            packet_format=2026,
+            player_car_index=0,
+        )
+    )
+    session = assembler.session
+    assert session is not None
+
+    # What the live classifier resolves and writes, before any batch flushes.
+    with sqlite3.connect(database.path) as db:
+        db.execute(
+            """
+            INSERT INTO recorded_sessions(
+                id, game_session_uid, restart_epoch, track_id, session_type,
+                mode_profile, status, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, 'race', 'recording', 'now', 'now')
+            """,
+            (
+                session.id,
+                session.game_session_uid,
+                session.restart_epoch,
+                4,
+                live_label,
+            ),
+        )
+
+    for index in (0, 1):
+        assembler.consume(
+            ParticipantEvent(
+                stamp(2, 0.2),
+                index,
+                {"name": f"Driver {index}", "is_player": index == 0},
+            )
+        )
+        for frame, distance in enumerate((0.0, 5.0, 10.0), 3):
+            for channel, payload in (
+                ("telemetry", {"speed_mps": 50.0, "brake": 0.0}),
+                ("lap_data", {"position": index + 1}),
+            ):
+                assembler.consume(
+                    SampleEvent(
+                        stamp(frame, frame / 10),
+                        index,
+                        1,
+                        channel,
+                        {"lap_distance_m": distance, **payload},
+                        units={"lap_distance_m": "m"},
+                    )
+                )
+        assembler.consume(LapEvent(stamp(8, 1.0), index, 1, 2, 60_000, True))
+
+    await archive.stop()
+    assert archive.snapshot().persisted_laps == 1
+
+    with sqlite3.connect(database.path) as db:
+        db.row_factory = sqlite3.Row
+        row = db.execute(
+            "SELECT session_type, mode_profile, raw_session_type_id"
+            " FROM recorded_sessions WHERE id=?",
+            (session.id,),
+        ).fetchone()
+
+    assert row is not None
+    assert row["session_type"] == live_label
+    assert row["mode_profile"] == "race"
+    # The protocol identity is kept, just not where the name belongs.
+    assert row["raw_session_type_id"] == raw_type_id

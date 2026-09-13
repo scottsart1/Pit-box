@@ -13,9 +13,16 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, TypeAlias
 
+from f1.packets import SESSIONS
+
 from .catalog import lap_id
 from .session_assembler import BranchInvalidation, FinalizedLapBatch
 from .trace_store import TraceStore
+
+# The protocol's own names for the session type enum. Only a fallback here:
+# the live classifier owns the semantic label, because the effective one also
+# weighs the manual override and the weekend structure.
+SESSION_TYPE_LABELS = {int(type_id): label for type_id, label in SESSIONS.items()}
 
 log = logging.getLogger(__name__)
 
@@ -244,17 +251,33 @@ class FullFieldArchiveService:
             context.get("layout_signature")
             or f"f1:{int(context.get('packet_format', 0) or 0)}:{track_id}"
         )
+        # This writer only ever sees the protocol enum, so it must not touch
+        # the semantic session_type: writing str(16) here replaced a catalog
+        # row already correctly reading "Race 2" with the number, and Session
+        # Review showed a protocol id where the session name belongs. The enum
+        # keeps its own column, and the label is written only as the seed for
+        # a row this writer reaches before the live classifier has made one.
+        raw_session_type = context.get("session_type")
+        raw_session_type_id = (
+            raw_session_type if isinstance(raw_session_type, int) else None
+        )
+        seed_label = (
+            "Unknown"
+            if raw_session_type_id is None
+            else SESSION_TYPE_LABELS.get(raw_session_type_id, "Unknown")
+        )
         db.execute(
             """
             INSERT INTO recorded_sessions(
                 id, game_session_uid, restart_epoch, track_id,
-                track_layout_signature, session_type, mode_profile, started_at,
-                status, packet_format, capture_mode, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'recording', ?, ?, ?, ?)
+                track_layout_signature, session_type, raw_session_type_id,
+                mode_profile, started_at, status, packet_format, capture_mode,
+                created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'recording', ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
                 track_id=excluded.track_id,
                 track_layout_signature=excluded.track_layout_signature,
-                session_type=excluded.session_type,
+                raw_session_type_id=excluded.raw_session_type_id,
                 packet_format=excluded.packet_format,
                 updated_at=excluded.updated_at
             """,
@@ -264,7 +287,8 @@ class FullFieldArchiveService:
                 batch.session.restart_epoch,
                 track_id,
                 layout,
-                str(context.get("session_type", "Unknown")),
+                seed_label,
+                raw_session_type_id,
                 str(context.get("mode_profile", "unknown")),
                 now,
                 int(context.get("packet_format", 0) or 0),

@@ -5,6 +5,7 @@ import sqlite3
 
 import pytest
 
+from pitwall import database as database_module
 from pitwall.config import Settings
 from pitwall.database import PitWallDatabase
 from pitwall.migrations import LATEST_SCHEMA_VERSION, MIGRATIONS
@@ -144,3 +145,58 @@ def test_v42_network_and_capture_settings_validate_and_keep_legacy_udp_alias(
         web_access_token="correct-horse-battery-staple",
     )
     assert secured.web_lan_access is True
+
+
+@pytest.mark.asyncio
+async def test_v496_repairs_session_names_the_archive_overwrote_with_enums(
+    tmp_path, monkeypatch
+) -> None:
+    """Issue #33: catalogued races already read "15" and "16" in the field.
+
+    The full-field writer wrote the protocol enum into the semantic
+    session_type, so history recorded before the fix still names sessions by
+    number. The migration moves that number into its own column and restores
+    the name, touching only rows whose label is entirely digits.
+    """
+    path = tmp_path / "pitwall.sqlite3"
+    # A database as the released build left it: every migration but this one.
+    monkeypatch.setattr(
+        database_module,
+        "MIGRATIONS",
+        tuple(item for item in MIGRATIONS if item.version != 4902),
+    )
+    await PitWallDatabase(path).initialize()
+
+    corrupted = (("s-race2", "16"), ("s-race", "15"))
+    healthy = (("s-tt", "Time Trial"), ("s-q3", "Qualifying 3"))
+    with sqlite3.connect(path) as db:
+        columns = {row[1] for row in db.execute("PRAGMA table_info(recorded_sessions)")}
+        assert "raw_session_type_id" not in columns
+        for index, (key, label) in enumerate(corrupted + healthy):
+            db.execute(
+                """
+                INSERT INTO recorded_sessions(
+                    id, game_session_uid, restart_epoch, session_type,
+                    mode_profile, status, created_at, updated_at
+                ) VALUES (?, ?, 0, ?, 'race', 'complete', 't', 't')
+                """,
+                (key, f"uid-{index}", label),
+            )
+
+    monkeypatch.undo()
+    await PitWallDatabase(path).initialize()
+
+    with sqlite3.connect(path) as db:
+        db.row_factory = sqlite3.Row
+        rows = {
+            row["id"]: (row["session_type"], row["raw_session_type_id"])
+            for row in db.execute(
+                "SELECT id, session_type, raw_session_type_id FROM recorded_sessions"
+            )
+        }
+
+    assert rows["s-race2"] == ("Race 2", 16)
+    assert rows["s-race"] == ("Race", 15)
+    # A real session name is never all digits, so nothing else is rewritten.
+    assert rows["s-tt"] == ("Time Trial", None)
+    assert rows["s-q3"] == ("Qualifying 3", None)

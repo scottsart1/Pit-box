@@ -365,10 +365,60 @@ V4_9_2_TYRE_LEARNING = Migration(
 )
 
 
+V4_9_6_RAW_SESSION_TYPE = Migration(
+    version=4902,
+    app_version="4.9.6",
+    statements=(
+        "ALTER TABLE recorded_sessions ADD COLUMN raw_session_type_id INTEGER",
+        # Repair the rows the full-field writer already overwrote. It wrote the
+        # protocol enum into the semantic session_type, so catalogued races
+        # read "15" or "16" instead of "Race" or "Race 2". An all-digits value
+        # is unambiguously one of those: no session name is only digits, and
+        # the guard leaves every legitimate label alone.
+        """
+        UPDATE recorded_sessions
+        SET raw_session_type_id = CAST(session_type AS INTEGER)
+        WHERE raw_session_type_id IS NULL
+          AND session_type GLOB '[0-9]*'
+          AND NOT session_type GLOB '*[^0-9]*'
+        """,
+        """
+        UPDATE recorded_sessions
+        SET session_type = CASE raw_session_type_id
+                    WHEN 0 THEN 'Unknown'
+                    WHEN 1 THEN 'Practice 1'
+                    WHEN 2 THEN 'Practice 2'
+                    WHEN 3 THEN 'Practice 3'
+                    WHEN 4 THEN 'Short Practice'
+                    WHEN 5 THEN 'Qualifying 1'
+                    WHEN 6 THEN 'Qualifying 2'
+                    WHEN 7 THEN 'Qualifying 3'
+                    WHEN 8 THEN 'Short Qualifying'
+                    WHEN 9 THEN 'One-Shot Qualifying'
+                    WHEN 10 THEN 'Sprint Shootout 1'
+                    WHEN 11 THEN 'Sprint Shootout 2'
+                    WHEN 12 THEN 'Sprint Shootout 3'
+                    WHEN 13 THEN 'Short Sprint Shootout'
+                    WHEN 14 THEN 'One-Shot Sprint Shoot'
+                    WHEN 15 THEN 'Race'
+                    WHEN 16 THEN 'Race 2'
+                    WHEN 17 THEN 'Race 3'
+                    WHEN 18 THEN 'Time Trial'
+                    ELSE session_type
+                END
+        WHERE session_type GLOB '[0-9]*'
+          AND NOT session_type GLOB '*[^0-9]*'
+          AND raw_session_type_id IS NOT NULL
+        """,
+    ),
+)
+
+
 MIGRATIONS: tuple[Migration, ...] = (
     V4_2_CATALOG,
     V4_2_COMPARISON_RESULTS,
     V4_2_ARCHIVE_PROVENANCE,
     V4_9_2_TYRE_LEARNING,
+    V4_9_6_RAW_SESSION_TYPE,
 )
 LATEST_SCHEMA_VERSION = MIGRATIONS[-1].version
