@@ -3,9 +3,10 @@
 This accounts for all **72 scenarios** in the specification frozen at
 `c3229ed`: D01–D31, W01–W24, and R01–R17. It is a coverage review, **not a
 claim that all 72 scenarios passed** or that the model is calibrated to real
-races. Source reviewed: integrating tree through `e1781b1`, with the separately
-verified championship correction `ccb710c` identified below. Later integration
-and execution results must be appended with their tested revision.
+races. The ledger includes the integrated player/rival/set pace references,
+championship validity, exact driver overrides, conditional cut tools and
+pending-penalty corrections through `a71c062`. Execution results identify
+their own tested revisions in the reports linked below.
 
 **Covered** means a targeted automated test exercises the stated behavior or
 its explicit mathematical invariant, and the responsible worker reports a
@@ -37,22 +38,22 @@ included where a broad file name would otherwise overstate coverage.
 | D12 | Covered | `tests/test_extraction_3_4.py::test_two_compound_rule_does_not_apply_to_a_sprint`; Sprint classification and points have separate parameterized tests. |
 | D13 | Covered | `tests/test_strategy.py::test_wet_use_waives_dry_compound_requirement`, grid-swap regressions in `test_race_regressions_4_9_3.py`, and probability/observed-weather separation in `test_rain_probability.py`. |
 | D14 | Covered | `tests/test_pit_call_sanity.py::test_recovery_is_bounded_by_what_the_time_advantage_can_buy` compares easy/hard passing and shorter remainders; no-advantage and maximum-recovery tests prevent free overtakes. Traffic response remains a heuristic, not calibrated passing physics. |
-| D15 | Partial | `tests/test_strategy_event_costs_and_scoring.py::test_player_personal_degradation_is_not_rival_evidence` prevents player learning from being mislabeled as rival evidence. The matched equal-field pace scenario in `docs/strategy-pace-reference-scenarios.md` was still an integration dependency at review time; the exact faster-rivals monotonicity case needs recorded confirmation. |
-| D16 | Partial | Finite-set record ordering and deterministic world generation are tested. No recorded test permutes all driver names/indices while preserving player identity and gaps through the complete planner. |
+| D15 | Covered | `test_strategy_event_costs_and_scoring.py::test_renaming_and_permuting_the_field_does_not_change_strategy` improves every rival by one second and checks each matched candidate cannot gain finishing positions. Equal-field age-reference oracles are in `test_strategy_rival_pace_reference.py`. |
+| D16 | Covered | The field permutation test changes names, indices, player identity and array order through actual compute, preserving stop choices, clocks, points and distributions. |
 | D17 | Partial | `tests/test_strategy_event_costs_and_scoring.py::test_retired_cars_do_not_cost_rejoin_positions` covers retired/DNF/disqualified cars. Adding a distant noncompetitive classified car is not independently tested across all ranking/probability outputs. |
-| D18 | Partial | `tests/test_strategy_event_costs_and_scoring.py::test_only_current_stop_receives_safety_car_discount` independently sums actual candidate stop costs. Exact +5-second green-loss changes across otherwise identical one/two-stop plans need a dedicated recorded counterfactual. |
+| D18 | Covered | `test_strategy_event_costs_and_scoring.py::test_five_seconds_more_pit_loss_is_counted_once_per_stop` compares actual matched zero/one/two-stop candidates and separates changed traffic from the exact +5 seconds per stop. |
 | D19 | Partial | `tests/test_strategy_event_costs_and_scoring.py::test_raw_lane_duration_is_not_a_measured_net_pit_loss` verifies honest fallback when main-track traversal is absent. The planner currently uses labeled circuit priors; it does not independently measure the stipulated 27−9-second traversal pair. |
 | D20 | Covered | `tests/test_strategy_event_costs_and_scoring.py::test_only_current_stop_receives_safety_car_discount` checks actual two-stop candidate totals: current reachable SC discount, later green loss. |
-| D21 | Partial | `tests/test_strategy_inventory.py::test_red_flag_change_can_be_followed_by_a_later_stop` checks resources and zero-lap initial change. Existing red-flag tests check free current changes, and per-stop uncertainty tests check future paid costs. An actual two-stop red-flag candidate's full 0+green total should be pinned directly. Actual game entitlement to a suspension change still needs game validation. |
+| D21 | Covered | The parameterized current-stop ledger test includes actual red-flag two-stop candidates: zero seconds for the suspension change and 24 seconds for a later green stop. Inventory/zero-lap removal tests also pass. Actual game entitlement remains an assumption requiring game validation. |
 | D22 | Covered | `tests/test_strategy_event_costs_and_scoring.py::test_specific_ending_event_outranks_lingering_general_status` covers SC/VSC ending against lingering full/virtual status. |
 | D23 | Covered | `tests/test_strategy_benchmarks_2026.py::test_britain_late_sc_protects_track_position` verifies the safe/legal late-neutralisation case. The likelihood of a neutralised finish remains an assumption. |
 | D24 | Partial | The model exposes pit-entry availability and the fuzz validator checks stop-lap validity. No recorded emergency sequence straddles the actual pit-entry threshold and validates the resulting instruction through the application. Circuit thresholds themselves are approximations. |
-| D25 | Unsupported | Existing fuel-save and impossible-repair narration tests do not price an explicit future stop's repair/penalty duration. No verified per-stop stationary repair-time observation is included in this refinement. Do not claim that tyres repair a fuel deficit or that these costs are fully modeled. |
+| D25 | Partial | `tests/test_strategy_finish_penalties.py` covers current unserved time penalties once in player/rival clocks, probabilities, held outputs and what-if comparisons. Cleared counters and classification gains are separate from physical passes. Unknown repair, drive-through and stop-go service durations remain explicitly unmodeled. |
 | D26 | Covered | `tests/test_strategy_event_costs_and_scoring.py::test_rival_age_resets_after_every_projected_stop` uses an independently written age sequence and counts every pit cost. Rival response and fresh-set pace remain estimates. |
 | D27 | Covered | `tests/test_strategy_event_costs_and_scoring.py::test_pit_cycle_recovery_does_not_require_on_track_overtakes` verifies six later rival stops restore positions even at maximal passing difficulty. This is conditional on those rival stops occurring. |
-| D28 | Partial | Undercut APIs, dialogue, and threat classification exist; `tests/test_field_capture.py::test_undercut_range_requires_the_car_to_be_behind_on_position` tests target selection. No recorded +2.8→−2.2-second numerical counterfactual verifies API/main-planner agreement. |
-| D29 | Partial | Overcut API/dialogue and candidate selection exist. No recorded +2.5→−1.5-second out-lap/in-lap oracle verifies the tool verdict and its stated rival response. |
-| D30 | Covered | `tests/test_strategy_inventory.py::test_nondominated_faster_worn_set_is_preserved` prevents lowest wear from automatically discarding a quicker usable set. Measured set-delta baseline calibration is a separate follow-up, not established by this test alone. |
+| D28 | Covered | `tests/test_strategy_cut_tools.py` exercises actual shared response-window arithmetic: undercut +2.8 seconds becomes −2.2 with five seconds of traffic. The tool consumes feasible main-plan physical stints and discloses a low-confidence rival-response assumption; real-game response calibration remains open. |
+| D29 | Covered | `tests/test_strategy_cut_tools.py` verifies overcut +2.5 seconds becomes −1.5 with the slower extra lap, and changes second-for-second with target gap. Guards decline unsupported weather, neutralisation, stock and partial-stop situations. Rival out-lap behavior remains an estimate. |
+| D30 | Covered | `test_strategy_inventory.py::test_nondominated_faster_worn_set_is_preserved` retains faster usable sets. Physical-set pace oracles in `test_strategy_pace_reference.py` validate fitted-reference deltas without duplicating compound, age or wear cost. Unknown spare age and game-estimator accuracy remain disclosed. |
 | D31 | Covered | `tests/test_strategy_inventory.py::test_three_stop_search_includes_urgent_first_stop` covers the early three-stop resource requirement. Longer-horizon two/three-stop search remains explicitly sampled; this is not an exhaustive optimizer claim. |
 
 ## Weather and learning
@@ -92,7 +93,7 @@ included where a broad file name would otherwise overstate coverage.
 | R02 | Covered | `tests/test_strategy_stability_projection.py` observes recompute→state→tools→SQLite coherence while a call is held; `test_race_regressions_4_9_3.py` verifies sustained-winner confirmation and shortlist-independent holds. |
 | R03 | Partial | `tests/test_strategy_hold_feasibility.py` prevents illegal/infeasible holds and loss of warnings; wet-stop and high-wear tests cover fresh computation. The complete held-call→new emergency→reachable pit action sequence has not been recorded across every trigger. |
 | R04 | Covered | Same-compound physical replacements in `test_strategy_inventory.py`, complete-plan validation in `test_race_plan.py`, and actual planned-stop rebasing in `test_race_plan_ranking.py`. |
-| R05 | Partial | Illegal/unsafe hold rejection, unavailable grid stock, unservable legality warnings, and explicit driver-plan validation are covered. Exact mid-race locked unavailable-set behavior and all `honored`/warning combinations should not be inferred from these tests. |
+| R05 | Covered | `tests/test_race_plan_ranking.py` verifies exact unsampled safe three-stop requests, unavailable repeated physical stock and an unsafe long SOFT finish. Unsafe requests receive wear/life/inventory explanations; safe exact schedules are honored. UI adoption also requires feasibility and legality. |
 | R06 | Partial | `test_reliability.py::test_new_session_uid_resets_stale_session_state_but_keeps_ptt`, same-UID restart tests in `test_state_v42.py`, assembler flashback invalidation, and clock epoch tests cover components. UID→0→same UID and every race-local cache together are not one observed regression. |
 | R07 | Partial | Stale radio suppression in `test_architecture_v4.py`, stale connection tests, packet-health duplicate/reorder/flashback tests, and archive invalidation are covered. The final mixed-packet loss/reconnection app run remains an integration gate; individual packet-group freshness is not equivalent to overall connectivity. |
 | R08 | Partial | Qualifying exclusion, Sprint mode extraction, and race legality/scoring are tested. An otherwise-identical five-mode full-planner matrix, including practice/time trial and transitions, is not separately recorded. |
@@ -117,14 +118,15 @@ independent benchmark definition and baseline are in
 `docs/strategy-independent-baseline-2026-09.md`. An adapter correction does not
 justify changing physical worlds or hidden seeds after observing a failure.
 
-The following remain release gates, regardless of the table's coverage labels:
+The following gates apply regardless of the table's coverage labels:
 
-1. Integrate and rerun the corrected championship output and the matched
-   player/rival pace reference. The earlier equal-field oracle explicitly
-   exposed a ranking reversal; its integrating revision must pass.
-2. Inspect every independently infeasible emitted candidate and every
-   contradictory output. Do not omit failed worlds from the report or call a
-   larger mean improvement sufficient to release an impossible tyre plan.
+1. The corrected championship output and matched player/rival pace references
+   are integrated. Their regressions pass in the complete 1,529-test run at
+   `35b33c6`, including the equal-field oracle that exposed a ranking reversal.
+2. Independent evaluation at `a71c062` finds 24/24 executable recommendations,
+   versus 20/24 in v4.9.8, with no contract violations or candidate regression
+   among the 20 common feasible worlds. This is synthetic validation, not
+   real-race calibration; all worlds, including remaining regret, are retained.
 3. Attach full-suite, same-evaluator candidate-versus-baseline, bounded fuzz,
    isolated app/UDP/capture/restart, latency, and data-preservation evidence for
    the final candidate. The presence of `tools/strategy_app_smoke.py` is not
@@ -137,19 +139,24 @@ The following remain release gates, regardless of the table's coverage labels:
    narration, real-game red-flag behavior, and actual driver forecast accuracy
    explicitly deferred unless observed. No synthetic test establishes these.
 
-The partial/unsupported rows identify genuine limits on the requested scope.
-They are not automatically confirmed defects, and this ledger did not modify
-the model or execute new product experiments. Additional numerical oracles
-may convert a partial row into a pass or reveal a release blocker. In
-particular, exact undercut/overcut margins, repair-duration pricing, extended
-warm-up learning, and whole-app replay equivalence must not be described as
-fully validated by the existing nearby tests.
+The partial/unsupported rows identify limits on the requested scope; they are
+not automatically confirmed defects. Conditional undercut/overcut arithmetic
+now has explicit numerical oracles, while its rival-response assumptions remain
+uncalibrated. Repair-duration pricing, extended temperature-attributed warm-up
+learning and whole-app replay equivalence are not fully validated.
 
-## Final integration results to append
+## Integration evidence
 
-Reserved for the integrating owner: tested commit, full-suite result, exact
-benchmark/evaluator/report hashes, all failure dispositions, normal and
-adversarial fuzz counts, UDP/replay/persistence observations, memory/latency
-measurements, Windows workflow/artifact identity, and deployment evidence.
-Until those are attached, this document is a coverage ledger rather than a
-release approval.
+- `strategy-independent-validation-final.md` records all 24 physical worlds,
+  the two sequential runs, exact evaluator/input/output identities and timing.
+- `strategy-qa-findings-2026-09.md` records reproduced defects, overlap with
+  existing GitHub issues and publication status.
+- `strategy-sqlite-runtime-blocker-20260913.md` records byte-identical source
+  replays, failed overlay storage controls in both release and candidate,
+  passing tmpfs controls and independently measured reception/capture gaps.
+- The Windows workflow now includes sustained telemetry and full database
+  integrity checks. Its portable tests and source-helper run do not establish
+  that the Windows installed artifact passed.
+
+This ledger is not a release approval. GitHub denied branch/issue creation with
+HTTP403, and no candidate Windows artifact or production deployment is claimed.
