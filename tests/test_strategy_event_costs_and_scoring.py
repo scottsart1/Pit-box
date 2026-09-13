@@ -91,9 +91,12 @@ def test_specific_ending_event_outranks_lingering_general_status(phase, safety):
 
 
 @pytest.mark.asyncio
-async def test_only_current_stop_receives_safety_car_discount(stack):
+@pytest.mark.parametrize("phase,safety,factor", [
+    ("safety_car", "full", .46), ("vsc", "virtual", .64), ("red_flag", "none", 0),
+])
+async def test_only_current_stop_receives_safety_car_discount(stack, phase, safety, factor):
     store, _, engine, *_ = stack
-    await store.mutate(lambda s: _race(s, phase="safety_car", safety="full"))
+    await store.mutate(lambda s: _race(s, phase=phase, safety=safety))
     state = await store.snapshot_analysis()
     engine.compute(state)
     two = [p for p in engine._candidate_pool if p["stops_remaining"] == 2]
@@ -101,7 +104,7 @@ async def test_only_current_stop_receives_safety_car_discount(stack):
     for plan in two:
         pit_cost = (plan["projected_time_s"] - plan["traffic_cost_s"]
                     - sum(s["expected_time_s"] for s in plan["stint_models"]))
-        expected = 24 + (24 * 0.46 if plan["box_laps"][0] == 10 else 24)
+        expected = 24 + (24 * factor if plan["box_laps"][0] == 10 else 24)
         assert pit_cost == pytest.approx(expected, abs=0.02), plan["box_laps"]
 
 
@@ -268,6 +271,9 @@ async def test_renaming_and_permuting_the_field_does_not_change_strategy(stack):
         "lap_history": [{"lap_ms": 90000 + p * 100, "valid_flags": 1}],
     } for p in range(1, 21)]
     before = engine.compute(state)["recommended"]
+    def plan_key(plan):
+        return tuple(plan["box_laps"]), tuple(plan["compounds"])
+    before_pool = {plan_key(p): p for p in engine._candidate_pool}
     renamed = deepcopy(state)
     renamed["player_car_index"] = 71
     for driver in renamed["drivers"]:
@@ -278,6 +284,18 @@ async def test_renaming_and_permuting_the_field_does_not_change_strategy(stack):
     for key in ("box_laps", "compounds", "projected_time_s", "projected_finish_position",
                 "points_expected", "position_probabilities"):
         assert after[key] == before[key], key
+    faster_rivals = deepcopy(state)
+    for driver in faster_rivals["drivers"]:
+        if driver["car_idx"] != state["player_car_index"]:
+            driver["lap_history"][0]["lap_ms"] -= 1000
+    engine.compute(faster_rivals)
+    compared = 0
+    for plan in engine._candidate_pool:
+        previous = before_pool.get(plan_key(plan))
+        if previous is not None:
+            assert plan["projected_finish_position"] >= previous["projected_finish_position"]
+            compared += 1
+    assert compared > 1
 
 
 @pytest.mark.asyncio
