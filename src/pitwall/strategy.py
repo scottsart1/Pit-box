@@ -5,6 +5,7 @@ import re
 import time
 import zlib
 from collections.abc import Iterable, Sequence
+from copy import deepcopy
 from itertools import pairwise
 from statistics import median
 from typing import Any
@@ -4112,83 +4113,182 @@ class StrategyEngine:
             ),
         }
 
-    async def evaluate_undercut(self, driver: str = "ahead") -> dict[str, Any]:
-        state = await self.store.snapshot_analysis()
-        target = self._resolve_driver(state, driver)
-        if target is None or target.get("gap_to_player_s") is None:
-            return {
-                "available": False,
-                "reason": "Target driver or gap is unavailable.",
-            }
-        gap = abs(float(target["gap_to_player_s"]))
-        historical = await self.database.tyre_history_model(
-            int(state.get("track_id", -1)), context=state
-        )
-        historical = infer_unrun_compounds(historical)
-        own_deg, _, _ = self._deg_for(state, str(state["tyre"]["compound"]), historical)
-        rival_age = int(target.get("tyre_age", 0))
-        rival_compound = str(target.get("tyre_compound", "MEDIUM"))
-        rival_deg = DEFAULT_DEG.get(rival_compound, 0.09)
-        fresh_gain = max(0.35, own_deg * max(1, int(state["tyre"]["age_laps"])) + 0.45)
-        two_lap_gain = 2 * (fresh_gain + rival_deg * rival_age)
-        neutral = self._neutralisation(state)
-        traffic_penalty = (
-            0.5
-            if self._rejoin_position(state, float(neutral["effective_pit_loss_s"]))
-            > int(state.get("player_position", 0)) + 3
-            else 0.0
-        )
-        margin = two_lap_gain - gap - traffic_penalty
+    @staticmethod
+    def _cut_window_margin(
+        player_laps_s: Sequence[float], rival_laps_s: Sequence[float],
+        gap_to_player_s: float, player_pit_loss_s: float,
+        rival_pit_loss_s: float, player_traffic_s: float = 0.0,
+    ) -> dict[str, Any]:
+        """Two cars traverse the same distance from one signed-gap origin."""
+        if not player_laps_s or len(player_laps_s) != len(rival_laps_s):
+            raise ValueError("A cut comparison requires matching nonempty lap windows.")
+        player_time = sum(player_laps_s) + player_pit_loss_s + player_traffic_s
+        rival_time = sum(rival_laps_s) + rival_pit_loss_s
         return {
-            "available": True,
-            "driver": target["name"],
-            "gap_s": round(gap, 2),
-            "estimated_two_lap_gain_s": round(two_lap_gain, 2),
-            "traffic_penalty_s": round(traffic_penalty, 2),
-            "margin_s": round(margin, 2),
-            "verdict": "undercut is on"
-            if margin > 0.4
-            else "undercut is marginal"
-            if margin > -0.4
-            else "undercut is unlikely",
-            "required": "Clean in-lap, legal compound, no traffic on rejoin, and a strong out-lap.",
-            "confidence": "medium" if target.get("lap_history") else "low",
+            "player_elapsed_s": round(player_time, 3),
+            "rival_elapsed_s": round(rival_time, 3),
+            "margin_s": round(gap_to_player_s + rival_time - player_time, 3),
+            "margin_basis": "signed target gap + rival elapsed time - player elapsed time",
         }
 
-    async def evaluate_overcut(self, driver: str = "ahead") -> dict[str, Any]:
+    def _cut_rival_laps(
+        self, state: dict[str, Any], target: dict[str, Any], *, overcut: bool,
+    ) -> dict[str, Any] | None:
+        """Apply the shared stint model to an explicitly assumed rival response.
+
+        Rival fuel/set inventory are not observed here. Their own matched lap
+        reference and a separate degradation prior avoid borrowing the player's
+        learned slope or charging observed tyre age a second time.
+        """
+        compound = str(target.get("tyre_compound", "UNKNOWN")).upper()
+        if compound not in DRY_COMPOUNDS:
+            return None
+        age = max(0, int(target.get("tyre_age", 0) or 0))
+        clean = {
+            "track_id": state.get("track_id", -1),
+            "track_temp_c": state.get("track_temp_c", 30),
+            "current_lap": state.get("current_lap", 0),
+            "tyre": {"compound": compound, "age_laps": age},
+            "driver_tyre_feedback": {}, "analysis": {}, "car_setup": {},
+        }
+        deg, _, _ = self._deg_for(clean, compound, {})
+        reference = self._rival_pace_reference(target, deg)
+        observed = finite(reference.get("observed_lap_s"))
+        if observed is None:
+            return None
+        normalized = finite(reference.get("normalized_lap_s"))
+        base = normalized if normalized is not None else observed - deg * age
+        current_wear = list(target.get("tyre_wear") or [0.0] * 4)
+        clean["_strategy_pace_reference"] = {
+            # The observed lap already contains wear loss. Current wear is
+            # an explicit approximation to the wear at the pace reference;
+            # charging it again would invent a second fresh-tyre benefit.
+            "reference_adjustment_s": self._wear_pace_penalty(current_wear),
+            "setup_in_observed_pace": True,
+            "age_end_reference": bool(reference.get("age_end_reference")),
+        }
+        old = self._simulate_stint(
+            clean, compound, 1 if overcut else 3, age,
+            current_wear, base, {}, 1.0,
+            {"fitted": True},
+        )
+        stints = [old]
+        if overcut:
+            # The spare's existence/compound is a scenario, not an observed
+            # physical set. The shared model includes its cold out-lap cost.
+            stints.append(self._simulate_stint(
+                clean, compound, 1, 0, [0.0] * 4, base, {}, 1.0,
+            ))
+        return {
+            "lap_times_s": [value for stint in stints for value in stint["lap_times_s"]],
+            "pace_reference": reference,
+            "feasible": all(stint["feasible"] for stint in stints),
+        }
+
+    async def _evaluate_cut(self, driver: str, *, overcut: bool) -> dict[str, Any]:
         state = await self.store.snapshot_analysis()
         target = self._resolve_driver(state, driver)
-        if target is None or target.get("gap_to_player_s") is None:
-            return {
-                "available": False,
-                "reason": "Target driver or gap is unavailable.",
-            }
+        if (target is None or finite(target.get("gap_to_player_s")) is None
+                or int(target.get("car_idx", -1)) == int(state.get("player_car_index", 0))
+                or str(target.get("result_label", "")).lower() in {
+                    "finished", "retired", "did not finish", "disqualified", "not classified"}):
+            return {"available": False, "reason": "A classified rival with an observed gap is required."}
+        current = int(state.get("current_lap", 0) or 0)
+        remaining = int(state.get("total_laps", 0) or 0) - current + 1
+        if state.get("mode_profile") not in {"race", "sprint"} or current < 1 or remaining < 3:
+            return {"available": False, "reason": "Not enough racing distance remains for this cut response window."}
+        if state.get("telemetry_stale"):
+            return {"available": False, "reason": "Telemetry is stale; the live gap cannot support a new cut call."}
+        player = self._resolve_driver(state, "me")
+        if player and (player.get("pit_status") or player.get("pit_lane_timer_active")
+                       or str(player.get("result_label", "")).lower() in {
+                           "finished", "retired", "did not finish", "disqualified", "not classified"}):
+            return {"available": False, "reason": "The player must still be racing on track for a new cut comparison."}
+        if target.get("pit_status") or target.get("pit_lane_timer_active"):
+            return {"available": False, "reason": "The rival's stop is already in progress; the live gap includes an unknown share of its pit loss."}
+        neutral = self._neutralisation(state)
+        if neutral["phase"] != "green":
+            return {"available": False, "reason": "A short cut margin requires green racing; use the main neutralisation-aware pit strategy."}
+        if not overcut and not neutral["pit_this_lap_available"]:
+            return {"available": False, "reason": "Pit entry has passed; an immediate undercut is no longer reachable."}
+        if str(state.get("tyre", {}).get("compound", "UNKNOWN")).upper() not in DRY_COMPOUNDS:
+            return {"available": False, "reason": "Wet or unknown player tyres need the main weather-aware pit strategy."}
         historical = await self.database.tyre_history_model(
             int(state.get("track_id", -1)), context=state
         )
         historical = infer_unrun_compounds(historical)
-        current_wear = max(state["tyre"]["wear"] or [0])
-        current_deg, _, _ = self._deg_for(
-            state, str(state["tyre"]["compound"]), historical
-        )
-        clean_air_gain = 0.5 if abs(float(target["gap_to_player_s"])) < 2.0 else 0.2
-        extra_lap_cost = (
-            current_deg * max(1, state["tyre"]["age_laps"])
-            + max(0.0, current_wear - 65) * 0.03
-        )
-        margin = clean_air_gain - extra_lap_cost
-        return {
-            "available": True,
-            "driver": target["name"],
-            "margin_s_per_extra_lap": round(margin, 2),
-            "verdict": "overcut is viable"
-            if margin > 0.15
-            else "overcut is marginal"
-            if margin > -0.15
-            else "overcut is not advised",
-            "required": "The rival must rejoin in traffic and your current tyre must remain stable.",
-            "confidence": "low" if not target.get("lap_history") else "medium",
+        box_lap = current + int(overcut)
+        query_state = deepcopy(state)
+        query_state["strategy_override"] = {
+            "enabled": True, "locked": True, "next_box_lap": box_lap,
         }
+        # The driver asked a what-if question, not to replace the live plan or
+        # its hysteresis pool. Compute the same model in a separate instance.
+        scenario = StrategyEngine(self.store, self.database).compute(query_state, historical)
+        plan = scenario.get("recommended", {})
+        if (not plan.get("legal") or not plan.get("feasible")
+                or (plan.get("box_laps") or [None])[0] != box_lap):
+            return {"available": False, "reason": "No legal, feasible main-planner stop with the available tyres matches this response window."}
+        if scenario.get("weather_crossover"):
+            return {"available": False, "reason": "Wet or changing conditions need the main weather-aware pit strategy; this short dry-pace comparison is unavailable."}
+        window = 2 if overcut else 3
+        if any(int(lap) <= current + window - 1 for lap in plan.get("box_laps", [])[1:]):
+            return {"available": False, "reason": "Another required stop falls inside the short cut response window."}
+        player_laps = [value for stint in plan.get("stint_models", [])
+                       for value in stint.get("lap_times_s", [])][:window]
+        rival = self._cut_rival_laps(state, target, overcut=overcut)
+        if rival is None or not rival["feasible"] or len(player_laps) != window:
+            return {"available": False, "reason": "Observed rival pace and a viable assumed tyre window are required for this comparison."}
+        own_cost = float(plan["pit_stop_costs_s"][0])
+        rival_box = current if overcut else current + 2
+        rival_cost = self._pit_stop_costs(state, [rival_box])[0]
+        traffic = float(plan.get("traffic_cost_s", 0.0))
+        signed_gap = float(target["gap_to_player_s"])
+        comparison = self._cut_window_margin(
+            player_laps, rival["lap_times_s"], signed_gap, own_cost, rival_cost, traffic,
+        )
+        margin = comparison["margin_s"]
+        kind = "overcut" if overcut else "undercut"
+        result = {
+            "available": True, "conditional": True, "confidence": "low",
+            "driver": target["name"],
+            "gap_s": round(abs(signed_gap), 3), "target_gap_to_player_s": signed_gap,
+            "box_lap": box_lap, "fit_compound": plan["compounds"][1],
+            "tyre_set_indices": plan.get("tyre_set_indices"),
+            "inventory_status": plan.get("inventory_status"),
+            "inventory_feasible": plan.get("inventory_feasible"),
+            "legal": True, "feasible": True,
+            "player_lap_times_s": player_laps,
+            "rival_lap_times_s": rival["lap_times_s"],
+            "player_pit_loss_s": own_cost, "rival_pit_loss_s": rival_cost,
+            "traffic_penalty_s": traffic, "rival_traffic_assumed_s": 0.0,
+            "rival_response_assumed": True, "rival_box_lap": rival_box,
+            "rival_pace_reference": rival["pace_reference"],
+            "verdict": f"{kind} has a conditional advantage" if margin > 0.4
+            else f"{kind} is marginal under this response" if margin > -0.4
+            else f"{kind} loses time under this response",
+            "required": "The rival must follow the assumed stop timing and have a usable replacement; our planned physical sets must be available.",
+            "assumptions": [
+                f"Rival stops at the end of lap {rival_box}; their future response is not observed.",
+                "The rival's hypothetical replacement is the same compound, with the shared cold-tyre model; their spare inventory is unknown.",
+                "Both cars include the current in-lap from the same signed live gap; whole-lap timing matches the main planner approximation.",
+                "Our selected main-plan rejoin penalty is charged once; rival rejoin traffic is unknown and assumed zero.",
+                "Rival pace uses its own observed laps and a degradation prior; current wear approximates wear at that reference, and unreported wear is assumed zero. Fuel differences are unobserved.",
+                "A time margin is conditional on these assumptions; it is not a calibrated success probability or an on-track passing guarantee.",
+            ],
+            **comparison,
+        }
+        if overcut:
+            result["margin_s_per_extra_lap"] = margin
+        else:
+            result["estimated_two_lap_gain_s"] = round(sum(rival["lap_times_s"][1:]) - sum(player_laps[1:]), 3)
+        return result
+
+    async def evaluate_undercut(self, driver: str = "ahead") -> dict[str, Any]:
+        return await self._evaluate_cut(driver, overcut=False)
+
+    async def evaluate_overcut(self, driver: str = "ahead") -> dict[str, Any]:
+        return await self._evaluate_cut(driver, overcut=True)
 
     @staticmethod
     def _resolve_driver(state: dict[str, Any], driver: str) -> dict[str, Any] | None:
