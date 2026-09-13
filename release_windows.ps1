@@ -116,7 +116,7 @@ try {
       # production path: the Worker's /installer route, or the R2 object in
       # the Cloudflare dashboard. Warn, do not abort the release on an
       # untrusted reader.
-      Write-Host "WARNING: wrangler read back $remote, not $sha. wrangler reads are known to serve stale objects - verify via $ActivationApi/installer or the Cloudflare dashboard before trusting either hash." -ForegroundColor Yellow
+      Write-Host "WARNING: wrangler read back '$remote', not $sha. wrangler reads are known to serve stale objects, and an empty read back usually means the put never happened - check that the stored Cloudflare login has r2 write with 'wrangler whoami'. The release is not allowed to reach the site on this alone: the download gate below fetches and hashes the file a visitor would get." -ForegroundColor Yellow
     } else {
       Write-Host "R2 round-trip verified: downloads get exactly this build." -ForegroundColor Green
     }
@@ -162,10 +162,27 @@ try {
   Step "Confirm the free download answers before the site points at it" {
     $probe = Invoke-WebRequest -Uri "$ActivationApi/installer" -Method Head -UseBasicParsing
     $length = [int64]($probe.Headers["Content-Length"] | Select-Object -First 1)
-    if ($probe.StatusCode -ne 200 -or $length -lt 1MB) {
-      throw "$ActivationApi/installer answered $($probe.StatusCode) with $length bytes. The Worker or the R2 object is wrong; do not deploy the site."
+    if ($probe.StatusCode -ne 200) {
+      throw "$ActivationApi/installer answered $($probe.StatusCode). The Worker or the R2 object is wrong; do not deploy the site."
     }
-    Write-Host "Worker serves the installer: $length bytes." -ForegroundColor Green
+    # A size floor is not a check. The 4.9.5 release published a page
+    # describing a build the download did not contain: the R2 put had silently
+    # done nothing (the stored Cloudflare login had every scope except r2), and
+    # the eight-day-old object it left in place was also well over a megabyte,
+    # so this gate waved it through. The only check worth making here is the
+    # one a visitor makes - fetch the file and hash it.
+    if ($length -ne $bytes) {
+      throw "$ActivationApi/installer serves $length bytes, not the $bytes just built. The upload did not land - check that the Cloudflare login has r2 write (wrangler whoami) - and do not deploy the site."
+    }
+    $served = Join-Path $env:TEMP "pitwall-release-served.exe"
+    Remove-Item $served -Force -ErrorAction SilentlyContinue
+    Invoke-WebRequest -Uri "$ActivationApi/installer" -OutFile $served -UseBasicParsing
+    $servedSha = (Get-FileHash $served -Algorithm SHA256).Hash
+    Remove-Item $served -Force -ErrorAction SilentlyContinue
+    if ($servedSha -ne $sha) {
+      throw "$ActivationApi/installer serves SHA-256 $servedSha, not the $sha just built. Visitors would download a different build than this release; do not deploy the site."
+    }
+    Write-Host "Download verified: $length bytes, SHA-256 $sha - visitors get exactly this build." -ForegroundColor Green
   }
 
   Step "Build the site" {

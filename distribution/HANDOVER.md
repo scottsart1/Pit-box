@@ -178,6 +178,29 @@ It is now confirmed fixed from the deployed site: a cross-origin POST returns
 503 and **the body is readable**, which is only possible with the header
 present.
 
+### The release that published a page for a build it had not uploaded (4.9.5)
+
+`release_windows.ps1` announced "Release 4.9.5 is live" while
+`/installer` still served the 4.9.4 build from eight days earlier. Both
+halves of the guard failed:
+
+- `wrangler r2 object put` did nothing and said nothing. The Cloudflare
+  login stored on the machine had `workers`, `pages`, `d1` and a dozen
+  other scopes, but **not `r2`**, so the Worker and the site deployed
+  normally while the upload silently went nowhere. `npx wrangler` also
+  exits 255 on success here, so the exit-code check in `Run` cannot be
+  relied on to catch it.
+- The gate before the site deploy only asked for HTTP 200 and more than a
+  megabyte. The stale object was 34 MB and answered 200.
+
+The gate now fetches `/installer` and compares its SHA-256 to the build
+that was just made, and aborts before the site goes out if they differ.
+Size is not identity: check the hash a visitor would get.
+
+If an upload fails this way, `wrangler whoami` lists the token's scopes.
+An `r2`-scoped API token in `CLOUDFLARE_API_TOKEN` overrides the stored
+OAuth login for the `r2 object put`.
+
 ### How the installer is served
 
 The file sits in a **private** R2 bucket (`pitwall-downloads`) and is streamed
