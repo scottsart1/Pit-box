@@ -92,7 +92,7 @@ def test_legacy_matching_cannot_invent_or_reuse_sets():
     impossible = {"compounds": ["MEDIUM", "HARD", "HARD"], "box_laps": [11, 13]}
     assert score_plan(world, impossible)["physical_feasible"] is False
     possible = {"compounds": ["MEDIUM", "HARD"], "box_laps": [11]}
-    assert score_plan(world, possible)["time_s"] == 35
+    assert score_plan(world, possible)["time_s"] == 37  # One old lap before boxing.
 
 
 def test_explicit_set_identity_is_scored_as_emitted_not_optimistically_replaced():
@@ -100,8 +100,8 @@ def test_explicit_set_identity_is_scored_as_emitted_not_optimistically_replaced(
     world = replace(world, sets=world.sets + (replace(world.sets[1], index=2, pace_delta_s=1),))
     legacy = {"compounds": ["MEDIUM", "HARD"], "box_laps": [11]}
     explicit = {**legacy, "tyre_set_indices": [2]}
-    assert score_plan(world, legacy)["time_s"] == 35
-    assert score_plan(world, explicit)["time_s"] == 47
+    assert score_plan(world, legacy)["time_s"] == 37
+    assert score_plan(world, explicit)["time_s"] == 46
 
 
 def test_impossible_outcomes_are_not_silently_dropped_from_summary():
@@ -144,7 +144,9 @@ def test_closed_loop_executes_actual_set_and_tracks_wear_after_a_stop():
 
     result = closed_loop(FixedDecision(), small_world())
     assert result["completed"]
-    assert result["time_s"] == 35
+    assert result["time_s"] == 37
+    assert result["checkpoints"][0]["lap_time_s"] == 10  # Box after this old-tyre lap.
+    assert result["checkpoints"][1]["lap_time_s"] == 8
     assert result["checkpoints"][0]["executed_set_index"] == 1
     assert all(step["executed_set_index"] is None for step in result["checkpoints"][1:])
 
@@ -164,3 +166,13 @@ def test_adapter_maps_remaining_life_and_total_recommendation_to_ea_fields():
     assert fitted["life_span_laps"] == 2  # EA: laps left in this tyre set.
     assert fitted["usable_life_laps"] == 7  # EA: max recommended total laps.
     assert world.sets[0].usable_laps == 2  # Physical scoring remains unchanged.
+
+
+def test_box_lap_means_end_of_lap_and_cannot_add_a_phantom_lap_to_final_set():
+    world = small_world(horizon=6)
+    world = replace(world, sets=(replace(world.sets[0], usable_laps=1),
+                                 replace(world.sets[1], usable_laps=5)))
+    plan = {"compounds": ["MEDIUM", "HARD"], "box_laps": [11], "tyre_set_indices": [1]}
+    score = score_plan(world, plan)
+    assert score["physical_feasible"]
+    assert score["time_s"] == 53  # 10 + 5*8 + 3.

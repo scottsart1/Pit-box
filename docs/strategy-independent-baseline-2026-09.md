@@ -7,26 +7,26 @@ Manifest frozen in commit `39eeaa4` before executing the released model. The eva
 
 | Family | Worlds | Physically impossible recommendations | Median finite regret | P90 finite regret |
 |---|---:|---:|---:|---:|
-| Linear degradation | 4 | 0 | 1.434 s | 10.794 s |
+| Linear degradation | 4 | 0 | 1.434 s | 12.970 s |
 | Finite tyre inventory | 4 | 4 | unavailable | unavailable |
-| Rejoin traffic | 4 | 0 | 2.545 s | 8.524 s |
-| Unseen quadratic degradation | 4 | 0 | 37.882 s | 49.315 s |
-| Unseen wear cliff | 4 | 0 | 17.368 s | 24.224 s |
+| Rejoin traffic | 4 | 0 | 3.574 s | 11.259 s |
+| Unseen quadratic degradation | 4 | 0 | 42.785 s | 60.087 s |
+| Unseen wear cliff | 4 | 0 | 24.280 s | 31.868 s |
 | Future weather | 4 | 0 | 72.032 s | 94.145 s |
 
-Across the 20 physically executable outputs, median regret was 17.935 s and P90 66.247 s. The four impossible outputs remain explicitly counted; they are not assigned a flattering finite score. Six training worlds had median finite regret 0 s; 18 withheld worlds had median finite regret 30.359 s. All nonlinear/weather families are withheld even when paired with a training seed.
+Across the 20 physically executable outputs, median regret was 24.280 s and P90 66.503 s. The four impossible outputs remain explicitly counted; they are not assigned a flattering finite score. Six training worlds had median finite regret 0 s; 18 withheld worlds had median finite regret 34.217 s. All nonlinear/weather families are withheld even when paired with a training seed.
 
 These numbers compare the chosen strategy with the exact best strategy in a deliberately small generated world. The oracle knows its actual future weather, nonlinear tyre response and traffic clearance. The production model receives normal state and linear historical summaries; it does not receive that hidden truth. This information advantage makes regret useful for diagnosing sensitivity, but it does **not** establish real-game prediction accuracy or make every second of regret a defect.
 
 The definite defect is narrower and directly observable: all four finite-inventory cases emitted `feasible: false` together with the instruction **“Stay out to the finish.”** The fitted set has only two usable laps, but 12, 15 or 18 laps remain. The independent exhaustive search finds a physically executable two- or three-stop finish. For example, case `2026091301-finite_sets` can stop after 1, 6 and 12 remaining laps using three distinct available sets. Staying out exhausts the fitted tyre on remaining lap 3. This is both a missed feasible finish and a contradictory driver instruction. The engine did not falsely label these four plans feasible; that distinction is recorded separately.
 
-Two sequential runs re-evaluated the actual model on the wear and fitted set resulting from each previous lap. They completed 30 checkpoints without physical failure or a future recommendation change before execution. Their finite regret was 14.190192 s (linear) and 13.055792 s (wear cliff). This exercises lap-by-lap model decisions; it does not test the wall-clock radio hold, database learning, UDP handling or the user interface.
+Two sequential runs re-evaluated the actual model on the wear and fitted set resulting from each previous lap. They completed 30 checkpoints without physical failure or a future recommendation change before execution. Their finite regret was 17.298917 s (linear) and 19.401091 s (wear cliff). This exercises lap-by-lap model decisions; it does not test the wall-clock radio hold, database learning, UDP handling or the user interface.
 
-The corrected baseline's P95 single-checkpoint model runtime was 43.745 ms in this shared Linux environment. This is a small-sample responsiveness measurement, not a worst-case bound or a Windows claim.
+The corrected baseline's P95 single-checkpoint model runtime was 39.553 ms in this shared Linux environment. This is a small-sample responsiveness measurement, not a worst-case bound or a Windows claim.
 
 ## Harness validation and reproduction
 
-Eighteen evaluator tests passed. They verify exact stop arithmetic, actual-lap weather exposure, hard physical wear/life and unique-set constraints, a necessary two-stop finish over six laps, and agreement of dynamic programming with an independent exhaustive enumeration for every family. They also check explicit versus legacy set allocation, no silent omission of impossible cases, scoring consistency, actual closed-loop set execution and the correct EA remaining-life versus total-life field mapping. Ruff passed for the added files.
+Nineteen evaluator tests passed. They verify exact stop arithmetic, actual-lap weather exposure, hard physical wear/life and unique-set constraints, a necessary two-stop finish over six laps, and agreement of dynamic programming with an independent exhaustive enumeration for every family. They also check explicit versus legacy set allocation, no silent omission of impossible cases, scoring consistency, actual closed-loop set execution, end-of-lap boxing and the correct EA remaining-life versus total-life field mapping. Ruff passed for the added files.
 
 Run the same evaluator file against each revision in a new process:
 
@@ -38,14 +38,20 @@ python -m pytest tests/test_strategy_validation.py -q
 
 `--only finite_sets` reproduces the resource failures. `--skip-closed-loop` omits sequential runs. Every report contains all generated worlds, ordinary observations, historical summaries, emitted recommendations, oracle stop assignments, failure reasons, runtime, revision and evaluator/manifest digests. The program exits successfully when it produces a report; findings inside the report must be inspected by the release gate.
 
-Current baseline evidence file: `strategy-validation-baseline-protocol-corrected.json`, SHA-256 `d2549463d5e6406d94fed2a59c1e2189ded09c358c6dbb34a4618054baec0ce0`.
+Current baseline evidence file: `strategy-validation-baseline-adapter-corrected-v2.json`, SHA-256 `cb4c4611f6a540e730192a3e40aa5f39a92d84b40e7cf715754704d348e91db2`.
 Manifest SHA-256: `e64e4bc36c829a07073d746ba7e4822221be02794a19e357344207a6a8bd51fe`.
-Evaluator SHA-256: `a8f76f8d5a0592f2f85340240026a7748a5375369c76000577c97112445b41f4`.
+Evaluator SHA-256: `e4a84bf83900a571ad44c135898e6214b331e4462f799b301a2582aa4e18f1f4`.
 
 ### Protocol adapter correction
 
 The first artifact, `strategy-validation-baseline.json` (SHA-256 `dde04f50e921db7415528e47a100a3e7447126f074f3328e9b802c4bf672acad`), is superseded for comparisons. Review of the [official EA 2026 telemetry structures](https://forums.ea.com/t5/s/tghpe58374/attachments/tghpe58374/f1-games-game-info-hub-en/61/8/2026%20Season%20Pack%20Telemetry%20Output%20Structures%20%281%29.txt) established that `m_lifeSpan` is laps left in the physical set, while `m_usableLife` is the recommended total compound stint length. The original adapter had mapped them in reverse for an aged fitted set. It now maps world remaining life to `life_span_laps`, and age plus remaining life to `usable_life_laps`.
 
-This correction changes only the ordinary telemetry adapter, not generated physical worlds, oracle, scoring, seeds, split or acceptance expectations. The released baseline was rerun with the corrected evaluator. All 24 physical worlds, all oracle answers, and all 24 emitted recommendations are identical to the first run; only adapter fields and runtime/provenance change. Candidate comparisons must use this same corrected evaluator. This is a protocol-fixture repair, not tuning worlds after seeing a failure.
+This correction changes only the ordinary telemetry adapter, not generated physical worlds, oracle, scoring, seeds, split or acceptance expectations. The released baseline was rerun with the corrected evaluator as `strategy-validation-baseline-protocol-corrected.json` (SHA-256 `d2549463d5e6406d94fed2a59c1e2189ded09c358c6dbb34a4618054baec0ce0`). All 24 physical worlds, all oracle answers, and all 24 emitted recommendations were identical to the first run. This artifact is now also superseded by the second adapter correction below.
+
+### Stop-boundary adapter correction
+
+The initial scorer interpreted production `box_laps` as beginning-of-lap events. The product's normal stop convention is end of the named lap: a lap-11 box call while on lap 11 consumes one remaining lap on the fitted set. Its physical action therefore maps to `box_lap - current_lap + 1`, not `box_lap - current_lap`. The initial adapter moved every stop one lap earlier and charged its final set an extra lap. It also executed the current lap's stop too early in closed-loop runs.
+
+The output adapter and sequential execution boundary are now corrected, with a regression test proving that a one-lap current stint followed by a five-lap spare is scored as 1+5, not 0+6. Both baseline and candidate were rerun using the same corrected evaluator; the table above reflects these results. The fixed physical worlds, oracle, manifest and expectations did not change. The frozen oracle still permits an offset-zero change, giving it an additional timing advantage relative to ordinary end-of-lap production stops. Regret is therefore explicitly a lower-bound comparison including that advantage. No provisional impossible-plan finding from the earlier candidate artifact is valid until rescored with this correction.
 
 No user database, account, provider, capture or installation was accessed. Candidate results must use these unchanged worlds and scoring rules; failed heldout cases are evidence to disclose, not a reason to alter the manifest or tune hidden-world parameters.

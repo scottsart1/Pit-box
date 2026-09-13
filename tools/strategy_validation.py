@@ -142,7 +142,11 @@ def score_plan(world: World, plan: dict[str, Any]) -> dict[str, Any]:
     """Score emitted allocations exactly; legacy compounds get optimistic matching."""
     if not plan:
         return {"time_s": None, "physical_feasible": False, "reason": "no recommendation"}
-    boxes = [int(lap) - world.current_lap for lap in plan.get("box_laps", [])]
+    # Production's "box lap 11" means stop at the END of lap 11. The
+    # independent world's actions occur BEFORE a lap, so current-lap boxing
+    # maps to offset 1. Keeping these boundaries distinct avoids charging a
+    # plan's final set one extra lap and falsely calling it impossible.
+    boxes = [int(lap) - world.current_lap + 1 for lap in plan.get("box_laps", [])]
     compounds = list(plan.get("compounds", []))
     if len(compounds) != len(boxes) + 1 or compounds[0] != world.sets[0].compound:
         return {"time_s": None, "physical_feasible": False, "reason": "inconsistent compound/stint sequence"}
@@ -374,6 +378,7 @@ def closed_loop(adapter: EngineAdapter, world: World) -> dict[str, Any]:
             changes += 1
         previous_future = signature
         chosen_index = None
+        next_fitted = None
         if signature and signature[0] <= suffix.current_lap:
             ids = recommendation.get("tyre_set_indices")
             chosen_index = ids[0] if ids and ids[0] is not None else None
@@ -383,11 +388,8 @@ def closed_loop(adapter: EngineAdapter, world: World) -> dict[str, Any]:
                 failure = "recommendation requested an unavailable set"
                 break
             # Legacy output has no set identity; grant the lowest wear matching set.
-            fitted = min(candidates, key=lambda tyre: (tyre.wear, tyre.index))
-            remaining_sets.remove(fitted)
-            chosen_index, used_on_set = fitted.index, 0
-            total += world.pit_loss_s + world.traffic_delays_s[offset]
-            previous_future = None
+            next_fitted = min(candidates, key=lambda tyre: (tyre.wear, tyre.index))
+            chosen_index = next_fitted.index
         cost = lap_cost(world, fitted, used_on_set, offset)
         decisions.append({"lap": suffix.current_lap, "plan": compact_plan(recommendation),
                           "executed_set_index": chosen_index, "runtime_ms": round(runtime, 3),
@@ -397,6 +399,16 @@ def closed_loop(adapter: EngineAdapter, world: World) -> dict[str, Any]:
             break
         total += cost
         used_on_set += 1
+        # Finish the current lap on the fitted set, then execute its box call.
+        if next_fitted is not None:
+            if offset + 1 >= world.horizon:
+                failure = "recommendation stops after the race finish"
+                break
+            fitted = next_fitted
+            remaining_sets.remove(fitted)
+            used_on_set = 0
+            total += world.pit_loss_s + world.traffic_delays_s[offset + 1]
+            previous_future = None
     oracle = exact_oracle(world)
     return {"name": world.name, "failure": failure, "completed": not failure,
             "recommendation_changes_before_execution": changes, "checkpoints": decisions,
@@ -460,6 +472,12 @@ def main() -> int:
               "source_diff_sha256": hashlib.sha256(source_diff).hexdigest(),
               "evaluator_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
               "manifest_sha256": hashlib.sha256(manifest_bytes).hexdigest(),
+              "adapter_contract": {
+                  "life_span_laps": "physical laps remaining",
+                  "usable_life_laps": "age plus physical laps remaining",
+                  "stop_offset": "production box lap - current lap + 1; normal end-of-lap stop",
+                  "oracle_timing_advantage": "Frozen oracle may fit a spare at offset zero; normal production plans complete the current lap first. Oracle cost is therefore a lower bound including that timing advantage.",
+              },
               "manifest": manifest, "summary": summarize(rows, loops), "worlds": rows, "closed_loop": loops}
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(report, indent=2, allow_nan=False) + "\n")
