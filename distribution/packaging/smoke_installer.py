@@ -413,7 +413,10 @@ def run_smoke(installer: Path, version: str, runner_temp: Path, timeout: float =
         save_json(diagnostics / "summary.json", summary)
         if cleanup_errors and "error" not in summary:
             raise SmokeFailure("; ".join(cleanup_errors))
-    print("Installed artifact: install → launch → UDP → persist → quit → uninstall passed", flush=True)
+    print(
+        "Installed artifact: install -> launch -> UDP -> persist -> quit -> uninstall passed",
+        flush=True,
+    )
     return diagnostics
 
 
@@ -423,6 +426,14 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--version", required=True)
     parser.add_argument("--startup-timeout", type=float, default=120)
     args = parser.parse_args(argv)
+    # Python writes this console in the code page Windows hands it, which on a
+    # runner is cp1252. Anything outside it raises while being printed, so a
+    # non-ASCII character in a diagnostic would replace the failure it was
+    # reporting with a UnicodeEncodeError. Say it in UTF-8, and never let the
+    # reporting path be the thing that fails.
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(encoding="utf-8", errors="backslashreplace")
     runner_temp = require_disposable_runner()
     run_smoke(args.installer, args.version, runner_temp, args.startup_timeout)
     return 0
