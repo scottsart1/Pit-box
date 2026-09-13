@@ -1214,6 +1214,29 @@ class StrategyEngine:
         return PIT_LOSS_SECONDS.get(int(state.get("track_id", -1)), 22.5)
 
     @staticmethod
+    def _finish_penalty(car: dict[str, Any]) -> dict[str, Any]:
+        """Current LapData seconds to add, never historical served duration."""
+        raw = car.get("penalties_s")
+        value = finite(raw)
+        valid = (not isinstance(raw, bool) and value is not None
+                 and 0 <= value <= 255 and value.is_integer())
+        return {
+            "pending_s": value if valid else 0.0,
+            "status": "reported" if valid else "invalid" if raw is not None else "unreported",
+            "source": "live_lap_data" if valid else "no_usable_live_counter",
+            "basis": "Current accumulated time penalty is added once to classification; elapsed or historical served penalties are not added.",
+        }
+
+    @staticmethod
+    def _finish_penalty_note(plan: dict[str, Any]) -> str:
+        pending = float(plan.get("pending_finish_penalty_s", 0))
+        recovered = int(plan.get("penalty_positions_recovered", 0))
+        note = f" Includes {pending:g}s of pending time penalties." if pending else ""
+        if recovered:
+            note += f" Projected classification gains {recovered} position(s) from rivals' pending penalties."
+        return note
+
+    @staticmethod
     def _neutralisation(state: dict[str, Any]) -> dict[str, Any]:
         base = StrategyEngine._base_pit_loss(state)
         phase = str(state.get("race_control_phase", "green"))
@@ -1260,6 +1283,7 @@ class StrategyEngine:
             "phase": kind,
             "base_pit_loss_s": round(base, 2),
             "base_pit_loss_source": "circuit_prior",
+            "pit_loss_scope": "Normal-stop circuit prior; excludes unreported repair, drive-through and stop-go service durations. Pending time penalties are priced separately once.",
             "future_stop_assumption": "Green-flag loss after the current reachable opportunity; neutralisation duration is unknown.",
             "effective_pit_loss_s": round(effective, 2),
             "saving_vs_green_s": round(base - effective, 2),
@@ -1609,6 +1633,7 @@ class StrategyEngine:
             box_laps = [int(state.get("current_lap", 0)) + offset - 1 for offset in stop_offsets]
             pit_costs = self._pit_stop_costs(state, box_laps)
             running_time += sum(pit_costs)
+            penalty = self._finish_penalty(driver)
             gap = driver.get("gap_to_player_s")
             gap_assumed = gap is None
             if gap is None:
@@ -1620,7 +1645,10 @@ class StrategyEngine:
                 {
                     "driver": driver.get("name", "Unknown"),
                     "position": position,
-                    "finish_time_s": round(float(gap) + running_time, 3),
+                    "finish_time_s": round(float(gap) + running_time + penalty["pending_s"], 3),
+                    "finish_time_before_penalties_s": round(float(gap) + running_time, 3),
+                    "pending_finish_penalty_s": penalty["pending_s"],
+                    "finish_penalty": penalty,
                     "current_gap_s": round(float(gap), 3),
                     "pace_s": round(float(pace), 3),
                     "pace_samples": pace_samples,
@@ -1667,10 +1695,30 @@ class StrategyEngine:
             gap = finite(rival.get("current_gap_s"))
             future_stops = zip(rival.get("likely_stop_offsets_laps", []), rival.get("pit_stop_costs_s", []))
             if (current < position <= rejoin and gap is not None and 0 < gap < first_cost
-                    and float(rival.get("finish_time_s", 0)) > float(plan.get("projected_time_s", 0))
+                    and float(rival.get("finish_time_before_penalties_s", rival.get("finish_time_s", 0)))
+                    > float(plan.get("projected_time_before_penalties_s", plan.get("projected_time_s", 0)))
                     and any(offset > first_offset and cost > 0 for offset, cost in future_stops)):
                 recovered += 1
         return recovered
+
+    @staticmethod
+    def _penalty_positions_recovered(
+        plan: dict[str, Any], rivals: list[dict[str, Any]], classified_time_s: float | None = None,
+    ) -> int:
+        """A penalty can reverse classification without an on-track pass."""
+        if not plan.get("stops_remaining"):
+            return 0
+        classified_time = (float(plan.get("projected_time_s", 0))
+                           if classified_time_s is None else classified_time_s)
+        physical_time = classified_time - float(plan.get("pending_finish_penalty_s", 0))
+        rejoin = int(plan.get("projected_rejoin_position", 1))
+        return sum(
+            1 for rival in rivals
+            if 0 < int(rival.get("position", 0)) <= rejoin
+            and float(rival.get("pending_finish_penalty_s", 0)) > 0
+            and float(rival.get("finish_time_before_penalties_s", rival.get("finish_time_s", 0))) <= physical_time
+            and float(rival.get("finish_time_s", 0)) > classified_time
+        )
 
     @staticmethod
     def _unobserved_cars_ahead(state: dict[str, Any], rivals: list[dict[str, Any]]) -> int:
@@ -1778,7 +1826,8 @@ class StrategyEngine:
         recovered = self._expected_positions_recovered(
             plan, state, rival_projections, difficulty
         )
-        best_from_rejoin = max(1, rejoin - math.floor(recovered + 1e-9))
+        penalty_recovered = self._penalty_positions_recovered(plan, rival_projections)
+        best_from_rejoin = max(1, rejoin - math.floor(recovered + 1e-9) - penalty_recovered)
         projected_position = (
             max(raw_position, best_from_rejoin)
             if int(plan.get("stops_remaining", 0) or 0) > 0
@@ -1793,6 +1842,7 @@ class StrategyEngine:
                 "projected_points": points_for_position(projected_position, str(state.get("mode_profile", "race"))),
                 "positions_lost_by_stopping": max(0, rejoin - current),
                 "expected_positions_recovered": recovered,
+                "penalty_positions_recovered": penalty_recovered,
                 "pit_cycle_positions_recovered": self._pit_cycle_positions_recovered(plan, state, rival_projections),
                 "observed_rival_count": len(rival_projections),
                 "expected_rival_count": max(0, active - 1),
@@ -1838,7 +1888,8 @@ class StrategyEngine:
                 else int(state.get("player_position", 1) or 1)
             )
             if int(plan.get("stops_remaining", 0) or 0) > 0:
-                raw = max(raw, cap)
+                penalty_recovered = StrategyEngine._penalty_positions_recovered(plan, rival_projections, float(outcome))
+                raw = max(raw, max(1, cap - penalty_recovered))
             positions.append(max(1, min(active, raw)))
         counts = {position: positions.count(position) for position in sorted(set(positions))}
         total = max(1, len(positions))
@@ -2624,6 +2675,7 @@ class StrategyEngine:
                 "positions in the lane."
             )
             held["defence"] = candidate.get("defence", {})
+        held["rationale"] += self._finish_penalty_note(held)
         feedback = self._driver_feedback_adjustment(
             state, str(state.get("tyre", {}).get("compound", "UNKNOWN")).upper()
         )
@@ -2782,6 +2834,12 @@ class StrategyEngine:
         mode = str(state.get("mode_profile", "idle"))
         base_rule = self._compound_rule(state)
         neutralisation = self._neutralisation(state)
+        penalty_car = state
+        if "penalties_s" not in state:
+            penalty_car = next((driver for driver in state.get("drivers", [])
+                                if driver.get("car_idx") == state.get("player_car_index")), {})
+        player_penalty = self._finish_penalty(penalty_car)
+        pending_penalty_s = float(player_penalty["pending_s"])
         if remaining <= 0 or total_laps <= 0 or mode not in {"race", "sprint"}:
             return {
                 "available": False,
@@ -2997,11 +3055,13 @@ class StrategyEngine:
                 sum(float(stint["expected_time_s"]) for stint in stints)
                 + total_pit_cost
                 + traffic_cost
+                + pending_penalty_s
             )
             conservative = (
                 sum(float(stint["conservative_time_s"]) for stint in stints)
                 + total_pit_cost
                 + traffic_cost * 1.35
+                + pending_penalty_s
             )
             legality = self._compound_rule(state, compounds_in_plan[1:])
             feedback_feasible = all(bool(stint["feasible"]) for stint in stints) and legality["compliant"]
@@ -3021,11 +3081,13 @@ class StrategyEngine:
                 sum(float(stint["expected_time_s"]) for stint in baseline_stints)
                 + total_pit_cost
                 + traffic_cost
+                + pending_penalty_s
             )
             baseline_conservative = (
                 sum(float(stint["conservative_time_s"]) for stint in baseline_stints)
                 + total_pit_cost
                 + traffic_cost * 1.35
+                + pending_penalty_s
             )
             return {
                 "stops_remaining": stops,
@@ -3043,6 +3105,9 @@ class StrategyEngine:
                 "box_laps": box_laps,
                 "compounds": compounds_in_plan,
                 "projected_time_s": round(expected, 2),
+                "projected_time_before_penalties_s": round(expected - pending_penalty_s, 2),
+                "pending_finish_penalty_s": pending_penalty_s,
+                "finish_penalty": player_penalty,
                 "risk_adjusted_time_s": round(conservative, 2),
                 "projected_finish_wear_pct": round(
                     float(stints[-1]["projected_finish_wear_pct"]), 1
@@ -3429,6 +3494,9 @@ class StrategyEngine:
                 baseline_plan["projected_time_s"] = plan[
                     "projected_time_without_driver_feedback_s"
                 ]
+                baseline_plan["projected_time_before_penalties_s"] = (
+                    baseline_plan["projected_time_s"] - pending_penalty_s
+                )
                 baseline_plan["risk_adjusted_time_s"] = plan[
                     "risk_adjusted_time_without_driver_feedback_s"
                 ]
@@ -3820,6 +3888,7 @@ class StrategyEngine:
                 f"Staying out protects projected P{best.get('projected_finish_position')} "
                 f"and avoids losing {avoided_positions} positions in the lane."
             )
+        rationale += self._finish_penalty_note(best)
         if feedback_adjustment.get("active"):
             rationale += (
                 f" Driver report from lap {feedback_adjustment.get('lap')} is weighted "
@@ -3877,6 +3946,7 @@ class StrategyEngine:
             "available": True,
             "laps_remaining": remaining,
             "pace_reference": pace_reference,
+            "finish_penalty": player_penalty,
             "tyre_inventory": {
                 "status": inventory.status,
                 "spare_set_count": sum(len(items) for items in inventory.groups.values()) if inventory.known else None,
@@ -4500,15 +4570,19 @@ class StrategyEngine:
             self._available_sets(state).get(compound),
         )
         neutral = self._neutralisation(state)
+        penalty = base.get("finish_penalty") or self._finish_penalty(state)
+        pending_penalty_s = float(penalty["pending_s"])
         total = (
             float(pre["expected_time_s"])
             + float(neutral["effective_pit_loss_s"])
             + float(post["expected_time_s"])
+            + pending_penalty_s
         )
         risk = (
             float(pre["conservative_time_s"])
             + float(neutral["effective_pit_loss_s"])
             + float(post["conservative_time_s"])
+            + pending_penalty_s
         )
         best_time = float(base.get("recommended", {}).get("risk_adjusted_time_s", risk))
         legality = self._compound_rule(state, [compound])
@@ -4516,6 +4590,9 @@ class StrategyEngine:
             "available": True,
             "scenario": f"Box lap {requested_lap} for {compound}",
             "projected_time_s": round(total, 2),
+            "projected_time_before_penalties_s": round(total - pending_penalty_s, 2),
+            "pending_finish_penalty_s": pending_penalty_s,
+            "finish_penalty": penalty,
             "risk_adjusted_time_s": round(risk, 2),
             "delta_to_best_s": round(risk - best_time, 2),
             "projected_finish_wear_pct": round(
