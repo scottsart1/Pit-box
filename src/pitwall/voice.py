@@ -147,6 +147,37 @@ class NativeVoiceController:
         return bool(self.realtime is not None and self.realtime.is_open)
 
     @property
+    def busy_reason(self) -> str:
+        """Which latch is holding the engineer, named.
+
+        ``is_busy`` is an OR of seven independent latches. When one of them
+        sticks — a conversation that never closes, a wake window that never
+        disarms — every unsolicited call blocks behind it and the queue grows
+        with nothing to say which. A driver then sees a dozen calls pending and
+        an engineer that never speaks, and there is no way to tell from outside
+        whether the fault is the microphone, the model or the race.
+
+        Checked in the same order as ``is_busy`` so the two can never disagree.
+        Empty string when the engineer is free.
+        """
+        if self.busy:
+            return "speaking"
+        if self._signal_pressed:
+            return "push-to-talk held"
+        if self._wake_speaking:
+            return "answering the wake word"
+        armed_for = self._wake_armed_until - time.monotonic()
+        if armed_for > 0:
+            return f"wake window armed for another {armed_for:.0f}s"
+        if self.realtime_active:
+            return "speech session open"
+        if self._speech_task and not self._speech_task.done():
+            return "speech task still running"
+        if self._wake_process_task and not self._wake_process_task.done():
+            return "wake task still running"
+        return ""
+
+    @property
     def is_busy(self) -> bool:
         return bool(
             self.busy

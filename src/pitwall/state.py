@@ -504,6 +504,12 @@ class SessionState:
             "next_due_lap": 2,
             "oldest_wait_s": 0.0,
             "delivery_state": "idle",
+            # Why the longest-waiting call has not been spoken, and for how
+            # long. A queue that climbs while the engineer stays silent is
+            # otherwise indistinguishable from a race with nothing to say.
+            "blocked_reason": "",
+            "blocked_for_s": 0.0,
+            "blocked_calls": 0,
         }
     )
     # A tactical plan the driver and engineer agreed out loud — an overcut, an
