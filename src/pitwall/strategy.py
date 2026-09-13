@@ -379,8 +379,71 @@ class StrategyEngine:
         ]
 
     @staticmethod
+    def _matched_pace_laps(state: dict[str, Any]) -> list[dict[str, Any]]:
+        """Recent measured laps whose age and conditions identify this stint.
+
+        The fallback estimator predates age/context fields. Keep it available,
+        but do not silently turn those older observations into a fresh-tyre
+        intercept. A reset in age, compound, setup or timeline ends this cohort.
+        """
+        tyre = state.get("tyre", {}) or {}
+        compound = str(tyre.get("compound", "")).upper()
+        weather = str(state.get("weather", "")).lower()
+        if compound not in DRY_COMPOUNDS or weather not in {
+            "clear", "light cloud", "overcast",
+        }:
+            return []
+        current_age = finite(tyre.get("age_laps"))
+        current_lap = finite(state.get("current_lap"))
+        if current_age is None or current_lap is None:
+            return []
+        setup = state.get("car_setup", {}) or {}
+        matched: list[dict[str, Any]] = []
+        seen_laps: set[float] = set()
+        for lap in reversed(state.get("completed_laps", []) or []):
+            age = finite(lap.get("tyre_age_end"))
+            lap_number = finite(lap.get("lap_num"))
+            wear = lap.get("wear_end") or []
+            if (
+                age is None or lap_number is None
+                or not 1 < age <= current_age
+                or not 0 < lap_number < current_lap
+                or not math.isclose(age, current_age - (current_lap - 1 - lap_number))
+                or str(lap.get("compound", "")).upper() != compound
+                or str(lap.get("weather", "")).lower() != weather
+                or "setup" not in lap or (lap.get("setup") or {}) != setup
+                or len(wear) != 4
+                or any((value := finite(item)) is None or not 0 <= value <= 100 for item in wear)
+                or any(lap.get(key) != state.get(key) for key in (
+                    "session_uid", "restart_epoch", "timeline_epoch",
+                ))
+            ):
+                break
+            if exclusion_reason({"mode_profile": state.get("mode_profile", ""), **lap}):
+                continue
+            if lap_number in seen_laps:
+                continue
+            seen_laps.add(lap_number)
+            matched.append(lap)
+            if len(matched) == 4:
+                break
+        return list(reversed(matched)) if len(matched) >= 3 else []
+
+    @staticmethod
+    def _wear_pace_penalty(wear: Sequence[float]) -> float:
+        peak = max(wear, default=0.0)
+        average = sum(wear) / len(wear) if wear else 0.0
+        return (
+            max(0.0, average - 52.0) * 0.009
+            + max(0.0, peak - 58.0) * 0.008
+            + max(0.0, peak - 70.0) * 0.060
+        )
+
+    @staticmethod
     def _estimate_base_lap_s(state: dict[str, Any]) -> float:
-        valid = StrategyEngine._valid_laps(state)
+        # Prefer one identified current stint. An old compound's laps must not
+        # dilute the measured baseline once the new stint has enough evidence.
+        valid = StrategyEngine._matched_pace_laps(state) or StrategyEngine._valid_laps(state)
         recent = [lap["lap_time_ms"] / 1000 for lap in valid[-4:]]
         if recent:
             return float(median(recent))
@@ -396,6 +459,81 @@ class StrategyEngine:
         if player and player.get("best_lap_ms"):
             return float(player["best_lap_ms"]) / 1000
         return 95.0
+
+    @classmethod
+    def _pace_reference(
+        cls, state: dict[str, Any], historical: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Identify the effects already present in the observed lap baseline.
+
+        Future stints add age/wear costs, so those same modeled costs must be
+        removed at the reference observation. Setup remains in observed pace
+        and is therefore not added again. No fuel or weather intercept is fit.
+        """
+        observed = cls._estimate_base_lap_s(state)
+        laps = cls._matched_pace_laps(state)
+        wetness = finite(state.get("_strategy_reference_wetness"))
+        if wetness is None:
+            wetness, _ = rain.wetness_from_history(
+                state.get("completed_laps", []) or [],
+                weather=str(state.get("weather", "")),
+                track_temp_c=finite(state.get("track_temp_c")),
+                active_cars=int(state.get("active_cars", 0) or 0),
+            )
+        if wetness > 0.05:
+            # Clear skies alone do not establish a dry surface after rain.
+            laps = []
+        reference: dict[str, Any] = {
+            "source": "unmatched_observed_or_default_fallback",
+            "observed_lap_s": round(observed, 6),
+            "reference_age_laps": None,
+            "reference_degradation_s": 0.0,
+            "reference_wear_penalty_s": 0.0,
+            "reference_adjustment_s": 0.0,
+            "normalized_lap_s": round(observed, 6),
+            "sample_size": 0,
+            "setup_in_observed_pace": False,
+            "age_end_reference": False,
+            "assumptions": [
+                "Matched dry-stint age and condition evidence is unavailable; legacy pace fallback is used.",
+                "Future fuel consumption and weather are not normalized by this reference.",
+            ],
+        }
+        if not laps:
+            return reference
+        compound = str(state["tyre"]["compound"]).upper()
+        # New subjective feedback must affect the forecast, not retroactively
+        # change what the reference laps measured and cancel its own effect.
+        clean_state = {**state, "driver_tyre_feedback": {}}
+        deg, source, samples = cls._deg_for(clean_state, compound, historical)
+        ages = [float(lap["tyre_age_end"]) for lap in laps]
+        times = [float(lap["lap_time_ms"]) / 1000.0 for lap in laps]
+        wear_costs = [cls._wear_pace_penalty([float(v) for v in lap["wear_end"]]) for lap in laps]
+        age_normalized = float(median(t - deg * age for t, age in zip(times, ages)))
+        normalized = float(median(
+            t - deg * age - wear_cost
+            for t, age, wear_cost in zip(times, ages, wear_costs)
+        ))
+        reference.update({
+            "source": "matched_dry_stint",
+            "reference_age_laps": float(median(ages)),
+            "reference_degradation_s": round(observed - age_normalized, 6),
+            "reference_wear_penalty_s": round(age_normalized - normalized, 6),
+            "reference_adjustment_s": round(observed - normalized, 6),
+            "normalized_lap_s": round(normalized, 6),
+            "sample_size": len(laps),
+            "deg_s_per_lap": deg,
+            "deg_source": source,
+            "deg_sample_size": samples,
+            "setup_in_observed_pace": True,
+            "age_end_reference": True,
+            "assumptions": [
+                "Current dry stint, setup and timeline match the observed laps.",
+                "Existing age and wear priors are referenced once; setup is already in measured pace.",
+                "Future fuel consumption and weather are not normalized by this reference.",
+            ],
+        })
+        return reference
 
     @staticmethod
     def _planned_start_compound(
@@ -1831,6 +1969,15 @@ class StrategyEngine:
         compound_penalties = penalties.get(compound, [])
         reference_penalties = penalties.get(reference, [])
         setup_delta_s = float(effects.get("lap_time_delta_s", 0.0))
+        pace_reference = state.get("_strategy_pace_reference")
+        if not isinstance(pace_reference, dict):
+            pace_reference = self._pace_reference(state, historical)
+        reference_adjustment_s = float(pace_reference["reference_adjustment_s"])
+        if pace_reference["setup_in_observed_pace"]:
+            setup_delta_s = 0.0
+        # Live degradation is fitted against tyre_age_end. A lap starting at
+        # age 10 finishes at age 11; the observed age-10 lap is already done.
+        age_end_offset = 1 if pace_reference["age_end_reference"] else 0
         expected = conservative = 0.0
         feasible = True
         peak_wear = max(wear)
@@ -1849,9 +1996,7 @@ class StrategyEngine:
             for index in range(4):
                 wear[index] += wheel_rates[index] * thermal_growth
             peak_wear = max(peak_wear, max(wear))
-            average_wear = sum(wear) / 4
-            wear_penalty = max(0.0, average_wear - 52.0) * 0.009 + max(0.0, peak_wear - 58.0) * 0.008
-            cliff = max(0.0, peak_wear - 70.0) * 0.060
+            wear_penalty = self._wear_pace_penalty(wear)
             warm_up = cold_penalty_s if offset == 0 else (cold_penalty_s * 0.5 if offset == 1 else 0.0)
             if trajectory:
                 index = min(len(trajectory) - 1, max(0, start_offset + offset))
@@ -1869,7 +2014,11 @@ class StrategyEngine:
                 compound_delta = compound_pace_delta_s(
                     compound, reference, base_lap_s, wetness
                 )
-            expected_lap = base_lap_s + compound_delta + set_delta_s + setup_delta_s + deg * age + wear_penalty + cliff + warm_up
+            expected_lap = (
+                base_lap_s - reference_adjustment_s
+                + compound_delta + set_delta_s + setup_delta_s
+                + deg * (age + age_end_offset) + wear_penalty + warm_up
+            )
             uncertainty = 0.045 + (0.24 if compound == "SOFT" else 0.12 if compound == "MEDIUM" else 0.075) * (1.0 if min(deg_samples, wear_samples) < 3 else 0.35)
             conservative_lap = expected_lap + uncertainty + max(0.0, peak_wear - 65.0) * 0.020
             expected += expected_lap
@@ -2469,6 +2618,11 @@ class StrategyEngine:
             if weather_crossover and "wetness" in weather_crossover
             else 0.0
         )
+        # This is a per-compute cache, not live/persisted telemetry. Thousands
+        # of candidate stints share one reference without mutating the caller.
+        state = {**state, "_strategy_reference_wetness": current_wetness}
+        pace_reference = self._pace_reference(state, historical)
+        state["_strategy_pace_reference"] = pace_reference
         wetness_trajectory = list(
             (weather_crossover or {}).get("trajectory") or ()
         )
@@ -3417,6 +3571,7 @@ class StrategyEngine:
         return {
             "available": True,
             "laps_remaining": remaining,
+            "pace_reference": pace_reference,
             "tyre_inventory": {
                 "status": inventory.status,
                 "spare_set_count": sum(len(items) for items in inventory.groups.values()) if inventory.known else None,
