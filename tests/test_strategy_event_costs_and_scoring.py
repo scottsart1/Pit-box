@@ -60,6 +60,7 @@ async def test_championship_uses_finish_not_rejoin_and_keeps_expected_value(stac
         "projected_rejoin_position": 12, "projected_finish_position": 5,
         "points_expected": 3.5, "stops_remaining": 1,
         "instruction": "Box lap 10 for HARD", "confidence": "low",
+        "legal": True, "feasible": True,
     }]})
     result = await engine.championship_scenario()
     assert result["plans"][0]["projected_position"] == 5

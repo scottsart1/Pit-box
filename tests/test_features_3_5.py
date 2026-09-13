@@ -229,8 +229,12 @@ async def test_championship_scenario_scores_plans_by_projected_points(stack) -> 
         player_position=4,
         strategy={
             "plans": [
-                {"instruction": "Stay out", "stops_remaining": 1, "projected_rejoin_position": 4, "projected_time_s": 3600},
-                {"instruction": "Aggressive", "stops_remaining": 2, "projected_rejoin_position": 3, "projected_time_s": 3605},
+                {"instruction": "Stay out", "stops_remaining": 0,
+                 "projected_rejoin_position": 4, "projected_finish_position": 4,
+                 "projected_time_s": 3600, "legal": True, "feasible": True},
+                {"instruction": "Aggressive", "stops_remaining": 2,
+                 "projected_rejoin_position": 8, "projected_finish_position": 3,
+                 "projected_time_s": 3605, "legal": True, "feasible": True},
             ]
         },
     )
@@ -239,6 +243,8 @@ async def test_championship_scenario_scores_plans_by_projected_points(stack) -> 
     assert scenario["best_projected_points"] == 15  # P3
     plans = {p["instruction"]: p for p in scenario["plans"]}
     assert plans["Aggressive"]["projected_points"] == 15
+    assert plans["Aggressive"]["projected_position"] == 3
+    assert plans["Aggressive"]["projected_rejoin_position"] == 8
 
 
 @pytest.mark.asyncio

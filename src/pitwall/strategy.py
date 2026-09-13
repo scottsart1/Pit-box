@@ -3798,9 +3798,7 @@ class StrategyEngine:
         }
 
     async def championship_scenario(self) -> dict[str, Any]:
-        """Attach F1 points to each ranked plan's projected finish position so
-        the trade-off between a safe finish and an aggressive one is explicit.
-        """
+        """Score supported finishes without rewarding an illegal tyre plan."""
         current = await self.store.snapshot_analysis()
         strategy = current.get("strategy", {})
         plans = strategy.get("plans", []) or []
@@ -3811,30 +3809,57 @@ class StrategyEngine:
             projected = int(
                 plan.get("projected_finish_position", player_pos) or player_pos
             )
+            legal, feasible = plan.get("legal"), plan.get("feasible")
+            valid = bool(legal is True and feasible is True
+                         and plan.get("finish_projection_valid") is not False)
+            conditional_points = points_for_position(projected, mode)
+            if legal is False:
+                caveat = "This plan is illegal under the modelled compound rules and earns no points."
+            elif feasible is False or plan.get("finish_projection_valid") is False:
+                caveat = "This finish is outside the supported tyre limits; conditional points are not an earnable forecast."
+            elif not valid:
+                caveat = "Plan legality and feasibility are not established in this snapshot; points are conditional only."
+            elif plan.get("inventory_status") == "unknown" and plan.get("stops_remaining"):
+                caveat = "Spare tyre availability is unconfirmed; this estimate requires the planned sets to be available."
+            else:
+                caveat = ""
             scored.append(
                 {
                     "instruction": plan.get("instruction"),
                     "stops_remaining": plan.get("stops_remaining"),
                     "projected_position": projected,
-                    "projected_points": points_for_position(projected, mode),
-                    "points_expected": plan.get("points_expected"),
+                    "projected_points": conditional_points if valid else 0 if legal is False else None,
+                    "points_expected": plan.get("points_expected") if valid else 0 if legal is False else None,
+                    "conditional_projected_points": conditional_points,
+                    "conditional_points_expected": plan.get("points_expected"),
+                    "legal": legal,
+                    "feasible": feasible,
+                    "finish_projection_valid": valid,
+                    "projection_caveat": caveat,
+                    "inventory_status": plan.get("inventory_status"),
+                    "inventory_feasible": plan.get("inventory_feasible"),
+                    "finish_projection_confidence": plan.get("finish_projection_confidence"),
                     "projected_rejoin_position": plan.get("projected_rejoin_position"),
                     "risk_time_s": plan.get("projected_time_s"),
                     "confidence": plan.get("confidence"),
                 }
             )
         current_points = points_for_position(player_pos, mode)
-        best_points = max((item["projected_points"] for item in scored), default=current_points)
+        best_points = max((item["projected_points"] for item in scored
+                           if item["projected_points"] is not None), default=None)
         return {
             "available": bool(scored),
             "points_profile": "sprint" if mode == "sprint" else "race",
             "current_position": player_pos,
             "current_points_if_held": current_points,
+            "current_points_basis": "Scoring lookup for the current position, conditional on a legal classified finish.",
             "best_projected_points": best_points,
+            "has_supported_finish": any(item["finish_projection_valid"] for item in scored),
             "plans": scored,
             "note": (
-                "Points use the projected finishing position of each plan; a "
-                "safe finish can outweigh a higher-variance gamble."
+                "Projected points require a legal, feasible finish in the model. "
+                "Conditional point values describe the displayed position only; "
+                "they do not make an unsupported or illegal plan earn points."
             ),
         }
 
