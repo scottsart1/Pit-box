@@ -34,6 +34,7 @@ def test_rival_observed_age_is_not_the_age_at_forecast_start(monkeypatch):
     # Completed observations are90.2..91.0. Future completions age11..15
     # must be91.1..91.5, independently totalling456.5 seconds.
     assert result["finish_time_s"] == pytest.approx(456.5)
+    assert result["lap_times_s"] == pytest.approx([91.1, 91.2, 91.3, 91.4, 91.5])
     assert result["pace_reference"]["reference_age_laps"] == 8
     assert result["pace_reference"]["source"] == "matched_current_stint_age"
 
@@ -136,3 +137,4 @@ def test_matched_rival_stop_resets_to_first_completed_fresh_lap(monkeypatch):
     # Complete age17, pit22s, then finish fresh ages1,2,3,4.
     expected = sum(90 + .1 * age for age in [17, 1, 2, 3, 4]) + 22
     assert result["finish_time_s"] == pytest.approx(expected)
+    assert result["lap_times_s"] == pytest.approx([91.7, 90.1, 90.2, 90.3, 90.4])

@@ -1583,6 +1583,7 @@ class StrategyEngine:
             typical = max(6, int(TYPICAL_STINT_LAPS.get(compound, 18)))
             running_time = 0.0
             future_age = age
+            projected_laps: list[float] = []
             stop_offsets: list[int] = []
             for offset in range(max(0, remaining)):
                 # A racing stop happens after an in-lap, never before the
@@ -1599,7 +1600,9 @@ class StrategyEngine:
                     # Legacy data without an identifiable observation age
                     # retains its prior numeric behavior, explicitly labelled.
                     lap_time = pace + deg * (future_age - age)
-                running_time += max(1.0, lap_time)
+                lap_time = max(1.0, lap_time)
+                projected_laps.append(round(lap_time, 6))
+                running_time += lap_time
                 future_age += 1
             stops = len(stop_offsets)
             box_laps = [int(state.get("current_lap", 0)) + offset - 1 for offset in stop_offsets]
@@ -1621,6 +1624,7 @@ class StrategyEngine:
                     "pace_s": round(float(pace), 3),
                     "pace_samples": pace_samples,
                     "pace_reference": pace_reference,
+                    "lap_times_s": projected_laps,
                     "compound": compound,
                     "tyre_age": age,
                     "likely_remaining_stops": stops,
