@@ -2127,9 +2127,9 @@ class StrategyEngine:
         # are usually one shape on adjacent laps, so a perfectly good held
         # plan of a different shape "vanished" from the list and the call
         # flipped to whatever was fastest that second.
-        pool = list(candidate.get("plans", [])) + [
-            plan
-            for plan in self._candidate_pool
+        all_plans = list(candidate.get("plans", [])) + self._candidate_pool
+        pool = [
+            plan for plan in all_plans
             if plan.get("feasible") and plan.get("legal", True)
         ]
         old_ranked = next(
@@ -2182,7 +2182,9 @@ class StrategyEngine:
         held["source_compound"] = current_compound
         held["neutralisation_phase"] = phase
         held["session_epoch"] = epoch
-        self._refresh_held_plan_details(state, candidate, held, pool)
+        # The rejected stay-out case still explains why a stop is required;
+        # only the selection above is restricted to executable legal plans.
+        self._refresh_held_plan_details(state, candidate, held, all_plans)
         candidate["raw_recommended"] = new_rec
         candidate["recommended"] = held
         candidate["stability"] = {
@@ -2281,7 +2283,18 @@ class StrategyEngine:
             )
         if "compound_rule" in held:
             candidate["compound_rule"] = held["compound_rule"]
+        held["finish_projection_valid"] = bool(held.get("feasible") and held.get("legal"))
         evidence_samples, confidence = self._plan_confidence(held)
+        inventory_status = held.get("inventory_status") or (
+            candidate.get("tyre_inventory", {}) or {}
+        ).get("status")
+        if held.get("stops_remaining") and inventory_status == "unknown":
+            # The tyre model may be well learned while the physical spare is
+            # unconfirmed. Refreshing a held plan must preserve that distinction.
+            confidence = "low"
+            qualification = "Confirm a spare set is available; tyre inventory has not arrived."
+            if qualification not in str(held.get("instruction", "")):
+                held["instruction"] = f"{held.get('instruction', '')} {qualification}".strip()
         candidate["confidence"] = confidence
         stints = held.get("stint_models", [])
         selected_stint = stints[-1] if stints else {}
