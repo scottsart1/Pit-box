@@ -113,10 +113,16 @@ async def test_no_wet_stop_called_on_the_final_lap(stack):
     )
     crossover = result.get("weather_crossover") or {}
     if crossover:
-        # The conditions must still be reported even though no stop is called.
+        # The conditions must still be reported even though no stop is called,
+        # and the reason has to be the one that is true: the tyre is wrong for
+        # the track and there is no longer enough race left to pay for fixing
+        # it. Reporting the slick as the right tyre would be a different, and
+        # false, claim.
         assert crossover.get("worth_stopping") is False
         assert crossover.get("box_lap") is None
-        assert "cannot repay" in str(crossover.get("reason", ""))
+        reason = str(crossover.get("reason", ""))
+        assert "cannot repay" in reason, reason
+        assert "WET" in reason or "INTER" in reason, reason
 
 
 @pytest.mark.asyncio

@@ -8,6 +8,7 @@ import time
 from collections import deque
 from typing import Any
 
+from . import rain
 from .analysis import fmt_ms
 from .brain import EngineerBrain
 from .config import settings
@@ -274,6 +275,7 @@ class ProactiveEngineer:
         self._last_spoken_text = ""
         self._cooldowns: dict[str, float] = {}
         self._safe_since = 0.0
+        self._wide_safe_since = 0.0
         # Refreshed each detection pass so _enqueue can honour them.
         self._standing_instructions: list[Any] = []
 
@@ -572,6 +574,7 @@ class ProactiveEngineer:
         self._driver_check_stints = {}
         self._cooldowns.clear()
         self._safe_since = 0.0
+        self._wide_safe_since = 0.0
         await self.store.mutate(lambda s: s.proactive.update({
             "queued": 0, "last_spoken_lap": 0, "last_call": "",
             "last_queued_lap": 0, "next_due_lap": int(s.proactive.get("cadence_laps", 2)),
@@ -830,7 +833,16 @@ class ProactiveEngineer:
         if kind == "race_control":
             return state.get("race_control_phase") != "green" or event.get("payload", {}).get("to") == "green"
         if kind == "weather_crossover":
-            return int(state.get("rain_next_15_pct", 0)) >= 55
+            # Still worth saying while the surface is over the crossover, or
+            # while the model is still asking for the stop or the driver's read.
+            # A queued call must not be dropped just because the forecast
+            # percentage eased while the track stayed soaked.
+            published = (state.get("strategy", {}) or {}).get("weather_crossover") or {}
+            return (
+                rain.surface_is_wet(state)
+                or bool(published.get("worth_stopping"))
+                or bool(published.get("ask_driver"))
+            )
         if kind == "fuel_warning":
             return float(state.get("fuel_laps_delta", 1.0)) < 0.3
         if kind == "tyre_wear":
@@ -901,26 +913,94 @@ class ProactiveEngineer:
             ) == "green"
         return True
 
-    def _safe_to_speak(self, state: dict[str, Any], event: dict[str, Any]) -> bool:
+    def _engine_block_reason(self, state: dict[str, Any]) -> str | None:
+        """What stops *every* call this tick, whatever the call is.
+
+        Separated from the per-call checks because the two behave completely
+        differently when the queue backs up. These conditions are properties of
+        the car and the radio, so if one holds, no call can be spoken and there
+        is no point looking at the rest of the queue. Everything in
+        ``_safe_to_speak`` varies from call to call, and giving up on the whole
+        queue because the first one failed is what silenced the others.
+        """
         if not state.get("connected") or state.get("game_paused"):
-            self._safe_since = 0.0
-            self._mark_blocked(event, "disconnected or paused")
-            return False
+            return "disconnected or paused"
+        if state.get("ptt_pressed"):
+            return "driver holding push-to-talk"
         # An open speech session makes the controller "busy" for the whole of its
         # lifetime. Treating that as a blanket block suppressed red flags,
         # penalties, damage and safety-car-delta warnings for up to the maximum
         # session length, by which time they had all expired unspoken. A live
         # conversation can be spoken into — the session itself delivers the line
         # — so only genuine capture (the driver talking) blocks a critical call.
-        conversation_open = bool(getattr(self.voice, "realtime_active", False))
-        engineer_busy = self.voice.is_busy and not conversation_open
-        if state.get("ptt_pressed") or engineer_busy:
-            self._safe_since = 0.0
-            self._mark_blocked(event, "driver or engineer busy")
+        if self.voice.is_busy and not bool(
+            getattr(self.voice, "realtime_active", False)
+        ):
+            # Name the latch. "Driver or engineer busy" covers the driver
+            # holding the radio button and six unrelated states of the voice
+            # controller, which is no help at all when the queue has stopped.
+            return f"engineer busy: {self.voice.busy_reason or 'unknown'}"
+        return None
+
+    @staticmethod
+    def _baseline_safe(state: dict[str, Any]) -> bool:
+        """Whether the driving itself is calm enough to be spoken into."""
+        return int(state.get("speed_kph", 0)) < 75 or (
+            float(state.get("brake", 0)) <= settings.proactive_max_brake
+            and abs(float(state.get("lateral_g", 0))) <= settings.proactive_max_lateral_g
+            and float(state.get("throttle", 0)) >= 0.45
+        )
+
+    @staticmethod
+    def _wide_safe(state: dict[str, Any]) -> bool:
+        """The wider straight-line window a battery call may use.
+
+        Never heavy braking or a high-G corner, but it does not insist on the
+        full throttle the strict window wants: a call about the battery is worth
+        making while the driver is attacking.
+        """
+        return (
+            float(state.get("throttle", 0)) >= 0.25
+            and float(state.get("brake", 0)) <= 0.22
+            and abs(float(state.get("lateral_g", 0))) <= 1.55
+        )
+
+    def _update_safe_window(self, state: dict[str, Any]) -> None:
+        """Track how long each safety window has been open, once per tick.
+
+        These are properties of the car, not of any particular call, and they
+        have to be measured that way. The clock used to be reset inside the
+        per-call check, so a call that failed the strict window reset it for the
+        call behind that had a wider one. It was also always measured against
+        the *strict* window, so a call could satisfy its own wider window and
+        still be told to wait out one it was never asked to meet. The battery
+        call carries exactly such a widening, and was delivered nine times in a
+        hundred.
+        """
+        now = time.monotonic()
+        baseline = self._baseline_safe(state)
+        self._safe_since = (self._safe_since or now) if baseline else 0.0
+        wide = baseline or self._wide_safe(state)
+        self._wide_safe_since = (self._wide_safe_since or now) if wide else 0.0
+
+    def _safe_to_speak(self, state: dict[str, Any], event: dict[str, Any]) -> bool:
+        """Whether *this* call can be spoken now. Callers check the engine first.
+
+        Every condition here varies from call to call: a critical call may be
+        spoken into an open conversation, an overdue one accepts a rougher
+        stretch of road, and a battery call has a window of its own. That is
+        why a blocked call must not stop the queue — the next one may hold a
+        relaxation this one does not.
+        """
+        blocked = self._engine_block_reason(state)
+        if blocked is not None:
+            self._safe_since = self._wide_safe_since = 0.0
+            self._mark_blocked(event, blocked)
             return False
-        if conversation_open and self._priority_of(event) != CRITICAL:
+        if bool(getattr(self.voice, "realtime_active", False)) and self._priority_of(
+            event
+        ) != CRITICAL:
             # Non-critical chatter still waits for the driver to finish talking.
-            self._safe_since = 0.0
             self._mark_blocked(event, "conversation open")
             return False
         now = time.time()
@@ -929,28 +1009,37 @@ class ProactiveEngineer:
         lat_g = abs(float(state.get("lateral_g", 0)))
         speed = int(state.get("speed_kph", 0))
         throttle = float(state.get("throttle", 0))
-        safe = speed < 75 or (brake <= settings.proactive_max_brake and lat_g <= settings.proactive_max_lateral_g and throttle >= 0.45)
-        if event.get("type") == "energy_low" and self._priority_of(event) <= IMPORTANT:
-            # Battery calls matter while attacking. They may use a wider straight-
-            # line window, but never heavy braking or a high-G corner.
-            safe = safe or (
-                throttle >= 0.25
-                and brake <= 0.22
-                and lat_g <= 1.55
-            )
+        safe = self._baseline_safe(state)
+        uses_wide = (
+            event.get("type") == "energy_low"
+            and self._priority_of(event) <= IMPORTANT
+        )
+        if uses_wide:
+            safe = safe or self._wide_safe(state)
         # Deadline fallback still refuses heavy braking/high-G, but no longer waits
         # forever for full throttle on tracks with short straights.
         if overdue:
             safe = speed < 90 or (brake < 0.35 and lat_g < 1.85)
         if not safe:
-            self._safe_since = 0.0
-            self._mark_blocked(event, "unsafe driving phase")
+            # Carry the numbers that closed the window. A driver whose calls
+            # never arrive needs to be able to see whether the engineer is
+            # waiting for a straight that this lap never offers. The shared
+            # clock is not touched here: _update_safe_window owns it.
+            self._mark_blocked(
+                event,
+                f"unsafe driving phase (speed {speed}, throttle {throttle:.2f}, "
+                f"brake {brake:.2f}, lateral {lat_g:.2f}g)",
+            )
             return False
         if event.get("critical") or overdue:
             return True
-        if not self._safe_since:
-            self._safe_since = time.monotonic()
-        ready = time.monotonic() - self._safe_since >= settings.proactive_safe_hold_s
+        self._update_safe_window(state)
+        # Hold the window this call is actually using, not a stricter one it was
+        # never asked to meet.
+        held_since = self._wide_safe_since if uses_wide else self._safe_since
+        ready = bool(held_since) and (
+            time.monotonic() - held_since >= settings.proactive_safe_hold_s
+        )
         if not ready:
             self._mark_blocked(event, "safe window not held")
         return ready
@@ -960,6 +1049,18 @@ class ProactiveEngineer:
         reasons = event.setdefault("blocked_reasons", [])
         if reason not in reasons:
             reasons.append(reason)
+        # The list above is deduplicated history, which is what the saved record
+        # wants but the wrong thing to diagnose a stall from: the first reason a
+        # call was ever blocked for stays at the end of it forever. Keep the
+        # reason that applies *now* separately, so a queue that has stopped
+        # moving can say what is holding it rather than what once did.
+        # Stamped only when the reason changes. Delivery re-judges the queue
+        # ten times a second, so refreshing this on every pass would report
+        # every call as having been blocked for no time at all — which is the
+        # opposite of what a stalled queue needs to say.
+        if event.get("blocked_reason") != reason:
+            event["blocked_at"] = time.time()
+        event["blocked_reason"] = reason
 
     @staticmethod
     def _relevance_reason(
@@ -995,6 +1096,12 @@ class ProactiveEngineer:
         signature = repr((
             int(state.get("current_lap", 0)), state.get("race_control_phase"),
             state.get("weather"), int(state.get("rain_next_15_pct", 0)),
+            # The wet model reads the rain falling now, the driver's report on
+            # the surface and the lap times behind it, so a change in any of
+            # them has to be able to move the call.
+            int(state.get("rain_now_pct", 0) or 0),
+            int(state.get("last_lap_ms", 0) or 0),
+            tuple(sorted((state.get("driver_grip_feedback", {}) or {}).items())),
             state.get("tyre", {}).get("compound"), int(state.get("tyre", {}).get("age_laps", 0)),
             tuple(round(float(x), 1) for x in state.get("tyre", {}).get("wear", [])),
             tuple(sorted((state.get("driver_tyre_feedback", {}) or {}).items())),
@@ -1015,9 +1122,16 @@ class ProactiveEngineer:
         phase = str(state.get("race_control_phase", "green"))
         if phase != str(baseline.get("race_control_phase", "green")):
             return f"race control changed to {phase.replace('_', ' ')}"
-        wet_now = int(state.get("rain_next_15_pct", 0) or 0) >= 55
-        if wet_now and not bool(baseline.get("wet")):
-            return "the weather crossed the wet-strategy threshold"
+        wet_now = rain.surface_is_wet(state)
+        if wet_now != bool(baseline.get("wet")):
+            # Both directions are material. A track drying out under a hold is
+            # exactly as much a reason to speak as one getting wet, and only the
+            # wetting half used to count.
+            return (
+                "the track crossed the wet-strategy threshold"
+                if wet_now
+                else "the track dried back below the wet-strategy threshold"
+            )
         if str(state.get("tyre", {}).get("compound")) != str(
             baseline.get("compound")
         ):
@@ -1279,9 +1393,34 @@ class ProactiveEngineer:
                     expires_s=20.0,
                 )
 
-        wet = int(state.get("rain_next_15_pct", 0)) >= 60
+        # The conditions call comes from the wetness model, not from a rain
+        # percentage. A forecast crossing 60% is not news on a track that is
+        # already soaked, and a track drying under a 70% forecast is news the
+        # percentage alone would never have reported.
+        crossover = (state.get("strategy", {}) or {}).get("weather_crossover") or {}
+        wet = bool(crossover) and (
+            bool(crossover.get("worth_stopping"))
+            or bool(crossover.get("ask_driver"))
+            or float(crossover.get("wetness", 0.0) or 0.0) >= rain.WETNESS_SLICK_INTER
+        )
         if wet and not self._last_weather_alert:
-            self._enqueue("weather_crossover", {"rain_15_pct": state.get("rain_next_15_pct"), "forecast": state.get("weather_forecast", [])}, critical=True, cooldown_s=0.0)
+            self._enqueue(
+                "weather_crossover",
+                {
+                    "rain_15_pct": state.get("rain_next_15_pct"),
+                    "wetness": crossover.get("wetness"),
+                    "trend": crossover.get("trend"),
+                    "compound": crossover.get("compound"),
+                    "box_lap": crossover.get("box_lap"),
+                    "worth_stopping": crossover.get("worth_stopping"),
+                    "ask_driver": crossover.get("ask_driver"),
+                    "driver_question": crossover.get("driver_question"),
+                    "reason": crossover.get("reason"),
+                    "forecast": state.get("weather_forecast", []),
+                },
+                critical=True,
+                cooldown_s=0.0,
+            )
         self._last_weather_alert = wet
 
         # Fuel, tyre, penalty and damage calls describe a car being driven.
@@ -1675,6 +1814,20 @@ class ProactiveEngineer:
         if kind == "compound_requirement":
             return "You still owe a second dry compound. We must fit a different compound before the finish."
         if kind == "weather_crossover":
+            # Three different things to say, and the difference matters to a
+            # driver: we are boxing, we need you to tell us something before we
+            # decide, or we have looked and we are staying out.
+            if payload.get("ask_driver") and payload.get("driver_question"):
+                return (
+                    f"{payload.get('reason')} It is close enough that your read decides it. "
+                    f"{payload.get('driver_question')}"
+                )
+            if payload.get("worth_stopping") and payload.get("compound"):
+                box = payload.get("box_lap")
+                where = f"Box lap {box}" if box else "Box this lap"
+                return f"{payload.get('reason')} {where} for {payload.get('compound')}."
+            if payload.get("reason"):
+                return str(payload["reason"])
             return (
                 f"Rain risk is {payload.get('rain_15_pct')} percent within fifteen minutes. "
                 "Stand by for a crossover call."
@@ -1824,6 +1977,18 @@ class ProactiveEngineer:
         the queue could hold up a safety-car delta warning behind it until both
         expired.
         """
+        self._prune(state)
+        candidates = self._candidates(state)
+        return candidates[0] if candidates else None
+
+    def _prune(self, state: dict[str, Any]) -> None:
+        """Drop calls that are no longer worth making.
+
+        Kept separate from selection because delivery needs the queue pruned
+        even on the ticks where it never gets as far as choosing a call: a stale
+        call left in place is re-reported to the database on every pass and goes
+        on occupying one of the twenty-four slots that a live call needs.
+        """
         standing = state.get("standing_instructions", [])
         kept: list[dict[str, Any]] = []
         for event in list(self.pending):
@@ -1835,11 +2000,21 @@ class ProactiveEngineer:
                 continue
             kept.append(event)
         self.pending = deque(kept, maxlen=24)
-        if not self.pending:
-            return None
-        return min(
+
+    def _candidates(self, state: dict[str, Any]) -> list[dict[str, Any]]:
+        """Everything still worth saying, most important first.
+
+        ``_select`` returns the head of this list. Delivery walks the whole of
+        it, because a call the driving phase rules out does not rule out the one
+        behind it: the next may be critical, overdue, or carry a wider window of
+        its own.
+        """
+        return sorted(
             self.pending,
-            key=lambda event: (self._priority_of(event), float(event.get("queued_at", 0.0))),
+            key=lambda event: (
+                self._priority_of(event),
+                float(event.get("queued_at", 0.0)),
+            ),
         )
 
     async def _deliver(self, state: dict[str, Any]) -> None:
@@ -1858,22 +2033,48 @@ class ProactiveEngineer:
                     state, event, reason, False
                 )
 
-        event = self._select(state)
+        self._prune(state)
+        if not self.pending:
+            return
+
+        # Nothing can be spoken while the car is disconnected or the radio is
+        # held, so the queue is left alone and told why.
+        engine_blocked = self._engine_block_reason(state)
+        if engine_blocked is not None:
+            self._safe_since = self._wide_safe_since = 0.0
+            for held in self.pending:
+                self._mark_blocked(held, engine_blocked)
+            return
+
+        # Otherwise walk the queue in priority order and speak the first call
+        # that can be spoken. Stopping at the first blocked call was the bug
+        # this replaces: every condition left in _safe_to_speak varies from
+        # call to call, so the one at the head being unspeakable said nothing
+        # about the rest. A battery warning with a deliberately wider window, a
+        # critical call allowed into an open conversation, an overdue call that
+        # accepts a rougher stretch of road — each of them sat behind a call
+        # that could not use its relaxation, and waited there until it expired.
+        self._update_safe_window(state)
+        event = None
+        for candidate in self._candidates(state):
+            if not self._safe_to_speak(state, candidate):
+                continue
+            # Only routine chatter waits out the full spacing interval; an
+            # important call gets a much shorter one so it is still current
+            # when spoken.
+            if self._priority_of(candidate) != CRITICAL:
+                interval = (
+                    settings.proactive_min_interval_s
+                    if self._priority_of(candidate) == ROUTINE
+                    else settings.proactive_important_interval_s
+                )
+                if time.monotonic() - self._last_spoken_at < interval:
+                    self._mark_blocked(candidate, "minimum interval")
+                    continue
+            event = candidate
+            break
         if event is None:
             return
-        if not self._safe_to_speak(state, event):
-            return
-        # Only routine chatter waits out the full spacing interval; an important
-        # call gets a much shorter one so it is still current when spoken.
-        if self._priority_of(event) != CRITICAL:
-            interval = (
-                settings.proactive_min_interval_s
-                if self._priority_of(event) == ROUTINE
-                else settings.proactive_important_interval_s
-            )
-            if time.monotonic() - self._last_spoken_at < interval:
-                self._mark_blocked(event, "minimum interval")
-                return
 
         with contextlib.suppress(ValueError):
             self.pending.remove(event)
@@ -2008,14 +2209,45 @@ class ProactiveEngineer:
                     state = await self.store.snapshot_analysis()
                 await self._detect(state)
                 oldest = max(0.0, time.time() - float(self.pending[0].get("queued_at", time.time()))) if self.pending else 0.0
-                await self.store.mutate(lambda s, wait=oldest: s.proactive.update({
+                # Why the queue is not moving, published every tick. Without it
+                # a stalled engineer is indistinguishable from a quiet race:
+                # the count climbs, nothing is spoken, and the reason each call
+                # was held sits in memory where nobody can read it.
+                blocked = self._queue_blockage()
+                await self.store.mutate(lambda s, wait=oldest, b=blocked: s.proactive.update({
                     "queued": len(self.pending), "oldest_wait_s": round(wait, 1),
                     "delivery_state": "queued" if self.pending else "waiting",
+                    **b,
                 }))
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
                 await self.store.update(last_error=f"Proactive engineer recovered from: {exc}")
+
+    def _queue_blockage(self) -> dict[str, Any]:
+        """What is holding the queue, and for how long.
+
+        Reports the longest-waiting call's current reason rather than the
+        newest, because the call that has been stuck longest is the one that
+        explains a stall. A queue that is simply empty, or moving normally,
+        reports nothing.
+        """
+        if not self.pending:
+            return {"blocked_reason": "", "blocked_for_s": 0.0, "blocked_calls": 0}
+        oldest = min(
+            self.pending, key=lambda event: float(event.get("queued_at", 0.0))
+        )
+        reason = str(oldest.get("blocked_reason", "") or "")
+        blocked_at = float(oldest.get("blocked_at", 0.0) or 0.0)
+        return {
+            "blocked_reason": reason,
+            "blocked_for_s": round(max(0.0, time.time() - blocked_at), 1)
+            if blocked_at
+            else 0.0,
+            "blocked_calls": sum(
+                1 for event in self.pending if event.get("blocked_reason")
+            ),
+        }
 
     async def _run_deliver(self) -> None:
         """Speak what detection has queued, one call at a time.

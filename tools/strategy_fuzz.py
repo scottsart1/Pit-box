@@ -209,6 +209,9 @@ def build_scenario(
     if rng.random() < 0.12:  # mixed/transition
         rain_pct = rng.randint(40, 70)
         note += "; weather transition"
+    forecast, forecast_note = _build_forecast(rng, weather, rain_pct)
+    if forecast_note:
+        note += f"; {forecast_note}"
 
     safety_car, phase = rng.choices(
         SAFETY_STATES, weights=[55, 12, 12, 5, 4, 6, 6]
@@ -262,6 +265,10 @@ def build_scenario(
         "active_cars": active_cars,
         "weather": weather,
         "rain_next_15_pct": rain_pct,
+        "rain_now_pct": rain_pct,
+        "weather_forecast": forecast,
+        "forecast_accuracy": rng.choice([0, 0, 1]),
+        "track_temp_c": rng.randint(6, 48),
         "safety_car": safety_car,
         "race_control_phase": phase,
         "fuel_laps_delta": round(fuel_delta, 2),
@@ -364,6 +371,48 @@ def _build_field(
     return drivers
 
 
+def _build_forecast(
+    rng: Any, weather: str, rain_pct: int
+) -> tuple[list[dict[str, Any]], str]:
+    """A forecast that goes somewhere, so wet calls are exercised properly.
+
+    A scenario with only a current weather label never tests the half of the
+    wet model that matters: what the track will be doing for the laps that are
+    left. These generate the shapes that decide wet races — a shower arriving,
+    one clearing, and one that never changes.
+    """
+    shape = rng.random()
+    if shape < 0.30:
+        return [], ""
+    samples = [
+        {
+            "time_offset_min": 0,
+            "weather": weather,
+            "rain_pct": rain_pct,
+            "track_temp_c": rng.randint(10, 45),
+        }
+    ]
+    if shape < 0.55:  # clearing
+        later, note = ["Light rain", "Overcast", "Clear"], "forecast clearing"
+        percentages = [max(0, rain_pct - 30), 10, 0]
+    elif shape < 0.80:  # arriving
+        later, note = ["Light rain", "Heavy rain", "Heavy rain"], "forecast worsening"
+        percentages = [min(100, rain_pct + 25), 85, 95]
+    else:  # steady
+        later, note = [weather, weather, weather], "forecast steady"
+        percentages = [rain_pct, rain_pct, rain_pct]
+    for offset, (label, pct) in zip((5, 15, 30), zip(later, percentages)):
+        samples.append(
+            {
+                "time_offset_min": offset,
+                "weather": label,
+                "rain_pct": int(pct),
+                "track_temp_c": rng.randint(10, 45),
+            }
+        )
+    return samples, note
+
+
 def apply(state: Any, setup: dict[str, Any]) -> None:
     """Write one scenario onto the live SessionState."""
     state.session_type = setup["session_type"]
@@ -376,6 +425,10 @@ def apply(state: Any, setup: dict[str, Any]) -> None:
     state.active_cars = setup["active_cars"]
     state.weather = setup["weather"]
     state.rain_next_15_pct = setup["rain_next_15_pct"]
+    state.rain_now_pct = setup.get("rain_now_pct", setup["rain_next_15_pct"])
+    state.weather_forecast = list(setup.get("weather_forecast", []))
+    state.forecast_accuracy = int(setup.get("forecast_accuracy", 0))
+    state.track_temp_c = int(setup.get("track_temp_c", 28))
     state.safety_car = setup["safety_car"]
     state.race_control_phase = setup["race_control_phase"]
     state.fuel_laps_delta = setup["fuel_laps_delta"]
@@ -667,6 +720,82 @@ def check_plan(sc: Scenario, plan: dict[str, Any]) -> list[Violation]:
     return out
 
 
+def check_weather_call(sc: Scenario, plan: dict[str, Any]) -> list[Violation]:
+    """Ground truth for the wet call, which has its own ways of being wrong.
+
+    The generic plan checks cannot see these: a recommendation can be perfectly
+    self-consistent, legal and feasible while still putting the car on the wrong
+    tyre for the weather, which is the failure that actually loses wet races.
+    """
+    from pitwall import rain
+
+    out: list[Violation] = []
+    crossover = plan.get("weather_crossover")
+
+    def bad(check: str, detail: str, severity: str = "error") -> None:
+        out.append(Violation(sc.id, check, detail, severity))
+
+    if not crossover:
+        return out
+
+    wetness = crossover.get("wetness")
+    if wetness is None or not 0.0 <= float(wetness) <= 1.0:
+        bad("wetness_out_of_range", f"wetness={wetness} is not a surface state")
+        return out
+    wetness = float(wetness)
+
+    for value in crossover.get("trajectory") or ():
+        if not 0.0 <= float(value) <= 1.0:
+            bad("projection_out_of_range", f"projected wetness {value}")
+            break
+
+    options = crossover.get("options") or []
+    if options:
+        cheapest = min(options, key=lambda item: float(item["total_s"]))
+        if str(cheapest["compound"]) != str(crossover.get("compound")):
+            bad(
+                "weather_choice_not_cheapest",
+                f"chose {crossover.get('compound')} over {cheapest['compound']} "
+                f"({cheapest['total_s']}s)",
+            )
+
+    # Full wets are a standing-water tyre. *Fitting* them anywhere else is the
+    # single most expensive wet-weather mistake available. Staying on a set
+    # already bolted on is a different question — there the pit loss is the
+    # argument, not the compound — so only a called change is checked.
+    if str(crossover.get("compound")) == "WET" and crossover.get("worth_stopping"):
+        if str(sc.setup.get("tyre_compound", "")).upper() != "WET":
+            projected = list(crossover.get("trajectory") or [wetness])
+            if max(projected) < rain.WETNESS_INTER_WET:
+                bad(
+                    "full_wets_without_standing_water",
+                    f"called WET at a projected peak wetness of {max(projected):.2f}, "
+                    f"below the {rain.WETNESS_INTER_WET} crossover",
+                )
+
+    # A stop only pays if there are laps left to run on the new tyre. Under a
+    # red flag the change happens during the suspension and is free.
+    if crossover.get("worth_stopping") and sc.setup["race_control_phase"] != "red_flag":
+        if int(crossover.get("benefiting_laps", 0) or 0) <= 0:
+            bad(
+                "weather_stop_with_no_laps_to_gain",
+                f"called a stop for {crossover.get('compound')} with no laps left to use it",
+            )
+
+    # The two answers are mutually exclusive by construction; both at once
+    # means the driver is told to box and asked what they think.
+    if crossover.get("worth_stopping") and crossover.get("ask_driver"):
+        bad("weather_call_both_made_and_deferred", "worth_stopping and ask_driver together")
+
+    if crossover.get("ask_driver") and not crossover.get("driver_question"):
+        bad("weather_question_missing", "ask_driver set with nothing to ask")
+
+    if not str(crossover.get("reason", "")).strip():
+        bad("weather_call_unexplained", "a conditions call with no reason")
+
+    return out
+
+
 async def check_companion_tools(sc: Scenario, tools: Any) -> list[Violation]:
     """The strategy-adjacent tools the engineer calls in the same breath."""
     out: list[Violation] = []
@@ -771,6 +900,7 @@ async def run_batch(count: int, seed: int, verbose: bool = False,
             tested += 1
             continue
         found = check_plan(sc, plan)
+        found.extend(check_weather_call(sc, plan))
 
         # Determinism: the same race state must not produce a different call.
         # A live engineer re-asked one second later must not get a new answer.

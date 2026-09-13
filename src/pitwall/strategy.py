@@ -4,12 +4,14 @@ import math
 import re
 import time
 import zlib
+from collections.abc import Iterable, Sequence
 from itertools import pairwise
 from statistics import median
 from typing import Any
 
 import numpy as np
 
+from . import rain
 from .config import settings
 from .database import PitWallDatabase
 from .race_plan import plan_matches, remaining_plan
@@ -245,13 +247,43 @@ TRACK_OVERTAKING_DIFFICULTY = {
     42: 0.60,  # Madrid; provisional until personal race evidence accumulates
 }
 
+# Dry-compound pace, in seconds against a medium. Wet compounds are absent on
+# purpose: what an intermediate or a full wet is worth is not a constant, it is
+# a function of how wet the track is, and rain.lap_penalty_fraction prices that
+# against the conditions the stint will actually be run in. A fixed +7 s for an
+# intermediate meant every plan involving one looked hopeless even in a
+# downpour, so wet plans could only ever reach the driver by bypassing the
+# ranking entirely. Use compound_pace_delta_s rather than this table directly.
 COMPOUND_DELTA = {
     "SOFT": -0.55,
     "MEDIUM": 0.0,
     "HARD": 0.65,
-    "INTER": 7.0,
-    "WET": 12.0,
 }
+
+
+def compound_pace_delta_s(
+    compound: str,
+    reference: str,
+    base_lap_s: float,
+    wetness: float,
+) -> float:
+    """Pace of ``compound`` against ``reference``, priced for the conditions.
+
+    Two independent dimensions: where a compound sits on the dry hardness scale,
+    and how well it suits the amount of water on the track. Dry compounds differ
+    on the first and behave alike on the second; wet compounds are the reverse.
+    Adding them keeps a single table from having to pretend a wet tyre has one
+    fixed cost regardless of the weather.
+    """
+    dry = COMPOUND_DELTA.get(str(compound).upper(), 0.0) - COMPOUND_DELTA.get(
+        str(reference).upper(), 0.0
+    )
+    weather = float(base_lap_s) * (
+        rain.lap_penalty_fraction(compound, wetness)
+        - rain.lap_penalty_fraction(reference, wetness)
+    )
+    return dry + weather
+
 
 DEFAULT_DEG = {
     "SOFT": 0.16,
@@ -295,6 +327,19 @@ F1_POINTS = {1: 25, 2: 18, 3: 15, 4: 12, 5: 10, 6: 8, 7: 6, 8: 4, 9: 2, 10: 1}
 
 def points_for_position(position: int) -> int:
     return F1_POINTS.get(int(position), 0)
+
+
+def _surface_word(wetness: float) -> str:
+    """Plain English for a wetness, for text a driver hears mid-corner."""
+    if wetness >= 0.85:
+        return "flooded"
+    if wetness >= rain.WETNESS_INTER_WET:
+        return "fully wet"
+    if wetness >= rain.WETNESS_SLICK_INTER:
+        return "wet"
+    if wetness >= 0.15:
+        return "damp"
+    return "dry"
 
 
 class StrategyEngine:
@@ -1088,79 +1133,118 @@ class StrategyEngine:
         state: dict[str, Any],
         base_lap_s: float,
         effective_pit_loss_s: float = 0.0,
+        available_compounds: Iterable[str] | None = None,
+        neutralisation: dict[str, Any] | None = None,
     ) -> dict[str, Any] | None:
+        """When to change tyre for the weather, and what to change to.
+
+        The decision is made by ``rain.evaluate``, which prices every available
+        compound over the conditions projected for the laps that are actually
+        left. This function's job is to turn that into the stop the rest of the
+        engine understands, and to find the lap on which it becomes right.
+
+        The whole shape of the old answer — rain label in, wet compound out —
+        is gone, because it could not express any of the calls that decide a
+        wet race: staying out on intermediates through worsening rain because
+        the forecast clears before the flag, taking slicks while it is still
+        spitting because the line has dried, or leaving a shower alone because
+        there is no longer enough distance for the stop to pay.
+        """
         current_lap = int(state.get("current_lap", 0))
         total_laps = int(state.get("total_laps", 0))
-        weather = str(state.get("weather", "Unknown"))
-        current_rain = weather in {"Light rain", "Heavy rain", "Storm"}
-        current_compound = str(state.get("tyre", {}).get("compound", "UNKNOWN"))
-        if current_rain and current_compound not in WET_COMPOUNDS:
-            compound = "WET" if weather in {"Heavy rain", "Storm"} else "INTER"
-            # A tyre change has to earn back the pit lane. A tyre fitted at the
-            # end of the current lap only benefits the laps run after it, so
-            # calling a stop into the flag costs the pit loss to gain nothing.
-            # The per-lap gain is the pace penalty currently being paid for
-            # running the wrong compound, taken from the same COMPOUND_DELTA
-            # table the stint simulation uses rather than a separate figure.
-            remaining = max(0, total_laps - current_lap + (1 if current_lap > 0 else 0))
-            benefiting_laps = max(0, remaining - 1)
-            per_lap_gain_s = COMPOUND_DELTA.get(compound, 7.0)
-            payback_s = benefiting_laps * per_lap_gain_s
-            if effective_pit_loss_s > 0.0 and payback_s <= effective_pit_loss_s:
-                return {
-                    "box_lap": None,
-                    "compound": compound,
-                    "rain_pct": 100 if weather == "Storm" else 80
-                    if weather == "Heavy rain" else 60,
-                    "time_offset_min": 0,
-                    "worth_stopping": False,
-                    "benefiting_laps": benefiting_laps,
-                    "payback_s": round(payback_s, 1),
-                    "pit_loss_s": round(effective_pit_loss_s, 1),
-                    "reason": (
-                        f"{weather} is on track, but with {benefiting_laps} lap(s) "
-                        f"left to gain on the change the stop cannot repay its "
-                        f"{effective_pit_loss_s:.0f}s pit loss. Stay out and manage it."
-                    ),
-                }
-            return {
-                "box_lap": current_lap,
-                "compound": compound,
-                "rain_pct": 100
-                if weather == "Storm"
-                else 80
-                if weather == "Heavy rain"
-                else 60,
-                "time_offset_min": 0,
-                "worth_stopping": True,
-                "benefiting_laps": benefiting_laps,
-                "payback_s": round(payback_s, 1),
-                "reason": f"{weather} is already on track.",
-            }
-        for sample in sorted(
-            state.get("weather_forecast", []),
-            key=lambda item: int(item.get("time_offset_min", 999)),
-        ):
-            rain_pct = int(sample.get("rain_pct", 0))
-            if rain_pct < 60:
-                continue
-            minutes = max(0, int(sample.get("time_offset_min", 0)))
-            laps_until = max(1, math.ceil(minutes * 60 / max(base_lap_s, 30.0)))
-            box_lap = min(total_laps, current_lap + laps_until)
-            sample_weather = str(sample.get("weather", "Light rain"))
-            compound = (
-                "WET"
-                if rain_pct >= 80 or sample_weather in {"Heavy rain", "Storm"}
-                else "INTER"
+        remaining = max(0, total_laps - current_lap + (1 if current_lap > 0 else 0))
+        if remaining <= 0:
+            return None
+
+        red_flag_change = bool((neutralisation or {}).get("red_flag_tyre_change"))
+        decision = rain.evaluate(
+            state,
+            base_lap_s=base_lap_s,
+            remaining_laps=remaining,
+            pit_loss_s=effective_pit_loss_s,
+            available_compounds=available_compounds,
+            change_during_suspension=red_flag_change,
+        )
+        reading = decision["reading"]
+        wetness = float(decision["wetness"])
+        common = {
+            "wetness": wetness,
+            "wetness_source": {
+                "declared": reading["declared_wetness"],
+                "surface_model": reading["dynamic_wetness"],
+                "measured_pace": reading["measured_wetness"],
+                "pace_confidence": reading["pace_confidence"],
+                "pace_samples": reading["pace_samples"],
+                "field_cars": reading["field_pace_cars"],
+                "driver_report": reading["driver_report"],
+            },
+            "compound_split": reading["compound_split"],
+            "trend": reading["trend"],
+            "equilibrium_bias": reading.get("equilibrium_bias", 0.0),
+            # The conditions every plan in this compute is simulated against, so
+            # the stop the weather asks for and the plans it is ranked among are
+            # priced on one projection rather than two.
+            "trajectory": decision["trajectory"],
+            "projected_end_wetness": decision["projected_end_wetness"],
+            "rain_pct": reading["rain_pct"],
+            "options": decision["options"],
+            "margin_s": decision["margin_s"],
+            "uncertainty_s": decision["uncertainty_s"],
+            "pit_loss_s": round(float(effective_pit_loss_s), 1),
+            "remaining_laps": remaining,
+            "ask_driver": decision["should_ask_driver"],
+            "driver_question": decision["driver_question"],
+            "reason": decision["reason"],
+        }
+
+        if decision["should_change"]:
+            best = next(
+                item for item in decision["options"] if item["compound"] == decision["best_compound"]
             )
             return {
-                "box_lap": box_lap,
-                "compound": compound,
-                "rain_pct": rain_pct,
-                "time_offset_min": minutes,
-                "reason": f"Rain reaches {rain_pct}% in about {minutes} minutes ({sample_weather.lower()}).",
+                **common,
+                "box_lap": current_lap,
+                "compound": decision["best_compound"],
+                "time_offset_min": 0,
+                "worth_stopping": True,
+                "benefiting_laps": int(best["benefiting_laps"]),
+                "payback_s": round(float(decision["margin_s"]), 1),
             }
-        return None
+
+        # Not yet here, but the model has already found the lap on which the
+        # change becomes right. Naming it is how a driver gets to plan a stop
+        # rather than being told to dive in from wherever they happen to be.
+        upcoming = decision.get("upcoming_change")
+        if upcoming:
+            box_lap = current_lap + int(upcoming["lap_offset"])
+            if total_laps:
+                box_lap = min(total_laps, box_lap)
+            return {
+                **common,
+                "box_lap": box_lap,
+                "compound": str(upcoming["compound"]),
+                "time_offset_min": int(upcoming["minutes_away"]),
+                "worth_stopping": True,
+                "benefiting_laps": int(upcoming["benefiting_laps"]),
+                "payback_s": round(float(upcoming["gain_s"]), 1),
+                "projected_wetness_at_stop": upcoming["projected_wetness"],
+                # The call is made and the lap is named; nothing is being
+                # deferred to the driver, whatever this lap's own margin was.
+                "ask_driver": False,
+                "driver_question": None,
+            }
+        if wetness <= 0.05 and not reading["compound_split"]:
+            # Dry track, dry forecast, nothing to report.
+            return None
+        return {
+            **common,
+            "box_lap": None,
+            "compound": decision["best_compound"],
+            "time_offset_min": 0,
+            "worth_stopping": False,
+            "benefiting_laps": max(0, remaining - 1),
+            "payback_s": round(float(decision["margin_s"]), 1),
+        }
 
     @staticmethod
     def _rejoin_position(state: dict[str, Any], effective_pit_loss_s: float) -> int:
@@ -1192,6 +1276,7 @@ class StrategyEngine:
         remaining: int,
         base_lap_s: float,
         effective_pit_loss_s: float,
+        wetness: float = 0.0,
     ) -> list[dict[str, Any]]:
         """Project field finish times on the player's current time axis.
 
@@ -1217,7 +1302,13 @@ class StrategyEngine:
             pace, pace_samples = self._recent_driver_pace_s(driver)
             compound = str(driver.get("tyre_compound", "MEDIUM")).upper()
             if pace is None:
-                pace = base_lap_s + COMPOUND_DELTA.get(compound, 0.0)
+                # No lap times for this car yet, so fall back to what their
+                # tyre is worth in the conditions everyone is sharing. On a wet
+                # track the dry table alone would have a rival on intermediates
+                # projected to finish behind a rival on slicks.
+                pace = base_lap_s + compound_pace_delta_s(
+                    compound, "MEDIUM", base_lap_s, wetness
+                )
             deg, deg_source, deg_samples = self._deg_for(
                 clean_state, compound, historical
             )
@@ -1624,6 +1715,8 @@ class StrategyEngine:
         historical: dict[str, Any],
         style_factor: float,
         set_info: dict[str, Any] | None = None,
+        wetness_trajectory: Sequence[float] | None = None,
+        start_offset: int = 0,
     ) -> dict[str, Any]:
         deg, deg_source, deg_samples = self._deg_for(state, compound, historical)
         wheel_rates, wear_source, wear_samples, effects = self._wheel_wear_rates(
@@ -1639,7 +1732,10 @@ class StrategyEngine:
         life_span = int(set_info.get("life_span_laps", 0) or 0)
         set_delta_s = float(set_info.get("lap_delta_ms", 0) or 0) / 1000.0
         reference = str(state.get("tyre", {}).get("compound", "MEDIUM"))
-        compound_delta = COMPOUND_DELTA.get(compound, 0.0) - COMPOUND_DELTA.get(reference, 0.0)
+        # What this compound is worth is a per-lap question once the weather is
+        # moving, so it is evaluated inside the loop against the wetness
+        # projected for each lap of the stint rather than fixed up front.
+        trajectory = list(wetness_trajectory or ())
         setup_delta_s = float(effects.get("lap_time_delta_s", 0.0))
         expected = conservative = 0.0
         feasible = True
@@ -1662,6 +1758,14 @@ class StrategyEngine:
             wear_penalty = max(0.0, average_wear - 52.0) * 0.009 + max(0.0, peak_wear - 58.0) * 0.008
             cliff = max(0.0, peak_wear - 70.0) * 0.060
             warm_up = cold_penalty_s if offset == 0 else (cold_penalty_s * 0.5 if offset == 1 else 0.0)
+            if trajectory:
+                index = min(len(trajectory) - 1, max(0, start_offset + offset))
+                wetness = float(trajectory[index])
+            else:
+                wetness = 0.0
+            compound_delta = compound_pace_delta_s(
+                compound, reference, base_lap_s, wetness
+            )
             expected_lap = base_lap_s + compound_delta + set_delta_s + setup_delta_s + deg * age + wear_penalty + cliff + warm_up
             uncertainty = 0.045 + (0.24 if compound == "SOFT" else 0.12 if compound == "MEDIUM" else 0.075) * (1.0 if min(deg_samples, wear_samples) < 3 else 0.35)
             conservative_lap = expected_lap + uncertainty + max(0.0, peak_wear - 65.0) * 0.020
@@ -2050,7 +2154,23 @@ class StrategyEngine:
         available_sets = self._available_sets(state)
         compounds = list(available_sets)
         weather_crossover = self._weather_crossover(
-            state, base_lap_s, effective_pit_loss
+            state,
+            base_lap_s,
+            effective_pit_loss,
+            available_compounds=compounds,
+            neutralisation=neutralisation,
+        )
+        # Every stint in every plan is simulated against the same projected
+        # conditions, so a wet-weather plan is ranked on its merits alongside
+        # the dry ones instead of having to be forced past a ranking that could
+        # only ever price an intermediate as seven seconds a lap of pure loss.
+        current_wetness = (
+            float(weather_crossover["wetness"])
+            if weather_crossover and "wetness" in weather_crossover
+            else 0.0
+        )
+        wetness_trajectory = list(
+            (weather_crossover or {}).get("trajectory") or ()
         )
         style_factor, style_evidence = self._driver_wear_factor(state, historical)
         feedback_adjustment = self._driver_feedback_adjustment(
@@ -2086,6 +2206,7 @@ class StrategyEngine:
             history: dict[str, Any],
             personal_factor: float,
             set_info: dict[str, Any] | None = None,
+            start_offset: int = 0,
         ) -> dict[str, Any]:
             wear_key = (
                 tuple(round(float(value), 3) for value in starting_wear)
@@ -2105,11 +2226,15 @@ class StrategyEngine:
             key = (
                 str(compound), int(laps), int(starting_age), wear_key,
                 round(float(base_lap), 3), round(float(personal_factor), 4), set_key,
+                # Two stints of the same tyre at different points in the race
+                # are no longer the same stint once the weather is moving.
+                int(start_offset) if wetness_trajectory else 0,
             )
             if key not in simulation_cache:
                 simulation_cache[key] = self._simulate_stint(
                     state_arg, compound, laps, starting_age, starting_wear,
                     base_lap, history, personal_factor, set_info,
+                    wetness_trajectory, start_offset,
                 )
             result = dict(simulation_cache[key])
             if feedback_adjustment.get("active"):
@@ -2124,6 +2249,8 @@ class StrategyEngine:
                         history,
                         personal_factor,
                         set_info,
+                        wetness_trajectory,
+                        start_offset,
                     )
                 result["without_driver_feedback"] = baseline_simulation_cache[key]
             return result
@@ -2278,6 +2405,7 @@ class StrategyEngine:
                     historical,
                     style_factor,
                     available_sets.get(compound),
+                    pre_laps,
                 )
                 reason = (
                     f"Fit {compound} during the red flag"
@@ -2333,6 +2461,7 @@ class StrategyEngine:
                                 historical,
                                 style_factor,
                                 available_sets.get(middle),
+                                first_laps,
                             )
                             final_stint = simulate(
                                 state,
@@ -2344,6 +2473,7 @@ class StrategyEngine:
                                 historical,
                                 style_factor,
                                 available_sets.get(final),
+                                first_laps + middle_laps,
                             )
                             plans.append(
                                 make_plan(
@@ -2381,9 +2511,9 @@ class StrategyEngine:
                                         continue
                                     stints = [
                                         simulate(state, current_compound, first_laps, current_age, current_wear, base_lap_s, historical, style_factor, None),
-                                        simulate(state, compound1, middle1_laps, 0, 0.0, base_lap_s, historical, style_factor, available_sets.get(compound1)),
-                                        simulate(state, compound2, middle2_laps, 0, 0.0, base_lap_s, historical, style_factor, available_sets.get(compound2)),
-                                        simulate(state, compound3, final_laps, 0, 0.0, base_lap_s, historical, style_factor, available_sets.get(compound3)),
+                                        simulate(state, compound1, middle1_laps, 0, 0.0, base_lap_s, historical, style_factor, available_sets.get(compound1), first_laps),
+                                        simulate(state, compound2, middle2_laps, 0, 0.0, base_lap_s, historical, style_factor, available_sets.get(compound2), first_laps + middle1_laps),
+                                        simulate(state, compound3, final_laps, 0, 0.0, base_lap_s, historical, style_factor, available_sets.get(compound3), first_laps + middle1_laps + middle2_laps),
                                     ]
                                     plans.append(
                                         make_plan(
@@ -2426,6 +2556,7 @@ class StrategyEngine:
                 historical,
                 style_factor,
                 available_sets.get(fit),
+                first_laps,
             )
             weather_plan = make_plan(
                 stops=1,
@@ -2449,6 +2580,7 @@ class StrategyEngine:
             remaining,
             base_lap_s,
             effective_pit_loss,
+            current_wetness,
         )
         for plan in plans:
             self._annotate_finish_projection(
@@ -2947,9 +3079,13 @@ class StrategyEngine:
                 shortlisted,
                 ranking_key,
                 allow_wet=(
-                    str(state.get("weather", "Unknown"))
-                    in {"Light rain", "Heavy rain", "Storm"}
-                    or int(state.get("rain_next_15_pct", 0) or 0) >= 40
+                    # Whether a wet shape is worth offering is a question about
+                    # the surface over the rest of the race, not about the
+                    # current label: a track still called "light rain" can have
+                    # a dry line through it, and one called "overcast" can be
+                    # soaked from the shower that just passed.
+                    current_wetness >= rain.WETNESS_SLICK_INTER * 0.6
+                    or max(wetness_trajectory or [0.0]) >= rain.WETNESS_SLICK_INTER
                     or current_compound in WET_COMPOUNDS
                 ),
             ),

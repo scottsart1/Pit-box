@@ -5,6 +5,7 @@ import re
 import time
 from typing import Any
 
+from . import rain
 from .config import settings
 from .database import PitWallDatabase
 from .identity import match_drivers
@@ -301,6 +302,48 @@ _FEEDBACK_PATTERNS = {
     "traction": ("no traction", "wheelspin", "spinning the rears"),
     "no_grip": ("no grip", "tires are toast", "tyres are toast"),
 }
+
+# What the driver says about the *track*, which is a different question from
+# what they say about their tyres. The pit wall can see rain percentages and lap
+# times; only the driver can see whether there is a dry line through turn four
+# or a river across the exit of six. These map onto the wetness scale in
+# rain.GRIP_REPORT_WETNESS and are the one channel that reports the surface
+# directly rather than inferring it.
+_GRIP_PATTERNS = {
+    "flooded": (
+        "aquaplaning", "aquaplane", "standing water", "there's a river",
+        "rivers across", "can't see anything", "cannot see anything",
+        "no visibility", "undriveable", "can't drive", "it's a lake",
+    ),
+    "soaked": (
+        "soaking", "soaked", "it's properly wet", "fully wet", "very wet",
+        "it's pouring", "no grip anywhere", "wet everywhere", "needs wets",
+    ),
+    "damp": (
+        "it's damp", "still damp", "greasy", "slippery off line",
+        "damp off line", "wet off line", "treacherous",
+    ),
+    "drying": (
+        "it's drying", "track is drying", "starting to dry", "drying out",
+        "inters are going off", "inters are done", "boiling the inters",
+        "overheating the inters",
+    ),
+    "dry_line": (
+        "dry line", "there's a line", "the line is dry", "ready for slicks",
+        "i want slicks", "put me on slicks", "it's dry out here",
+        "bone dry", "track is dry",
+    ),
+}
+
+# A lap can be slow because the track changed or because the driver did. When
+# they say which, the wet model stops reading that lap as evidence of rain.
+_INCIDENT_PATTERNS = (
+    "i went off", "went off", "off the track", "in the gravel", "ran wide",
+    "i spun", "spun it", "had a spin", "locked up", "lock up", "flat spot",
+    "had a moment", "big moment", "hit the wall", "clipped the wall",
+    "missed my braking", "outbraked myself", "lost it", "half spin",
+    "went straight on", "cut the chicane", "over the kerb",
+)
 
 
 def _fahrenheit(celsius: float) -> float:
@@ -1331,12 +1374,27 @@ class EngineerBrain:
                 ("first tyre", "first tire", "start tyre", "start tire", "race start tyre", "race start tire"),
             )
             if profile in {"race", "sprint"} and asks_start_tyre:
-                rain = int(state.get("rain_next_15_pct", 0) or 0)
                 total_laps = int(state.get("total_laps", 0) or 0)
                 prefs = state.get("driver_preferences", {}) or {}
                 priority = str(prefs.get("strategy_priority", "balanced")).lower()
-                if rain >= 60:
-                    tyre_call = "Start on intermediates."
+                # On the grid there are no lap times to read, so the surface
+                # estimate is the conditions themselves — but it is still the
+                # surface being asked about, not the rain percentage, and a
+                # full wet is the answer only when the track is truly flooded.
+                start_wetness = rain.equilibrium_wetness(
+                    str(state.get("weather", "Unknown")),
+                    int(state.get("rain_now_pct", 0) or 0)
+                    or int(state.get("rain_next_15_pct", 0) or 0),
+                )
+                if start_wetness >= rain.WETNESS_SLICK_INTER:
+                    start_compound = rain.best_compound_for(
+                        start_wetness, ("MEDIUM", "INTER", "WET")
+                    )
+                    tyre_call = (
+                        "Start on full wets."
+                        if start_compound == "WET"
+                        else "Start on intermediates."
+                    )
                 elif priority in {"tyre_life", "safety", "one_stop"}:
                     tyre_call = "Start on hards for tyre-life priority."
                 elif 0 < total_laps <= 15:
@@ -1435,7 +1493,7 @@ class EngineerBrain:
                 "set_at_lap": current_lap,
                 "baseline": {
                     "race_control_phase": state.get("race_control_phase", "green"),
-                    "wet": int(state.get("rain_next_15_pct", 0) or 0) >= 55,
+                    "wet": rain.surface_is_wet(state),
                     "damage": {
                         key: damage.get(key, 0)
                         for key in (
@@ -1809,7 +1867,15 @@ class EngineerBrain:
             ("what is", "what s", "how is", "how s", "forecast", "any", "chance",
              "risk", "coming", "expected", "update", "look"),
         ):
-            return f"{state.get('weather', 'Unknown')}; rain risk {int(state.get('rain_next_15_pct', 0))} percent in 15 minutes."
+            # Answer with the read the tyre call is actually being made on, not
+            # just the label and a percentage. A driver asking about the weather
+            # in a wet race is asking what it means for their tyre.
+            crossover = (state.get("strategy", {}) or {}).get("weather_crossover") or {}
+            label = state.get("weather", "Unknown")
+            risk = int(state.get("rain_next_15_pct", 0))
+            if crossover.get("reason"):
+                return f"{label}, rain risk {risk} percent in 15 minutes. {crossover['reason']}"
+            return f"{label}; rain risk {risk} percent in 15 minutes."
 
         if has_phrase(text, "damage") and has_any_phrase(
             text,
@@ -1842,6 +1908,7 @@ class EngineerBrain:
             lowered = "rears are holding"
         elif closed_answer in {"going away", "they're going away", "they re going away", "the rears are going away"}:
             lowered = "starting to go"
+        await self._capture_conditions_feedback(utterance, lowered, state)
         for category, patterns in _FEEDBACK_PATTERNS.items():
             if any(pattern in lowered for pattern in patterns):
                 await self.store.add_feedback(category, utterance)
@@ -1862,6 +1929,48 @@ class EngineerBrain:
                     utterance,
                 )
                 break
+
+    async def _capture_conditions_feedback(
+        self, utterance: str, lowered: str, state: dict[str, Any]
+    ) -> None:
+        """Record what the driver said about the track, and about their own lap.
+
+        Separate from the tyre feedback above because it answers a separate
+        question and both can be true at once — "the rears are gone and it's
+        started raining" is two pieces of evidence, not one. The grip report
+        feeds the wetness estimate; a reported mistake keeps that lap's time out
+        of the pace evidence, so a spin never reads as a change in the weather.
+        """
+        lap = int(state.get("current_lap", 0) or 0)
+        for category, patterns in _GRIP_PATTERNS.items():
+            if any(pattern in lowered for pattern in patterns):
+                await self.store.update(
+                    driver_grip_feedback={
+                        "lap": lap,
+                        "category": category,
+                        "confidence": 1.0,
+                        "text": utterance,
+                        "created_at": time.time(),
+                    }
+                )
+                await self.database.add_feedback(
+                    int(state.get("session_uid", 0)),
+                    int(state.get("track_id", -1)),
+                    f"track_{category}",
+                    utterance,
+                )
+                break
+        if lap > 0 and any(pattern in lowered for pattern in _INCIDENT_PATTERNS):
+            # The lap in progress and the one just completed: a driver reports a
+            # mistake on the lap it happened or on the way past the line after.
+            incidents = list(state.get("driver_lap_incidents", []) or [])
+            known = {int(item.get("lap", 0) or 0) for item in incidents}
+            for affected in (lap, lap - 1):
+                if affected > 0 and affected not in known:
+                    incidents.append(
+                        {"lap": affected, "text": utterance, "created_at": time.time()}
+                    )
+            await self.store.update(driver_lap_incidents=incidents[-20:])
 
     async def _run(
         self,

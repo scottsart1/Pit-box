@@ -31,11 +31,20 @@ from distribution.licensing.license_store import (  # noqa: E402
 )
 from distribution.licensing.verify import VerificationError, verify_entitlement  # noqa: E402
 
+_TEST_SIGNING_KEY = Ed25519PrivateKey.generate()
+
+
+@pytest.fixture(autouse=True)
+def test_verification_key(monkeypatch):
+    # Exercise real signatures without accessing the production private key.
+    monkeypatch.setattr(
+        "distribution.licensing.verify.load_public_key",
+        _TEST_SIGNING_KEY.public_key,
+    )
+
 
 def _sign(entitlement: Entitlement) -> str:
-    key_b64 = (DIST / ".secrets" / "signing_key.ed25519").read_text().strip()
-    private = Ed25519PrivateKey.from_private_bytes(base64.b64decode(key_b64))
-    return base64.b64encode(private.sign(canonical_bytes(entitlement))).decode()
+    return base64.b64encode(_TEST_SIGNING_KEY.sign(canonical_bytes(entitlement))).decode()
 
 
 def _entitlement(code_id: str = "PITW-ABCDE-FGHJK-MNPQR") -> Entitlement:

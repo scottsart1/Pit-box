@@ -7,8 +7,8 @@
 # Release tagged with the app version, from where the R2 upload and the site
 # deploy can be run from anywhere with wrangler and a Cloudflare token.
 #
-# Only the app suite and the two offline launcher test files run here: the
-# rest of distribution/tests needs the signing key, which is never in CI.
+# Licensing tests generate temporary keys, so the full suite can run in CI
+# without accessing the production signing key.
 name: Build Windows installer
 
 on:
@@ -41,8 +41,8 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -e ".[dev]" pyinstaller cryptography
 
-      - name: Run the tests that need no signing key
-        run: python -m pytest tests distribution/tests/test_free_edition.py distribution/tests/test_packaged_entry.py -q
+      - name: Run the full test suite
+        run: python -m pytest -q
 
       - name: Make sure Inno Setup is present
         shell: pwsh
