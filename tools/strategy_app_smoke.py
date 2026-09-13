@@ -7,6 +7,7 @@ import json
 import math
 import os
 import socket
+import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -169,6 +170,12 @@ def main():
             app.wait(timeout=25)
             assert app.returncode == 0
             assert sentinel.read_text() == 'isolated data must survive shutdown and reopen\n'
+            connection = sqlite3.connect(f"file:{health['database']}?mode=ro", uri=True)
+            try:
+                summary['database_integrity'] = [row[0] for row in connection.execute('PRAGMA integrity_check')]
+                assert summary['database_integrity'] == ['ok']
+            finally:
+                connection.close()
             app, _ = launch(log)
             summary['sessions_after_reopen'] = get('/api/v1/sessions')
             assert post('/api/shutdown', {})['stopping']
@@ -177,11 +184,15 @@ def main():
             if args.capture:
                 assert hashlib.sha256(args.capture.read_bytes()).hexdigest() == input_digest
             assert sentinel.read_text() == 'isolated data must survive shutdown and reopen\n'
-            assert summary['sessions_after_reopen']['sessions'], 'persisted session catalog is empty'
+            assert summary['sessions_after_reopen']['items'], 'persisted session catalog is empty'
             latencies = sorted(summary.pop('http_latencies_s'))
             summary['http_latency_max_s'] = round(max(latencies, default=0), 4)
             summary['http_latency_p95_s'] = round(latencies[int(.95 * (len(latencies)-1))], 4) if latencies else None
             summary['passed'] = True
+        except Exception as exc:  # noqa: BLE001 - preserve the actual gate failure in diagnostics
+            summary['passed'] = False
+            summary['failure'] = f'{type(exc).__name__}: {exc}'
+            raise
         finally:
             if emitter is not None and emitter.poll() is None:
                 emitter.terminate()
