@@ -1,6 +1,9 @@
 # Observed SQLite runtime blocker
 
-**Status: unresolved; do not treat the strategy candidate as ready to deploy.**
+**Status: the same fixed capture corrupts the released application and strategy
+candidate on workspace overlay storage; it passes the candidate on tmpfs.
+The underlying cause remains unresolved. Do not treat this as a verified
+production persistence fix or a completed Windows release gate.**
 
 The source application intermittently produced SQLite corruption under an
 isolated 25-lap Monza telemetry run. This is an observed persistence failure,
@@ -37,6 +40,89 @@ failure was introduced by this strategy change, and one successful tmpfs run
 does not prove that overlayfs caused it. A further causal comparison should
 replay one finalized QA capture at its recorded timing on both source versions.
 
+## Fixed-input source, runtime and filesystem controls
+
+The follow-up controls used exactly one finalized synthetic Monza capture,
+without regenerating telemetry between runs. Its 31,930 frames occupy
+6,925,392 bytes and span 99.589909 seconds. The original recording was already
+accelerated; replay at `--speed 1` preserves that roughly 100-second timeline.
+No personal recording or database was used.
+
+Input SHA-256:
+`c713ee4391e5f22755c16c240a4ae7a75bfc5c5aa599d6c6bc625f98d88cc436`.
+
+Each run started with fresh data, used the corrected source-app harness,
+and completed before the next control began. The candidate source was fixed
+at `97688bae9a70b57ed0f8901d36478f8722e0a0e7`; the released source remained
+exactly `daa029ad41ce29c101254e54a53ade5dbaf8b852`.
+
+| Run suffix | Source / runtime / output filesystem | Packets / reported drops | Observed result |
+| --- | --- | ---: | --- |
+| `y61elrwi` | Released / Python 3.12.14, SQLite 3.53.1 / overlay | 30,615 / 0 | Live state reached lap 25 and orderly shutdown completed, but final integrity check raised malformed database; independently copied DB also failed |
+| `370luqge` | Candidate / Python 3.12.14, SQLite 3.53.1 / overlay | 24,324 / 5 | First malformed error 41 seconds after startup; session API 500; copied DB failed integrity |
+| `q5v4g46h` | Candidate / stock Python 3.12.3, SQLite 3.45.1 / overlay | 24,222 / 13 | First malformed error 12 seconds after startup; session API 500 and failed shutdown; copied DB failed integrity |
+| `r3voqicd` | Candidate / Python 3.12.14, SQLite 3.53.1 / tmpfs | 24,707 / 0 | Complete harness passed: 178 snapshots, zero strategy violations, catalog read, orderly shutdown, integrity `ok`, relaunch, retained catalog and sentinel |
+| `hv3bblhb` | Same candidate / primary runtime / tmpfs, second fresh replay | 25,314 / 0 | Complete harness passed again: 171 snapshots, zero strategy violations, integrity `ok`, relaunch and retention |
+| `sykq2wvi` | Same candidate / primary runtime / tmpfs, slower `0.5x` replay | 29,294 / 0 | Complete harness passed: 408 snapshots, zero strategy violations, integrity `ok`, relaunch and retention; still 2,636 input frames absent from parsed count |
+
+The stock-Python control used a separate virtual environment pointing to the
+same installed dependency directory. Python and SQLite changed together; this
+is not an isolated SQLite-version test. The stock run's database header records
+writer version 3.45.1, confirming that the alternative engine wrote it. This
+old engine is a diagnostic control, not a proposed production downgrade.
+
+The fixed-input comparison establishes that corruption is not exclusive to
+the strategy changes or to the custom Python/SQLite versions. Changing only
+the candidate run's output filesystem produced a complete pass and slightly
+more received packets than the failing overlay candidate. The workspace and
+`/tmp` share overlay storage configured with `fsync=volatile`; `/dev/shm` is a
+separate tmpfs filesystem. These results support a storage-environment
+association, not proof of a particular filesystem bug. Scheduling and UDP
+delivery still vary: a fixed source capture does not imply that every frame
+reaches the application's receive queue, and its reported drop counter does
+not measure all possible kernel-level loss.
+
+An offline audit successfully parsed every input frame. All 31,930 have the
+same session UID, with no UID transitions or backward session-time transitions;
+the application's assembler reports zero restarts. A session-counter reset
+therefore does not explain the difference between sent and parsed counts.
+The two passing tmpfs runs still lack 7,223 and 6,616 of the sent frames in
+their parsed-packet counters. These passes validate the observed strategy and
+persistence paths, not lossless reception of the whole input stream.
+The single slower control extended replay to roughly 200 seconds and improved
+reception to 29,294 frames, but 2,636 of 31,930 sent frames (8.26%) still did not
+appear in the parsed count. Its zero reported drops do not invalidate that
+independent comparison. The improvement supports a load/timing contribution;
+it does not identify the exact loss mechanism or establish a production limit.
+
+Capture retention is also distinct from parsing. Across all finalized files,
+the first tmpfs run recorded 24,505 original input frames, 202 fewer than its
+parsed count; a multiset comparison found no foreign frames. The second run
+recorded 25,112 frames, also 202 fewer than its parsed count. Both report zero
+capture queue drops and write errors. Each has an initial 64-frame capture,
+then its main session capture. The lifecycle stops capture while it registers
+the old file and starts the identified-session file; `submit()` declines
+datagrams during that interval. This provides a concrete coverage limitation
+to investigate separately from upstream delivery loss. No claim is made that
+all missing frames have been localized to one layer.
+The slower run captured 29,129 source frames with no foreign frames, leaving
+165 fewer captured than parsed. Its capture queue-drop and write-error counters
+were also zero. The input file hash was unchanged after all controls.
+
+A separate deterministic probe then established the rotation loss itself:
+with the real capture service, a fake catalog paused registration using an
+asynchronous event. Three datagrams before rotation and three after it were
+accepted and persisted; all 202 submitted during registration returned false
+and were absent from the finalized captures. Queue-drop, write-error and
+rotation-drop counters all remained zero. A control without rotation persisted
+all 208 labeled datagrams. Both variants produced valid, cleanly closed capture
+files. This proves a silent capture-rotation gap without claiming that it
+accounts for the entire application's upstream receive deficit.
+
+No application persistence change was made to obtain the tmpfs pass, and tmpfs
+is not a durable production storage remedy. The practical release requirement
+remains a passing installer/persistence gate on the supported Windows target.
+
 ## Forensic evidence
 
 The original failed main file contained 185 physical 4096-byte pages while its
@@ -52,6 +138,14 @@ The second full candidate run's copied integrity check reported invalid page
 references in the 1554–1560 range, an overflow chain of length 2 where 24 was
 required, a duplicate reference to page 129 and index entry-count mismatches.
 The no-VACUUM run's copied database also raised `database disk image is malformed`.
+
+In the fixed-input stock-runtime failure, the main file had 577 physical pages
+but its header declared 582; the WAL was empty. Both a read-only DB-plus-sidecar
+copy and an immutable main-file copy returned `SQLITE_CORRUPT`. Approximately
+29.45 GB and 2.02 million inodes were free, so capacity exhaustion was not
+supported by observation. The fixed-input released and candidate main files
+had internally matching file/header page counts, but both still failed the
+copied integrity check; page-count agreement alone is not a valid health test.
 
 ## Investigations that did not establish a cause
 
@@ -114,6 +208,13 @@ Additional stopped-process forensic copies are at:
 - `pitbox-sqlite-control-csnfn26s` — released control, integrity `ok`.
 - `pitbox-sqlite-control-_1h7t2yf` — audit-hook control, integrity `ok`.
 - `pitbox-no-vacuum-copy-zf4h67id` — no-VACUUM corruption.
+- `sqlite-fixed-input-evidence-hnma0cva` — copied fixed-input released and candidate corruption, with hashes and integrity results.
+- `sqlite-stock-corruption-evidence-06v2uodq` — preserved stock-runtime originals, disposable query copies and forensic report.
+- `pitbox-fixed-tmpfs-evidence-dfr0b4a8` — fixed-input tmpfs pass, copied stopped-process DB, complete snapshots, logs and summary.
+- `pitbox-fixed-tmpfs-repeat-evidence-1k0rma_g` — second fixed-input tmpfs pass and stopped-process database copy.
+- `pitbox-fixed-tmpfs-half-evidence-gniw9jpd` — slower fixed-input tmpfs pass, stopped-process database and independent frame-count audit.
+- `capture-rotation-evidence-l874in66` — deterministic capture-rotation and no-rotation controls.
+- `sqlite-fixedcapture-frame-audit.json` — input UID/type/parse audit and first tmpfs output-frame multiset comparison.
 
 All paths above are QA evidence, not user data. The individual runtime
 directories are transient; the factual findings are preserved in this report.
