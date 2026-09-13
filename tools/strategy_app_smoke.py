@@ -15,7 +15,6 @@ import time
 import urllib.request
 from pathlib import Path
 
-
 REPO = Path(__file__).resolve().parents[1]
 PYTHON = Path(sys.executable)
 HTTP = urllib.request.build_opener(urllib.request.ProxyHandler({}))
@@ -189,7 +188,7 @@ def main():
             summary['http_latency_max_s'] = round(max(latencies, default=0), 4)
             summary['http_latency_p95_s'] = round(latencies[int(.95 * (len(latencies)-1))], 4) if latencies else None
             summary['passed'] = True
-        except Exception as exc:  # noqa: BLE001 - preserve the actual gate failure in diagnostics
+        except Exception as exc:
             summary['passed'] = False
             summary['failure'] = f'{type(exc).__name__}: {exc}'
             raise

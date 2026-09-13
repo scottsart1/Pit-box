@@ -93,6 +93,21 @@ dashboard. Bind the web host to `0.0.0.0`, set a long
 `PITWALL_WEB_ACCESS_TOKEN`, and keep it on a trusted LAN. Your Pit Box never opens a
 router or firewall to the public internet automatically.
 
+## What changed in 4.10.0 (candidate)
+
+The strategy planner now assigns distinct physical tyre sets, evaluates urgent
+multi-stop finishes and exact driver requests, and prices only the current
+safety-car or red-flag pit opportunity at its discounted cost. Pace forecasts
+reference observed tyre age and the fitted set once, without duplicating the
+same advantage. Weather evidence and forecast arrival times retain their
+session context; Sprint points use the Sprint table.
+
+Unknown inventory, impossible finishes and conditional future compound use are
+qualified in recommendations, championship estimates and the Strategy board.
+The scenario specification, independent synthetic comparison and remaining
+release gates are recorded in `docs/strategy-qa-findings-2026-09.md`.
+This candidate is not a published release until its installed-artifact gates pass.
+
 ## What changed in 4.9.8
 
 ### A saved API key no longer crashes startup behind a SOCKS proxy
