@@ -323,10 +323,17 @@ TYPICAL_STINT_LAPS = {
 
 # F1 points for finishing positions 1..10 (2026 system unchanged from 2010+).
 F1_POINTS = {1: 25, 2: 18, 3: 15, 4: 12, 5: 10, 6: 8, 7: 6, 8: 4, 9: 2, 10: 1}
+SPRINT_POINTS = {position: 9 - position for position in range(1, 9)}
 
 
-def points_for_position(position: int) -> int:
-    return F1_POINTS.get(int(position), 0)
+def points_for_position(position: int, mode_profile: str = "race") -> int:
+    """Score the classified event, not its selected game distance.
+
+    A completed 25%-length game Race still uses the Race table. Telemetry does
+    not establish the FIA curtailed-event distance bracket before results.
+    """
+    table = SPRINT_POINTS if mode_profile == "sprint" else F1_POINTS
+    return table.get(int(position), 0)
 
 
 def _surface_word(wetness: float) -> str:
@@ -1046,16 +1053,11 @@ class StrategyEngine:
 
     @staticmethod
     def _base_pit_loss(state: dict[str, Any]) -> float:
-        measured = [
-            float(lap.get("pit_lane_time_ms", 0)) / 1000
-            for lap in state.get("completed_laps", [])
-            if float(lap.get("pit_lane_time_ms", 0)) > 5000
-        ]
-        return (
-            float(median(measured))
-            if measured
-            else PIT_LOSS_SECONDS.get(int(state.get("track_id", -1)), 22.5)
-        )
+        # EA's lane timer measures time *in* the lane. Net race-time loss also
+        # needs the main-track time between the same reference points, which
+        # the lap record does not supply. A long repair/penalty must not train
+        # a permanently inflated base loss. Keep the labelled circuit prior.
+        return PIT_LOSS_SECONDS.get(int(state.get("track_id", -1)), 22.5)
 
     @staticmethod
     def _neutralisation(state: dict[str, Any]) -> dict[str, Any]:
@@ -1066,15 +1068,15 @@ class StrategyEngine:
         if red:
             factor = 0.0
             kind = "red_flag"
+        elif phase in {"safety_car_ending", "vsc_ending", "formation_ending"}:
+            factor = 0.82
+            kind = phase
         elif phase in {"safety_car", "formation"} or safety == "full":
             factor = 0.46
             kind = "safety_car"
         elif phase == "vsc" or safety == "virtual":
             factor = 0.64
             kind = "vsc"
-        elif phase in {"safety_car_ending", "vsc_ending", "formation_ending"}:
-            factor = 0.82
-            kind = phase
         else:
             factor = 1.0
             kind = "green"
@@ -1103,6 +1105,8 @@ class StrategyEngine:
         return {
             "phase": kind,
             "base_pit_loss_s": round(base, 2),
+            "base_pit_loss_source": "circuit_prior",
+            "future_stop_assumption": "Green-flag loss after the current reachable opportunity; neutralisation duration is unknown.",
             "effective_pit_loss_s": round(effective, 2),
             "saving_vs_green_s": round(base - effective, 2),
             "pit_entry_status": pit_entry_status,
@@ -1127,6 +1131,21 @@ class StrategyEngine:
             ),
             "red_flag_tyre_change": red,
         }
+
+    @staticmethod
+    def _pit_stop_costs(
+        state: dict[str, Any], box_laps: list[int],
+        neutralisation: dict[str, Any] | None = None,
+    ) -> list[float]:
+        """Price each actual opportunity without predicting an endless SC."""
+        neutral = neutralisation or StrategyEngine._neutralisation(state)
+        current_lap = int(state.get("current_lap", 0))
+        return [
+            float(neutral["effective_pit_loss_s"])
+            if index == 0 and lap == current_lap and neutral["pit_this_lap_available"]
+            else float(neutral["base_pit_loss_s"])
+            for index, lap in enumerate(box_laps)
+        ]
 
     @staticmethod
     def _weather_crossover(
@@ -1259,6 +1278,10 @@ class StrategyEngine:
             return current_position
         lost_positions = 0
         for driver in state.get("drivers", []):
+            if str(driver.get("result_label", "")).lower() in {
+                "retired", "did not finish", "disqualified", "not classified"
+            }:
+                continue
             gap = driver.get("gap_to_player_s")
             if gap is not None and 0 < float(gap) < effective_pit_loss_s:
                 lost_positions += 1
@@ -1296,11 +1319,15 @@ class StrategyEngine:
         player_position = int(state.get("player_position", 0) or 0)
         clean_state = dict(state)
         clean_state["driver_tyre_feedback"] = {}
+        # Player-specific fuel-corrected degradation is not an observation of
+        # another car. Rival lap history measures pace, but does not contain
+        # the fuel evidence needed to identify intrinsic rival degradation.
+        clean_state["analysis"] = {}
         for driver in state.get("drivers", []):
             if int(driver.get("car_idx", -1)) == player_idx:
                 continue
             position = int(driver.get("position", 0) or 0)
-            result = str(driver.get("result_label", ""))
+            result = str(driver.get("result_label", "")).lower()
             if position <= 0 or result in {
                 "retired", "did not finish", "disqualified", "not classified"
             }:
@@ -1316,24 +1343,28 @@ class StrategyEngine:
                     compound, "MEDIUM", base_lap_s, wetness
                 )
             deg, deg_source, deg_samples = self._deg_for(
-                clean_state, compound, historical
+                clean_state, compound, {}
             )
             age = max(0, int(driver.get("tyre_age", 0) or 0))
             typical = max(6, int(TYPICAL_STINT_LAPS.get(compound, 18)))
-            life_left = max(0, typical - age)
-            stops = (
-                max(0, math.ceil(max(0, remaining - life_left) / typical))
-                if remaining > life_left
-                else 0
-            )
             running_time = 0.0
             future_age = age
+            stop_offsets: list[int] = []
             for offset in range(max(0, remaining)):
-                if offset == life_left and stops:
+                # A racing stop happens after an in-lap, never before the
+                # already-in-progress lap. Reset at *every* later stop too.
+                if offset > 0 and future_age >= typical:
+                    stop_offsets.append(offset)
                     future_age = 0
-                running_time += pace + deg * max(0, future_age - age)
+                # Recent pace already includes the current tyre's age.
+                # A fresh replacement removes that contribution; clamping
+                # the difference to zero erased its fresh-tyre benefit.
+                running_time += max(1.0, pace + deg * (future_age - age))
                 future_age += 1
-            running_time += stops * effective_pit_loss_s
+            stops = len(stop_offsets)
+            box_laps = [int(state.get("current_lap", 0)) + offset - 1 for offset in stop_offsets]
+            pit_costs = self._pit_stop_costs(state, box_laps)
+            running_time += sum(pit_costs)
             gap = driver.get("gap_to_player_s")
             gap_assumed = gap is None
             if gap is None:
@@ -1352,6 +1383,9 @@ class StrategyEngine:
                     "compound": compound,
                     "tyre_age": age,
                     "likely_remaining_stops": stops,
+                    "likely_stop_offsets_laps": stop_offsets,
+                    "pit_stop_costs_s": pit_costs,
+                    "pit_loss_basis": "Current reachable opportunity, then green-flag circuit prior.",
                     "deg_s_per_lap": round(float(deg), 4),
                     "deg_source": deg_source,
                     "deg_samples": deg_samples,
@@ -1364,6 +1398,42 @@ class StrategyEngine:
                 }
             )
         return projections
+
+    @staticmethod
+    def _pit_cycle_positions_recovered(
+        plan: dict[str, Any], state: dict[str, Any], rivals: list[dict[str, Any]],
+    ) -> int:
+        """Positions returned by later rival stops require no on-track pass.
+
+        Only credit cars that actually pass our estimated first pit exit,
+        subsequently stop, and finish behind the candidate on its time axis.
+        This remains conditional on their explicitly estimated pit schedule.
+        """
+        if not plan.get("stops_remaining") or not plan.get("box_laps"):
+            return 0
+        current = int(state.get("player_position", 1) or 1)
+        rejoin = int(plan.get("projected_rejoin_position", current))
+        first_offset = max(0, int(plan["box_laps"][0]) - int(state.get("current_lap", 0)) + 1)
+        first_cost = float((plan.get("pit_stop_costs_s") or [StrategyEngine._base_pit_loss(state)])[0])
+        recovered = 0
+        for rival in rivals:
+            position = int(rival.get("position", 0))
+            gap = finite(rival.get("current_gap_s"))
+            future_stops = zip(rival.get("likely_stop_offsets_laps", []), rival.get("pit_stop_costs_s", []))
+            if (current < position <= rejoin and gap is not None and 0 < gap < first_cost
+                    and float(rival.get("finish_time_s", 0)) > float(plan.get("projected_time_s", 0))
+                    and any(offset > first_offset and cost > 0 for offset, cost in future_stops)):
+                recovered += 1
+        return recovered
+
+    @staticmethod
+    def _unobserved_cars_ahead(state: dict[str, Any], rivals: list[dict[str, Any]]) -> int:
+        # Missing rivals cannot be treated as retired. Retain their current
+        # ordering as an explicit conservative assumption until observed.
+        current = int(state.get("player_position", 1) or 1)
+        observed_ahead = {int(r.get("position", 0)) for r in rivals
+                          if 0 < int(r.get("position", 0)) < current}
+        return max(0, current - 1 - len(observed_ahead))
 
     @staticmethod
     def _expected_positions_recovered(
@@ -1379,11 +1449,12 @@ class StrategyEngine:
         )
         if not plan.get("stops_remaining") or lost <= 0:
             return 0.0
+        pit_cycle = StrategyEngine._pit_cycle_positions_recovered(plan, state, rival_projections)
         final_stint = (plan.get("stint_models") or [{}])[-1]
         lap_times = [float(value) for value in final_stint.get("lap_times_s", [])]
         laps_after_stop = len(lap_times)
         if laps_after_stop <= 0:
-            return 0.0
+            return float(pit_cycle)
         player_final_pace = float(median(lap_times))
         nearby = [
             float(item["pace_s"])
@@ -1405,7 +1476,7 @@ class StrategyEngine:
         # is not the whole story when the time has to be taken off cars that
         # do not move over.
         if pace_advantage <= _MIN_USEFUL_PACE_ADVANTAGE_S:
-            return 0.0
+            return float(pit_cycle)
         # The fresh-tyre offset erodes as the new set wears and the cars
         # ahead stop themselves, so only part of the nominal advantage is
         # ever bankable.
@@ -1415,8 +1486,8 @@ class StrategyEngine:
         overtake_tax = 1.0 + 6.0 * difficulty
         cost_per_position = _typical_adjacent_gap_s(state) + overtake_tax
         if cost_per_position <= 0:
-            return 0.0
-        return round(max(0.0, min(float(lost), time_budget / cost_per_position)), 2)
+            return float(pit_cycle)
+        return round(max(0.0, min(float(lost), pit_cycle + time_budget / cost_per_position)), 2)
 
     def _annotate_finish_projection(
         self,
@@ -1429,6 +1500,7 @@ class StrategyEngine:
         projected_time = float(plan.get("projected_time_s", 1e9))
         raw_position = (
             1
+            + self._unobserved_cars_ahead(state, rival_projections)
             + sum(
                 1
                 for rival in rival_projections
@@ -1458,14 +1530,19 @@ class StrategyEngine:
         plan.update(
             {
                 "projected_finish_position": projected_position,
-                "projected_points": points_for_position(projected_position),
+                "projected_points": points_for_position(projected_position, str(state.get("mode_profile", "race"))),
                 "positions_lost_by_stopping": max(0, rejoin - current),
                 "expected_positions_recovered": recovered,
+                "pit_cycle_positions_recovered": self._pit_cycle_positions_recovered(plan, state, rival_projections),
+                "observed_rival_count": len(rival_projections),
+                "expected_rival_count": max(0, active - 1),
+                "missing_field_assumption": "Unobserved cars ahead retain their order; their pace and pit schedule are unknown.",
                 "overtaking_difficulty": round(difficulty, 2),
                 "overtaking_difficulty_known": difficulty_known,
                 "finish_projection_confidence": (
                     "low"
                     if not difficulty_known
+                    or len(rival_projections) < max(0, active - 1)
                     or any(item.get("confidence") == "low" for item in rival_projections)
                     else "medium"
                     if any(item.get("confidence") == "medium" for item in rival_projections)
@@ -1491,6 +1568,7 @@ class StrategyEngine:
         for outcome in outcome_times:
             raw = (
                 1
+                + StrategyEngine._unobserved_cars_ahead(state, rival_projections)
                 + sum(
                     1
                     for rival in rival_projections
@@ -1511,7 +1589,7 @@ class StrategyEngine:
             "P11-15": sum(1 for value in positions if 11 <= value <= 15) / total,
             "P16+": sum(1 for value in positions if value >= 16) / total,
         }
-        expected_points = sum(points_for_position(value) for value in positions) / total
+        expected_points = sum(points_for_position(value, str(state.get("mode_profile", "race"))) for value in positions) / total
         return {
             "outcome_distribution": {
                 key: round(value, 4) for key, value in bands.items()
@@ -2398,17 +2476,19 @@ class StrategyEngine:
             reason: str,
             weather: dict[str, Any] | None = None,
         ) -> dict[str, Any]:
+            pit_costs = self._pit_stop_costs(state, box_laps, neutralisation)
+            total_pit_cost = sum(pit_costs)
             traffic_cost, projected_rejoin = self._traffic_cost(
-                state, effective_pit_loss, stops
+                state, pit_costs[0] if pit_costs else 0.0, stops
             )
             expected = (
                 sum(float(stint["expected_time_s"]) for stint in stints)
-                + stops * effective_pit_loss
+                + total_pit_cost
                 + traffic_cost
             )
             conservative = (
                 sum(float(stint["conservative_time_s"]) for stint in stints)
-                + stops * effective_pit_loss
+                + total_pit_cost
                 + traffic_cost * 1.35
             )
             legality = self._compound_rule(state, compounds_in_plan[1:])
@@ -2427,16 +2507,18 @@ class StrategyEngine:
             feasible = baseline_feasible if feedback_adjustment.get("active") else feedback_feasible
             baseline_expected = (
                 sum(float(stint["expected_time_s"]) for stint in baseline_stints)
-                + stops * effective_pit_loss
+                + total_pit_cost
                 + traffic_cost
             )
             baseline_conservative = (
                 sum(float(stint["conservative_time_s"]) for stint in baseline_stints)
-                + stops * effective_pit_loss
+                + total_pit_cost
                 + traffic_cost * 1.35
             )
             return {
                 "stops_remaining": stops,
+                "pit_stop_costs_s": pit_costs,
+                "total_pit_cost_s": round(total_pit_cost, 3),
                 "box_laps": box_laps,
                 "compounds": compounds_in_plan,
                 "projected_time_s": round(expected, 2),
@@ -2838,12 +2920,12 @@ class StrategyEngine:
                 appetite_position = int(
                     plan.get("downside_p90_position", plan.get("projected_finish_position", 99))
                 )
-                appetite_points = points_for_position(appetite_position)
+                appetite_points = points_for_position(appetite_position, mode)
             elif risk_appetite == "aggressive":
                 appetite_position = int(
                     plan.get("upside_p10_position", plan.get("projected_finish_position", 99))
                 )
-                appetite_points = points_for_position(appetite_position)
+                appetite_points = points_for_position(appetite_position, mode)
             else:
                 appetite_position = int(plan.get("projected_finish_position", 99))
                 appetite_points = float(plan.get("points_expected", 0.0))
@@ -3010,7 +3092,7 @@ class StrategyEngine:
         if best["stops_remaining"]:
             box_lap = best["box_laps"][0]
             fit = best["compounds"][1]
-            if neutralisation["phase"] == "red_flag":
+            if neutralisation["phase"] == "red_flag" and box_lap == current_lap:
                 instruction = f"During the red flag, fit {fit} for the restart."
             elif not plans[0].get("legal", True) and not best.get("weather_crossover"):
                 # The stop exists because the rules demand a second compound.
@@ -3120,6 +3202,7 @@ class StrategyEngine:
         )
         model_summary = {
             "confidence": confidence,
+            "points_profile": "sprint" if mode == "sprint" else "race",
             "evidence_samples": evidence_samples,
             "confidence_basis": "Least-supported tyre stint in the selected plan; requires both wear and pace evidence.",
             "learning_policy": "Practice and race laps; time trials, qualifying, pit laps and recorded neutralisations excluded.",
@@ -3171,11 +3254,7 @@ class StrategyEngine:
                 "fit_compound": fit,
                 "instruction": instruction,
                 "tyre_reason": tyre_reason,
-                "projected_rejoin_position": (
-                    self._rejoin_position(state, effective_pit_loss)
-                    if best.get("stops_remaining")
-                    else int(state.get("player_position", 0) or 0)
-                ),
+                "projected_rejoin_position": best.get("projected_rejoin_position", int(state.get("player_position", 0) or 0)),
                 "net_gain_vs_stay_out_s": (
                     round(net_gain_vs_stay_out, 2)
                     if net_gain_vs_stay_out is not None
@@ -3313,25 +3392,29 @@ class StrategyEngine:
         strategy = current.get("strategy", {})
         plans = strategy.get("plans", []) or []
         player_pos = int(current.get("player_position", 0))
+        mode = str(current.get("mode_profile", "race"))
         scored: list[dict[str, Any]] = []
         for plan in plans:
             projected = int(
-                plan.get("projected_rejoin_position", player_pos) or player_pos
+                plan.get("projected_finish_position", player_pos) or player_pos
             )
             scored.append(
                 {
                     "instruction": plan.get("instruction"),
                     "stops_remaining": plan.get("stops_remaining"),
                     "projected_position": projected,
-                    "projected_points": points_for_position(projected),
+                    "projected_points": points_for_position(projected, mode),
+                    "points_expected": plan.get("points_expected"),
+                    "projected_rejoin_position": plan.get("projected_rejoin_position"),
                     "risk_time_s": plan.get("projected_time_s"),
                     "confidence": plan.get("confidence"),
                 }
             )
-        current_points = points_for_position(player_pos)
+        current_points = points_for_position(player_pos, mode)
         best_points = max((item["projected_points"] for item in scored), default=current_points)
         return {
             "available": bool(scored),
+            "points_profile": "sprint" if mode == "sprint" else "race",
             "current_position": player_pos,
             "current_points_if_held": current_points,
             "best_projected_points": best_points,
