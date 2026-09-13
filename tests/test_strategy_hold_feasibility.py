@@ -84,4 +84,3 @@ def test_supported_hold_keeps_field_confidence_separate_from_tyre_evidence():
     assert held["finish_projection_confidence"] == "low"
     assert result["model_summary"]["evidence_samples"] == 30
     assert result["confidence"] == "high"  # Measured tyre evidence, not probability calibration.
-
