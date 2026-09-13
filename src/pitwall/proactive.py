@@ -926,7 +926,15 @@ class ProactiveEngineer:
         engineer_busy = self.voice.is_busy and not conversation_open
         if state.get("ptt_pressed") or engineer_busy:
             self._safe_since = 0.0
-            self._mark_blocked(event, "driver or engineer busy")
+            # Name the latch. "Driver or engineer busy" covers the driver
+            # holding the radio button and six unrelated states of the voice
+            # controller, which is no help at all when the queue has stopped.
+            self._mark_blocked(
+                event,
+                "driver holding push-to-talk"
+                if state.get("ptt_pressed")
+                else f"engineer busy: {self.voice.busy_reason or 'unknown'}",
+            )
             return False
         if conversation_open and self._priority_of(event) != CRITICAL:
             # Non-critical chatter still waits for the driver to finish talking.
@@ -954,7 +962,14 @@ class ProactiveEngineer:
             safe = speed < 90 or (brake < 0.35 and lat_g < 1.85)
         if not safe:
             self._safe_since = 0.0
-            self._mark_blocked(event, "unsafe driving phase")
+            # Carry the numbers that closed the window. A driver whose calls
+            # never arrive needs to be able to see whether the engineer is
+            # waiting for a straight that this lap never offers.
+            self._mark_blocked(
+                event,
+                f"unsafe driving phase (speed {speed}, throttle {throttle:.2f}, "
+                f"brake {brake:.2f}, lateral {lat_g:.2f}g)",
+            )
             return False
         if event.get("critical") or overdue:
             return True
@@ -970,6 +985,13 @@ class ProactiveEngineer:
         reasons = event.setdefault("blocked_reasons", [])
         if reason not in reasons:
             reasons.append(reason)
+        # The list above is deduplicated history, which is what the saved record
+        # wants but the wrong thing to diagnose a stall from: the first reason a
+        # call was ever blocked for stays at the end of it forever. Keep the
+        # reason that applies *now* separately, so a queue that has stopped
+        # moving can say what is holding it rather than what once did.
+        event["blocked_reason"] = reason
+        event["blocked_at"] = time.time()
 
     @staticmethod
     def _relevance_reason(
@@ -2070,14 +2092,45 @@ class ProactiveEngineer:
                     state = await self.store.snapshot_analysis()
                 await self._detect(state)
                 oldest = max(0.0, time.time() - float(self.pending[0].get("queued_at", time.time()))) if self.pending else 0.0
-                await self.store.mutate(lambda s, wait=oldest: s.proactive.update({
+                # Why the queue is not moving, published every tick. Without it
+                # a stalled engineer is indistinguishable from a quiet race:
+                # the count climbs, nothing is spoken, and the reason each call
+                # was held sits in memory where nobody can read it.
+                blocked = self._queue_blockage()
+                await self.store.mutate(lambda s, wait=oldest, b=blocked: s.proactive.update({
                     "queued": len(self.pending), "oldest_wait_s": round(wait, 1),
                     "delivery_state": "queued" if self.pending else "waiting",
+                    **b,
                 }))
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
                 await self.store.update(last_error=f"Proactive engineer recovered from: {exc}")
+
+    def _queue_blockage(self) -> dict[str, Any]:
+        """What is holding the queue, and for how long.
+
+        Reports the longest-waiting call's current reason rather than the
+        newest, because the call that has been stuck longest is the one that
+        explains a stall. A queue that is simply empty, or moving normally,
+        reports nothing.
+        """
+        if not self.pending:
+            return {"blocked_reason": "", "blocked_for_s": 0.0, "blocked_calls": 0}
+        oldest = min(
+            self.pending, key=lambda event: float(event.get("queued_at", 0.0))
+        )
+        reason = str(oldest.get("blocked_reason", "") or "")
+        blocked_at = float(oldest.get("blocked_at", 0.0) or 0.0)
+        return {
+            "blocked_reason": reason,
+            "blocked_for_s": round(max(0.0, time.time() - blocked_at), 1)
+            if blocked_at
+            else 0.0,
+            "blocked_calls": sum(
+                1 for event in self.pending if event.get("blocked_reason")
+            ),
+        }
 
     async def _run_deliver(self) -> None:
         """Speak what detection has queued, one call at a time.
