@@ -3194,6 +3194,16 @@ class StrategyEngine:
         earliest_box_lap = current_lap if red_flag_change else max(1, current_lap)
         if neutralisation["pit_entry_status"] == "passed" and not red_flag_change:
             earliest_box_lap += 1
+        if weather_crossover is not None and weather_crossover.get("box_lap") is not None:
+            # Crossover timing describes when conditions favor a tyre; it
+            # cannot make an already-passed pit entry executable again.
+            weather_box = max(earliest_box_lap, int(weather_crossover["box_lap"]))
+            weather_crossover = {**weather_crossover, "box_lap": weather_box}
+            if weather_box >= total_laps and not (red_flag_change and weather_box == current_lap):
+                weather_crossover.update(
+                    box_lap=None, worth_stopping=False,
+                    reason="No reachable tyre change leaves racing distance before the finish.",
+                )
 
         def laps_before_stop(box_lap: int) -> int:
             return 0 if red_flag_change and box_lap == current_lap else box_lap - max(1, current_lap) + 1
@@ -3456,7 +3466,7 @@ class StrategyEngine:
         ):
             box_lap = int(weather_crossover["box_lap"])
             fit = str(weather_crossover["compound"])
-            first_laps = max(1, box_lap - current_lap + 1)
+            first_laps = laps_before_stop(box_lap)
             pre = simulate(
                 state,
                 current_compound,
@@ -3574,9 +3584,26 @@ class StrategyEngine:
         # Run uncertainty analysis only on credible candidates; this keeps live
         # strategy recomputes bounded even when the full enumeration is large.
         shortlisted = deterministic[: min(48, len(deterministic))]
+        imminent_weather = bool(
+            weather_plan is not None
+            and int(weather_plan.get("weather_crossover", {}).get("time_offset_min", 99)) <= 1
+        )
+
+        def executable_weather_plan(plan: dict[str, Any]) -> bool:
+            return bool(
+                imminent_weather and plan.get("feasible") and plan.get("legal")
+                and plan.get("box_laps") and plan.get("compounds", [])[1:]
+                and plan["box_laps"][0] == weather_plan["box_laps"][0]
+                and plan["compounds"][1] == weather_plan["compounds"][1]
+            )
+
+        # Reserve one executable complete weather plan even if the single-stop
+        # crossover exhausts its physical set. Add at most one extra uncertainty
+        # evaluation; weather does not authorize an impossible tyre allocation.
+        weather_required = next((plan for plan in deterministic if executable_weather_plan(plan)), None)
         # Stay-out is the comparison anchor even when it is too slow to make the
         # first time-based cut. An imminent weather plan must also survive.
-        for required in (plans[0], weather_plan):
+        for required in (plans[0], weather_plan, weather_required):
             if required is not None and all(required is not item for item in shortlisted):
                 shortlisted.append(required)
         # So must whatever the driver actually asked for. The shortlist is the
@@ -3678,10 +3705,11 @@ class StrategyEngine:
             shortlisted,
             key=ranking_key,
         )[:8]
-        force_weather = bool(
-            weather_plan is not None
-            and int(weather_plan.get("weather_crossover", {}).get("time_offset_min", 99)) <= 1
+        forced_weather_plan = min(
+            (plan for plan in shortlisted if executable_weather_plan(plan)),
+            key=ranking_key, default=None,
         )
+        force_weather = forced_weather_plan is not None
         automatic_best = ranked[0]
         override_match: dict[str, Any] | None = None
         override_warning = ""
@@ -3770,9 +3798,19 @@ class StrategyEngine:
             else:
                 override_warning = "No legal plan matches the driver override."
 
-        best = weather_plan if force_weather else (override_match or automatic_best)
+        best = forced_weather_plan if force_weather else (override_match or automatic_best)
         second = next((plan for plan in ranked if plan is not best), best)
         best = dict(best)
+        if force_weather and best.get("weather_crossover") is None:
+            best["weather_crossover"] = {
+                **weather_crossover,
+                "reason": (
+                    f"Track conditions call for {best['compounds'][1]} at lap {best['box_laps'][0]}; "
+                    f"the complete {best['stops_remaining']}-stop plan keeps each planned set "
+                    "within its modelled life."
+                ),
+                "plan_basis": "Crossover selects the next tyre and timing; the full strategy prices all physical sets and stops.",
+            }
         if driver_override.get("enabled"):
             best["driver_override"] = {
                 "active": True,
