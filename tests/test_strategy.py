@@ -80,17 +80,20 @@ async def test_live_rain_creates_explicit_inter_stop(stack):
 
 
 @pytest.mark.asyncio
-async def test_rain_on_the_crossover_asks_the_driver_rather_than_guessing(stack):
-    """Marginal conditions are a question, not a call.
+async def test_uncertain_rain_forecast_asks_the_driver_rather_than_guessing(stack):
+    """A marginal expected saving is a question, not a call.
 
-    Light rain barely past the crossover with twelve laps to run puts the
-    intermediate about a second up on the whole remaining race — less than the
-    error in the estimate. Boxing on that is a coin toss with a pit stop
-    attached, so the engineer asks the one person who can see the track.
+    It is raining now, but a 70% future chance leaves a drying outcome in the
+    projection. Intermediates save only a few expected seconds over the race,
+    less than the estimate's uncertainty. The chance must not weaken the rain
+    inside the wet outcome just to manufacture a marginal crossover.
     """
     store, _, strategy, _, _, _ = stack
 
     await store.mutate(lambda state: _rain_on_slicks(state, 70))
+    await store.update(weather_forecast=[
+        {"time_offset_min": 1, "weather": "Light rain", "rain_pct": 70},
+    ])
     result = await strategy.recompute()
     crossover = result["weather_crossover"]
 

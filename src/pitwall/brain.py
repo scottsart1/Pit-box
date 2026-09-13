@@ -1383,8 +1383,6 @@ class EngineerBrain:
                 # full wet is the answer only when the track is truly flooded.
                 start_wetness = rain.equilibrium_wetness(
                     str(state.get("weather", "Unknown")),
-                    int(state.get("rain_now_pct", 0) or 0)
-                    or int(state.get("rain_next_15_pct", 0) or 0),
                 )
                 if start_wetness >= rain.WETNESS_SLICK_INTER:
                     start_compound = rain.best_compound_for(

@@ -248,9 +248,9 @@ class SessionState:
     wheel_slip_angle: list[float] = field(default_factory=lambda: [0.0] * 4)
     weather: str = "Unknown"
     weather_forecast: list[dict[str, Any]] = field(default_factory=list)
-    # Rain intensity on track right now, from the zero-offset forecast sample.
-    # The rain_next_* fields are all forecasts; none of them says what is
-    # falling at this moment, which is what a wet-tyre call starts from.
+    # Forecast chances of rain (EA m_rainPercentage), including offset zero.
+    # Kept under the existing names for saved-state/API compatibility. Actual
+    # conditions come from `weather`; none of these percentages is intensity.
     rain_now_pct: int = 0
     rain_next_15_pct: int = 0
     rain_next_30_pct: int = 0
@@ -1069,10 +1069,7 @@ class StateStore:
                     "track_temp_c": int(state.track_temp_c),
                     "air_temp_c": int(state.air_temp_c),
                     "weather": state.weather,
-                    # Rain intensity, not just the weather label: "light rain"
-                    # at 30% and at 100% put very different amounts of water on
-                    # the track, and the wetness model integrates the
-                    # difference lap by lap.
+                    # Historical forecast chance for context, never intensity.
                     "rain_pct": int(state.rain_now_pct),
                     "fuel_start_kg": float(start.get("fuel_kg", state.fuel_kg)),
                     "fuel_end_kg": state.fuel_kg,

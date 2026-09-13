@@ -306,14 +306,25 @@ def test_a_drying_track_reaches_for_slicks_while_it_is_still_spitting():
             {"time_offset_min": 15, "weather": "Overcast", "rain_pct": 0, "track_temp_c": 38},
         ],
         tyre={"compound": "INTER", "age_laps": 12},
-        completed_laps=[
-            # The track has been drying for a while: the surface model has to
-            # carry that history rather than reading the current label.
-            _lap(25, 99000, weather="Light rain", rain_pct=30),
-            _lap(26, 97000, weather="Light rain", rain_pct=25),
-            _lap(27, 95000, weather="Light rain", rain_pct=20),
-            _lap(28, 94000, weather="Light rain", rain_pct=20),
-            _lap(29, 93000, weather="Light rain", rain_pct=20),
+        completed_laps=[_lap(n, 90000) for n in range(20, 25)] + [
+            # Drying needs measured grip evidence, not falling forecast odds.
+            # Inters still pay their dry-line penalty against the 90s slick
+            # benchmark; the slick runners below independently confirm grip.
+            _lap(25, 102000, weather="Light rain", rain_pct=30),
+            _lap(26, 101000, weather="Light rain", rain_pct=25),
+            _lap(27, 100000, weather="Light rain", rain_pct=20),
+            _lap(28, 99000, weather="Light rain", rain_pct=20),
+            _lap(29, 98000, weather="Light rain", rain_pct=20),
+        ],
+        drivers=[
+            {
+                "car_idx": idx, "active": True, "tyre_compound": "MEDIUM",
+                "lap_history": [
+                    {"lap_num": n, "lap_ms": 90000 if n < 25 else 92000, "valid_flags": 1}
+                    for n in (20, 22, 24, 29)
+                ],
+            }
+            for idx in range(1, 7)
         ],
         driver_grip_feedback={"lap": 29, "category": "dry_line", "confidence": 1.0},
     )

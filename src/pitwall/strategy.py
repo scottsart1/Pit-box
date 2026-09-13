@@ -1181,10 +1181,12 @@ class StrategyEngine:
             "compound_split": reading["compound_split"],
             "trend": reading["trend"],
             "equilibrium_bias": reading.get("equilibrium_bias", 0.0),
-            # The conditions every plan in this compute is simulated against, so
-            # the stop the weather asks for and the plans it is ranked among are
-            # priced on one projection rather than two.
+            # The mean trajectory is for display. Plans use the same expected
+            # scenario costs as the weather call, not costs at mean wetness.
             "trajectory": decision["trajectory"],
+            "trajectory_kind": decision["trajectory_kind"],
+            "scenarios": decision["scenarios"],
+            "expected_lap_penalties": decision["expected_lap_penalties"],
             "projected_end_wetness": decision["projected_end_wetness"],
             "rain_pct": reading["rain_pct"],
             "options": decision["options"],
@@ -1233,7 +1235,11 @@ class StrategyEngine:
                 "ask_driver": False,
                 "driver_question": None,
             }
-        if wetness <= 0.05 and not reading["compound_split"]:
+        if (
+            wetness <= 0.05
+            and not reading["compound_split"]
+            and all(max(item["trajectory"], default=0.0) <= 0.05 for item in decision["scenarios"])
+        ):
             # Dry track, dry forecast, nothing to report.
             return None
         return {
@@ -1717,6 +1723,7 @@ class StrategyEngine:
         set_info: dict[str, Any] | None = None,
         wetness_trajectory: Sequence[float] | None = None,
         start_offset: int = 0,
+        expected_weather_penalties: dict[str, list[float]] | None = None,
     ) -> dict[str, Any]:
         deg, deg_source, deg_samples = self._deg_for(state, compound, historical)
         wheel_rates, wear_source, wear_samples, effects = self._wheel_wear_rates(
@@ -1736,6 +1743,9 @@ class StrategyEngine:
         # moving, so it is evaluated inside the loop against the wetness
         # projected for each lap of the stint rather than fixed up front.
         trajectory = list(wetness_trajectory or ())
+        penalties = expected_weather_penalties or {}
+        compound_penalties = penalties.get(compound, [])
+        reference_penalties = penalties.get(reference, [])
         setup_delta_s = float(effects.get("lap_time_delta_s", 0.0))
         expected = conservative = 0.0
         feasible = True
@@ -1763,9 +1773,17 @@ class StrategyEngine:
                 wetness = float(trajectory[index])
             else:
                 wetness = 0.0
-            compound_delta = compound_pace_delta_s(
-                compound, reference, base_lap_s, wetness
-            )
+            if compound_penalties and reference_penalties:
+                index = min(len(compound_penalties) - 1, max(0, start_offset + offset))
+                compound_delta = (
+                    COMPOUND_DELTA.get(compound.upper(), 0.0)
+                    - COMPOUND_DELTA.get(reference.upper(), 0.0)
+                    + base_lap_s * (compound_penalties[index] - reference_penalties[index])
+                )
+            else:
+                compound_delta = compound_pace_delta_s(
+                    compound, reference, base_lap_s, wetness
+                )
             expected_lap = base_lap_s + compound_delta + set_delta_s + setup_delta_s + deg * age + wear_penalty + cliff + warm_up
             uncertainty = 0.045 + (0.24 if compound == "SOFT" else 0.12 if compound == "MEDIUM" else 0.075) * (1.0 if min(deg_samples, wear_samples) < 3 else 0.35)
             conservative_lap = expected_lap + uncertainty + max(0.0, peak_wear - 65.0) * 0.020
@@ -2172,6 +2190,7 @@ class StrategyEngine:
         wetness_trajectory = list(
             (weather_crossover or {}).get("trajectory") or ()
         )
+        expected_weather_penalties = (weather_crossover or {}).get("expected_lap_penalties") or {}
         style_factor, style_evidence = self._driver_wear_factor(state, historical)
         feedback_adjustment = self._driver_feedback_adjustment(
             state, current_compound
@@ -2234,7 +2253,7 @@ class StrategyEngine:
                 simulation_cache[key] = self._simulate_stint(
                     state_arg, compound, laps, starting_age, starting_wear,
                     base_lap, history, personal_factor, set_info,
-                    wetness_trajectory, start_offset,
+                    wetness_trajectory, start_offset, expected_weather_penalties,
                 )
             result = dict(simulation_cache[key])
             if feedback_adjustment.get("active"):
@@ -2251,6 +2270,7 @@ class StrategyEngine:
                         set_info,
                         wetness_trajectory,
                         start_offset,
+                        expected_weather_penalties,
                     )
                 result["without_driver_feedback"] = baseline_simulation_cache[key]
             return result

@@ -1130,19 +1130,11 @@ class F1DatagramProtocol(asyncio.DatagramProtocol):
             return int(candidates[-1]["rain_pct"]) if candidates else 0
 
         def rain_now() -> int:
-            """Rain falling at this moment, from the zero-offset sample.
-
-            ``rain_at`` returns the last sample at or before an offset, so
-            ``rain_at(15)`` is the forecast fifteen minutes out. Wet strategy
-            needs the present intensity as well as the forecast, and they can
-            differ by everything that matters.
-            """
-            nearest = min(
-                forecast,
-                key=lambda item: abs(int(item["time_offset_min"])),
-                default=None,
+            """Offset-zero chance of rain, not an observation of rain intensity."""
+            return next(
+                (int(item["rain_pct"]) for item in forecast if item["time_offset_min"] == 0),
+                0,
             )
-            return int(nearest["rain_pct"]) if nearest is not None else 0
 
         track_length = max(1, int(packet.track_length))
         # Marshal zones are the only field-wide report of which part of the lap

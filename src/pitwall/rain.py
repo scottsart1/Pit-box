@@ -38,8 +38,9 @@ from __future__ import annotations
 
 import math
 from collections.abc import Iterable, Sequence
+from itertools import pairwise
 from statistics import median
-from typing import Any
+from typing import Any, TypedDict
 
 from .tyre_learning import finite
 
@@ -86,8 +87,8 @@ _INTER_FLOOD_MISMATCH = 0.0949
 _WET_DRY_MISMATCH = 0.300
 
 # Where the surface settles if the current sky keeps doing what it is doing.
-# Rain percentage scales these: a "light rain" sample at 40% is a passing
-# shower, at 100% it is a steady soaking.
+# EA's rain percentage is the chance of rain, not its intensity. It weights
+# future scenarios only; each weather category keeps its physical equilibrium.
 # "Heavy rain" deliberately settles just *below* the intermediate/full-wet
 # crossover. It is a common weather state and the tyre teams reach for in it is
 # the intermediate; putting its equilibrium above the crossover would have the
@@ -210,24 +211,13 @@ def best_compound_for(wetness: float, available: Iterable[str] | None = None) ->
 
 
 def equilibrium_wetness(weather: str, rain_pct: float | None = None) -> float:
-    """Where the surface settles if the present sky persists."""
-    base = _EQUILIBRIUM_WETNESS.get(str(weather).strip().lower())
-    if base is None:
-        # An unknown label is not evidence of dry. Let the rain percentage
-        # speak on its own rather than asserting a clear sky.
-        base = 0.86 if (rain_pct or 0) >= 80 else 0.52 if (rain_pct or 0) >= 35 else 0.0
-    if base <= 0.0:
-        return 0.0
-    # The label says what is falling; the percentage modulates how hard. Scaling
-    # the equilibrium by the raw percentage double-counts, because a label of
-    # "light rain" already means it is raining — at 70% that is a wet track, not
-    # seven tenths of one. The floor is what stops the double-counting; it is
-    # deliberately low enough that a barely-falling drizzle still settles a
-    # track short of the slick crossover, which is where it belongs.
-    intensity = (
-        1.0 if rain_pct is None else 0.45 + 0.55 * max(0.0, min(1.0, float(rain_pct) / 100.0))
-    )
-    return clamp_wetness(base * intensity)
+    """Where the surface settles if the observed weather category persists.
+
+    ``rain_pct`` is accepted for compatibility with older callers and saved lap
+    data, but deliberately ignored. EA's ``m_rainPercentage`` is a forecast
+    probability and cannot supply a missing observation or scale water depth.
+    """
+    return _EQUILIBRIUM_WETNESS.get(str(weather).strip().lower(), 0.0)
 
 
 def drying_factor(track_temp_c: float | None, active_cars: int = 0) -> float:
@@ -273,7 +263,7 @@ def wetness_from_history(
     laps: Sequence[dict[str, Any]],
     *,
     weather: str,
-    rain_pct: float | None,
+    rain_pct: float | None = None,
     track_temp_c: float | None,
     active_cars: int = 0,
 ) -> tuple[float, int]:
@@ -283,18 +273,20 @@ def wetness_from_history(
     history at all the honest answer is the current equilibrium, which is what a
     weather label on its own would have said — the point being that one lap of
     history is already enough to start disagreeing with it.
+
+    ``rain_pct`` remains accepted for compatibility, but is not an observation.
     """
     samples = [lap for lap in laps if lap.get("weather")]
-    current_target = equilibrium_wetness(weather, rain_pct)
+    current_target = equilibrium_wetness(weather)
     if not samples:
         return current_target, 0
     # Seed from the oldest lap's own conditions rather than from dry, so a race
     # that was already wet when the history window opens does not have to soak
     # from zero all over again.
     first = samples[0]
-    wet = equilibrium_wetness(str(first.get("weather", "")), first.get("rain_pct"))
+    wet = equilibrium_wetness(str(first.get("weather", "")))
     for lap in samples:
-        target = equilibrium_wetness(str(lap.get("weather", "")), lap.get("rain_pct"))
+        target = equilibrium_wetness(str(lap.get("weather", "")))
         wet = step_wetness(
             wet,
             target,
@@ -376,7 +368,7 @@ def player_pace_observation(
     dry = [
         lap
         for lap in laps
-        if equilibrium_wetness(str(lap.get("weather", "")), lap.get("rain_pct")) <= 0.0
+        if equilibrium_wetness(str(lap.get("weather", ""))) <= 0.0
         and lap.get("valid")
         and not lap.get("pit_status")
     ]
@@ -686,16 +678,15 @@ def estimate_wetness(
 ) -> dict[str, Any]:
     """Blend every channel into one read on the surface, with its evidence."""
     weather = str(state.get("weather", "Unknown"))
-    rain_pct = _current_rain_pct(state)
+    rain_pct = _current_rain_probability(state)
     track_temp = finite(state.get("track_temp_c"))
     active_cars = int(state.get("active_cars", 0) or 0)
     laps = list(state.get("completed_laps", []))
 
-    declared = equilibrium_wetness(weather, rain_pct)
+    declared = equilibrium_wetness(weather)
     dynamic, history_laps = wetness_from_history(
         laps,
         weather=weather,
-        rain_pct=rain_pct,
         track_temp_c=track_temp,
         active_cars=active_cars,
     )
@@ -775,7 +766,7 @@ def estimate_wetness(
         else None,
         "compound_split": compound_split([*field, *( [player] if player and player.get("ratio") else [] )]),
         "driver_report": grip,
-        "trend": _wetness_trend(laps, weather, rain_pct, track_temp, active_cars),
+        "trend": _wetness_trend(laps, weather),
     }
 
 
@@ -792,24 +783,21 @@ def surface_is_wet(state: dict[str, Any]) -> bool:
     if "wetness" in published:
         return float(published["wetness"] or 0.0) >= WETNESS_SLICK_INTER
     return (
-        equilibrium_wetness(str(state.get("weather", "Unknown")), _current_rain_pct(state))
+        equilibrium_wetness(str(state.get("weather", "Unknown")))
         >= WETNESS_SLICK_INTER
     )
 
 
-def _current_rain_pct(state: dict[str, Any]) -> int:
-    """Rain intensity now, never the fifteen-minute forecast standing in for it."""
-    now = state.get("rain_now_pct")
-    if now is not None and int(now) > 0:
-        return int(now)
-    samples = sorted(
-        state.get("weather_forecast", []) or [],
-        key=lambda item: abs(int(item.get("time_offset_min", 999) or 999)),
-    )
-    for sample in samples:
-        if abs(int(sample.get("time_offset_min", 999) or 999)) <= 5:
-            return int(sample.get("rain_pct", 0) or 0)
-    return int(state.get("rain_next_15_pct", 0) or 0)
+def _current_rain_probability(state: dict[str, Any]) -> int:
+    """Offset-zero forecast chance, for reporting only; zero is a valid value.
+
+    Never substitute a future sample for the present, or treat this forecast
+    as the observed ``PacketSessionData.weather`` category.
+    """
+    for sample in state.get("weather_forecast", []) or []:
+        if finite(sample.get("time_offset_min")) == 0:
+            return int(max(0.0, min(100.0, finite(sample.get("rain_pct")) or 0.0)))
+    return int(max(0.0, min(100.0, finite(state.get("rain_now_pct")) or 0.0)))
 
 
 def _laps_at_current_conditions(
@@ -818,7 +806,7 @@ def _laps_at_current_conditions(
     """How many trailing laps were run in the conditions on track now."""
     count = 0
     for lap in reversed(laps):
-        equilibrium = equilibrium_wetness(str(lap.get("weather", "")), lap.get("rain_pct"))
+        equilibrium = equilibrium_wetness(str(lap.get("weather", "")))
         if abs(equilibrium - declared) > tolerance:
             break
         count += 1
@@ -830,7 +818,7 @@ def _last_dry_lap(laps: Sequence[dict[str, Any]]) -> int | None:
     dry = [
         int(lap.get("lap_num", 0) or 0)
         for lap in laps
-        if equilibrium_wetness(str(lap.get("weather", "")), lap.get("rain_pct")) <= 0.0
+        if equilibrium_wetness(str(lap.get("weather", ""))) <= 0.0
     ]
     return max(dry) if dry else None
 
@@ -846,23 +834,125 @@ def _incident_laps(state: dict[str, Any]) -> list[int]:
 def _wetness_trend(
     laps: Sequence[dict[str, Any]],
     weather: str,
-    rain_pct: float | None,
-    track_temp_c: float | None,
-    active_cars: int,
 ) -> str:
     """Whether the surface is getting wetter or drying, from the last few laps."""
     if len(laps) < 2:
         return "steady"
     recent = laps[-3:]
-    earlier = equilibrium_wetness(
-        str(recent[0].get("weather", "")), recent[0].get("rain_pct")
-    )
-    now = equilibrium_wetness(weather, rain_pct)
+    earlier = equilibrium_wetness(str(recent[0].get("weather", "")))
+    now = equilibrium_wetness(weather)
     if now > earlier + 0.05:
         return "wetting"
     if now < earlier - 0.05:
         return "drying"
     return "steady"
+
+
+class WetnessScenario(TypedDict):
+    probability: float
+    trajectory: list[float]
+
+
+def project_wetness_scenarios(
+    state: dict[str, Any],
+    current_wetness: float,
+    remaining_laps: int,
+    base_lap_s: float,
+    equilibrium_bias: float = 0.0,
+) -> list[WetnessScenario]:
+    """Project physical rain/no-rain outcomes, with probability kept separate.
+
+    EA supplies marginal chances, not a temporal correlation model. Use one
+    shared probability rank through the horizon: rain persists within a sample
+    rather than being independently redrawn each lap. Splitting at every
+    forecast probability preserves each marginal exactly with at most N+1
+    paths, instead of an exponential tree. This persistence assumption is a
+    modelling choice, not information provided by the game.
+
+    Offset zero is a forecast too. The observed session weather supersedes it
+    until a strictly future sample becomes due. Approximate forecasts add a
+    separate persistence outcome, never a weakened version of the rain.
+    """
+    lap_count = max(0, int(remaining_laps))
+    lap_minutes = max(0.2, float(base_lap_s) / 60.0)
+    forecast = sorted(
+        [
+            sample
+            for sample in state.get("weather_forecast", []) or []
+            if 0 < (finite(sample.get("time_offset_min")) or 0)
+            <= lap_count * lap_minutes
+        ],
+        key=lambda item: float(item["time_offset_min"]),
+    )
+    track_temp = finite(state.get("track_temp_c"))
+    active_cars = int(state.get("active_cars", 0) or 0)
+    now_target = equilibrium_wetness(str(state.get("weather", "Unknown")))
+
+    def probability(sample: dict[str, Any]) -> float:
+        pct = finite(sample.get("rain_pct"))
+        if pct is None:
+            # Older/synthetic samples without a chance retain their category.
+            return 1.0 if equilibrium_wetness(str(sample.get("weather", ""))) > 0 else 0.0
+        return max(0.0, min(1.0, pct / 100.0))
+
+    def project(rank: float | None) -> list[float]:
+        trajectory: list[float] = []
+        wet = clamp_wetness(current_wetness)
+        sample_index = 0
+        current_sample = None
+        for index in range(lap_count):
+            minutes = (index + 1) * lap_minutes
+            while (
+                sample_index < len(forecast)
+                and float(forecast[sample_index]["time_offset_min"]) <= minutes
+            ):
+                current_sample = forecast[sample_index]
+                sample_index += 1
+            target, sample_temp = now_target, track_temp
+            if rank is not None and current_sample is not None:
+                if rank < probability(current_sample):
+                    # A dry/unknown label with a nonzero chance supplies no
+                    # rain severity. Use light rain as an explicit scenario
+                    # fallback; the percentage still never sets its intensity.
+                    target = (
+                        equilibrium_wetness(str(current_sample.get("weather", "")))
+                        or _EQUILIBRIUM_WETNESS["light rain"]
+                    )
+                else:
+                    target = 0.0
+                sample_temp = finite(current_sample.get("track_temp_c"))
+                if sample_temp is None:
+                    sample_temp = track_temp
+            # Carry the correction supported by observed pace into each path.
+            wet = step_wetness(
+                wet, clamp_wetness(target + equilibrium_bias),
+                track_temp_c=sample_temp, active_cars=active_cars,
+            )
+            trajectory.append(round(wet, 4))
+        return trajectory
+
+    if not forecast:
+        return [{"probability": 1.0, "trajectory": project(None)}]
+
+    trust = 1.0 if int(state.get("forecast_accuracy", 0) or 0) == 0 else 0.55
+    boundaries = sorted({0.0, 1.0, *(probability(sample) for sample in forecast)})
+    scenarios: list[WetnessScenario] = [
+        {"probability": (upper - lower) * trust, "trajectory": project((lower + upper) / 2)}
+        for lower, upper in pairwise(boundaries)
+    ]
+    if trust < 1.0:
+        scenarios.append({"probability": 1.0 - trust, "trajectory": project(None)})
+    return scenarios
+
+
+def _mean_trajectory(scenarios: Sequence[WetnessScenario]) -> list[float]:
+    """Display summary only: a mean surface cannot price nonlinear tyre costs."""
+    if not scenarios:
+        return []
+    return [
+        round(sum(item["probability"] * item["trajectory"][i] for item in scenarios), 4)
+        for i in range(len(scenarios[0]["trajectory"]))
+    ]
 
 
 def project_wetness(
@@ -872,56 +962,29 @@ def project_wetness(
     base_lap_s: float,
     equilibrium_bias: float = 0.0,
 ) -> list[float]:
-    """Wetness for each remaining lap, from the forecast and the surface lag.
-
-    Only the laps that are actually left are projected. A shower forty minutes
-    out is weather; in a race with eight laps to run it is not strategy, and
-    this is where that distinction gets made.
-    """
-    forecast = sorted(
-        [
-            sample
-            for sample in state.get("weather_forecast", []) or []
-            if int(sample.get("time_offset_min", -1) or -1) >= 0
-        ],
-        key=lambda item: int(item.get("time_offset_min", 0) or 0),
-    )
-    track_temp = finite(state.get("track_temp_c"))
-    active_cars = int(state.get("active_cars", 0) or 0)
-    # An approximate forecast is a hint, not a plan. Pull each sample's target
-    # back toward the conditions actually on track so the projection cannot be
-    # led far away from the present by a figure the game itself hedges on.
-    trust = 1.0 if int(state.get("forecast_accuracy", 0) or 0) == 0 else 0.55
-    now_target = equilibrium_wetness(
-        str(state.get("weather", "Unknown")), _current_rain_pct(state)
-    )
-
-    trajectory: list[float] = []
-    wet = clamp_wetness(current_wetness)
-    lap_minutes = max(0.2, float(base_lap_s) / 60.0)
-    for index in range(max(0, int(remaining_laps))):
-        minutes = (index + 1) * lap_minutes
-        target = now_target
-        for sample in forecast:
-            if int(sample.get("time_offset_min", 0) or 0) <= minutes:
-                target = equilibrium_wetness(
-                    str(sample.get("weather", "")), sample.get("rain_pct")
-                )
-            else:
-                break
-        target = now_target + (target - now_target) * trust
-        # Whatever the declared conditions have been getting wrong about this
-        # track, assume they keep getting wrong. See estimate_wetness.
-        target = clamp_wetness(target + equilibrium_bias)
-        sample_temp = track_temp
-        for sample in forecast:
-            if int(sample.get("time_offset_min", 0) or 0) <= minutes:
-                sample_temp = finite(sample.get("track_temp_c")) or track_temp
-        wet = step_wetness(
-            wet, target, track_temp_c=sample_temp, active_cars=active_cars
+    """Probability-weighted mean for display; use scenarios to price strategy."""
+    return _mean_trajectory(
+        project_wetness_scenarios(
+            state, current_wetness, remaining_laps, base_lap_s, equilibrium_bias
         )
-        trajectory.append(round(wet, 4))
-    return trajectory
+    )
+
+
+def expected_lap_penalties(
+    compounds: Iterable[str], scenarios: Sequence[WetnessScenario]
+) -> dict[str, list[float]]:
+    """E[tyre cost at wetness], not tyre cost at E[wetness]."""
+    lap_count = len(scenarios[0]["trajectory"]) if scenarios else 0
+    return {
+        compound: [
+            sum(
+                item["probability"] * lap_penalty_fraction(compound, item["trajectory"][i])
+                for item in scenarios
+            )
+            for i in range(lap_count)
+        ]
+        for compound in compounds
+    }
 
 
 def stint_cost_s(
@@ -936,7 +999,7 @@ def stint_cost_s(
 
 
 def _cumulative_costs(
-    compounds: Iterable[str], trajectory: Sequence[float], base_lap_s: float
+    penalties: dict[str, list[float]], base_lap_s: float
 ) -> dict[str, list[float]]:
     """Running total of weather cost per compound, so any stint is two lookups.
 
@@ -946,11 +1009,11 @@ def _cumulative_costs(
     is linear, and the search stops being something to ration.
     """
     table: dict[str, list[float]] = {}
-    for compound in compounds:
+    for compound, lap_penalties in penalties.items():
         running = 0.0
         column = [0.0]
-        for wetness in trajectory:
-            running += base_lap_s * lap_penalty_fraction(compound, wetness)
+        for penalty in lap_penalties:
+            running += base_lap_s * penalty
             column.append(running)
         table[compound] = column
     return table
@@ -979,19 +1042,21 @@ def evaluate(
     wetness = float(reading["wetness"])
     current = str(state.get("tyre", {}).get("compound", "UNKNOWN")).upper()
     remaining = max(0, int(remaining_laps))
-    trajectory = project_wetness(
+    scenarios = project_wetness_scenarios(
         state,
         wetness,
         remaining,
         base_lap_s,
         equilibrium_bias=float(reading.get("equilibrium_bias", 0.0) or 0.0),
     )
+    trajectory = _mean_trajectory(scenarios)
 
     candidates = {str(item).upper() for item in (available_compounds or ())}
     candidates.update({"INTER", "WET"})
     if current and current != "UNKNOWN":
         candidates.add(current)
-    costs = _cumulative_costs(sorted(candidates | {current}), trajectory, base_lap_s)
+    penalties = expected_lap_penalties(sorted(candidates | {current}), scenarios)
+    costs = _cumulative_costs(penalties, base_lap_s)
     overhead = (
         # A change made during a suspension is free: the field is stationary and
         # nothing is being raced while the tyre goes on.
@@ -1096,6 +1161,9 @@ def evaluate(
         "wetness": reading["wetness"],
         "reading": reading,
         "trajectory": trajectory,
+        "trajectory_kind": "probability_weighted_mean",
+        "scenarios": scenarios,
+        "expected_lap_penalties": penalties,
         "projected_end_wetness": trajectory[-1] if trajectory else reading["wetness"],
         "options": options,
         "best_compound": str(best_compound),
@@ -1121,9 +1189,9 @@ def evaluate(
             # What the conditions alone would ask for, before the pit lane is
             # priced in. "The right tyre" and "not worth the stop" are different
             # answers and a driver is owed the difference.
-            pace_best=best_compound_for(
-                trajectory[len(trajectory) // 2] if trajectory else wetness,
-                {item["compound"] for item in options},
+            pace_best=(
+                min(penalties, key=lambda compound: penalties[compound][len(trajectory) // 2])
+                if trajectory else best_compound_for(wetness, penalties)
             ),
             upcoming=upcoming,
         ),
