@@ -2043,6 +2043,88 @@ class StrategyEngine:
             source += "+driver_feedback"
         return rates, source, samples, effects
 
+    @classmethod
+    def _set_pace_reference(
+        cls,
+        state: dict[str, Any],
+        compound: str,
+        starting_age: int,
+        starting_wear: Sequence[float],
+        deg: float,
+        pace_reference: dict[str, Any],
+        set_info: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Use EA's whole fitted-to-spare delta once, when its basis matches.
+
+        The packet delta already includes the initial compound/condition
+        difference. Calibrate that initial difference, then let the stint model
+        price future changes. A spare's unreported age is not reconstructed.
+        """
+        reported_ms = finite(set_info.get("lap_delta_ms"))
+        result: dict[str, Any] = {
+            "source": "model_only",
+            "reported_delta_s": reported_ms / 1000.0 if reported_ms is not None else None,
+            "initial_pace_adjustment_s": 0.0,
+            "reason": "No reported relative set pace is available.",
+        }
+        if reported_ms is None:
+            return result
+        if set_info.get("fitted"):
+            result["reason"] = "The fitted set is already the observed pace reference."
+            return result
+        result["reason"] = "A matched dry pace and physical fitted-set reference are required."
+        if pace_reference.get("source") != "matched_dry_stint" or compound not in DRY_COMPOUNDS:
+            return result
+        tyre = state.get("tyre", {})
+        reference_compound = str(tyre.get("compound", "")).upper()
+        fitted_index = state.get("fitted_tyre_set_idx", -1)
+        records = state.get("tyre_sets", []) or []
+        fitted = [item for item in records if item.get("fitted") or (
+            item.get("index") is not None and item.get("index") == fitted_index
+        )]
+        if len(fitted) != 1 or str(fitted[0].get("compound", "")).upper() != reference_compound:
+            return result
+        current = fitted[0]
+        current_index = current.get("index")
+        target_index = set_info.get("index")
+        if current_index is None or target_index is None or current_index == target_index:
+            return result
+        if fitted_index not in (None, -1, 255) and fitted_index != current_index:
+            return result
+        if finite(current.get("lap_delta_ms")) != 0:
+            result["reason"] = "The fitted set's reported delta to itself is inconsistent."
+            return result
+        targets = [item for item in records if item.get("index") == target_index]
+        if len(targets) != 1 or str(targets[0].get("compound", "")).upper() != compound:
+            return result
+        current_age = finite(tyre.get("age_laps"))
+        current_wear = [finite(value) for value in tyre.get("wear", [])]
+        if current_age is None or current_age < 0 or len(current_wear) != 4 or any(
+            value is None or value < 0 or value > 100 for value in current_wear
+        ):
+            return result
+        fitted_cost = float(pace_reference["deg_s_per_lap"]) * current_age + cls._wear_pace_penalty(current_wear)
+        target_cost = (
+            COMPOUND_DELTA.get(compound, 0.0) - COMPOUND_DELTA.get(reference_compound, 0.0)
+            + deg * starting_age + cls._wear_pace_penalty(starting_wear)
+        )
+        modeled_delta = target_cost - fitted_cost
+        result.update({
+            "source": "game_delta_replaces_initial_model_difference",
+            "fitted_set_index": current_index,
+            "fitted_reference_age_laps": current_age,
+            "fitted_reference_lap_s": float(pace_reference["normalized_lap_s"]) + fitted_cost,
+            "modeled_initial_delta_s": modeled_delta,
+            "initial_pace_adjustment_s": reported_ms / 1000.0 - modeled_delta,
+            "reason": "Game relative pace replaces the initial compound/age/wear difference; future changes are modeled once.",
+            "assumptions": [
+                "The packet estimate refers to the currently identified fitted physical set in dry conditions.",
+                "Spare age is unreported; its initial pace is anchored by the game delta, not inferred from tyre life.",
+                "Future degradation, wear and weather remain model estimates; packet delta accuracy is not established.",
+            ],
+        })
+        return result
+
     def _simulate_stint(
         self,
         state: dict[str, Any],
@@ -2070,7 +2152,6 @@ class StrategyEngine:
             wear = [max(float(starting_wear), set_wear)] * 4
         usable_life = int(set_info.get("usable_life_laps", 0) or 0)
         life_span = int(set_info.get("life_span_laps", 0) or 0)
-        set_delta_s = float(set_info.get("lap_delta_ms", 0) or 0) / 1000.0
         reference = str(state.get("tyre", {}).get("compound", "MEDIUM"))
         # What this compound is worth is a per-lap question once the weather is
         # moving, so it is evaluated inside the loop against the wetness
@@ -2086,6 +2167,10 @@ class StrategyEngine:
         reference_adjustment_s = float(pace_reference["reference_adjustment_s"])
         if pace_reference["setup_in_observed_pace"]:
             setup_delta_s = 0.0
+        set_pace_reference = self._set_pace_reference(
+            state, compound, starting_age, wear, deg, pace_reference, set_info,
+        )
+        set_delta_s = float(set_pace_reference["initial_pace_adjustment_s"])
         # Live degradation is fitted against tyre_age_end. A lap starting at
         # age 10 finishes at age 11; the observed age-10 lap is already done.
         age_end_offset = 1 if pace_reference["age_end_reference"] else 0
@@ -2187,6 +2272,7 @@ class StrategyEngine:
             "usable_life_laps": usable_life,
             "operational_wear_limit_pct": operational_limit,
             "setup_effects": effects,
+            "set_pace_reference": set_pace_reference,
             "lap_times_s": [round(value, 3) for value in lap_times],
             "wheel_projection": wheel_projection,
         }
@@ -2804,7 +2890,7 @@ class StrategyEngine:
                     for key, value in (set_info or {}).items()
                     if key in {
                         "compound", "wear_pct", "usable_life_laps",
-                        "life_span_laps", "lap_delta_ms", "source",
+                        "life_span_laps", "lap_delta_ms", "source", "index", "fitted",
                     }
                 )
             )

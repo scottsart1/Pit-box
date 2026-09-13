@@ -80,9 +80,23 @@ async def test_inventory_ids_are_not_reused_as_fresh_tyres(stack):
 @pytest.mark.asyncio
 async def test_nondominated_faster_worn_set_is_preserved(stack):
     engine, state, history = await race(stack, wear=75, sets=[
+        set_info(0, "MEDIUM", wear=75, fitted=True),
         set_info(1, "HARD", lap_delta_ms=2000), set_info(2, "HARD", wear=5)])
+    state["fitted_tyre_set_idx"] = 0
+    # A relative packet delta needs its actual fitted reference and matched
+    # observed dry pace. Missing age/fitted metadata must not invent that basis.
+    state["weather"] = "Clear"
+    state["completed_laps"] += [
+        {"lap_num": age + 4, "compound": "MEDIUM", "valid": True,
+         "lap_time_ms": 90000 + 10 * age, "tyre_age_end": age,
+         "wear_end": [70 + age] * 4, "weather": "Clear",
+         "setup": dict(state.get("car_setup") or {}),
+         **{key: state.get(key) for key in ("session_uid", "restart_epoch", "timeline_epoch")}}
+        for age in range(2, 6)
+    ]
     result = engine.compute(state, history)
     assert result["recommended"].get("tyre_set_indices") == [2], result["recommended"]
+    assert result["recommended"]["stint_models"][1]["set_pace_reference"]["source"] == "game_delta_replaces_initial_model_difference"
 
 
 @pytest.mark.asyncio
