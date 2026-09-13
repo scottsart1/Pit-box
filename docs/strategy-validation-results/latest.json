@@ -1,0 +1,23 @@
+{
+  "scope": "Independent primary strategy model validation; release gates remain separate",
+  "candidate_version": "4.10.0",
+  "candidate_commit": "a71c062bdbcc6dd54fbb45498e6bf82627290eb6",
+  "baseline_commit": "daa029ad41ce29c101254e54a53ade5dbaf8b852",
+  "paired_evidence": "daa029a-vs-a71c062.json",
+  "paired_evidence_sha256": "ee9fbf60f16402cd9ee31c4816eff5647f079923d1e0469edc8c3a2c117f4d30",
+  "evaluator_sha256": "e4a84bf83900a571ad44c135898e6214b331e4462f799b301a2582aa4e18f1f4",
+  "manifest_sha256": "e64e4bc36c829a07073d746ba7e4822221be02794a19e357344207a6a8bd51fe",
+  "worlds": 24,
+  "candidate_physical_failures": 0,
+  "candidate_contract_failures": 0,
+  "newly_executable": 4,
+  "paired_common_executable": 20,
+  "paired_improved": 4,
+  "paired_unchanged": 16,
+  "paired_worse": 0,
+  "closed_loop_runs": 2,
+  "closed_loop_checkpoints": 30,
+  "closed_loop_physical_failures": 0,
+  "physical_decisions_identical_to_3ed73b9": true,
+  "real_race_calibration_claim": false
+}
