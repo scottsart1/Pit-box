@@ -1,0 +1,43 @@
+{
+  "version": 1,
+  "frozen_before_baseline": "2026-09-13",
+  "baseline_commit": "daa029ad41ce29c101254e54a53ade5dbaf8b852",
+  "training_seeds": [2026091301, 2026091302],
+  "heldout_seeds": [2026091391, 2026091392],
+  "training_families": ["linear", "finite_sets", "traffic"],
+  "heldout_families": ["quadratic", "wear_cliff", "weather"],
+  "worlds_per_seed": 6,
+  "max_world_horizon_laps": 18,
+  "closed_loop_families": ["linear", "wear_cliff"],
+  "closed_loop_seed": 2026091392,
+  "oracle": {
+    "type": "finite-set exact dynamic program",
+    "stop_timing": "before each remaining lap, including the current lap",
+    "inventory": "unique physical sets; removed sets cannot be reused",
+    "wear_limit_pct": 90,
+    "cost": "independent generated base pace, age slope, curvature, wear cliff, weather penalty, cold tyre cost, stop loss and rejoin delay",
+    "information_advantage": "Oracle sees the full generated world, including future conditions and nonlinear tyre response. Planner receives ordinary state and linear historical summaries. Regret is diagnostic, not a calibrated real-race accuracy claim.",
+    "excluded": "No production stint simulator, lap-cost constants, ranking function or probability distribution is used to score a plan."
+  },
+  "metrics": [
+    "physically impossible emitted plans",
+    "independent finite-set regret seconds, median and p90",
+    "linear-family regret separately from distribution-shift families",
+    "reported-feasible versus independently feasible contradictions",
+    "total planner runtime and p95 per checkpoint",
+    "closed-loop physical failures and recommendation changes before execution",
+    "missing or internally contradictory output contracts"
+  ],
+  "hard_gates": {
+    "oracle_unit_checks": "all pass",
+    "impossible_recommendations": "must be investigated individually; no improvement claim based on dropping impossible outcomes from regret",
+    "candidate_vs_baseline": "same manifest, worlds, observations and scoring code; no holdout retuning"
+  },
+  "limitations": [
+    "This is an intentionally small deterministic engineering benchmark, not a fitted simulator of any EA title or a real driver.",
+    "Synthetic histories are supplied directly at the model boundary; this does not test database learning, UDP parsing or the installed user interface.",
+    "Baseline plans without physical set IDs receive the most favorable unique-set assignment consistent with their compound sequence; this is explicitly optimistic.",
+    "An unavailable or physically impossible plan has no finite regret and remains counted separately.",
+    "Weather future in the oracle is known; production weather beliefs are uncertain, so weather regret cannot be interpreted as an optimality defect alone."
+  ]
+}
