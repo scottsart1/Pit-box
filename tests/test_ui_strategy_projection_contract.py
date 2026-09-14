@@ -72,7 +72,11 @@ process.stdout.write(JSON.stringify(snapshots));
     result = subprocess.run(
         [NODE, "--input-type=module", "-e", harness,
          str(ROOT / "static/js/strategy.js"), json.dumps(changes), json.dumps(strategy_extra or {})],
-        capture_output=True, text=True, check=True, timeout=10,
+        # Node writes UTF-8. Without naming it, text mode decodes with the
+        # locale encoding, which is cp1252 on a Windows runner: the em dash
+        # this contract asserts on comes back mangled and the test fails on
+        # Windows while passing everywhere else.
+        capture_output=True, text=True, encoding="utf-8", check=True, timeout=10,
     )
     return json.loads(result.stdout)
 
