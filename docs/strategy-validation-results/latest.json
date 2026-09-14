@@ -22,5 +22,11 @@
   "physical_decisions_identical_to_3ed73b9": true,
   "complete_outputs_identical_to_a71c062": true,
   "complete_outputs_identical_to_a7042b5": true,
-  "real_race_calibration_claim": false
+  "real_race_calibration_claim": false,
+  "superseded_evidence_location": "Pit Box 4.10.0 handoff archive, docs/strategy-validation-results/",
+  "superseded_evidence": {
+    "daa029a-vs-3ed73b9.json": "81b9be5276aa8391efcce1d5e945b6e570885fce3cdb214023946d1bb373bbaa",
+    "daa029a-vs-a7042b5.json": "66772c2f1438730d03b19e6e7959a100566ebf9077cedcae74bcbeaf858fbae1",
+    "daa029a-vs-a71c062.json": "ee9fbf60f16402cd9ee31c4816eff5647f079923d1e0469edc8c3a2c117f4d30"
+  }
 }

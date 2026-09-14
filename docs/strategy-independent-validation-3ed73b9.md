@@ -57,7 +57,7 @@ python -m tools.strategy_validation_compare /tmp/baseline.json /tmp/candidate.js
 python -m pytest tests/test_strategy_validation.py -q
 ```
 
-Committed machine evidence: `docs/strategy-validation-results/daa029a-vs-3ed73b9.json`. It contains every per-world input fingerprint, both emitted plans, physical scores and failure reasons, oracle stop assignments, paired statistics and sequential decisions. All data is synthetic.
+Machine evidence: `daa029a-vs-3ed73b9.json` (SHA-256 `81b9be5276aa8391efcce1d5e945b6e570885fce3cdb214023946d1bb373bbaa`), retained in the 4.10.0 handoff archive rather than this repository, and indexed from `docs/strategy-validation-results/latest.json`. It contains every per-world input fingerprint, both emitted plans, physical scores and failure reasons, oracle stop assignments, paired statistics and sequential decisions. All data is synthetic.
 
 | Evidence | SHA-256 |
 |---|---|
