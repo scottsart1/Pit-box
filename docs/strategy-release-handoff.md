@@ -1,6 +1,32 @@
 # Strategy 4.10.0 candidate: release handoff
 
-**Unpublished candidate. Do not interpret this handoff as release approval.**
+**Published as 4.10.0. The validation limitations recorded below are unchanged
+by publication: none of them was resolved, retested or withdrawn.**
+
+Release `v4.10.0` was built from `727349590ebb59a88a126225150f5835ef190b20`. The
+Windows installer gate ran with release attachment disabled first, and its
+diagnostics were inspected before anything was published. The artifact attached
+to the release carries the same SHA-256 the gate recorded for the artifact it
+tested, `806f8a70f047b6c086306d34777c76954040d6f6741062ff348f9fe7b3b63aae`, and
+the public `/installer` download was fetched and hashed to that same value.
+
+What the gate did and did not establish. It installed the built artifact on a
+disposable Windows runner, started the frozen executable, ran a 25-lap stress
+telemetry session, and reported a full `PRAGMA integrity_check` of `ok` with the
+race classification persisted and read back after a restart. That is one passing
+Windows observation. It is not the bounded comparison this handoff asks for: no
+run of the released 4.9.8 installer alongside it, no repetition, and no replay of
+the fixed capture. The gate generates telemetry rather than replaying that
+capture, and it reports the application's own drop counter rather than comparing
+frames sent against frames received, so the reception and load question below
+remains open on the evidence available here.
+
+The overlay-storage corruption recorded in
+`strategy-sqlite-runtime-blocker-20260913.md` is likewise unresolved. Its
+mechanism is unknown, it was observed against both 4.9.8 and this candidate, and
+no persistence fix was made. The first-run welcome window, browser rendering on a
+clean Windows install, audio hardware and live provider narration remain
+unobserved on the supported product.
 
 The user authorized scenario-first refinement, isolated testing, fixes and
 publication only after satisfactory validation. The scenario specification was
@@ -8,8 +34,8 @@ committed before implementation. All data used here is synthetic; existing
 user data and live provider credentials were not accessed.
 
 The base is released v4.9.8, commit
-`daa029ad41ce29c101254e54a53ade5dbaf8b852`. GitHub `main` was independently
-rechecked and still resolved to that commit during final review. The handoff
+`daa029ad41ce29c101254e54a53ade5dbaf8b852`, which is where `main` stood when this
+candidate was prepared. The handoff
 archive's manifest identifies the exact candidate commit and tree. The patch
 series preserves the scenario-first history and all observed-failure fixes.
 
