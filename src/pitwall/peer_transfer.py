@@ -411,6 +411,14 @@ class PeerTransferService:
         interfaces = getattr(result, "interfaces", result)
         networks, addresses = [], []
         for item in interfaces:
+            # The stdlib diagnostic fallback knows only a hostname/default-
+            # route address and guesses /24. It cannot establish whether that
+            # address belongs to Wi-Fi, cellular, a VPN or a virtual adapter.
+            # Keep it useful in CONNECTION, but never use it to authorize a
+            # sharing listener or peer subnet. Native Android interfaces keep
+            # their android: IDs even when returned by fallback discovery.
+            if str(getattr(item, "adapter_id", "")).startswith("fallback:"):
+                continue
             address = ipaddress.ip_address(item.address)
             if not getattr(item, "is_up", True):
                 continue
@@ -504,7 +512,7 @@ class PeerTransferService:
             self._refresh_networks()
             host = advertise_host or (self._addresses[0] if self._addresses else None)
             if not host or host not in self._addresses:
-                raise TransferError("No usable local IPv4 address was found. Connect both devices to the same Wi-Fi and try again.", "no_local_network")
+                raise TransferError("No confirmed local interface is available. Connect to home Wi-Fi or Ethernet, refresh Listener & source in Connection, then try again.", "no_local_network")
             try:
                 context = self._certificate()
                 server = _TransferServer((host, port), self, context)

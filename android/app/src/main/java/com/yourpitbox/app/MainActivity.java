@@ -18,6 +18,7 @@ import android.webkit.WebResourceRequest;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
 import android.widget.FrameLayout;
+import android.widget.ScrollView;
 import android.widget.TextView;
 
 import androidx.core.content.ContextCompat;
@@ -38,6 +39,7 @@ import org.json.JSONObject;
 public class MainActivity extends Activity {
     private WebView web;
     private TextView status;
+    private ScrollView startupContainer;
     private final Handler handler = new Handler(Looper.getMainLooper());
     private boolean loaded = false;
     private long startedAt = 0;
@@ -113,11 +115,11 @@ public class MainActivity extends Activity {
         // Selectable and scrollable: a traceback must be readable and
         // copyable on the device, with no computer attached.
         status.setTextIsSelectable(true);
-        android.widget.ScrollView scroller = new android.widget.ScrollView(this);
-        scroller.setFillViewport(true);
-        scroller.addView(status, new FrameLayout.LayoutParams(
+        startupContainer = new ScrollView(this);
+        startupContainer.setFillViewport(true);
+        startupContainer.addView(status, new FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.WRAP_CONTENT));
-        root.addView(scroller, new FrameLayout.LayoutParams(
+        root.addView(startupContainer, new FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
 
         setContentView(root);
@@ -264,7 +266,9 @@ public class MainActivity extends Activity {
                     if (isDestroyed() || isFinishing()) return;
                     if (ready && !loaded) {
                         loaded = true;
-                        status.setVisibility(View.GONE);
+                        // Hide the entire overlay: an empty visible ScrollView
+                        // still receives touches before the dashboard underneath.
+                        startupContainer.setVisibility(View.GONE);
                         web.setVisibility(View.VISIBLE);
                         web.loadUrl(join(url, ""));
                     } else {

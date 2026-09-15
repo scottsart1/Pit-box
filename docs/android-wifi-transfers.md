@@ -45,6 +45,13 @@ If an IP address changes, turn sharing off and on, then pair again using a new
 invitation. Allow the app's TCP port 20778 through the Windows firewall on the
 private network when needed. Never expose or forward this port on the router.
 
+Sharing requires a confirmed Windows or native Android interface. A guessed
+hostname/default-route address is useful for diagnostics but cannot establish
+its adapter type or subnet, so it cannot authorize sharing. If Windows adapter
+discovery is still warming up or times out, refresh **Listener & source** in
+Connection, then retry. Generic Linux/macOS hostname-only discovery does not
+enable sharing in this Windows/Android candidate.
+
 ## What travels
 
 - Completed or recovered incomplete sessions, recorded laps, available legacy
@@ -143,9 +150,15 @@ GitHub verification on 2026-09-15, commit `c1079a7f564f3313fd71cbdd409a28ac68f4b
 | Captured Android runtime | Empty crash buffer; dashboard rendered with Suzuka, lap 8 and P4 |
 
 [Android build and runtime evidence](https://github.com/scottsart1/Pit-box/actions/runs/35032433419).
-The verified APK is `YourPitBox-4.10.0-android.8-debug.apk`, SHA-256
-`d45676d65a1e9811ef7dad264673f4a0202e2f3492076397c71e4a56cc9fb3b7`.
-Its brief emulator memory snapshot was approximately 251 MiB PSS; this is
+These initial backend checks did not exercise touch input. A later UI test
+found the startup ScrollView was left over the WebView after its text was
+hidden, intercepting dashboard taps. Android revision 9 hides the entire
+startup container; the unchanged UI gate now requires opening Connection and
+enabling transfers by tapping their real controls. Revision 8 is superseded;
+use the latest verified revision linked from the PR.
+
+The early build's brief main-process emulator snapshot was approximately
+251 MiB PSS; this is
 not a long-race or physical-device performance measurement.
 
 Not executed: physical Samsung/PS5/router tests, screen-off power behavior,

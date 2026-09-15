@@ -11,6 +11,7 @@ import pytest
 
 from pitwall.api.transfers import create_transfer_router
 from pitwall.peer_transfer import PeerTransferService, TransferError
+from pitwall.networking import AdapterKind, DiscoveryResult, IPv4Interface
 from test_history_transfer import _installation, _session, _count
 
 
@@ -183,3 +184,49 @@ def test_changing_client_addresses_cannot_grow_rate_limit_state_unbounded(tmp_pa
             with pytest.raises(TransferError): peer._rate_limit(f"pair:{index}", 8)
         assert len(peer._rates) == 256
     finally: peer.close()
+
+
+def test_route_only_fallback_cannot_start_sharing_before_virtual_adapter_is_identified(tmp_path):
+    address = "192.168.50.4"
+    discovered = DiscoveryResult((IPv4Interface(
+        adapter_id="fallback:" + address, name="Detected IPv4 interface",
+        address=address, prefix_length=24, is_up=True, kind=AdapterKind.UNKNOWN,
+    ),), "stdlib-fallback", ("Windows interface discovery exceeded 20.0s.",))
+    peer = PeerTransferService(None, tmp_path, network_provider=lambda: discovered)
+    try:
+        with pytest.raises(TransferError) as error:
+            peer.start()
+        assert error.value.code == "no_local_network"
+        assert not peer.status()["running"]
+        assert not (peer.root / "identity.pem").exists(), "Unverified routes must be rejected before opening TLS"
+        discovered = DiscoveryResult((IPv4Interface(
+            adapter_id="windows:7", name="Ethernet", description="Hyper-V Virtual Ethernet Adapter",
+            address=address, prefix_length=24, is_up=True, kind=AdapterKind.VIRTUAL,
+        ),), "windows")
+        with pytest.raises(TransferError) as error:
+            peer.start()
+        assert error.value.code == "no_local_network"
+        assert not peer._allowed_address("192.168.50.5")
+    finally:
+        peer.close()
+
+
+@pytest.mark.parametrize("adapter_id,kind", [
+    ("android:wlan0", AdapterKind.WIFI), ("windows:7", AdapterKind.ETHERNET),
+])
+def test_real_interface_provenance_retained_even_with_diagnostic_fallback_wrapper(tmp_path, adapter_id, kind):
+    interfaces = (
+        IPv4Interface(adapter_id=adapter_id, name="Local network", address="192.168.50.4",
+                      prefix_length=24, is_up=True, kind=kind),
+        IPv4Interface(adapter_id="fallback:172.19.1.2", name="Detected IPv4 interface",
+                      address="172.19.1.2", prefix_length=24, is_up=True, kind=AdapterKind.UNKNOWN),
+    )
+    peer = PeerTransferService(None, tmp_path,
+        network_provider=lambda: DiscoveryResult(interfaces, "stdlib-fallback"))
+    try:
+        peer._refresh_networks()
+        assert peer._addresses == ["192.168.50.4"]
+        assert peer._allowed_address("192.168.50.7")
+        assert not peer._allowed_address("172.19.1.7")
+    finally:
+        peer.close()
