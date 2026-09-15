@@ -14,10 +14,13 @@ Nothing is recursively deleted; the unique test data remains for diagnostics.
 from __future__ import annotations
 
 import argparse
+import base64
 import hashlib
+import ipaddress
 import json
 import math
 import os
+import re
 import shutil
 import socket
 import sqlite3
@@ -27,7 +30,9 @@ import tempfile
 import time
 import traceback
 import urllib.error
+import urllib.parse
 import urllib.request
+import xml.etree.ElementTree as ET
 from pathlib import Path
 
 APP_EXE = "Your Pit Box.exe"
@@ -100,19 +105,99 @@ def reserve_port(kind: int) -> socket.socket:
     return sock
 
 
-def request_json(port: int, route: str, *, method: str = "GET") -> dict:
+def request_json(
+    port: int, route: str, *, method: str = "GET", body: dict | None = None,
+    timeout: float = 3,
+) -> dict:
     # Never send loopback test traffic through a system proxy.
     opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
     request = urllib.request.Request(
         f"http://127.0.0.1:{port}{route}", method=method,
-        data=b"{}" if method == "POST" else None,
+        data=json.dumps(body or {}).encode() if method == "POST" else None,
         headers={"Content-Type": "application/json"},
     )
-    with opener.open(request, timeout=3) as response:
+    with opener.open(request, timeout=timeout) as response:
         payload = json.load(response)
     if not isinstance(payload, dict):
         raise SmokeFailure(f"{route} did not return a JSON object")
     return payload
+
+
+def exercise_transfers(web_port: int, previous_pin: str | None = None) -> dict:
+    """Exercise frozen TLS/QR imports through the installed app's real API.
+
+    A hosted VM may have only virtual adapters, which the product deliberately
+    excludes. Record that restriction explicitly; never substitute loopback or
+    loosen the shipped networking policy to make a smoke check pass.
+    """
+    prefix = "/api/v1/transfers"
+    if request_json(web_port, prefix + "/status").get("running") is not False:
+        raise SmokeFailure("Installed transfer sharing is not opt-in")
+
+    def post(route: str, body: dict | None = None) -> dict:
+        # Windows discovery may need its full 20-second PowerShell budget.
+        return request_json(web_port, prefix + route, method="POST", body=body, timeout=60)
+
+    try:
+        started = post("/start", {"device_name": "Pit Box installer smoke"})
+    except urllib.error.HTTPError as error:
+        try:
+            detail = json.load(error).get("detail", {})
+        except (ValueError, AttributeError):
+            detail = {}
+        if error.code == 422 and isinstance(detail, dict) and detail.get("code") == "no_local_network":
+            return {"result": "no_usable_private_lan", "management_api_verified": True,
+                    "tls_and_qr_verified": False, "paired_history_copy_tested": False}
+        raise SmokeFailure(f"Installed transfer startup failed with HTTP {error.code}") from error
+
+    try:
+        endpoint = urllib.parse.urlsplit(str(started.get("endpoint", "")))
+        try:
+            address = ipaddress.IPv4Address(endpoint.hostname)
+            private = any(address in ipaddress.IPv4Network(cidr)
+                          for cidr in ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"))
+        except (ValueError, TypeError):
+            private = False
+        pin = started.get("certificate_sha256")
+        if (started.get("running") is not True or endpoint.scheme != "https" or not private
+                or not isinstance(pin, str) or not re.fullmatch(r"[0-9a-f]{64}", pin)):
+            raise SmokeFailure("Installed transfer listener did not expose a private HTTPS certificate")
+        if previous_pin is not None and pin != previous_pin:
+            raise SmokeFailure("Installed transfer certificate changed after app restart")
+
+        invite = post("/invite")
+        raw = invite.get("invitation", "")
+        if not isinstance(raw, str) or not raw.startswith("pitwall-pair://"):
+            raise SmokeFailure("Installed transfer invitation is invalid")
+        encoded = raw[len("pitwall-pair://"):]
+        payload = json.loads(base64.b64decode(encoded + "=" * (-len(encoded) % 4), altchars=b"-_", validate=True))
+        uri = urllib.parse.urlsplit(invite.get("pairing_uri", ""))
+        if (payload.get("certificate_sha256") != pin
+                or payload.get("endpoint") != started["endpoint"]
+                or invite.get("endpoint") != started["endpoint"]
+                or uri.scheme != "pitwall" or uri.netloc != "pair"
+                or urllib.parse.parse_qs(uri.query).get("invite") != [raw]):
+            raise SmokeFailure("Installed invitation does not match its certificate or pairing link")
+        qr = ET.fromstring(invite.get("qr_svg", ""))
+        if (qr.tag != "{http://www.w3.org/2000/svg}svg"
+                or qr.find(".//{http://www.w3.org/2000/svg}path") is None):
+            raise SmokeFailure("Installed QR renderer did not produce a usable SVG")
+        if post("/stop").get("running") is not False:
+            raise SmokeFailure("Installed transfer listener did not stop")
+        restarted = post("/start", {"device_name": "Pit Box installer smoke"})
+        if (restarted.get("running") is not True or restarted.get("certificate_sha256") != pin
+                or restarted.get("device_id") != started.get("device_id")):
+            raise SmokeFailure("Installed transfer identity did not survive listener restart")
+        # Fingerprints are public identity data; no invitation or token enters
+        # the retained report, process output or assertion messages.
+        return {"result": "passed", "management_api_verified": True,
+                "tls_and_qr_verified": True, "certificate_sha256": pin,
+                "identity_survived_listener_restart": True,
+                "identity_survived_process_restart": previous_pin is not None,
+                "paired_history_copy_tested": False}
+    finally:
+        if post("/stop").get("running") is not False:
+            raise SmokeFailure("Installed transfer listener cleanup failed")
 
 
 def assert_health(health: dict, version: str, data_dir: Path) -> None:
@@ -516,6 +601,10 @@ def run_smoke(
         health = wait_for_health(process, web_port, version, data_dir, timeout)
         save_json(diagnostics / "health.json", health)
         summary["checks"].append("frozen_startup_and_isolated_health")
+        transfer = exercise_transfers(web_port)
+        summary["transfer"] = transfer
+        save_json(diagnostics / "transfer-summary.json", transfer)
+        summary["checks"].append("installed_transfer_management")
         state = exercise_telemetry(process, web_port, udp_port)
         save_json(diagnostics / "telemetry-state.json", state)
         summary["checks"].append("real_f1_2026_udp_to_live_state")
@@ -544,6 +633,9 @@ def run_smoke(
         # query. Do not transmit anything on this second launch.
         process = subprocess.Popen([str(executable)], cwd=install_dir, env=env)
         wait_for_health(process, web_port, version, data_dir, timeout)
+        transfer = exercise_transfers(web_port, transfer.get("certificate_sha256"))
+        summary["transfer_after_restart"] = transfer
+        save_json(diagnostics / "transfer-after-restart-summary.json", transfer)
         for recorded_id, expected_uid, filename in sessions_to_reopen:
             reopened = request_json(web_port, f"/api/v1/sessions/{recorded_id}")
             save_json(diagnostics / filename, reopened)

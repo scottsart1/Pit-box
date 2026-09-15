@@ -1,27 +1,54 @@
-# Build the Android APK on a GitHub-hosted runner.
-#
-# Mirrors android/README.md: cross-compile the three Rust dependencies with
-# cibuildwheel (cached by the versions pinned in build-wheels.sh), then let
-# Gradle and Chaquopy assemble the APK with the backend from src/pitwall.
-# The APK is uploaded as a workflow artifact and, on request, attached to a
-# GitHub Release tagged android-v<versionName>, from where a phone can
-# download and install it directly.
+# Build and verify an isolated debug APK. This workflow never publishes an
+# ephemeral debug certificate over an existing user's application.
 name: Build Android APK
 
 on:
+  pull_request:
+    paths:
+      - android/**
+      - src/**
+      - static/**
+      - pyproject.toml
+      - tests/**
+      - tools/backend_transfer_smoke.py
+      - tools/transfer-ui-smoke.cjs
+      - distribution/tests/test_android*.py
+      - .github/workflows/android-apk.yml
   workflow_dispatch:
-    inputs:
-      attach_release:
-        description: Attach the APK to a GitHub Release tagged android-v<version>
-        type: boolean
-        default: false
 
 permissions:
-  contents: write
+  contents: read
+
+concurrency:
+  group: android-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
-  apk:
+  checks:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - run: python -m pip install -e '.[dev]'
+      - name: Shared engine and Android bridge regression tests
+        run: python -m pytest tests distribution/tests/test_android_network.py distribution/tests/test_android_project.py -q
+      - name: Real UDP and transfer API integration
+        run: python tools/backend_transfer_smoke.py
+      - name: Transfer controls DOM checks
+        run: |
+          npm install --prefix "$RUNNER_TEMP/pitbox-ui" --no-save jsdom
+          NODE_PATH="$RUNNER_TEMP/pitbox-ui/node_modules" node tools/transfer-ui-smoke.cjs
+
+  apk:
+    needs: checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
 
@@ -30,9 +57,17 @@ jobs:
           distribution: temurin
           java-version: "17"
 
-      # 3.12 drives cibuildwheel (3.13's strict certificate checks trip some
-      # proxies); 3.13 is what Chaquopy embeds, and its build needs the same
-      # minor version on the build machine.
+      - uses: android-actions/setup-android@v3
+        with:
+          # The old SDK 'tools' package is no longer in Google's catalog.
+          # setup-android installs command-line tools itself.
+          packages: platform-tools
+          log-accepted-android-sdk-licenses: false
+
+      - name: Install the Android build platform
+        run: sdkmanager 'platforms;android-35' 'build-tools;35.0.0'
+
+      # The wheel builder and embedded CPython build have distinct interpreters.
       - uses: actions/setup-python@v5
         id: py312
         with:
@@ -46,58 +81,73 @@ jobs:
         with:
           targets: aarch64-linux-android,x86_64-linux-android
 
-      - name: Install the wheel-building tools
-        run: ${{ steps.py312.outputs.python-path }} -m pip install --quiet cibuildwheel uv
+      - name: Install wheel and host smoke tools
+        run: |
+          "${{ steps.py312.outputs.python-path }}" -m pip install --quiet cibuildwheel uv
+          "${{ steps.py313.outputs.python-path }}" -m pip install --quiet 'f1-packets>=2026.1.1,<2027'
 
       - name: Restore cross-compiled wheels
-        id: wheels
         uses: actions/cache@v4
         with:
           path: android/wheels
-          key: android-wheels-${{ hashFiles('android/build-wheels.sh') }}-${{ runner.os }}
+          key: android-wheels-${{ hashFiles('android/build-wheels.sh', 'android/check-wheels.py', 'android/native-requirements.txt') }}-${{ runner.os }}
 
-      - name: Cross-compile the Rust dependencies
-        if: steps.wheels.outputs.cache-hit != 'true'
+      # Always run: the script verifies BOTH ABIs and repairs a partial cache.
+      - name: Cross-compile and verify the native dependencies
         env:
           PITBOX_HOST_PYTHON: ${{ steps.py312.outputs.python-path }}
         run: bash ./android/build-wheels.sh
 
-      - name: Build the debug APK
+      - name: Build the isolated debug APK
         working-directory: android
         run: ./gradlew --no-daemon assembleDebug -Ppitbox.buildPython=${{ steps.py313.outputs.python-path }}
 
-      - name: Read the version and record the APK's digest
-        id: apk
-        working-directory: android
+      - name: Enable hardware acceleration for the emulator
         run: |
-          apk=app/build/outputs/apk/debug/app-debug.apk
-          test -s "$apk"
-          version=$(grep -oP 'versionName = "\K[^"]+' app/build.gradle.kts)
-          sha=$(sha256sum "$apk" | cut -d' ' -f1)
-          size=$(stat -c %s "$apk")
-          echo "version=$version" >> "$GITHUB_OUTPUT"
-          echo "path=android/$apk" >> "$GITHUB_OUTPUT"
-          echo "sha256=$sha" >> "$GITHUB_OUTPUT"
-          printf '## YourPitBox-%s.apk\n\n- %s bytes\n- SHA-256 `%s`\n' "$version" "$size" "$sha" >> "$GITHUB_STEP_SUMMARY"
-          cp "$apk" "YourPitBox-$version.apk"
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Tablet emulator startup, UDP, restart and background checks
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 35
+          target: google_apis
+          arch: x86_64
+          profile: pixel_c
+          disable-animations: true
+          emulator-options: -no-window -no-snapshot -noaudio -no-boot-anim -gpu swiftshader_indirect
+          script: '"${{ steps.py313.outputs.python-path }}" android/emulator-smoke.py'
+
+      - name: Retain Android runtime evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-runtime-evidence-${{ github.run_id }}
+          path: android/smoke-output/
+          if-no-files-found: warn
+
+      - name: Read packaged version and record the APK digest
+        id: apk
+        run: |
+          python - <<'PY'
+          import hashlib, json, os, pathlib, shutil
+          folder = pathlib.Path('android/app/build/outputs/apk/debug')
+          metadata = json.loads((folder / 'output-metadata.json').read_text())
+          element = metadata['elements'][0]
+          apk = folder / element['outputFile']
+          version = element['versionName']
+          with apk.open('rb') as source:
+              digest = hashlib.file_digest(source, 'sha256').hexdigest()
+          shutil.copyfile(apk, pathlib.Path('android') / f'YourPitBox-{version}.apk')
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as out:
+              out.write(f'version={version}\nsha256={digest}\n')
+          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as out:
+              out.write(f'## YourPitBox-{version}.apk\n\nSHA-256: {digest}\n\nEmulator startup, UDP parsing, restart and background reception passed. Physical-device Wi-Fi and Bluetooth still require device validation.\n')
+          PY
 
       - uses: actions/upload-artifact@v4
         with:
           name: YourPitBox-${{ steps.apk.outputs.version }}
           path: android/YourPitBox-${{ steps.apk.outputs.version }}.apk
           if-no-files-found: error
-
-      - name: Attach the APK to a GitHub Release
-        if: ${{ inputs.attach_release }}
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          tag="android-v${{ steps.apk.outputs.version }}"
-          file="android/YourPitBox-${{ steps.apk.outputs.version }}.apk"
-          notes="Debug-signed APK for sideloading, built from ${{ github.sha }}. SHA-256: ${{ steps.apk.outputs.sha256 }}"
-          if gh release view "$tag" --repo "${{ github.repository }}" >/dev/null 2>&1; then
-            gh release upload "$tag" "$file" --repo "${{ github.repository }}" --clobber
-          else
-            gh release create "$tag" "$file" --repo "${{ github.repository }}" --target "${{ github.sha }}" \
-              --title "Your Pit Box for Android ${{ steps.apk.outputs.version }}" --notes "$notes" --prerelease
-          fi

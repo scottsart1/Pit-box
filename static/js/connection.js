@@ -180,8 +180,62 @@ function renderPacketHealth(packets = []) {
   });
 }
 
+export function packetReceptionSummary(payload) {
+  const packets = payload?.packets || [];
+  const counters = payload?.datagrams || {};
+  const received = counters.received ?? packets.reduce((count, packet) => count + Number(packet.received || 0), 0);
+  const parsed = counters.parsed ?? packets.reduce((count, packet) => count + Number(packet.valid || 0), 0);
+  const rejected = counters.rejected ?? packets.reduce((count, packet) => count + Number(packet.invalid || 0), 0);
+  const unsupported = (payload?.invalid_packets || []).some((packet) => Number(packet.unsupported_format) > 0);
+  let message = "";
+  if (received > 0 && parsed === 0) {
+    message = unsupported
+      ? "UDP packets reached this device, but their game format is unsupported. Select UDP format 2026 in the game (F1 25 + 2026 Season Pack)."
+      : "UDP packets reached this device, but none parsed successfully. Check the game’s UDP format is 2026 and that another app is not sending unrelated traffic to this port.";
+  } else if (parsed > 0 && rejected > 0) {
+    message = "Some received packets were rejected. The counters show traffic observed so far; the receiver badge above shows whether valid telemetry is arriving now.";
+  }
+  return { received, parsed, rejected, message };
+}
+
+function renderReceptionCounters(payload) {
+  const summary = packetReceptionSummary(payload);
+  setText("networkDatagrams", formatCount(summary.received));
+  setText("networkParsed", formatCount(summary.parsed));
+  setText("networkRejected", formatCount(summary.rejected));
+  const notice = byId("networkParseNotice");
+  if (notice) { notice.hidden = !summary.message; setNotice("networkParseNotice", summary.message, summary.parsed ? "info" : "error"); }
+}
+
+async function refreshAndroidStatus() {
+  const notice = byId("androidConnectionStatus");
+  if (!notice) return;
+  try {
+    const payload = await apiRequest("/android");
+    if (!payload?.available) {
+      notice.hidden = payload?.platform !== "android";
+      if (!notice.hidden) setNotice("androidConnectionStatus", "Android network diagnostics are unavailable. Use the device address and packet counters above to check reception.");
+      return;
+    }
+    notice.hidden = false;
+    const networks = (payload.networks || []).filter((network) => ["wifi", "ethernet"].includes(network.transport));
+    const addresses = networks.flatMap((network) => (network.addresses || []).map((address) => address.address)).filter((address) => typeof address === "string" && /^\d+\.\d+\.\d+\.\d+$/.test(address));
+    const parts = [payload.service_running ? "Android receiver service is running." : "Android receiver service is not running. Reopen the app to start it."];
+    if (addresses.length) parts.push(`Local address${addresses.length > 1 ? "es" : ""}: ${[...new Set(addresses)].join(", ")}.`);
+    else parts.push("Check the network adapter address below; a Wi-Fi or Ethernet connection is needed to receive from the game.");
+    if (payload.internet_permission === false) parts.push("This installation is missing network permission.");
+    if (Array.isArray(payload.warnings)) parts.push(...payload.warnings);
+    setNotice("androidConnectionStatus", parts.join(" "), payload.service_running && payload.internet_permission !== false ? "info" : "error");
+  } catch {
+    // Desktop and older builds may not provide native diagnostics. Their
+    // ordinary listener/packet status remains independently useful.
+    notice.hidden = true;
+  }
+}
+
 function renderStatus(payload) {
   uiState.status = payload;
+  renderReceptionCounters(payload);
   const listener = payload?.listener || {};
   const listenerState = listener.state || "off";
   const badge = byId("connectionStateBadge");
@@ -432,6 +486,7 @@ export async function refreshConnectionCenter() {
   // it is a different service, and its failure should not claim the whole
   // Connection Center is unavailable.
   void refreshCredentialStatus();
+  void refreshAndroidStatus();
   const results = await Promise.allSettled([refreshInterfaces(), refreshStatus(), refreshForwarders()]);
   if (results.every((result) => result.status === "rejected")) {
     setNotice("connectionApiStatus", "Connection services are unavailable. Live, Review, and Setup remain available.", "error");
@@ -595,6 +650,7 @@ export function setConnectionCenterActive(active) {
   refreshConnectionCenter();
   uiState.pollTimer = window.setInterval(() => {
     refreshStatus({ quiet: true });
+    refreshAndroidStatus();
     // Windows adapter discovery spawns PowerShell and can still be warming
     // when this screen first opens. That first answer is the socket-derived
     // fallback, which cannot report adapter kind, gateway or metric. Ask

@@ -10,12 +10,15 @@ instead of failing on a phone.
 from __future__ import annotations
 
 import re
+import importlib.util
 import tomllib
 from pathlib import Path
+import zipfile
 
 ROOT = Path(__file__).resolve().parents[2]
 GRADLE = (ROOT / "android" / "app" / "build.gradle.kts").read_text(encoding="utf-8")
 WHEELS = (ROOT / "android" / "build-wheels.sh").read_text(encoding="utf-8")
+NATIVE_REQUIREMENTS = (ROOT / "android" / "native-requirements.txt").read_text(encoding="utf-8")
 WORKFLOW = (ROOT / ".github" / "workflows" / "android-apk.yml").read_text(encoding="utf-8")
 ANDROID_PYTHON = ROOT / "android" / "app" / "src" / "main" / "python"
 
@@ -71,7 +74,9 @@ def test_the_rust_wheels_are_built_for_the_versions_the_apk_installs():
     # pydantic pins pydantic-core exactly, so the cross-compiled wheel has to
     # be the version pip resolves; the build script carries those pins.
     for package in ("pydantic-core", "jiter", "rpds-py"):
-        assert re.search(rf'"{package} \d[\w.]*"', WHEELS), f"{package} is not pinned in build-wheels.sh"
+        assert re.search(rf"^{package}==\d[\w.]*$", NATIVE_REQUIREMENTS, re.MULTILINE), f"{package} has no native pin"
+    assert "native-requirements.txt" in WHEELS
+    assert "native-requirements.txt" in GRADLE and "--constraint" in GRADLE
     assert "--find-links" in GRADLE and 'dir("wheels")' in GRADLE
 
 
@@ -83,6 +88,29 @@ def test_the_workflow_builds_wheels_before_the_apk():
     assert "build-wheels.sh" in WORKFLOW
     assert WORKFLOW.index("build-wheels.sh") < WORKFLOW.index("assembleDebug")
     assert "python-version: \"3.13\"" in WORKFLOW
+
+
+def test_native_cache_requires_both_abis_and_rejects_corrupt_or_newer_api_wheels(tmp_path):
+    spec = importlib.util.spec_from_file_location("check_wheels", ROOT / "android/check-wheels.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    package = "jiter==0.16.0"
+    arm = tmp_path / "jiter-0.16.0-cp313-cp313-android_24_arm64_v8a.whl"
+    x86 = tmp_path / "jiter-0.16.0-cp313-cp313-android_24_x86_64.whl"
+
+    def write_wheel(path):
+        with zipfile.ZipFile(path, "w") as archive:
+            archive.writestr("jiter-0.16.0.dist-info/WHEEL", "Wheel-Version: 1.0\n")
+
+    write_wheel(arm)
+    missing = module.missing_wheels(tmp_path, [package], ["arm64_v8a", "x86_64"])
+    assert len(missing) == 1 and "x86_64" in missing[0]
+    x86.write_bytes(b"interrupted download")
+    assert module.missing_wheels(tmp_path, [package], ["x86_64"])
+    write_wheel(x86)
+    assert not module.missing_wheels(tmp_path, [package], ["arm64_v8a", "x86_64"])
+    x86.rename(tmp_path / x86.name.replace("android_24", "android_28"))
+    assert module.missing_wheels(tmp_path, [package], ["x86_64"])
 
 
 def _names_provided(module_file: Path) -> set[str]:

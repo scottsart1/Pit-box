@@ -3,9 +3,13 @@
 from __future__ import annotations
 
 import json
+import base64
+import io
 import socket
 import sqlite3
 import subprocess
+import urllib.error
+import urllib.parse
 from pathlib import Path
 
 import pytest
@@ -127,6 +131,11 @@ def lifecycle(tmp_path, monkeypatch):
     monkeypatch.setattr(smoke.subprocess, "Popen", popen)
     monkeypatch.setattr(smoke, "request_json", request)
     monkeypatch.setattr(smoke, "exercise_telemetry", exercise)
+    def transfers(_port, previous_pin=None):
+        events.append(("transfer", previous_pin))
+        return {"result": "passed", "certificate_sha256": "a" * 64,
+                "tls_and_qr_verified": True}
+    monkeypatch.setattr(smoke, "exercise_transfers", transfers)
     monkeypatch.setenv("GITHUB_OUTPUT", str(tmp_path / "outputs.txt"))
     return installer, events, processes, context
 
@@ -216,6 +225,9 @@ def test_lifecycle_installs_exact_file_launches_frozen_reopens_and_preserves_dat
     assert events[0][1][0] == str(installer)
     assert "/VERYSILENT" in events[0][1] and "/NOICONS" in events[0][1]
     assert "relaunch_and_read_recorded_session" in summary["checks"]
+    assert [event for event in events if event[0] == "transfer"] == [
+        ("transfer", None), ("transfer", "a" * 64),
+    ]
     assert "uninstall_preserves_existing_and_recorded_data" in summary["checks"]
     assert (diagnostics / "pitwall.log").exists()
     assert (diagnostics / "reopened-session.json").exists()
@@ -295,3 +307,68 @@ def test_workflow_gates_both_upload_and_release_and_preserves_failure_diagnostic
     assert gate < artifact < release
     assert "always() && steps.smoke.outputs.diagnostics != ''" in workflow
     assert "if ($LASTEXITCODE -ne 0)" in workflow[gate:artifact]
+    assert "github.event_name == 'workflow_dispatch' && inputs.attach_release" in workflow[release:]
+    assert "pull_request:" in workflow
+    assert "github.head_ref == 'codex/android-wifi-history'" in workflow
+    assert "github.event.pull_request.head.repo.full_name == github.repository" in workflow
+
+
+def test_installed_transfer_check_verifies_identity_qr_and_never_saves_invitation(monkeypatch):
+    import qrcode
+    from qrcode.image.svg import SvgPathImage
+
+    pin = "a" * 64
+    endpoint = "https://192.168.10.5:20778"
+    token = "private-invitation-fixture-token"
+    payload = {"endpoint": endpoint, "certificate_sha256": pin, "token": token}
+    invitation = "pitwall-pair://" + base64.urlsafe_b64encode(json.dumps(payload).encode()).decode().rstrip("=")
+    uri = "pitwall://pair?invite=" + urllib.parse.quote(invitation, safe="")
+    invite = {"invitation": invitation, "endpoint": endpoint, "pairing_uri": uri,
+              "qr_svg": qrcode.make(uri, image_factory=SvgPathImage).to_string().decode()}
+    status = {"running": True, "endpoint": endpoint, "certificate_sha256": pin,
+              "device_id": "b" * 32}
+    routes = []
+
+    def request(_port, route, *, method="GET", body=None, timeout=3):
+        routes.append((method, route))
+        if route.endswith("/status") or route.endswith("/stop"):
+            return {"running": False}
+        if route.endswith("/start"):
+            assert timeout >= 20 and body["device_name"]
+            return status
+        if route.endswith("/invite"):
+            return invite
+        raise AssertionError(route)
+
+    monkeypatch.setattr(smoke, "request_json", request)
+    result = smoke.exercise_transfers(18000, pin)
+    assert result["tls_and_qr_verified"] and result["identity_survived_process_restart"]
+    assert result["paired_history_copy_tested"] is False
+    assert token not in json.dumps(result) and invitation not in json.dumps(result)
+    assert [route.rsplit("/", 1)[-1] for _, route in routes] == [
+        "status", "start", "invite", "stop", "start", "stop",
+    ]
+    with pytest.raises(smoke.SmokeFailure, match="certificate changed"):
+        smoke.exercise_transfers(18000, "c" * 64)
+    assert routes[-1][1].endswith("/stop")
+
+
+@pytest.mark.parametrize("code,status,allowed", [
+    ("no_local_network", 422, True), ("tls_unavailable", 503, False),
+    ("no_local_network", 500, False), ("not_found", 404, False),
+])
+def test_transfer_gate_only_records_real_no_lan_restriction(monkeypatch, code, status, allowed):
+    def request(_port, route, **_kwargs):
+        if route.endswith("/status"):
+            return {"running": False}
+        payload = io.BytesIO(json.dumps({"detail": {"code": code}}).encode())
+        raise urllib.error.HTTPError("http://127.0.0.1/start", status, "fixture", {}, payload)
+
+    monkeypatch.setattr(smoke, "request_json", request)
+    if allowed:
+        result = smoke.exercise_transfers(18000)
+        assert result["result"] == "no_usable_private_lan"
+        assert result["tls_and_qr_verified"] is False
+    else:
+        with pytest.raises(smoke.SmokeFailure, match="transfer startup failed"):
+            smoke.exercise_transfers(18000)

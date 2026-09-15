@@ -25,6 +25,12 @@ import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.util.ArrayList;
+import java.util.List;
+
+import org.json.JSONArray;
+import org.json.JSONException;
+import org.json.JSONObject;
 
 /**
  * Runs the Python backend for as long as a session lasts.
@@ -44,8 +50,11 @@ public class PitBoxService extends Service {
     private static volatile boolean running = false;
     private static volatile String dashboardUrl = null;
     private static volatile String failure = null;
+    private static volatile PitBoxService instance;
 
     private Thread backend;
+    private AndroidNetworkMonitor networkMonitor;
+    private final List<String> lockWarnings = new ArrayList<>();
     private WifiManager.WifiLock wifiLock;
     private WifiManager.MulticastLock multicastLock;
     private PowerManager.WakeLock wakeLock;
@@ -54,9 +63,43 @@ public class PitBoxService extends Service {
     public static String getDashboardUrl() { return dashboardUrl; }
     public static String getFailure() { return failure; }
 
+    /** Read by Python through Chaquopy; the dashboard remains loopback-only. */
+    public static String getNetworkStatusJson() {
+        PitBoxService service = instance;
+        return service == null ? "{\"platform\":\"android\",\"available\":false}" : service.networkStatusJson();
+    }
+
+    /** The duplicated descriptor is closed in the monitor, never the caller's. */
+    public static boolean bindLocalSocket(int descriptor, String peerAddress) throws IOException {
+        PitBoxService service = instance;
+        return service != null && service.networkMonitor != null
+                && service.networkMonitor.bindLocalSocket(descriptor, peerAddress);
+    }
+
+    private synchronized String networkStatusJson() {
+        try {
+            JSONObject status = networkMonitor == null ? new JSONObject() : new JSONObject(networkMonitor.snapshot());
+            status.put("available", true);
+            status.put("service_running", running);
+            status.put("wifi_lock_held", wifiLock != null && wifiLock.isHeld());
+            status.put("multicast_lock_held", multicastLock != null && multicastLock.isHeld());
+            status.put("wake_lock_held", wakeLock != null && wakeLock.isHeld());
+            JSONArray warnings = status.optJSONArray("warnings");
+            if (warnings == null) warnings = new JSONArray();
+            for (String warning : lockWarnings) warnings.put(warning);
+            status.put("warnings", warnings);
+            return status.toString();
+        } catch (JSONException error) {
+            return "{\"platform\":\"android\",\"available\":false}";
+        }
+    }
+
     @Override
     public void onCreate() {
         super.onCreate();
+        instance = this;
+        networkMonitor = new AndroidNetworkMonitor(this);
+        networkMonitor.start();
         createChannel();
     }
 
@@ -67,10 +110,21 @@ public class PitBoxService extends Service {
             stopSelf();
             return START_NOT_STICKY;
         }
-        startInForeground();
+        try {
+            startInForeground();
+        } catch (RuntimeException error) {
+            // Android can reject a background restart or a revoked microphone
+            // grant. Keep the reason readable instead of crashing the activity.
+            failure = describe(error);
+            recordFailure(failure);
+            stopBackend();
+            stopSelf();
+            return START_NOT_STICKY;
+        }
         if (backend == null || !backend.isAlive()) {
             acquireLocks();
             failure = null;
+            dashboardUrl = null;
             backend = new Thread(this::runBackend, "pitbox-backend");
             backend.start();
         }
@@ -212,22 +266,41 @@ public class PitBoxService extends Service {
         }
     }
 
-    private void acquireLocks() {
+    private synchronized void acquireLocks() {
+        lockWarnings.clear();
         WifiManager wifi = (WifiManager) getApplicationContext().getSystemService(Context.WIFI_SERVICE);
         if (wifi != null) {
-            wifiLock = wifi.createWifiLock(WifiManager.WIFI_MODE_FULL_HIGH_PERF, "pitbox:telemetry");
-            wifiLock.acquire();
-            multicastLock = wifi.createMulticastLock("pitbox:broadcast");
-            multicastLock.acquire();
+            try {
+                wifiLock = wifi.createWifiLock(WifiManager.WIFI_MODE_FULL_HIGH_PERF, "pitbox:telemetry");
+                wifiLock.setReferenceCounted(false);
+                wifiLock.acquire();
+            } catch (RuntimeException error) {
+                lockWarnings.add("Wi-Fi performance lock unavailable; keep the app visible during racing.");
+                Log.w(TAG, "Wi-Fi lock unavailable", error);
+            }
+            try {
+                multicastLock = wifi.createMulticastLock("pitbox:broadcast");
+                multicastLock.setReferenceCounted(false);
+                multicastLock.acquire();
+            } catch (RuntimeException error) {
+                lockWarnings.add("Multicast lock unavailable; use the tablet's IP with game UDP broadcast off.");
+                Log.w(TAG, "Multicast lock unavailable", error);
+            }
         }
         PowerManager power = (PowerManager) getSystemService(Context.POWER_SERVICE);
         if (power != null) {
-            wakeLock = power.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "pitbox:backend");
-            wakeLock.acquire();
+            try {
+                wakeLock = power.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "pitbox:backend");
+                wakeLock.setReferenceCounted(false);
+                wakeLock.acquire();
+            } catch (RuntimeException error) {
+                lockWarnings.add("CPU wake lock unavailable; keep the app visible during racing.");
+                Log.w(TAG, "Wake lock unavailable", error);
+            }
         }
     }
 
-    private void releaseLocks() {
+    private synchronized void releaseLocks() {
         if (wifiLock != null && wifiLock.isHeld()) wifiLock.release();
         if (multicastLock != null && multicastLock.isHeld()) multicastLock.release();
         if (wakeLock != null && wakeLock.isHeld()) wakeLock.release();
@@ -281,6 +354,8 @@ public class PitBoxService extends Service {
     public void onDestroy() {
         stopBackend();
         releaseLocks();
+        if (networkMonitor != null) networkMonitor.stop();
+        if (instance == this) instance = null;
         super.onDestroy();
     }
 

@@ -33,6 +33,7 @@
 .brutal-toggle{color:var(--muted)}.brutal-on .brutal-toggle{color:var(--red);font-weight:800;text-transform:uppercase;letter-spacing:.06em}.brutal-on{border-color:var(--red)}
 </style>
 <link rel="stylesheet" href="/static/css/v42.css?v=4.10.0">
+<link rel="stylesheet" href="/static/css/transfers.css?v=4.10.0">
 </head>
 <body><div id="bootOverlay" aria-live="polite"><div style="text-align:center"><div style="font-weight:800;letter-spacing:3px;font-size:22px;margin-bottom:18px">YOUR PIT BOX</div><div class="boot-ring"></div><div id="bootNote" class="small muted" style="margin-top:16px">Starting your pit box…</div></div></div><div id="radioRail" class="radio-rail"></div><div id="dashPopover" role="dialog" aria-label="Dashboard cards"><div class="label">Dashboard cards</div><div id="dashList"></div></div><div id="raceControlBlip" class="rc-blip" role="status" aria-live="assertive" hidden></div><div class="app">
 <header class="top"><span class="brand">YOUR PIT BOX 4.10.0</span><span><i id="udpDot" class="dot"></i> <span id="udp">Waiting for UDP</span></span><span id="session">—</span><span id="track">—</span><span id="eng" class="status pill">standing by</span><button id="dashConfig" class="button ghost" style="margin-left:10px;padding:6px 12px" title="Choose which dashboard cards are shown, and drag to rearrange them.">⚙ Dashboard</button><button id="quitApp" class="button ghost" style="margin-left:10px;padding:6px 12px" title="Your Pit Box keeps running after you close this tab. Use this to stop it.">Quit Your Pit Box</button></header>
@@ -45,17 +46,74 @@
       <div><div class="eyebrow">PS5 / PC telemetry setup</div><h1 id="connectionHeading">Connection Center</h1></div>
       <div id="connectionStateBadge" class="connection-state" data-state="off"><span aria-hidden="true">●</span> <span id="connectionStateText">Off</span></div>
     </div>
-    <p class="muted connection-lede">Use the recommended PC address below as the UDP destination on your PS5 or a second PC running the game. If the game runs on this same PC, use 127.0.0.1 instead. Listening means the socket is open; Receiving means valid F1 telemetry has actually arrived.</p>
+    <p class="muted connection-lede">Send game telemetry directly to this device using the address below. Keep your console or gaming PC and this device on the same home network. If the game runs on this very computer, use 127.0.0.1 instead. Listening means the socket is open; Receiving means valid F1 telemetry has actually arrived.</p>
     <div id="connectionApiStatus" class="inline-notice" role="status" aria-live="polite">Checking local network services…</div>
+    <div class="network-packet-summary" aria-label="Observed UDP and parser counters"><span><strong id="networkDatagrams">—</strong> UDP datagrams arrived</span><span><strong id="networkParsed">—</strong> parsed successfully</span><span><strong id="networkRejected">—</strong> rejected</span></div>
+    <div id="networkParseNotice" class="inline-notice" role="status" aria-live="polite" hidden></div>
     <div class="destination-grid">
       <div class="destination-value"><span class="field-label">Enter this UDP IP on PS5 / second PC</span><div class="copy-row"><output id="recommendedIpv4" aria-label="Recommended PS5 / second PC UDP IP address">Unavailable</output><button id="copyRecommendedIp" class="button ghost icon-button" type="button" disabled>Copy IP</button></div><span id="recommendedAdapter" class="field-help">No adapter recommendation yet.</span></div>
-      <div class="destination-value"><span class="field-label">UDP port</span><div class="copy-row"><output id="recommendedPort" aria-label="Recommended PS5 / PC UDP port">20777</output><button id="copyRecommendedPort" class="button ghost icon-button" type="button">Copy port</button></div><span class="field-help">Use UDP telemetry format 2026 when the game offers that setting.</span></div>
+      <div class="destination-value"><span class="field-label">UDP port</span><div class="copy-row"><output id="recommendedPort" aria-label="Recommended PS5 / PC UDP port">20777</output><button id="copyRecommendedPort" class="button ghost icon-button" type="button">Copy port</button></div><span class="field-help">Use UDP format 2026 (F1 25 + 2026 Season Pack). Set the send rate to 60 Hz for detailed traces.</span></div>
     </div>
     <ol class="setup-steps">
       <li>On PS5 / PC, open the F1 telemetry settings and enable UDP telemetry.</li>
-      <li>Enter the PC IPv4 address and port shown above, then select the matching packet format.</li>
+      <li>Turn UDP Broadcast off and enter this device’s IPv4 address and port shown above. Select the supported packet format.</li>
       <li>Start or join an on-track session and wait for <strong>Receiving telemetry</strong>.</li>
     </ol>
+    <div id="androidConnectionStatus" class="inline-notice" role="status" aria-live="polite" hidden></div>
+    <details class="connection-quick-help">
+      <summary>Game running, but no telemetry?</summary>
+      <p>First check that the game’s UDP destination matches this device’s current address. An address saved for your laptop will not send packets to your tablet. Use your home network, not guest Wi-Fi; guest networks may block communication between devices.</p>
+      <p>Keep Pit Wall open while testing, enable UDP Telemetry, turn UDP Broadcast off, and start driving. If using a VPN, allow local-network traffic in its settings. Then use <button id="connectionRunChecks" class="button ghost" type="button">Run connection checks</button> for the observed receiver state.</p>
+    </details>
+  </section>
+
+  <section id="transferPanel" class="panel-surface transfer-panel" aria-labelledby="transferHeading" tabindex="-1">
+    <div class="section-heading">
+      <div><div class="eyebrow">Desktop ↔ tablet · same Wi-Fi</div><h2 id="transferHeading">Transfer history</h2></div>
+      <span id="transferBadge" class="state-chip" data-state="neutral">Checking…</span>
+    </div>
+    <p class="transfer-lede muted">Pair your devices once, then choose completed sessions to copy here. Your history stays available when the other device is off. Stop the telemetry listener on the receiving device before importing; keep both apps open until the transfer finishes.</p>
+    <div id="transferStatus" class="inline-notice" role="status" aria-live="polite">Open Connection to check Wi-Fi transfers.</div>
+    <form id="transferEnableForm" class="transfer-enable" novalidate>
+      <label for="transferDeviceName">This device’s name<input id="transferDeviceName" type="text" maxlength="80" autocomplete="off" placeholder="For example, Scott’s tablet"></label>
+      <button id="transferEnable" class="button primary" type="submit">Enable Wi-Fi transfers</button>
+      <button id="transferDisable" class="button ghost" type="button" hidden>Turn off</button>
+    </form>
+    <p id="transferEndpoint" class="field-help"></p>
+    <div id="transferWorkspace" hidden>
+      <div class="transfer-pair-grid">
+        <article class="transfer-step">
+          <div class="eyebrow">1 · On either device</div><h3>Create an invitation</h3>
+          <p>Enable Wi-Fi transfers on both devices. Create an invitation here, then scan it with your other device’s camera or copy the code.</p>
+          <button id="transferInvite" class="button ghost" type="button">Create pairing code</button>
+          <div id="transferInvitationPanel" hidden>
+            <img id="transferInvitationQr" class="transfer-qr" alt="Pairing QR code. Scan with your other device’s camera to open Pit Wall." hidden>
+            <p id="transferQrHelp" class="field-help" hidden>Scan with your other device’s camera to open Pit Wall, then tap Pair devices. You can also copy and paste the code below.</p>
+            <label for="transferInvitation">Pairing code</label>
+            <textarea id="transferInvitation" rows="3" readonly spellcheck="false" aria-describedby="transferInvitationExpiry"></textarea>
+            <div class="transfer-actions"><button id="transferCopyInvitation" class="button ghost" type="button">Copy code</button><span id="transferInvitationExpiry" class="field-help"></span></div>
+          </div>
+        </article>
+        <form id="transferPairForm" class="transfer-step" novalidate>
+          <div class="eyebrow">2 · On the other device</div><h3>Paste the invitation</h3>
+          <label for="transferPairCode">Code from your other device</label>
+          <textarea id="transferPairCode" rows="3" maxlength="8192" placeholder="Paste the whole pairing code" autocomplete="off" autocapitalize="off" spellcheck="false"></textarea>
+          <button id="transferPair" class="button primary" type="submit">Pair devices</button>
+          <p class="field-help">Pairing allows these two devices to browse and copy each other’s saved sessions.</p>
+        </form>
+      </div>
+      <div class="section-heading transfer-section-heading"><div><div class="eyebrow">3 · Copy completed sessions</div><h3>Paired devices</h3></div><button id="transferRefresh" class="button ghost" type="button">Refresh</button></div>
+      <div id="transferPeers" class="transfer-peer-list"><p class="muted">No paired devices yet.</p></div>
+      <section id="transferCatalog" class="transfer-catalog" aria-labelledby="transferCatalogHeading" hidden>
+        <div class="section-heading"><div><h3 id="transferCatalogHeading">Sessions on your other device</h3><p id="transferCatalogSummary" class="field-help"></p></div><button id="transferCloseCatalog" class="button ghost" type="button">Close list</button></div>
+        <div class="transfer-selection-bar"><label class="transfer-check"><input id="transferSelectAll" type="checkbox"><span>Select all available sessions</span></label><label for="transferSessionSearch" class="sr-only">Filter sessions</label><input id="transferSessionSearch" type="search" placeholder="Filter by track or session" autocomplete="off"></div>
+        <div id="transferSessions" class="transfer-session-list"></div>
+        <div class="transfer-actions transfer-import-actions"><span id="transferSelectedCount" class="field-help">0 selected</span><button id="transferPull" class="button primary" type="button" disabled>Copy selected to this device</button></div>
+        <p class="field-help">Only surviving records and telemetry can be copied. Detail availability is shown for each session. Existing history is preserved; repeating a transfer does not create duplicate imported sessions.</p>
+      </section>
+      <section id="transferJobsPanel" class="transfer-jobs" aria-labelledby="transferJobsHeading" hidden><h3 id="transferJobsHeading">Transfer progress</h3><div id="transferJobs"></div></section>
+    </div>
+    <details class="transfer-help"><summary>How pairing and history transfers work</summary><p>Keep both apps open on the same home network during a transfer. The connection is encrypted and paired to the invitation. No account is needed. If a device’s network address changes, pair it again to update its address.</p><p>Live race reception is separate: the game sends telemetry to the device address at the top of this page. Pairing copies completed history, not the current live race. Removing a pairing stops future access; copies already transferred stay on each device.</p><p>If a transfer fails, retry it while both devices are connected. Do not close the apps during the import step. If your firewall asks about Pit Wall, allow access on your private home network.</p></details>
   </section>
 
   <section class="panel-surface credential-panel" aria-labelledby="credentialHeading">
@@ -124,7 +182,7 @@
   </section>
 
   <section class="panel-surface" aria-labelledby="interfacesHeading">
-    <div class="section-heading"><div><div class="eyebrow">This PC</div><h2 id="interfacesHeading">IPv4 adapters</h2></div></div>
+    <div class="section-heading"><div><div class="eyebrow">This device</div><h2 id="interfacesHeading">IPv4 adapters</h2></div></div>
     <p class="field-help">Your Pit Box ranks active private Ethernet and Wi-Fi addresses first. A pinned marker reflects the saved adapter choice; it is never replaced silently.</p>
     <div id="networkInterfaces" class="interface-list" aria-live="polite"><div class="empty">No adapter information available.</div></div>
   </section>
@@ -230,7 +288,7 @@
   <div class="workspace-shell">
     <header class="workspace-header panel-surface">
       <div><div class="eyebrow">Saved telemetry</div><h1>Library</h1><p class="workspace-lede">Reopen recorded sessions without the game running. Size, quality, and capture state remain visible.</p></div>
-      <button id="libraryRefresh" class="button ghost" type="button">Refresh sessions</button>
+      <div class="transfer-actions"><button id="libraryOpenTransfers" class="button primary" type="button">Transfer history</button><button id="libraryRefresh" class="button ghost" type="button">Refresh sessions</button></div>
     </header>
     <form id="libraryFilters" class="panel-surface filter-bar" role="search">
       <label for="librarySearch">Search<span class="sr-only"> saved sessions</span></label><input id="librarySearch" type="search" maxlength="120" placeholder="Name or tag" autocomplete="off">
@@ -656,5 +714,6 @@ $('rivalCompare').ontoggle=()=>{lastRivalKey='';loadRivals()};$('objectiveDown')
      URLs bust reliably on upgrade. Keep in step with the app version. -->
 <script type="module" src="/static/js/connection.js?v=4.10.0"></script>
 <script type="module" src="/static/js/workspaces.js?v=4.10.0"></script>
+<script type="module" src="/static/js/transfers.js?v=4.10.0"></script>
 <script type="module" src="/static/js/strategy.js?v=4.10.0"></script>
 </body></html>

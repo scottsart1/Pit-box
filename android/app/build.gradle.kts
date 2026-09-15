@@ -1,5 +1,3 @@
-import com.android.build.api.dsl.ApplicationExtension
-
 plugins {
     id("com.android.application")
     id("com.chaquo.python")
@@ -13,6 +11,13 @@ val buildPythonCommand: String = (project.findProperty("pitbox.buildPython") as 
 // on PyPI or in Chaquopy's repository. android/build-wheels.sh cross-compiles
 // them into this directory with cibuildwheel; pip then finds them here.
 val localWheels = rootProject.layout.projectDirectory.dir("wheels")
+val nativeConstraints = rootProject.layout.projectDirectory.file("native-requirements.txt")
+// Read the shared engine's version so the APK can never advertise an older
+// engine than the source which Chaquopy actually packages.
+val backendVersion = Regex("__version__ = \"([^\"]+)\"")
+    .find(rootProject.file("../src/pitwall/__init__.py").readText())!!.groupValues[1]
+val androidRevision = 8
+val signingPath = providers.environmentVariable("PITBOX_KEYSTORE_PATH").orNull
 
 android {
     namespace = "com.yourpitbox.app"
@@ -22,17 +27,37 @@ android {
         applicationId = "com.yourpitbox.app"
         minSdk = 24
         targetSdk = 35
-        versionCode = 7
-        versionName = "4.9.2-android.7"
+        versionCode = androidRevision
+        versionName = "$backendVersion-android.$androidRevision"
         ndk {
             // 64-bit phones and tablets, plus the x86_64 emulator.
             abiFilters += listOf("arm64-v8a", "x86_64")
         }
     }
 
+    signingConfigs {
+        if (!signingPath.isNullOrBlank()) {
+            create("distribution") {
+                storeFile = file(signingPath)
+                storePassword = providers.environmentVariable("PITBOX_KEYSTORE_PASSWORD").get()
+                keyAlias = providers.environmentVariable("PITBOX_KEY_ALIAS").get()
+                keyPassword = providers.environmentVariable("PITBOX_KEY_PASSWORD").get()
+            }
+        }
+    }
+
     buildTypes {
+        debug {
+            // CI debug certificates change between clean runners. Keep this
+            // test application separate from the user's installed app/data.
+            applicationIdSuffix = ".debug"
+            versionNameSuffix = "-debug"
+        }
         release {
             isMinifyEnabled = false
+            if (!signingPath.isNullOrBlank()) {
+                signingConfig = signingConfigs.getByName("distribution")
+            }
         }
     }
 
@@ -51,7 +76,7 @@ android {
     }
 }
 
-val copyDashboard by tasks.registering(Copy::class) {
+val copyDashboard by tasks.registering(Sync::class) {
     from(rootProject.layout.projectDirectory.dir("../static"))
     into(layout.buildDirectory.dir("generated/pitbox-assets/static"))
 }
@@ -64,6 +89,9 @@ chaquopy {
 
         pip {
             options("--find-links", localWheels.asFile.absolutePath)
+            // A native dependency update without a matching Android wheel
+            // must not silently pick a newer, unbuildable source release.
+            options("--constraint", nativeConstraints.asFile.absolutePath)
             // The runtime dependencies from pyproject.toml, minus what cannot
             // run on Android: sounddevice/soundfile (PortAudio; replaced by
             // the sounddevice.py and soundfile.py in src/main/python) and
@@ -85,6 +113,10 @@ chaquopy {
             install("f1-packets>=2026.1.1,<2027")
             install("numpy==1.26.2")
             install("jsonschema>=4.23")
+            // Chaquopy publishes cp313 wheels for both supported ABIs.
+            install("cryptography==42.0.8")
+            // SVG pairing codes use the pure-Python renderer, without Pillow.
+            install("qrcode>=8")
         }
     }
 
