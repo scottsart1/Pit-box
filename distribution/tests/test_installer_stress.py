@@ -45,6 +45,8 @@ def stress_runtime(tmp_path, monkeypatch):
     def request(_port, route, **_kwargs):
         if route == "/api/health":
             return healthy(tmp_path)
+        if route == "/api/v1/network/status":
+            return {"datagrams": {"received": 6000, "parsed": 6000, "rejected": 0}}
         context["polls"] += 1
         if context["polls"] == 1:
             return {"session_uid": smoke.SESSION_UID, "packets_received": 160}
@@ -264,7 +266,7 @@ def test_emitter_summary_describes_the_real_final_datagram_sent(tmp_path, monkey
 
     from tools import replay_demo
 
-    observed = {"uids": set()}
+    observed = {"uids": set(), "final_bytes": []}
 
     class OwnedSocket:
         def sendto(self, raw, target):
@@ -273,6 +275,7 @@ def test_emitter_summary_describes_the_real_final_datagram_sent(tmp_path, monkey
             observed["uids"].add(int(header.session_uid))
             if header.packet_id == 8:
                 observed["final"] = PacketFinalClassificationData.unpack(raw)
+                observed["final_bytes"].append(raw)
             return len(raw)
 
     monkeypatch.setattr(replay_demo.socket, "socket", lambda *_: OwnedSocket())
@@ -288,3 +291,31 @@ def test_emitter_summary_describes_the_real_final_datagram_sent(tmp_path, monkey
     assert emitted["final_classification"]["laps"] == player.num_laps == 1
     assert emitted["final_classification"]["position"] == player.position
     assert emitted["final_classification"]["total_race_time_s"] == player.total_race_time
+    assert emitted["final_classification_datagrams"] == len(observed["final_bytes"]) == 21
+    assert len(set(observed["final_bytes"])) == 1, "Terminal repeats must contain the identical result"
+
+
+@pytest.mark.asyncio
+async def test_repeated_terminal_datagrams_persist_and_emit_finish_once():
+    from f1.packets import PacketFinalClassificationData
+    from pitwall.state import StateStore
+    from pitwall.udp import F1DatagramProtocol
+    from tools import replay_demo
+
+    store = StateStore()
+    persisted = []
+
+    async def persist():
+        persisted.append((await store.snapshot_live())["final_classification"])
+
+    protocol = F1DatagramProtocol(store, on_final_classification=persist)
+    cars = [replay_demo.Car(index, spec) for index, spec in enumerate(replay_demo.GRID)]
+    for car in cars:
+        car.lap = 26
+    raw = replay_demo.build_final_classification(cars, 2110.0, 22000, 25)
+    for _ in range(21):
+        await protocol._handle(PacketFinalClassificationData.unpack(raw))
+    state = await store.snapshot_live()
+    assert len(persisted) == 1 and persisted[0]["laps"] == 25
+    assert state["final_classification"] == persisted[0]
+    assert sum(event["type"] == "CHQF" for event in state["events_log"]) == 1

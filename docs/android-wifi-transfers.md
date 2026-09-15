@@ -10,6 +10,12 @@ Both devices need a build containing these changes. An older installation has
 no paired-transfer listener. Updating desktop source keeps its existing data
 directory; do not replace the directory with an empty installation.
 
+The Android debug candidate installs beside the existing Android application.
+The Windows candidate uses the normal desktop installation location. Quit the
+desktop app and back up `%USERPROFILE%\PitWallData` before installing a review
+build over an existing installation. Keep the backup until the transferred
+history has been checked on the tablet.
+
 1. Connect the devices to the same reachable private LAN. Wired desktop plus
    Wi-Fi tablet works on a bridged home network. Guest isolation can block it.
 2. On each device open **Connection → Transfer history**, name the device, and
@@ -55,6 +61,7 @@ The format cannot reconstruct detail already removed by retention. The
 catalog indicates recorded detail; export checks actual file availability and
 reports missing files on completion. Full history means available surviving
 history, not a recovery of every original sample.
+The receiving app's existing trace-retention policy still applies after import.
 
 Imports are additive and transactional. Stable identities and provenance
 receipts prevent repeat copies and round trips from counting a lap twice.
@@ -124,22 +131,44 @@ Executed locally on Linux:
 Two dependency deprecation warnings came from FastAPI/Starlette test tooling.
 DOM checks do not render a WebView or establish tablet layout correctness.
 
-Not executed: Android compilation, installation, emulator runtime, physical
-Samsung/PS5/router tests, screen-off power behavior, Bluetooth/audio checks,
-long-race memory/thermal profiling, and Windows installer upgrade testing.
-No installable APK has been produced or published from this candidate.
+GitHub verification on 2026-09-15, commit `c1079a7f564f3313fd71cbdd409a28ac68f4b764`:
+
+| Check | Result |
+| --- | --- |
+| Shared engine and Android regression checks | 1,422 passed |
+| Windows full test suite | 1,636 passed |
+| Native wheels and APK compilation | arm64-v8a and x86_64 built successfully |
+| Installed API-35 Pixel C emulator | Startup, exact engine version, real UDP parsing, background reception and process restart passed |
+| Android transfer management | Private-LAN TLS listener, QR invitation, stop/start and identity persistence across process restart passed |
+| Captured Android runtime | Empty crash buffer; dashboard rendered with Suzuka, lap 8 and P4 |
+
+[Android build and runtime evidence](https://github.com/scottsart1/Pit-box/actions/runs/35032433419).
+The verified APK is `YourPitBox-4.10.0-android.8-debug.apk`, SHA-256
+`d45676d65a1e9811ef7dad264673f4a0202e2f3492076397c71e4a56cc9fb3b7`.
+Its brief emulator memory snapshot was approximately 251 MiB PSS; this is
+not a long-race or physical-device performance measurement.
+
+Not executed: physical Samsung/PS5/router tests, screen-off power behavior,
+Bluetooth/audio checks, long-race memory/thermal profiling, or an upgrade of
+the user's existing Windows installation. Real Android-to-desktop history
+copying and Android's outgoing socket-binding path remain unverified at
+runtime: the single emulator's NAT and the runner's different subnet cannot
+satisfy the product's LAN/source-address checks. Desktop HTTPS integration
+tests cover complete copying, restart/resume and duplicate protection.
 
 The Android workflow runs engine/bridge regressions and host/DOM checks before
 building both arm64-v8a and x86_64. Its API-35 Pixel C emulator stage checks
 startup, exact packaged engine version, UDP parsing, force-stop/relaunch and
 background reception, retaining screenshot/logcat/memory evidence.
 
-The local environment lacks usable Gradle/SDK/adb/emulator downloads. Repository
-access was restored and the tested tree was uploaded to
+The local environment lacks usable Gradle/SDK/adb/emulator downloads, so the
+Android build and runtime checks ran on GitHub. The candidate is in
 [`codex/android-wifi-history`, PR #43](https://github.com/scottsart1/Pit-box/pull/43).
-The Android workflow is running on GitHub. Review its build and emulator
-results before offering an APK. It runs for pull-request changes or a manual
-dispatch, avoiding duplicate builds for a branch push and its pull request.
+See the PR for the latest build status and candidate download links. Windows
+installers are withheld until the installed-artifact test proves its complete
+25-lap classification, database integrity, restart persistence and uninstall
+data retention. Virtual-only Windows runners explicitly report when TLS/QR
+transfer runtime checks cannot run. PR builds never attach a public release.
 
 The CI APK uses `com.yourpitbox.app.debug` to keep its temporary signing key
 and data separate from an existing installation. Do not uninstall an older

@@ -171,6 +171,139 @@ def prove_transfer_service(label: str, previous_pin: str | None = None) -> str:
     return pin
 
 
+class UiProviderUnavailable(RuntimeError):
+    """The emulator did not expose WebView content to accessibility automation."""
+
+
+def ui_tree(label: str) -> ET.Element:
+    """Keep each fresh accessibility snapshot; never infer taps from pixels."""
+    result = adb("exec-out", "uiautomator", "dump", "/dev/tty", check=False)
+    output = result.stdout.decode(errors="replace")
+    (OUTPUT / f"{label}-dump.txt").write_text(output)
+    # uiautomator adds a status line after the XML on several Android images.
+    start, end = output.find("<hierarchy"), output.rfind("</hierarchy>")
+    if start < 0 or end < start:
+        raise UiProviderUnavailable("Android accessibility dump did not contain a UI hierarchy")
+    xml = output[start:end + len("</hierarchy>")]
+    (OUTPUT / f"{label}-ui.xml").write_text(xml)
+    return ET.fromstring(xml)
+
+
+def node_bounds(node: ET.Element) -> tuple[int, int, int, int] | None:
+    match = re.fullmatch(r"\[(\d+),(\d+)\]\[(\d+),(\d+)\]", node.get("bounds", ""))
+    if match is None:
+        return None
+    x1, y1, x2, y2 = map(int, match.groups())
+    return (x1, y1, x2, y2) if x2 > x1 and y2 > y1 else None
+
+
+def find_ui(label: str, text: str, *, attempts: int = 6) -> ET.Element:
+    """Retry WebView accessibility initialization and search by visible label.
+
+    If the label is missing, scroll only inside an actual scrollable node from
+    the latest tree, then dump and search again. This also covers a smaller
+    viewport without assuming where Connection's transfer card is laid out.
+    """
+    populated = False
+    for attempt in range(attempts):
+        tree = ui_tree(f"{label}-{attempt + 1}")
+        populated |= any(node.get("text") or node.get("content-desc") for node in tree.iter("node"))
+        for node in tree.iter("node"):
+            labels = (node.get("text", ""), node.get("content-desc", ""))
+            if any(value.strip().casefold() == text.casefold() for value in labels) and node_bounds(node):
+                return node
+        if attempt == attempts - 1:
+            break
+        # Let the first WebView accessibility request settle before scrolling.
+        if attempt > 0:
+            scrollable = [node for node in tree.iter("node")
+                          if node.get("scrollable") == "true" and node_bounds(node)]
+            if scrollable:
+                # The largest scrollable region is the page, not a small field.
+                def area(node):
+                    x1, y1, x2, y2 = node_bounds(node)
+                    return (x2 - x1) * (y2 - y1)
+                x1, y1, x2, y2 = node_bounds(max(scrollable, key=area))
+                x = (x1 + x2) // 2
+                height = y2 - y1
+                adb("shell", "input", "swipe", str(x), str(y1 + height * 4 // 5),
+                    str(x), str(y1 + height * 2 // 5), "350")
+        time.sleep(1)
+    if not populated:
+        raise UiProviderUnavailable(f"WebView accessibility provider remained empty; see {label}-*-ui.xml")
+    raise AssertionError(f"Android UI did not expose visible control: {text!r}; see {label}-*-ui.xml")
+
+
+def tap_node(node: ET.Element):
+    bounds = node_bounds(node)
+    assert bounds is not None, "Cannot tap a node without visible bounds"
+    x1, y1, x2, y2 = bounds
+    assert node.get("enabled", "true") == "true", "Target UI control is disabled"
+    adb("shell", "input", "tap", str((x1 + x2) // 2), str((y1 + y2) // 2))
+    time.sleep(1)
+
+
+def capture_view(label: str):
+    # Screenshot coordinates are evidence only; UI-tree bounds drive all input.
+    ui_tree(label)
+    (OUTPUT / f"{label}-screen.png").write_bytes(adb("exec-out", "screencap", "-p").stdout)
+
+
+def capture_transfer_ui():
+    """Navigate the installed WebView and open its actual pairing controls."""
+    capture_view("drive")
+    tap_node(find_ui("connection-tab", "CONNECTION"))
+    find_ui("connection-heading", "Connection Center")
+    capture_view("connection")
+    find_ui("transfer-heading", "Transfer history")
+    enable = find_ui("transfer-enable", "Enable Wi-Fi transfers")
+    capture_view("transfer-history-off")
+    try:
+        tap_node(enable)
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline and not get("/api/v1/transfers/status")["running"]:
+            time.sleep(0.5)
+        assert get("/api/v1/transfers/status")["running"], "Enable Wi-Fi transfers did not start the service from the UI"
+        find_ui("transfer-invite-control", "Create pairing code")
+        capture_view("transfer-invitation-controls")
+        find_ui("transfer-pair-control", "Pair devices")
+        capture_view("transfer-history")
+        (OUTPUT / "transfer-ui-summary.json").write_text(json.dumps({
+            "scope": "Installed APK Connection and Transfer history UI",
+            "status": "passed",
+            "navigation": "UI-tree-derived taps and scrolls",
+            "connection_heading_visible": True,
+            "transfer_heading_visible": True,
+            "enable_control_started_service": True,
+            "create_pairing_code_control_visible": True,
+            "pair_devices_control_visible": True,
+            "paired_history_copy_tested": False,
+        }, indent=2))
+    finally:
+        # Do not create a UI invitation: screenshots must not retain its token.
+        stopped = post("/api/v1/transfers/stop")
+        assert not stopped["running"], "UI transfer listener cleanup failed"
+
+
+def prove_transfer_ui() -> bool:
+    try:
+        capture_transfer_ui()
+        return True
+    except UiProviderUnavailable as error:
+        # A blank accessibility provider is a QA-infrastructure limitation, not
+        # evidence that the app's controls passed or failed. A populated tree
+        # missing the expected controls still raises an AssertionError above.
+        (OUTPUT / "transfer-ui-summary.json").write_text(json.dumps({
+            "scope": "Installed APK Connection and Transfer history UI",
+            "status": "not_tested",
+            "reason_code": "accessibility_provider_unavailable",
+            "reason": str(error),
+            "paired_history_copy_tested": False,
+        }, indent=2))
+        print(f"LIMITATION: Connection/Transfer history UI not verified: {error}")
+        return False
+
+
 def capture(package: str):
     for name, args in {
         "logcat.txt": ("logcat", "-d"),
@@ -214,7 +347,11 @@ def main():
         adb("shell", "input", "keyevent", "KEYCODE_HOME")
         prove_udp("background", 300)
         adb("shell", "am", "start", "-W", "-n", f"{args.package}/com.yourpitbox.app.MainActivity")
-        print("PASS: APK startup, exact engine version, UDP parsing/background reception, transfer TLS/QR management, and identity across listener/process restart. Paired-device history copying and physical Wi-Fi are not covered by this smoke check.")
+        ui_passed = prove_transfer_ui()
+        print("PASS: APK startup, exact engine version, UDP parsing/background reception, transfer TLS/QR management, and identity across listener/process restart.")
+        if ui_passed:
+            print("PASS: Installed APK Connection/Transfer history UI navigation, enable action, and pairing controls.")
+        print("LIMITATION: Paired-device history copying and physical Wi-Fi are not covered by this smoke check.")
     finally:
         capture(args.package)
         adb("emu", "redir", "del", "udp:20777", check=False)

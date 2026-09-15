@@ -611,6 +611,17 @@ def run(host: str, port: int, total_laps: int, speed: float, seed: int,
     sock.sendto(build_lap_positions(cars, session_time, frame), target)
     final_bytes = build_final_classification(cars, session_time, frame, total_laps)
     sock.sendto(final_bytes, target)
+    # UDP has no delivery acknowledgement. At accelerated replay speeds the
+    # receiver's OS buffer can still contain the last burst of race telemetry;
+    # a single terminal datagram can disappear even though the race advanced.
+    # Give that burst time to drain by repeating the exact same result at a
+    # low rate. The product must still parse and persist the real packet, and
+    # duplicate-final handling must keep the result/event idempotent.
+    final_datagrams = 1
+    for _ in range(20):
+        time.sleep(0.25)
+        sock.sendto(final_bytes, target)
+        final_datagrams += 1
     if summary_output is not None:
         # Record exactly the packet just sent, independently of what the app
         # later claims to have received. This is emitter evidence, not a server
@@ -621,6 +632,7 @@ def run(host: str, port: int, total_laps: int, speed: float, seed: int,
             "session_uid": int(packet.header.session_uid),
             "packet_format": int(packet.header.packet_format),
             "player_car_index": int(packet.header.player_car_index),
+            "final_classification_datagrams": final_datagrams,
             "final_classification": {
                 "position": int(result.position), "laps": int(result.num_laps),
                 "grid_position": int(result.grid_position), "points": int(result.points),

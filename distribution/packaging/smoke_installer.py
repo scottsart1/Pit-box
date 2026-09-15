@@ -389,6 +389,7 @@ def exercise_stress_telemetry(
     deadline = started + timeout
     uid = None
     latencies = []
+    state = None
     try:
         baseline = request_json(web_port, "/api/state")
         received_before = int(baseline.get("packets_received", 0))
@@ -454,6 +455,16 @@ def exercise_stress_telemetry(
         raise SmokeFailure(f"Stress telemetry did not complete a verified 25-lap race within {timeout}s")
     except Exception as exc:
         report.update(result="failed", error=str(exc))
+        # Preserve the exact missing criterion and UDP diagnostics if a final
+        # packet is lost; the progress samples alone cannot distinguish that
+        # from a protocol or persistence failure. Keep the primary gate error.
+        try:
+            if state is not None:
+                save_json(diagnostics / "stress-last-state.json", state)
+            save_json(diagnostics / "stress-network-status.json",
+                      request_json(web_port, "/api/v1/network/status"))
+        except Exception as diagnostic_error:  # noqa: BLE001 - retain the original failure
+            report["diagnostic_capture_error"] = str(diagnostic_error)
         raise
     finally:
         cleanup_error = None
