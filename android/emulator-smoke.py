@@ -9,6 +9,8 @@ Bluetooth audio. Logs and a screenshot are retained even when checks fail.
 from __future__ import annotations
 
 import argparse
+import base64
+import ipaddress
 import json
 from pathlib import Path
 import re
@@ -16,7 +18,9 @@ import socket
 import subprocess
 import time
 from urllib.error import URLError
-from urllib.request import urlopen
+from urllib.parse import parse_qs, urlsplit
+from urllib.request import Request, urlopen
+import xml.etree.ElementTree as ET
 
 from f1.packets import PacketHeader, PacketLapData, PacketSessionData
 
@@ -31,6 +35,17 @@ def adb(*args: str, check: bool = True) -> subprocess.CompletedProcess:
 
 def get(path: str):
     with urlopen(BASE + path, timeout=5) as response:
+        return json.load(response)
+
+
+def post(path: str, body: dict | None = None):
+    request = Request(
+        BASE + path,
+        data=json.dumps(body or {}).encode(),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    with urlopen(request, timeout=20) as response:
         return json.load(response)
 
 
@@ -91,6 +106,71 @@ def prove_udp(label: str, first_frame: int):
     assert state["connected"], "App did not report telemetry connected"
 
 
+def prove_transfer_service(label: str, previous_pin: str | None = None) -> str:
+    """Load real Android TLS/QR libraries and restart the private-LAN listener.
+
+    This is a management/lifecycle check, not a paired-device history copy.
+    Invitations and their tokens stay in memory and are never written to the
+    evidence directory or printed in assertion messages.
+    """
+    prefix = "/api/v1/transfers"
+    initial = get(prefix + "/status")
+    assert not initial["running"], "Transfers must remain opt-in after app startup"
+    summary = {"scope": "APK transfer management and listener lifecycle"}
+    try:
+        # Use the app's ordinary interface discovery. The emulator's actual
+        # 10.0.2.x interface must qualify; no loopback permission or mock route.
+        started = post(prefix + "/start", {"device_name": "Pit Box emulator"})
+        assert started["running"], "Transfer listener did not start"
+        endpoint = urlsplit(started["endpoint"])
+        assert endpoint.scheme == "https", "Transfer listener did not use HTTPS"
+        address = ipaddress.IPv4Address(endpoint.hostname)
+        assert address in ipaddress.IPv4Network("10.0.2.0/24"), "Listener did not bind the emulator's private LAN interface"
+        assert endpoint.port == started["port"], "Advertised transfer port differs from listener port"
+        pin = started["certificate_sha256"]
+        assert isinstance(pin, str) and re.fullmatch(r"[0-9a-f]{64}", pin), "Transfer certificate fingerprint is invalid"
+        if previous_pin is not None:
+            assert pin == previous_pin, "Transfer identity changed after app process restart"
+
+        invitation = post(prefix + "/invite")
+        assert invitation["endpoint"] == started["endpoint"], "Invitation advertises the wrong listener"
+        encoded = invitation["invitation"]
+        assert encoded.startswith("pitwall-pair://"), "Invitation format is invalid"
+        encoded = encoded[len("pitwall-pair://"):]
+        payload = json.loads(base64.b64decode(encoded + "=" * (-len(encoded) % 4), altchars=b"-_", validate=True))
+        assert payload["certificate_sha256"] == pin, "Invitation does not pin the active certificate"
+        assert payload["endpoint"] == started["endpoint"], "Encoded invitation advertises the wrong listener"
+        assert payload["expires_at"] == invitation["expires_at"], "Invitation expiry is inconsistent"
+        assert isinstance(payload["token"], str) and len(payload["token"]) >= 32, "Invitation token is invalid"
+        pairing_uri = urlsplit(invitation["pairing_uri"])
+        assert pairing_uri.scheme == "pitwall" and pairing_uri.netloc == "pair", "Pairing deep link is invalid"
+        assert parse_qs(pairing_uri.query).get("invite") == [invitation["invitation"]], "Pairing deep link changed the invitation"
+        qr = ET.fromstring(invitation["qr_svg"])
+        assert qr.tag == "{http://www.w3.org/2000/svg}svg", "QR renderer did not produce SVG"
+        assert qr.find(".//{http://www.w3.org/2000/svg}path") is not None, "QR SVG contains no code geometry"
+
+        stopped = post(prefix + "/stop")
+        assert not stopped["running"] and stopped["endpoint"] is None, "Transfer listener did not stop"
+        restarted = post(prefix + "/start", {"device_name": "Pit Box emulator"})
+        assert restarted["running"], "Transfer listener did not restart"
+        assert restarted["certificate_sha256"] == pin, "Transfer identity changed after listener restart"
+        assert restarted["device_id"] == started["device_id"], "Transfer device identity changed after listener restart"
+        summary.update({
+            "listener_address": str(address),
+            "listener_port": endpoint.port,
+            "tls_certificate_created": True,
+            "invitation_and_qr_valid": True,
+            "identity_survived_listener_restart": True,
+            "identity_survived_process_restart": previous_pin is not None,
+            "paired_history_copy_tested": False,
+        })
+    finally:
+        stopped = post(prefix + "/stop")
+        assert not stopped["running"], "Transfer listener cleanup failed"
+    (OUTPUT / f"{label}-transfer-summary.json").write_text(json.dumps(summary, indent=2))
+    return pin
+
+
 def capture(package: str):
     for name, args in {
         "logcat.txt": ("logcat", "-d"),
@@ -118,6 +198,7 @@ def main():
     redir = adb("emu", "redir", "add", "udp:20777:20777")
     assert b"KO" not in redir.stdout, redir.stdout.decode(errors="replace")
     try:
+        transfer_pin = None
         for attempt in (1, 2):
             if attempt == 2:
                 adb("shell", "am", "force-stop", args.package)
@@ -126,13 +207,14 @@ def main():
             assert health["version"] == expected_version, health
             assert health["udp_listener"], health
             (OUTPUT / f"launch-{attempt}-health.json").write_text(json.dumps(health, indent=2))
+            transfer_pin = prove_transfer_service(f"launch-{attempt}", transfer_pin)
             prove_udp(f"launch-{attempt}", attempt * 100)
         # The foreground service must retain receiving when the activity is
         # no longer visible. This is not a substitute for physical-device Doze QA.
         adb("shell", "input", "keyevent", "KEYCODE_HOME")
         prove_udp("background", 300)
         adb("shell", "am", "start", "-W", "-n", f"{args.package}/com.yourpitbox.app.MainActivity")
-        print("PASS: APK startup, exact engine version, UDP session/lap parsing, process restart, and foreground-service reception.")
+        print("PASS: APK startup, exact engine version, UDP parsing/background reception, transfer TLS/QR management, and identity across listener/process restart. Paired-device history copying and physical Wi-Fi are not covered by this smoke check.")
     finally:
         capture(args.package)
         adb("emu", "redir", "del", "udp:20777", check=False)

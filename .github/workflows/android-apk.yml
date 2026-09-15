@@ -3,14 +3,16 @@
 name: Build Android APK
 
 on:
-  push:
-    branches: [codex/android-wifi-history]
   pull_request:
     paths:
       - android/**
       - src/**
       - static/**
       - pyproject.toml
+      - tests/**
+      - tools/backend_transfer_smoke.py
+      - tools/transfer-ui-smoke.cjs
+      - distribution/tests/test_android*.py
       - .github/workflows/android-apk.yml
   workflow_dispatch:
 
@@ -56,6 +58,11 @@ jobs:
           java-version: "17"
 
       - uses: android-actions/setup-android@v3
+        with:
+          # The old SDK 'tools' package is no longer in Google's catalog.
+          # setup-android installs command-line tools itself.
+          packages: platform-tools
+          log-accepted-android-sdk-licenses: false
 
       - name: Install the Android build platform
         run: sdkmanager 'platforms;android-35' 'build-tools;35.0.0'

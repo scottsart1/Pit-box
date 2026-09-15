@@ -134,11 +134,12 @@ building both arm64-v8a and x86_64. Its API-35 Pixel C emulator stage checks
 startup, exact packaged engine version, UDP parsing, force-stop/relaunch and
 background reception, retaining screenshot/logcat/memory evidence.
 
-The local environment lacks usable Gradle/SDK/adb/emulator downloads. The
-GitHub integration rejected the attempted branch upload with HTTP 403,
-`Resource not accessible by integration`; no remote branch, commit or CI run
-was created. Restore repository write access, push `codex/android-wifi-history`,
-and review the Android workflow output before offering an APK.
+The local environment lacks usable Gradle/SDK/adb/emulator downloads. Repository
+access was restored and the tested tree was uploaded to
+[`codex/android-wifi-history`, PR #43](https://github.com/scottsart1/Pit-box/pull/43).
+The Android workflow is running on GitHub. Review its build and emulator
+results before offering an APK. It runs for pull-request changes or a manual
+dispatch, avoiding duplicate builds for a branch push and its pull request.
 
 The CI APK uses `com.yourpitbox.app.debug` to keep its temporary signing key
 and data separate from an existing installation. Do not uninstall an older
