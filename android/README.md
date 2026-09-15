@@ -27,13 +27,26 @@ android/
 (`static/`) is bundled as assets and extracted to the app's storage on first
 start, and `PITWALL_STATIC_DIR` tells the backend where it landed.
 
-## Why the Rust wheels
+## Native dependencies
 
-Everything the backend imports is pure Python except numpy, pydantic-core,
-jiter and rpds-py. Chaquopy's repository has numpy; the other three are Rust
-extensions with no Android build anywhere, so `build-wheels.sh` compiles them
-with cibuildwheel's Android support before the APK is built. It takes a
-Rust toolchain and the Android SDK and runs in minutes.
+Chaquopy's package repository supplies the Python 3.13 Android builds of numpy
+1.26.2 and cryptography 42.0.8. The latter supplies certificates for paired
+Wi-Fi transfers. Pairing QR codes use qrcode's SVG renderer and do not need
+Pillow. `build-wheels.sh` compiles pydantic-core, jiter, rpds-py and websockets
+with cibuildwheel for both arm64-v8a phones/tablets and x86_64 emulators.
+
+`native-requirements.txt` is shared by the wheel builder and the APK's pip
+constraints. Updating a Python dependency cannot silently select a different
+native version from the wheels which were built. `check-wheels.py` rejects a
+cache missing either ABI, corrupt ZIP files, a different Python ABI, or a
+wheel requiring an Android API newer than our minimum API 24. A partial
+cache is rebuilt even when GitHub Actions reports a cache hit.
+
+The Android Python and Java APIs are documented by
+[Chaquopy](https://chaquo.com/chaquopy/doc/current/android.html), and its
+[cryptography package index](https://chaquo.com/pypi-13.1/cryptography/)
+lists the builds used here. Native dependency compatibility must be checked
+when those pins change.
 
 Left out on purpose: uvicorn's `[standard]` extras (uvloop, httptools),
 which have no Android builds and are not needed. `sounddevice` and
@@ -55,9 +68,61 @@ PITBOX_HOST_PYTHON=python3.12 ./build-wheels.sh
 ./gradlew assembleDebug
 ```
 
-The APK is at `app/build/outputs/apk/debug/app-debug.apk`. Install it with
+The debug APK is at `app/build/outputs/apk/debug/app-debug.apk`. Install it with
 `adb install` or by opening it on the device (allow installs from this
 source when asked).
+
+The engine version is read directly from `src/pitwall/__init__.py` at build
+time. Increment `androidRevision` in `app/build.gradle.kts` for each
+distributed Android update; it is Android's monotonic `versionCode`.
+
+### Debug builds and preserving installed data
+
+Debug builds now use `com.yourpitbox.app.debug`, separately from the
+distribution app `com.yourpitbox.app`. They install alongside an existing app
+and have a separate data directory. The CI workflow produces debug test
+artifacts and does not publish GitHub Releases.
+
+Previous Android prereleases used the distribution package ID with a
+runner-generated debug certificate. A different runner's certificate cannot
+update that installation. The `.debug` variant avoids requiring the user to
+uninstall it, but does not inherit its settings or stored history. Keep the
+old installation until any wanted data has been recovered. Do not describe
+a new certificate as an in-place upgrade path.
+
+For distribution, configure an existing, securely backed-up signing key via
+`PITBOX_KEYSTORE_PATH`, `PITBOX_KEYSTORE_PASSWORD`, `PITBOX_KEY_ALIAS`, and
+`PITBOX_KEY_PASSWORD`, then run `./gradlew assembleRelease`. Without those
+variables Gradle can produce an unsigned release build for compilation
+checks, which is not installable. Never check a key or its passwords into
+the repository. See [Android app signing](https://developer.android.com/studio/publish/app-signing).
+
+### Executable emulator verification
+
+`.github/workflows/android-apk.yml` runs on the implementation branch and
+relevant pull requests. After building the APK for both ABIs, it launches an
+API 35 x86_64 Pixel C tablet emulator and runs `emulator-smoke.py`. To run it
+with an already booted emulator, from the repository root:
+
+```bash
+python3.13 -m pip install 'f1-packets>=2026.1.1,<2027'
+python3.13 android/emulator-smoke.py
+```
+
+The script installs the APK, checks the actual embedded engine version,
+forwards real UDP packets into the emulator, and verifies the decoded
+session, circuit, lap and position through the app's HTTP API. It repeats
+after force-stopping/restarting the app and checks reception with the
+activity in the background. Logs, decoded state, memory snapshot, UI tree
+and screenshot are captured in `android/smoke-output/`, including on failure.
+
+A passing emulator run establishes the packaged interpreter, dependencies,
+service and parser can work together. It does not establish physical router
+broadcast delivery, Samsung battery-management behavior, voice quality,
+headset routing, or a full-race performance budget. A single debug-emulator
+memory snapshot cannot establish a memory leak or predict a tablet's RAM
+use. Those need focused physical-device checks with both apps' versions and
+the router/device configuration recorded.
 
 ## Using it
 

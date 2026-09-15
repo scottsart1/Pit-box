@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from dataclasses import asdict
+import asyncio
+import sys
 
 from fastapi import APIRouter, HTTPException, Response, status
 
@@ -242,6 +245,14 @@ def _status_response(snapshot: NetworkSnapshot) -> NetworkStatusResponse:
         source=dict(snapshot.source) if snapshot.source else None,
         game=dict(snapshot.game) if snapshot.game else None,
         packets=packets,
+        datagrams={
+            "received": sum(item.received for item in snapshot.packet_health.packets)
+            + sum(item.received for item in snapshot.packet_health.invalid),
+            "parsed": sum(item.valid_parsed for item in snapshot.packet_health.packets),
+            "rejected": sum(item.parse_errors for item in snapshot.packet_health.packets)
+            + sum(item.received for item in snapshot.packet_health.invalid),
+        },
+        invalid_packets=[asdict(item) for item in snapshot.packet_health.invalid],
         forwarders=[_forwarder_response(item) for item in snapshot.forwarders],
         queues=queues,
         warnings=list(snapshot.warnings),
@@ -256,6 +267,23 @@ def create_network_router(service: NetworkService) -> APIRouter:
     """Create a router bound to one service; no global application state required."""
 
     router = APIRouter(prefix="/api/v1/network", tags=["network"])
+
+    @router.get("/android")
+    async def get_android_status() -> dict[str, object]:
+        # The native service imports this module before the shared backend.
+        # Do not import platform-specific code on desktop installations.
+        bridge = sys.modules.get("pitbox_android")
+        provider = getattr(bridge, "android_network_status", None)
+        if not callable(provider):
+            return {"available": False}
+        try:
+            result = await asyncio.to_thread(provider)
+            if not isinstance(result, dict):
+                raise TypeError("Android network diagnostics returned an invalid response")
+            return {"available": True, **result}
+        except Exception:
+            # Native bridge failures should not hide ordinary listener status.
+            return {"available": True, "error": "Android network diagnostics are unavailable."}
 
     @router.get("/interfaces", response_model=InterfacesResponse)
     async def get_interfaces() -> InterfacesResponse:

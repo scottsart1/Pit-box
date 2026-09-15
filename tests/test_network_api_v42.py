@@ -3,6 +3,8 @@ from __future__ import annotations
 import asyncio
 import errno
 import struct
+import sys
+from types import SimpleNamespace
 
 import httpx
 import pytest
@@ -111,6 +113,52 @@ def make_app(service: NetworkService) -> FastAPI:
     app = FastAPI()
     app.include_router(create_network_router(service))
     return app
+
+
+@pytest.mark.asyncio
+async def test_rejected_datagrams_are_visible_when_no_supported_packet_arrives():
+    service, endpoints = make_service()
+    transport = httpx.ASGITransport(app=make_app(service))
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        await client.post("/api/v1/network/listener/start", json={"port": 20777})
+        protocol = endpoints.protocols[-1]
+        wrong_format = bytearray(packet_bytes())
+        struct.pack_into("<H", wrong_format, 0, 2025)
+        protocol.datagram_received(bytes(wrong_format), ("192.168.10.61", 54022))
+        protocol.datagram_received(b"short", ("192.168.10.61", 54022))
+        status = (await client.get("/api/v1/network/status")).json()
+        assert status["packets"] == []
+        assert status["datagrams"] == {"received": 2, "parsed": 0, "rejected": 2}
+        assert status["invalid_packets"][0]["unsupported_format"] == 1
+        assert status["invalid_packets"][0]["too_short"] == 1
+        # A following supported packet still arrives on the same listener.
+        protocol.datagram_received(packet_bytes(), ("192.168.10.61", 54022))
+        status = (await client.get("/api/v1/network/status")).json()
+        assert status["datagrams"] == {"received": 3, "parsed": 1, "rejected": 2}
+        await service.stop_listener()
+
+
+@pytest.mark.asyncio
+async def test_android_diagnostics_does_not_require_android_on_desktop(monkeypatch):
+    service, _ = make_service()
+    monkeypatch.delitem(sys.modules, "pitbox_android", raising=False)
+    transport = httpx.ASGITransport(app=make_app(service))
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        assert (await client.get("/api/v1/network/android")).json() == {"available": False}
+        monkeypatch.setitem(sys.modules, "pitbox_android", SimpleNamespace(
+            android_network_status=lambda: {"sdk_int": 35, "networks": []}
+        ))
+        native = (await client.get("/api/v1/network/android")).json()
+        assert native["available"] is True
+        assert native["sdk_int"] == 35
+        def unavailable():
+            raise RuntimeError("native bridge temporarily unavailable")
+        monkeypatch.setitem(sys.modules, "pitbox_android", SimpleNamespace(
+            android_network_status=unavailable
+        ))
+        native = (await client.get("/api/v1/network/android")).json()
+        assert native["available"] is True
+        assert "unavailable" in native["error"]
 
 
 @pytest.mark.asyncio

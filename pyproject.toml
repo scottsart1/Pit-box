@@ -18,6 +18,9 @@ dependencies = [
   "sounddevice>=0.5",
   "soundfile>=0.12",
   "jsonschema>=4.23",
+  # Local Wi-Fi pairing uses per-install TLS certificates and pinned peers.
+  "cryptography>=42",
+  "qrcode>=8",
 ]
 
 [project.optional-dependencies]

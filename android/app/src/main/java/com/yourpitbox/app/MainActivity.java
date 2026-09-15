@@ -5,6 +5,7 @@ import android.app.Activity;
 import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.graphics.Color;
+import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
@@ -13,6 +14,7 @@ import android.view.Gravity;
 import android.view.View;
 import android.view.WindowManager;
 import android.webkit.WebSettings;
+import android.webkit.WebResourceRequest;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
 import android.widget.FrameLayout;
@@ -22,6 +24,8 @@ import androidx.core.content.ContextCompat;
 
 import java.net.HttpURLConnection;
 import java.net.URL;
+
+import org.json.JSONObject;
 
 /**
  * The dashboard, in a WebView, over the backend the service is running.
@@ -37,6 +41,9 @@ public class MainActivity extends Activity {
     private final Handler handler = new Handler(Looper.getMainLooper());
     private boolean loaded = false;
     private long startedAt = 0;
+    private boolean pageReady;
+    private String pendingInvitation;
+    private int invitationAttempts;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -67,7 +74,33 @@ public class MainActivity extends Activity {
         settings.setMediaPlaybackRequiresUserGesture(false);
         settings.setUseWideViewPort(true);
         settings.setLoadWithOverviewMode(true);
-        web.setWebViewClient(new WebViewClient());
+        web.setWebViewClient(new WebViewClient() {
+            @Override
+            public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
+                Uri target = request.getUrl();
+                if (isTrustedDashboard(target.toString())) return false;
+                // An external link opens in a browser; pairing invitations are
+                // never injected into a page outside the embedded dashboard.
+                String scheme = target.getScheme();
+                if (request.isForMainFrame() && request.hasGesture()
+                        && ("https".equals(scheme) || "http".equals(scheme))) {
+                    try { startActivity(new Intent(Intent.ACTION_VIEW, target)); }
+                    catch (android.content.ActivityNotFoundException ignored) { /* no browser installed */ }
+                }
+                return true;
+            }
+
+            @Override
+            public void onPageStarted(WebView view, String url, android.graphics.Bitmap favicon) {
+                pageReady = false;
+            }
+
+            @Override
+            public void onPageFinished(WebView view, String url) {
+                pageReady = isTrustedDashboard(url);
+                deliverPairingInvitation();
+            }
+        });
         root.addView(web, new FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
 
@@ -88,7 +121,57 @@ public class MainActivity extends Activity {
                 FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
 
         setContentView(root);
+        capturePairingInvitation(getIntent());
         if (!requestPermissionsFirst()) startBackend();
+    }
+
+    @Override
+    protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        setIntent(intent);
+        capturePairingInvitation(intent);
+        deliverPairingInvitation();
+    }
+
+    /** Custom-scheme input is untrusted; it only pre-fills the pairing form. */
+    private void capturePairingInvitation(Intent intent) {
+        if (intent == null || !Intent.ACTION_VIEW.equals(intent.getAction())) return;
+        Uri data = intent.getData();
+        if (data == null || data.toString().length() > 8192 || !data.isHierarchical()
+                || !"pitwall".equals(data.getScheme()) || !"pair".equals(data.getHost())
+                || data.getPort() != -1 || data.getUserInfo() != null || data.getFragment() != null) return;
+        String path = data.getPath();
+        if (path != null && !path.isEmpty() && !"/".equals(path)) return;
+        if (data.getQueryParameterNames().size() != 1 || data.getQueryParameters("invite").size() != 1) return;
+        String invitation = data.getQueryParameter("invite");
+        if (invitation == null || invitation.isEmpty() || invitation.length() > 4096) return;
+        pendingInvitation = invitation;
+        invitationAttempts = 0;
+    }
+
+    private boolean isTrustedDashboard(String url) {
+        String base = PitBoxService.getDashboardUrl();
+        if (base == null || url == null) return false;
+        Uri expected = Uri.parse(base);
+        Uri actual = Uri.parse(url);
+        return "http".equals(actual.getScheme()) && "127.0.0.1".equals(actual.getHost())
+                && actual.getHost().equals(expected.getHost()) && actual.getPort() == expected.getPort()
+                && actual.getUserInfo() == null;
+    }
+
+    private void deliverPairingInvitation() {
+        if (pendingInvitation == null || !pageReady || isDestroyed() || isFinishing()
+                || web == null || !isTrustedDashboard(web.getUrl())) return;
+        String invitation = pendingInvitation;
+        String script = "(function(){if(!window.PitWallTransfers || "
+                + "typeof window.PitWallTransfers.acceptInvitation !== 'function') return 'waiting';"
+                + "window.PitWallTransfers.acceptInvitation(" + JSONObject.quote(invitation) + ");"
+                + "return 'accepted';})()";
+        web.evaluateJavascript(script, result -> {
+            if (!invitation.equals(pendingInvitation)) return;
+            if ("\"accepted\"".equals(result)) pendingInvitation = null;
+            else if (++invitationAttempts < 20) handler.postDelayed(this::deliverPairingInvitation, 250);
+        });
     }
 
     /**
@@ -164,7 +247,7 @@ public class MainActivity extends Activity {
 
     /** Loads the dashboard the moment the backend answers its health check. */
     private void pollUntilReady() {
-        if (loaded) return;
+        if (loaded || isDestroyed() || isFinishing()) return;
         String failure = PitBoxService.getFailure();
         if (failure != null) {
             status.setText(getString(R.string.start_failed) + "\n\n" + failure
@@ -178,6 +261,7 @@ public class MainActivity extends Activity {
             new Thread(() -> {
                 boolean ready = healthy(healthUrl);
                 handler.post(() -> {
+                    if (isDestroyed() || isFinishing()) return;
                     if (ready && !loaded) {
                         loaded = true;
                         status.setVisibility(View.GONE);
@@ -234,6 +318,7 @@ public class MainActivity extends Activity {
 
     @Override
     protected void onDestroy() {
+        handler.removeCallbacksAndMessages(null);
         if (web != null) web.destroy();
         super.onDestroy();
     }

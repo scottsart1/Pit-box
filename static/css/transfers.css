@@ -1,0 +1,61 @@
+/* Connection administration follows the established dashboard visual system. */
+.transfer-panel { grid-column: 1 / -1; border-top: 3px solid var(--blue, #3f86ff); }
+.transfer-panel h3 { margin: 8px 0 12px; font-size: 18px; }
+.transfer-panel p, .connection-quick-help p { line-height: 1.5; }
+.transfer-lede { max-width: 82ch; }
+.transfer-enable, .transfer-actions, .transfer-selection-bar { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; }
+.transfer-enable { align-items: flex-end; margin-top: 16px; }
+.transfer-enable > label { flex: 1 1 240px; max-width: 420px; }
+.transfer-enable label, .transfer-step label { display: block; font-weight: 700; font-size: 13px; }
+.transfer-panel input[type="text"], .transfer-panel input[type="search"], .transfer-panel textarea { width: 100%; max-width: 100%; min-width: 0; background: var(--bg, #070b0f); color: #eef4f8; border: 1px solid var(--line, #263542); border-radius: 8px; padding: 12px; font: inherit; margin-top: 8px; }
+.transfer-panel textarea { resize: vertical; overflow-wrap: anywhere; min-height: 90px; font-size: 14px; }
+.transfer-panel textarea:focus-visible { outline: 3px solid var(--focus, #fff); outline-offset: 2px; }
+.transfer-pair-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; margin-top: 18px; }
+.transfer-step { min-width: 0; padding: 16px; border: 1px solid var(--line, #263542); border-radius: 10px; background: var(--card, #121b24); }
+.transfer-step > p { color: var(--muted, #91a6b8); font-size: 13px; }
+.transfer-step .button { margin-top: 10px; }
+#transferInvitationPanel { margin-top: 16px; }
+#transferInvitation { font-family: Consolas, monospace; font-size: 12px; }
+#transferEndpoint { overflow-wrap: anywhere; }
+.transfer-section-heading { padding-top: 22px; }
+.transfer-peer-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 320px), 1fr)); gap: 10px; }
+.transfer-peer, .transfer-job { padding: 14px; border: 1px solid var(--line, #263542); border-radius: 10px; background: var(--card, #121b24); min-width: 0; }
+.transfer-peer strong, .transfer-job strong { overflow-wrap: anywhere; }
+.transfer-peer .transfer-actions { margin-top: 12px; }
+.transfer-peer-address { overflow-wrap: anywhere; font-size: 12px; color: var(--muted, #91a6b8); margin-top: 6px; }
+.transfer-catalog { margin-top: 18px; border-top: 1px solid var(--line, #263542); padding-top: 18px; }
+.transfer-selection-bar { margin: 8px 0 12px; justify-content: space-between; }
+.transfer-selection-bar > input[type="search"] { flex: 1 1 220px; max-width: 360px; }
+.transfer-check { display: flex; align-items: center; gap: 12px; min-height: 44px; cursor: pointer; }
+.transfer-check input[type="checkbox"] { width: 22px; height: 22px; min-height: 22px; margin: 0; flex: 0 0 22px; accent-color: var(--green, #49d17d); }
+.transfer-session-list { max-height: 480px; overflow: auto; overscroll-behavior: contain; }
+.transfer-session { display: flex; align-items: flex-start; gap: 12px; padding: 14px 4px; border-top: 1px solid var(--line, #263542); min-height: 64px; }
+.transfer-session input { margin-top: 3px !important; }
+.transfer-session-details { flex: 1 1 0; min-width: 0; }
+.transfer-session-details strong { display: block; overflow-wrap: anywhere; }
+.transfer-session-details .field-help { display: block; margin-top: 4px; }
+.transfer-session .state-chip { flex: 0 1 auto; white-space: normal; text-align: center; }
+.transfer-import-actions { justify-content: space-between; margin-top: 14px; }
+.transfer-jobs { margin-top: 18px; }
+#transferJobs { display: grid; gap: 10px; }
+.transfer-job progress { display: block; width: 100%; height: 10px; accent-color: var(--blue, #3f86ff); margin: 12px 0; }
+.transfer-job[data-status="completed"] { border-color: var(--green, #49d17d); }
+.transfer-job[data-status="failed"], .transfer-job[data-status="conflict"] { border-color: var(--amber, #ffc15c); }
+.transfer-job .field-help { overflow-wrap: anywhere; }
+.transfer-help, .connection-quick-help { border-top: 1px solid var(--line, #263542); margin-top: 18px; padding-top: 8px; }
+.transfer-help summary, .connection-quick-help summary { min-height: 44px; padding-block: 12px; color: var(--text-2, #aeb8c7); }
+.transfer-help p, .connection-quick-help p { max-width: 90ch; color: var(--muted, #91a6b8); font-size: 13px; }
+.network-packet-summary { margin-top: 14px; display: flex; flex-wrap: wrap; gap: 8px 20px; padding: 12px; border-radius: 8px; background: var(--card, #121b24); }
+.network-packet-summary span { color: var(--muted, #91a6b8); font-size: 12px; }
+.network-packet-summary strong { color: #eef4f8; margin-right: 4px; }
+@media (max-width: 700px) {
+  .transfer-pair-grid { grid-template-columns: minmax(0, 1fr); }
+  .transfer-enable > label { max-width: none; flex-basis: 100%; }
+  .transfer-enable > .button { flex: 1 1 auto; }
+  .transfer-selection-bar > input[type="search"] { max-width: none; }
+  .transfer-import-actions > .button { width: 100%; }
+  .transfer-session { flex-wrap: wrap; }
+  .transfer-session .state-chip { margin-left: 34px; }
+}
+
+.transfer-qr { display: block; width: min(240px, 100%); height: auto; border: 12px solid white; border-radius: 8px; background: white; margin-bottom: 12px; }

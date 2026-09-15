@@ -154,6 +154,10 @@ class NetworkStatusResponse(VersionedResponse):
     source: dict[str, object] | None = None
     game: dict[str, object] | None = None
     packets: list[PacketHealthResponse] = Field(default_factory=list)
+    # Include traffic rejected before a packet type could be recognised. A
+    # healthy socket receiving the wrong game format must not look silent.
+    datagrams: dict[str, int] = Field(default_factory=dict)
+    invalid_packets: list[dict[str, object]] = Field(default_factory=list)
     forwarders: list[ForwardTargetResponse] = Field(default_factory=list)
     queues: dict[str, dict[str, int | float | None]] = Field(default_factory=dict)
     warnings: list[str] = Field(default_factory=list)

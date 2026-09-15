@@ -39,6 +39,7 @@ from .api.network import create_network_router
 from .api.sessions import create_sessions_router
 from .api.storage import create_storage_router
 from .api.track_models import create_track_models_router
+from .api.transfers import create_transfer_router
 from .audio import AudioService
 from .brain import EngineerBrain
 from .briefing import BriefingEngine
@@ -55,6 +56,8 @@ from .line_insights import line_findings
 from .network_profiles import NetworkProfileRepository
 from .network_service import ListenerBindError, NetworkService
 from .networking import PacketHealthTracker
+from .history_transfer import HistoryTransferService
+from .peer_transfer import PeerTransferService
 from .prerace import PreRacePlanner
 from .proactive import ProactiveEngineer
 from .race_plan import (
@@ -313,6 +316,14 @@ network_service = NetworkService(
     profile_repository=network_profiles,
 )
 tools.network_service = network_service
+history_transfer = HistoryTransferService(
+    database.path, settings.data_dir,
+    trace_root=settings.trace_dir, capture_root=settings.capture_dir,
+)
+peer_transfer = PeerTransferService(
+    history_transfer, settings.data_dir,
+    is_recording=lambda: network_service.listener_snapshot().state.value not in {"off", "error"},
+)
 
 
 async def _startup_maintenance() -> None:
@@ -536,6 +547,7 @@ async def lifespan(app: FastAPI):
         _event_persistence_worker(), name="pitwall-event-persistence"
     )
     yield
+    await asyncio.to_thread(peer_transfer.close)
     # Stop accepting datagrams first. The parser's connection_lost callback
     # closes its bounded consumer before capture and state are finalized.
     await network_service.stop_listener()
@@ -633,6 +645,7 @@ def _rebind_provider_clients() -> None:
 
 app.include_router(create_credentials_router(on_change=_rebind_provider_clients))
 app.include_router(create_network_router(network_service))
+app.include_router(create_transfer_router(peer_transfer))
 app.include_router(
     create_sessions_router(
         database.catalog,
