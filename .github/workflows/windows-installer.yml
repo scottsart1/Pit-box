@@ -3,15 +3,22 @@
 # release_windows.ps1 is the full release and runs on the owner's PC. This
 # workflow builds with PyInstaller/Inno Setup and smoke-tests the installed
 # artifact on a disposable Windows runner before anything can be published.
-# The installer is uploaded as a workflow artifact and attached to a GitHub
-# Release tagged with the app version, from where the R2 upload and the site
-# deploy can be run from anywhere with wrangler and a Cloudflare token.
+# Candidate PR installers are workflow artifacts only. A manual run can also
+# attach its installer to a GitHub Release tagged with the app version.
 #
 # Licensing tests generate temporary keys, so the full suite can run in CI
 # without accessing the production signing key.
 name: Build Windows installer
 
 on:
+  pull_request:
+    paths:
+      - src/**
+      - static/**
+      - pyproject.toml
+      - distribution/packaging/**
+      - distribution/tests/test_installer*.py
+      - .github/workflows/windows-installer.yml
   workflow_dispatch:
     inputs:
       attach_release:
@@ -22,9 +29,20 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: windows-installer-${{ github.head_ref || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   build:
+    # Keep candidate builds scoped to the requested implementation branch.
+    # No fork receives a write-capable candidate build or release attachment.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.head_ref == 'codex/android-wifi-history' &&
+       github.event.pull_request.head.repo.full_name == github.repository)
     runs-on: windows-latest
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
 
@@ -85,6 +103,7 @@ jobs:
           python -m distribution.packaging.smoke_installer --installer "${{ steps.installer.outputs.path }}" --version "${{ steps.version.outputs.version }}" --stress-telemetry
           if ($LASTEXITCODE -ne 0) { throw "Installed Windows artifact smoke test failed" }
           "`n- Installed artifact smoke: install, frozen startup, 25-lap UDP stress, full SQLite integrity, persistence/restart, shutdown, uninstall/data retention passed." >> $env:GITHUB_STEP_SUMMARY
+          "- Transfer management is exercised through the installed EXE; diagnostics state whether the runner had a usable private LAN for TLS/QR checks." >> $env:GITHUB_STEP_SUMMARY
 
       - name: Preserve installer-smoke diagnostics
         if: ${{ always() && steps.smoke.outputs.diagnostics != '' }}
@@ -102,7 +121,7 @@ jobs:
           if-no-files-found: error
 
       - name: Attach the installer to a GitHub Release
-        if: ${{ inputs.attach_release }}
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.attach_release }}
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
