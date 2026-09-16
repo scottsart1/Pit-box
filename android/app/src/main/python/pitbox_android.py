@@ -220,6 +220,11 @@ def dashboard_url() -> str:
         # Keep the configured port when free, otherwise use a local ephemeral
         # port and return that same address to the WebView and server.
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+            if os.name == "posix":
+                # Match Uvicorn's bind policy on Android. A recently stopped
+                # server can leave TIME_WAIT connections without a listener;
+                # those must not look like another app still owns the port.
+                probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             try:
                 probe.bind((settings.web_host, settings.web_port))
             except OSError as error:

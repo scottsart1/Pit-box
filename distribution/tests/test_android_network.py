@@ -303,6 +303,31 @@ def test_free_saved_dashboard_port_is_preserved(android_entry, monkeypatch):
     assert module.dashboard_url() == f"http://127.0.0.1:{port}"
 
 
+@pytest.mark.skipif(os.name != "posix", reason="Android/Unix TIME_WAIT binding semantics")
+def test_dashboard_restart_reuses_port_after_server_closed_connection(android_entry, monkeypatch):
+    module, _ = android_entry
+    from pitwall.config import settings
+
+    monkeypatch.setitem(sys.modules, "pitwall.app", types.ModuleType("pitwall.app"))
+    monkeypatch.setattr(settings, "web_host", "127.0.0.1")
+    with socket.socket() as previous:
+        previous.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        previous.bind(("127.0.0.1", 0))
+        previous.listen()
+        port = previous.getsockname()[1]
+        with socket.create_connection(("127.0.0.1", port), timeout=2) as client:
+            accepted, _ = previous.accept()
+            with accepted:
+                accepted.shutdown(socket.SHUT_RDWR)
+            assert client.recv(1) == b""
+    # Prove the regression fixture really has a recently closed connection.
+    with socket.socket() as without_reuse:
+        with pytest.raises(OSError):
+            without_reuse.bind(("127.0.0.1", port))
+    monkeypatch.setattr(settings, "web_port", port)
+    assert module.dashboard_url() == f"http://127.0.0.1:{port}"
+
+
 def test_stop_during_startup_is_forwarded_when_server_becomes_available(android_entry, monkeypatch):
     module, _ = android_entry
     module._configured = True
