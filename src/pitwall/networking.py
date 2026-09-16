@@ -369,19 +369,28 @@ class DiscoveryResult:
 
 
 _WINDOWS_DISCOVERY_SCRIPT = r"""
-$items = Get-NetIPConfiguration -ErrorAction Stop | ForEach-Object {
-  $cfg = $_
-  $metric = Get-NetIPInterface -AddressFamily IPv4 -InterfaceIndex $cfg.InterfaceIndex -ErrorAction SilentlyContinue |
-    Sort-Object InterfaceMetric | Select-Object -First 1 -ExpandProperty InterfaceMetric
+$ErrorActionPreference = 'Stop'
+$items = [System.Net.NetworkInformation.NetworkInterface]::GetAllNetworkInterfaces() | ForEach-Object {
+  $adapter = $_
+  $properties = $adapter.GetIPProperties()
   [pscustomobject]@{
-    adapter_id = [string]$cfg.InterfaceIndex
-    name = [string]$cfg.InterfaceAlias
-    description = [string]$cfg.InterfaceDescription
-    status = [string]$cfg.NetAdapter.Status
-    metric = $metric
-    has_default_gateway = [bool]($cfg.IPv4DefaultGateway)
-    addresses = @($cfg.IPv4Address | ForEach-Object {
-      [pscustomobject]@{ address = [string]$_.IPAddress; prefix_length = [int]$_.PrefixLength }
+    adapter_id = 'windows:' + [string]$adapter.Id
+    name = [string]$adapter.Name
+    description = [string]$adapter.Description
+    status = [string]$adapter.OperationalStatus
+    metric = $null
+    has_default_gateway = [bool](@($properties.GatewayAddresses | Where-Object {
+      $_.Address.AddressFamily -eq [System.Net.Sockets.AddressFamily]::InterNetwork -and
+      $_.Address.ToString() -ne '0.0.0.0'
+    }).Count)
+    addresses = @($properties.UnicastAddresses | Where-Object {
+      $_.Address.AddressFamily -eq [System.Net.Sockets.AddressFamily]::InterNetwork
+    } | ForEach-Object {
+      $prefix = 0
+      foreach ($part in $_.IPv4Mask.GetAddressBytes()) {
+        $prefix += ([Convert]::ToString($part, 2).ToCharArray() | Where-Object { $_ -eq '1' } | Measure-Object).Count
+      }
+      [pscustomobject]@{ address = $_.Address.ToString(); prefix_length = $prefix }
     })
   }
 }
@@ -527,12 +536,9 @@ def discover_ipv4_interfaces(
 ) -> DiscoveryResult:
     """Discover IPv4 interfaces without elevation and with a hard command timeout.
 
-    The timeout budgets a cold ``powershell.exe`` start, not just the cmdlets.
-    On a measured Windows 11 machine the same script returned in 9-17 s because
-    process startup dominates, so a 2 s budget failed every time and silently
-    degraded the Connection Center to one unclassified socket-derived address.
-    The result is cached by the caller, so this cost is paid once per refresh
-    rather than per request.
+    The .NET adapter API avoids the slow CIM initialization of Get-NetIPConfiguration
+    and returns confirmed adapter names, states and subnet masks. Keep a bounded
+    cold PowerShell startup budget; never authorize sharing from guessed routes.
     """
 
     system = platform_name or platform.system()

@@ -11,6 +11,7 @@ from __future__ import annotations
 import importlib
 import json
 import os
+import socket
 import sys
 import threading
 import types
@@ -267,6 +268,39 @@ def test_stop_before_configure_does_not_import_the_backend(android_entry, monkey
     module.stop()
     assert "pitwall.app" not in sys.modules
     assert module._stop_requested.is_set()
+
+
+def test_occupied_dashboard_port_uses_one_consistent_free_loopback_port(android_entry, monkeypatch):
+    module, _ = android_entry
+    from pitwall.config import settings
+
+    monkeypatch.setitem(sys.modules, "pitwall.app", types.ModuleType("pitwall.app"))
+    monkeypatch.setattr(settings, "web_host", "127.0.0.1")
+    with socket.socket() as occupied:
+        occupied.bind(("127.0.0.1", 0))
+        occupied.listen()
+        original_port = occupied.getsockname()[1]
+        monkeypatch.setattr(settings, "web_port", original_port)
+        url = module.dashboard_url()
+        assert settings.web_port != original_port
+        assert url == f"http://127.0.0.1:{settings.web_port}"
+        with socket.socket() as backend:
+            backend.bind(("127.0.0.1", settings.web_port))
+            backend.listen()
+            assert module.dashboard_url() == url
+
+
+def test_free_saved_dashboard_port_is_preserved(android_entry, monkeypatch):
+    module, _ = android_entry
+    from pitwall.config import settings
+
+    monkeypatch.setitem(sys.modules, "pitwall.app", types.ModuleType("pitwall.app"))
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        port = probe.getsockname()[1]
+    monkeypatch.setattr(settings, "web_host", "127.0.0.1")
+    monkeypatch.setattr(settings, "web_port", port)
+    assert module.dashboard_url() == f"http://127.0.0.1:{port}"
 
 
 def test_stop_during_startup_is_forwarded_when_server_becomes_available(android_entry, monkeypatch):

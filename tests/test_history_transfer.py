@@ -229,3 +229,48 @@ async def test_insufficient_storage_does_not_modify_history(tmp_path, monkeypatc
     with pytest.raises(HistoryTransferError, match="free storage"):
         incoming.import_bundle(bundle)
     assert _count(dest, "sessions") == 0
+
+
+@pytest.mark.asyncio
+async def test_migrated_column_order_imports_without_duplicate_history(tmp_path):
+    source, outgoing = await _installation(tmp_path / "source")
+    dest, incoming = await _installation(tmp_path / "destination")
+    key = await _session(source, 101, trace=True)
+    bundle = tmp_path / "history.pitbox"
+    outgoing.export_bundle([key], bundle)
+
+    def migrated_order(manifest):
+        for table in ("laps", "proactive_calls"):
+            columns = manifest["tables"][table]["columns"]
+            columns[:] = columns[:1] + columns[2:] + columns[1:2]
+            for index, column in enumerate(columns):
+                column["cid"] = index
+
+    migrated = _rewrite(bundle, manifest_change=migrated_order)
+    assert incoming.import_bundle(migrated)["imported_sessions"] == 1
+    assert incoming.import_bundle(bundle)["imported_rows"] == 0
+    with sqlite3.connect(dest.path) as db:
+        assert db.execute("SELECT lap_time_ms FROM laps").fetchall() == [(92001,)]
+        manifest_id = db.execute("SELECT trace_manifest_id FROM recorded_laps").fetchone()[0]
+    assert TraceStore(dest.path.parent / "traces").verify_manifest(manifest_id).valid
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("change", ["type", "pk", "notnull", "dflt_value", "duplicate"])
+async def test_column_order_tolerance_still_rejects_different_schema(tmp_path, change):
+    source, outgoing = await _installation(tmp_path / "source")
+    dest, incoming = await _installation(tmp_path / "destination")
+    key = await _session(source, 101)
+    bundle = tmp_path / "history.pitbox"
+    outgoing.export_bundle([key], bundle)
+
+    def alter(manifest):
+        columns = manifest["tables"]["laps"]["columns"]
+        if change == "duplicate":
+            columns[1] = dict(columns[0])
+        else:
+            columns[0][change] = {"type": "TEXT", "pk": 0, "notnull": 1, "dflt_value": "99"}[change]
+
+    with pytest.raises(HistoryTransferError, match="Incompatible history schema"):
+        incoming.import_bundle(_rewrite(bundle, manifest_change=alter))
+    assert _count(dest, "laps") == 0

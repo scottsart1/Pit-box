@@ -142,6 +142,25 @@ def _pk(schema: dict[str, list[dict[str, Any]]], table: str) -> list[str]:
     return [c["name"] for c in sorted(schema[table], key=lambda c: c["pk"]) if c["pk"]]
 
 
+def _compatible_columns(incoming: Any, local: list[dict[str, Any]]) -> bool:
+    """Migrations may append columns in a different order than a fresh install.
+
+    Rows are named dictionaries. Physical SQLite column positions therefore
+    do not affect compatibility; types, constraints and primary keys still do.
+    """
+    fields = {"cid", "name", "type", "notnull", "dflt_value", "pk"}
+    if not isinstance(incoming, list) or len(incoming) != len(local):
+        return False
+    if any(not isinstance(c, dict) or set(c) != fields or not isinstance(c["name"], str)
+           or type(c["cid"]) is not int for c in incoming):
+        return False
+    if sorted(c["cid"] for c in incoming) != list(range(len(incoming))):
+        return False
+    def named(columns):
+        return {c["name"]: {k: v for k, v in c.items() if k != "cid"} for c in columns}
+    return len({c["name"] for c in incoming}) == len(incoming) and named(incoming) == named(local)
+
+
 def _key(row: dict[str, Any], columns: list[str]) -> str:
     return _json([row[name] for name in columns])
 
@@ -416,7 +435,7 @@ class HistoryTransferService:
             if set(manifest["tables"]) != set(TABLES):
                 raise HistoryTransferError("Unexpected history tables")
             for table, definition in manifest["tables"].items():
-                if definition["columns"] != schema[table] or type(definition["rows"]) is not int or not 0 <= definition["rows"] <= 10_000_000:
+                if not _compatible_columns(definition["columns"], schema[table]) or type(definition["rows"]) is not int or not 0 <= definition["rows"] <= 10_000_000:
                     raise HistoryTransferError("Incompatible history schema or row count")
             expected = {"manifest.json", "rows.jsonl"}
             logical_paths = set()

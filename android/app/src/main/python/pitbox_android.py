@@ -11,13 +11,17 @@ Everything in `pitwall` is shared with the desktop build unchanged.
 from __future__ import annotations
 
 import ipaddress
+import errno
 import json
+import logging
 import os
+import socket
 import sys
 import threading
 from pathlib import Path
 
 _configured = False
+_dashboard_prepared = False
 _stop_requested = threading.Event()
 _run_finished = threading.Event()
 
@@ -29,7 +33,8 @@ def configure(files_dir: str, static_dir: str, microphone: bool = False) -> None
     push-to-talk are enabled only then, so a refused permission never leaves
     the voice layer retrying against a microphone it cannot open.
     """
-    global _configured
+    global _configured, _dashboard_prepared
+    _dashboard_prepared = False
     files = Path(files_dir)
     data = files / "PitWallData"
     data.mkdir(parents=True, exist_ok=True)
@@ -208,6 +213,26 @@ def dashboard_url() -> str:
     from pitwall.config import settings
     from pitwall.main import local_dashboard_url
 
+    global _dashboard_prepared
+    if not _dashboard_prepared:
+        # Android apps share the host's ports. A different app (including an
+        # older Pit Box installation) can own 8000 without exposing our API.
+        # Keep the configured port when free, otherwise use a local ephemeral
+        # port and return that same address to the WebView and server.
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+            try:
+                probe.bind((settings.web_host, settings.web_port))
+            except OSError as error:
+                if error.errno != errno.EADDRINUSE:
+                    raise
+                previous = settings.web_port
+                probe.bind((settings.web_host, 0))
+                settings.web_port = probe.getsockname()[1]
+                logging.getLogger(__name__).warning(
+                    "Dashboard port %s is occupied; using local port %s for this launch",
+                    previous, settings.web_port,
+                )
+        _dashboard_prepared = True
     return local_dashboard_url(settings.web_host, settings.web_port)
 
 
