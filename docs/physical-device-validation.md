@@ -90,8 +90,33 @@ when the car-telemetry packet is fresh. Regressions cover the full buffer,
 stop endpoints, control changes, stale readings and the shipped canvas renderer;
 the packaged emulator also verifies stationary trace coalescing.
 
-These checks used the source Windows engine, not a newly installed Windows
-installer. They do not yet establish completed live-console lap persistence,
-controller or Bluetooth audio behavior, screen-off endurance, or full-race thermal/memory
-performance. Revision 10's port recovery requires packaged-device validation.
+Revision 11 was subsequently installed on the physical tablet after a verified
+graceful-stop backup. Occupied-port recovery worked on installation and restart.
+All 64 imported car-laps and 17 saved console laps retained their metadata and
+trace checksums. A moving-then-stopped synthetic physical Wi-Fi test retained
+the same 182-point trace across seven foreground/background snapshots over
+30 seconds; the final run received and parsed all 2,523 packets. Two earlier
+delivery attempts missed datagrams without application queue drops, so the
+successful final run does not establish network endurance.
+
+## SQLite connection lifetime
+
+Physical Android logs exposed repeated Python ResourceWarnings for unclosed
+SQLite connections. The transaction context manager commits or rolls back but
+does not close the connection. Nine repository factories and the startup
+settings reader were relying on later garbage collection to release handles.
+Revision 12 closes those scopes deterministically, including configuration,
+operation and commit failures, while preserving transaction semantics. Backup
+and restore also close the first handle if opening the second fails; the
+transfer factory closes a handle if its PRAGMA setup fails.
+
+The initial 34 connection-lifetime regressions all failed before the correction
+and passed afterward. They keep strong references to every opened connection,
+so garbage collection cannot make a leaking implementation pass. Additional
+coverage checks the transfer factory's configuration-failure path. Physical
+revision-12 warning and endurance validation is pending its packaged build.
+
+The physical transfer checks used the source Windows engine, not a newly
+installed Windows installer. Audible wake/Bluetooth behavior, screen-off
+endurance and full-race thermal/memory performance are not yet certified.
 No stable release was published by this validation.

@@ -122,9 +122,13 @@ def _safe(root: Path, relative: str) -> Path:
 def _connect(path: Path, *, readonly: bool = False) -> sqlite3.Connection:
     db = sqlite3.connect(path.as_uri() + "?mode=ro" if readonly else path,
                          uri=readonly, timeout=30)
-    db.row_factory = sqlite3.Row
-    db.execute("PRAGMA foreign_keys=ON")
-    db.execute("PRAGMA trusted_schema=OFF")
+    try:
+        db.row_factory = sqlite3.Row
+        db.execute("PRAGMA foreign_keys=ON")
+        db.execute("PRAGMA trusted_schema=OFF")
+    except BaseException:
+        db.close()
+        raise
     return db
 
 

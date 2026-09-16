@@ -333,6 +333,20 @@ def prove_transfer_ui() -> bool:
         return False
 
 
+def prove_sqlite_lifecycle(package: str, label: str):
+    """The embedded Python 3.13 runtime reports connections abandoned to GC."""
+    pid = adb("shell", "pidof", "-s", package).stdout.decode().strip()
+    assert pid.isdecimal(), "APK process is unavailable for SQLite lifecycle check"
+    logs = adb("logcat", "-d", f"--pid={pid}").stdout.decode(errors="replace")
+    leaked = [line for line in logs.splitlines()
+              if "ResourceWarning: unclosed database" in line]
+    (OUTPUT / f"{label}-sqlite-lifecycle.json").write_text(json.dumps({
+        "scope": "Current installed APK process logs",
+        "unclosed_sqlite_warnings": len(leaked),
+    }, indent=2))
+    assert not leaked, "APK abandoned SQLite handles to garbage collection; see logcat"
+
+
 def capture(package: str):
     # Preserve management diagnostics even if the live-state request failed.
     # These endpoints contain neither pairing invitations nor credentials.
@@ -378,12 +392,14 @@ def main():
             (OUTPUT / f"launch-{attempt}-health.json").write_text(json.dumps(health, indent=2))
             transfer_pin = prove_transfer_service(f"launch-{attempt}", transfer_pin)
             prove_udp(f"launch-{attempt}", attempt * 100)
+            prove_sqlite_lifecycle(args.package, f"launch-{attempt}")
         # The foreground service must retain receiving when the activity is
         # no longer visible. This is not a substitute for physical-device Doze QA.
         adb("shell", "input", "keyevent", "KEYCODE_HOME")
         prove_udp("background", 300)
         adb("shell", "am", "start", "-W", "-n", f"{args.package}/com.yourpitbox.app.MainActivity")
         ui_passed = prove_transfer_ui()
+        prove_sqlite_lifecycle(args.package, "final")
         print("PASS: APK startup, exact engine version, UDP parsing/background reception, stationary trace stability, transfer TLS/QR management, and identity across listener/process restart.")
         if ui_passed:
             print("PASS: Installed APK Connection/Transfer history UI navigation, enable action, and pairing controls.")

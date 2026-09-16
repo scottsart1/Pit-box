@@ -5,6 +5,8 @@ from __future__ import annotations
 import asyncio
 import shutil
 import sqlite3
+from collections.abc import Iterator
+from contextlib import closing, contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -49,11 +51,13 @@ class StorageService:
         self.policy = policy
         self.capture_service = capture_service
 
-    def _connect(self) -> sqlite3.Connection:
-        connection = sqlite3.connect(self.database_path, timeout=15)
-        connection.row_factory = sqlite3.Row
-        connection.execute("PRAGMA foreign_keys=ON")
-        return connection
+    @contextmanager
+    def _connect(self) -> Iterator[sqlite3.Connection]:
+        with closing(sqlite3.connect(self.database_path, timeout=15)) as connection:
+            connection.row_factory = sqlite3.Row
+            connection.execute("PRAGMA foreign_keys=ON")
+            with connection:
+                yield connection
 
     def _rows(self) -> list[dict[str, Any]]:
         with self._connect() as db:

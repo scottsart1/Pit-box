@@ -8,6 +8,8 @@ import json
 import logging
 import sqlite3
 from collections import deque
+from collections.abc import Iterator
+from contextlib import closing, contextmanager
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -226,11 +228,13 @@ class FullFieldArchiveService:
                 else:
                     self.queue.task_done()
 
-    def _connect(self) -> sqlite3.Connection:
-        connection = sqlite3.connect(self.database_path, timeout=15)
-        connection.row_factory = sqlite3.Row
-        connection.execute("PRAGMA foreign_keys=ON")
-        return connection
+    @contextmanager
+    def _connect(self) -> Iterator[sqlite3.Connection]:
+        with closing(sqlite3.connect(self.database_path, timeout=15)) as connection:
+            connection.row_factory = sqlite3.Row
+            connection.execute("PRAGMA foreign_keys=ON")
+            with connection:
+                yield connection
 
     @staticmethod
     def _now() -> str:

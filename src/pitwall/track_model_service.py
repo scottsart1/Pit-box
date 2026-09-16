@@ -17,6 +17,8 @@ import sqlite3
 import struct
 import uuid
 import zlib
+from collections.abc import Iterator
+from contextlib import closing, contextmanager
 from dataclasses import asdict
 from datetime import UTC, datetime
 from pathlib import Path
@@ -230,12 +232,14 @@ class TrackModelService:
         self.build_config = build_config or TrackBuildConfig()
         self._lock = asyncio.Lock()
 
-    def _connect(self) -> sqlite3.Connection:
-        connection = sqlite3.connect(self.database_path, timeout=30)
-        connection.row_factory = sqlite3.Row
-        connection.execute("PRAGMA journal_mode=WAL")
-        connection.execute("PRAGMA foreign_keys=ON")
-        return connection
+    @contextmanager
+    def _connect(self) -> Iterator[sqlite3.Connection]:
+        with closing(sqlite3.connect(self.database_path, timeout=30)) as connection:
+            connection.row_factory = sqlite3.Row
+            connection.execute("PRAGMA journal_mode=WAL")
+            connection.execute("PRAGMA foreign_keys=ON")
+            with connection:
+                yield connection
 
     def _resolve_relative(self, relative_path: str) -> Path:
         relative = Path(relative_path)

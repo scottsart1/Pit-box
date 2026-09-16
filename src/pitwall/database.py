@@ -8,7 +8,7 @@ import shutil
 import sqlite3
 import time
 from collections.abc import Iterator
-from contextlib import contextmanager
+from contextlib import closing, contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -115,12 +115,16 @@ class PitWallDatabase:
                     fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
             handle.close()
 
-    def _connect(self) -> sqlite3.Connection:
-        connection = sqlite3.connect(self.path, timeout=10)
-        connection.row_factory = sqlite3.Row
-        connection.execute("PRAGMA journal_mode=WAL")
-        connection.execute("PRAGMA foreign_keys=ON")
-        return connection
+    @contextmanager
+    def _connect(self) -> Iterator[sqlite3.Connection]:
+        # sqlite3's own context commits/rolls back but does not close the handle.
+        # Close deterministically even if a PRAGMA or the final commit fails.
+        with closing(sqlite3.connect(self.path, timeout=10)) as connection:
+            connection.row_factory = sqlite3.Row
+            connection.execute("PRAGMA journal_mode=WAL")
+            connection.execute("PRAGMA foreign_keys=ON")
+            with connection:
+                yield connection
 
     @staticmethod
     def _schema_versions_table_sql() -> str:
@@ -178,17 +182,15 @@ class PitWallDatabase:
         backups.mkdir(parents=True, exist_ok=True)
         stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S.%fZ")
         destination = backups / f"{self.path.stem}-pre-v42-{stamp}.sqlite3"
-        source_db = sqlite3.connect(self.path, timeout=30)
-        backup_db = sqlite3.connect(destination, timeout=30)
-        try:
+        with (
+            closing(sqlite3.connect(self.path, timeout=30)) as source_db,
+            closing(sqlite3.connect(destination, timeout=30)) as backup_db,
+        ):
             source_db.backup(backup_db)
             backup_db.commit()
             check = [str(row[0]) for row in backup_db.execute("PRAGMA quick_check")]
             if check != ["ok"]:
                 raise RuntimeError(f"SQLite backup integrity check failed: {check}")
-        finally:
-            backup_db.close()
-            source_db.close()
         return destination
 
     def _apply_versioned_migrations_sync(self) -> None:
@@ -251,17 +253,15 @@ class PitWallDatabase:
             raise ValueError("backup path must be inside the Your Pit Box backup directory") from exc
         if not resolved.is_file():
             raise FileNotFoundError(resolved)
-        source = sqlite3.connect(resolved, timeout=30)
-        destination = sqlite3.connect(self.path, timeout=30)
-        try:
+        with (
+            closing(sqlite3.connect(resolved, timeout=30)) as source,
+            closing(sqlite3.connect(self.path, timeout=30)) as destination,
+        ):
             check = [str(row[0]) for row in source.execute("PRAGMA quick_check")]
             if check != ["ok"]:
                 raise RuntimeError(f"Refusing to restore a corrupt backup: {check}")
             source.backup(destination)
             destination.commit()
-        finally:
-            destination.close()
-            source.close()
 
     async def restore_backup(self, backup_path: Path) -> Path:
         """Restore an explicitly selected verified backup.

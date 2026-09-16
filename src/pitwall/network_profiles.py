@@ -10,6 +10,8 @@ from __future__ import annotations
 import asyncio
 import json
 import sqlite3
+from collections.abc import Iterator
+from contextlib import closing, contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -46,11 +48,13 @@ class NetworkProfileRepository:
         async with self._lock:
             await asyncio.to_thread(self._save_sync, profile)
 
-    def _connect(self) -> sqlite3.Connection:
-        connection = sqlite3.connect(self.database_path, timeout=10)
-        connection.row_factory = sqlite3.Row
-        connection.execute("PRAGMA foreign_keys=ON")
-        return connection
+    @contextmanager
+    def _connect(self) -> Iterator[sqlite3.Connection]:
+        with closing(sqlite3.connect(self.database_path, timeout=10)) as connection:
+            connection.row_factory = sqlite3.Row
+            connection.execute("PRAGMA foreign_keys=ON")
+            with connection:
+                yield connection
 
     @staticmethod
     def _profile_metadata(profile: StoredNetworkProfile) -> str:

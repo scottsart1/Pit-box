@@ -220,3 +220,28 @@ def test_emulator_fixed_tab_does_not_require_page_containment(monkeypatch):
     </hierarchy>''')
     monkeypatch.setattr(module, "ui_tree", lambda label: tree)
     assert module.node_bounds(module.find_ui("tab", "CONNECTION")) == (500, 148, 750, 236)
+
+
+@pytest.mark.parametrize("leaked", [False, True])
+def test_emulator_checks_sqlite_warnings_for_current_process(tmp_path, monkeypatch, leaked):
+    spec = importlib.util.spec_from_file_location("emulator_smoke", ROOT / "android/emulator-smoke.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    module.OUTPUT = tmp_path
+    calls = []
+
+    def adb(*args):
+        calls.append(args)
+        if args[0] == "shell":
+            return SimpleNamespace(stdout=b"1234\n")
+        return SimpleNamespace(stdout=(b"ResourceWarning: unclosed database in <sqlite3.Connection>"
+                                      if leaked else b"Application startup complete"))
+
+    monkeypatch.setattr(module, "adb", adb)
+    if leaked:
+        with pytest.raises(AssertionError, match="abandoned SQLite"):
+            module.prove_sqlite_lifecycle("com.yourpitbox.app.debug", "test")
+    else:
+        module.prove_sqlite_lifecycle("com.yourpitbox.app.debug", "test")
+    assert calls[-1] == ("logcat", "-d", "--pid=1234")
+    assert (tmp_path / "test-sqlite-lifecycle.json").is_file()

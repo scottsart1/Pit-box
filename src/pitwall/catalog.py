@@ -7,6 +7,8 @@ import json
 import secrets
 import sqlite3
 import time
+from collections.abc import Iterator
+from contextlib import closing, contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -112,12 +114,14 @@ class SessionCatalog:
         self._lock = asyncio.Lock()
         self._delete_previews: dict[str, tuple[str, str, float]] = {}
 
-    def _connect(self) -> sqlite3.Connection:
-        connection = sqlite3.connect(self.path, timeout=15)
-        connection.row_factory = sqlite3.Row
-        connection.execute("PRAGMA journal_mode=WAL")
-        connection.execute("PRAGMA foreign_keys=ON")
-        return connection
+    @contextmanager
+    def _connect(self) -> Iterator[sqlite3.Connection]:
+        with closing(sqlite3.connect(self.path, timeout=15)) as connection:
+            connection.row_factory = sqlite3.Row
+            connection.execute("PRAGMA journal_mode=WAL")
+            connection.execute("PRAGMA foreign_keys=ON")
+            with connection:
+                yield connection
 
     async def sync_legacy(self, *, batch_size: int = 250) -> dict[str, int]:
         if not 1 <= int(batch_size) <= 10_000:

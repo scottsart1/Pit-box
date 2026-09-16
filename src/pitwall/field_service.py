@@ -14,6 +14,8 @@ import json
 import math
 import sqlite3
 from collections import defaultdict
+from collections.abc import Iterator
+from contextlib import closing, contextmanager
 from dataclasses import dataclass
 from enum import IntFlag
 from pathlib import Path
@@ -152,12 +154,14 @@ class FieldAnalysisService:
         self.max_lap_rows = int(max_lap_rows)
         self.max_comparison_rows = int(max_comparison_rows)
 
-    def _connect(self) -> sqlite3.Connection:
-        connection = sqlite3.connect(self.database_path, timeout=15)
-        connection.row_factory = sqlite3.Row
-        connection.execute("PRAGMA foreign_keys=ON")
-        connection.execute("PRAGMA query_only=ON")
-        return connection
+    @contextmanager
+    def _connect(self) -> Iterator[sqlite3.Connection]:
+        with closing(sqlite3.connect(self.database_path, timeout=15)) as connection:
+            connection.row_factory = sqlite3.Row
+            connection.execute("PRAGMA foreign_keys=ON")
+            connection.execute("PRAGMA query_only=ON")
+            with connection:
+                yield connection
 
     @staticmethod
     def _session_row(

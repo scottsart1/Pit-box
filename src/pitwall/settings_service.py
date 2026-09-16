@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from contextlib import closing
 from pathlib import Path
 from typing import Any
 
@@ -229,7 +230,7 @@ def load_saved(db_path: Path | str) -> dict[str, Any]:
     if not path.exists():
         return {}
     try:
-        with sqlite3.connect(f"file:{path.as_posix()}?mode=ro", uri=True) as db:
+        with closing(sqlite3.connect(f"file:{path.as_posix()}?mode=ro", uri=True)) as db:
             row = db.execute(
                 "SELECT value_json FROM user_preferences WHERE key=?",
                 (PREFERENCE_KEY,),
