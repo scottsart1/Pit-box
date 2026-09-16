@@ -14,6 +14,7 @@ import importlib.util
 import tomllib
 from pathlib import Path
 import zipfile
+import xml.etree.ElementTree as ET
 from contextlib import nullcontext
 from types import SimpleNamespace
 
@@ -177,3 +178,44 @@ def test_emulator_state_probe_records_latency_without_weakening_decoding_checks(
         module.prove_udp("test", 100)
     assert calls == [("/api/state", 20)]
     assert '"request_elapsed_seconds": 1.25' in (tmp_path / "test-state-timing.json").read_text()
+
+
+@pytest.mark.parametrize("clipped", ["[930,1664][1254,1736]", "[930,1616][1254,1688]"])
+def test_emulator_page_action_scrolls_past_clipped_accessibility_bounds(monkeypatch, clipped):
+    spec = importlib.util.spec_from_file_location("emulator_smoke", ROOT / "android/emulator-smoke.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    def tree(bounds):
+        return ET.fromstring(f'''<hierarchy>
+            <node scrollable="true" bounds="[0,148][2560,236]" />
+            <node scrollable="true" bounds="[0,236][2560,1668]">
+                <node text="Enable Wi-Fi transfers" enabled="true" bounds="{bounds}" />
+            </node>
+            <node bounds="[0,1668][2560,1736]" />
+        </hierarchy>''')
+
+    # The first dump settles, the second triggers a scroll, and only the fresh
+    # third dump exposes a control fully inside the content viewport.
+    snapshots = iter([tree(clipped), tree(clipped), tree("[930,1000][1254,1072]")])
+    calls = []
+    monkeypatch.setattr(module, "ui_tree", lambda label: next(snapshots))
+    monkeypatch.setattr(module, "adb", lambda *args: calls.append(args))
+    monkeypatch.setattr(module.time, "sleep", lambda seconds: None)
+    node = module.find_ui("enable", "Enable Wi-Fi transfers", within_scroll_region=True)
+    assert module.node_bounds(node) == (930, 1000, 1254, 1072)
+    assert calls == [("shell", "input", "swipe", "1280", "1381", "1280", "808", "350")]
+    module.tap_node(node)
+    assert calls[-1] == ("shell", "input", "tap", "1092", "1036")
+
+
+def test_emulator_fixed_tab_does_not_require_page_containment(monkeypatch):
+    spec = importlib.util.spec_from_file_location("emulator_smoke", ROOT / "android/emulator-smoke.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    tree = ET.fromstring('''<hierarchy>
+        <node text="CONNECTION" bounds="[500,148][750,236]" />
+        <node scrollable="true" bounds="[0,236][2560,1668]" />
+    </hierarchy>''')
+    monkeypatch.setattr(module, "ui_tree", lambda label: tree)
+    assert module.node_bounds(module.find_ui("tab", "CONNECTION")) == (500, 148, 750, 236)

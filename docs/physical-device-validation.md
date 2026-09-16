@@ -57,12 +57,20 @@ The local full suite initially reported 1,644 passed and four failures because
 the existing development interpreter lacked the declared `socksio` dependency.
 All five proxy tests passed in an isolated validation interpreter with that
 dependency supplied; the existing development environment was not changed.
+The subsequent full isolated Windows run passed all 1,654 tests.
 
 Emulator diagnosis also recorded a 6.040-second initial live-state response
 during cold boot. The integration check now records that latency with a
 bounded 20-second request while retaining the decoded-state and connection
 assertions. This is not a responsiveness/performance pass. Runtime evidence
 and a clearly named diagnostic APK are retained if the runtime check fails.
+
+The packaged emulator then passed both launches and background UDP reception.
+Its transfer-UI check exposed an automation defect: WebView reported positive
+button bounds extending below the content viewport, so the tap landed on the
+fixed footer. Page-action lookup now requires the entire control to fit inside
+the UI tree's scroll region and refreshes its bounds immediately before tapping.
+Regression tests cover clipped controls and navigation tabs outside the page.
 
 These checks used the source Windows engine, not a newly installed Windows
 installer. They do not yet establish completed live-console lap persistence,

@@ -210,37 +210,48 @@ def node_bounds(node: ET.Element) -> tuple[int, int, int, int] | None:
     return (x1, y1, x2, y2) if x2 > x1 and y2 > y1 else None
 
 
-def find_ui(label: str, text: str, *, attempts: int = 6) -> ET.Element:
+def page_scroll_bounds(tree: ET.Element) -> tuple[int, int, int, int] | None:
+    regions = [bounds for node in tree.iter("node")
+               if node.get("scrollable") == "true" and (bounds := node_bounds(node))]
+    # The largest scrollable region is the page, not a tab strip or small field.
+    return max(regions, key=lambda bounds: (bounds[2] - bounds[0]) * (bounds[3] - bounds[1]), default=None)
+
+
+def find_ui(label: str, text: str, *, attempts: int = 6,
+            within_scroll_region: bool = False) -> ET.Element:
     """Retry WebView accessibility initialization and search by visible label.
 
     If the label is missing, scroll only inside an actual scrollable node from
     the latest tree, then dump and search again. This also covers a smaller
     viewport without assuming where Connection's transfer card is laid out.
+    Page actions must fit inside that region: WebView can expose positive
+    bounds for a clipped control whose tap center is underneath a fixed footer.
     """
     populated = False
     for attempt in range(attempts):
         tree = ui_tree(f"{label}-{attempt + 1}")
+        region = page_scroll_bounds(tree)
         populated |= any(node.get("text") or node.get("content-desc") for node in tree.iter("node"))
         for node in tree.iter("node"):
             labels = (node.get("text", ""), node.get("content-desc", ""))
-            if any(value.strip().casefold() == text.casefold() for value in labels) and node_bounds(node):
-                return node
+            bounds = node_bounds(node)
+            if not any(value.strip().casefold() == text.casefold() for value in labels) or bounds is None:
+                continue
+            if within_scroll_region and (region is None or not (
+                region[0] <= bounds[0] < bounds[2] <= region[2]
+                and region[1] <= bounds[1] < bounds[3] <= region[3]
+            )):
+                continue
+            return node
         if attempt == attempts - 1:
             break
         # Let the first WebView accessibility request settle before scrolling.
-        if attempt > 0:
-            scrollable = [node for node in tree.iter("node")
-                          if node.get("scrollable") == "true" and node_bounds(node)]
-            if scrollable:
-                # The largest scrollable region is the page, not a small field.
-                def area(node):
-                    x1, y1, x2, y2 = node_bounds(node)
-                    return (x2 - x1) * (y2 - y1)
-                x1, y1, x2, y2 = node_bounds(max(scrollable, key=area))
-                x = (x1 + x2) // 2
-                height = y2 - y1
-                adb("shell", "input", "swipe", str(x), str(y1 + height * 4 // 5),
-                    str(x), str(y1 + height * 2 // 5), "350")
+        if attempt > 0 and region is not None:
+            x1, y1, x2, y2 = region
+            x = (x1 + x2) // 2
+            height = y2 - y1
+            adb("shell", "input", "swipe", str(x), str(y1 + height * 4 // 5),
+                str(x), str(y1 + height * 2 // 5), "350")
         time.sleep(1)
     if not populated:
         raise UiProviderUnavailable(f"WebView accessibility provider remained empty; see {label}-*-ui.xml")
@@ -269,10 +280,10 @@ def capture_transfer_ui():
     find_ui("connection-heading", "Connection Center")
     capture_view("connection")
     find_ui("transfer-heading", "Transfer history")
-    enable = find_ui("transfer-enable", "Enable Wi-Fi transfers")
+    find_ui("transfer-enable", "Enable Wi-Fi transfers", within_scroll_region=True)
     capture_view("transfer-history-off")
     try:
-        tap_node(enable)
+        tap_node(find_ui("transfer-enable-tap", "Enable Wi-Fi transfers", within_scroll_region=True))
         deadline = time.monotonic() + 10
         while time.monotonic() < deadline and not get("/api/v1/transfers/status")["running"]:
             time.sleep(0.5)
