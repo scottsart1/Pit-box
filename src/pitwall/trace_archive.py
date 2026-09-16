@@ -182,15 +182,23 @@ class TraceArchiveService:
                 "fewer than two valid monotonic distance samples",
             )
         fingerprint = hashlib.sha256(
-            json.dumps(rows, sort_keys=True, separators=(",", ":")).encode("utf-8")
+            # A manifest owns one specific car/lap, not just its numeric values.
+            # Identical telemetry in another session must not reuse a manifest
+            # whose lap_id would leave the new lap without an archive link.
+            json.dumps({"lap_id": computed_lap_id, "rows": rows},
+                       sort_keys=True, separators=(",", ":")).encode("utf-8")
         ).hexdigest()
         manifest_id = f"tm_{fingerprint[:24]}"
 
         def write() -> TraceManifest:
             try:
-                return self.trace_store.load_manifest(manifest_id)
+                existing = self.trace_store.load_manifest(manifest_id)
             except FileNotFoundError:
                 pass
+            else:
+                if (existing.lap_id, existing.session_car_id) != (computed_lap_id, car_key):
+                    raise ValueError("trace manifest ownership does not match the completed lap")
+                return existing
             self.trace_store.append_samples(
                 car_key,
                 "telemetry",

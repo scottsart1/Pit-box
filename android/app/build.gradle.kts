@@ -16,7 +16,7 @@ val nativeConstraints = rootProject.layout.projectDirectory.file("native-require
 // engine than the source which Chaquopy actually packages.
 val backendVersion = Regex("__version__ = \"([^\"]+)\"")
     .find(rootProject.file("../src/pitwall/__init__.py").readText())!!.groupValues[1]
-val androidRevision = 12
+val androidRevision = 13
 val signingPath = providers.environmentVariable("PITBOX_KEYSTORE_PATH").orNull
 
 android {

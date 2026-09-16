@@ -113,8 +113,30 @@ transfer factory closes a handle if its PRAGMA setup fails.
 The initial 34 connection-lifetime regressions all failed before the correction
 and passed afterward. They keep strong references to every opened connection,
 so garbage collection cannot make a leaking implementation pass. Additional
-coverage checks the transfer factory's configuration-failure path. Physical
-revision-12 warning and endurance validation is pending its packaged build.
+coverage checks the transfer factory's configuration-failure path. Revision 12
+subsequently passed packaged emulator checks and a physical 13-lap/20-car Wi-Fi
+fixture: zero unclosed-database warnings, zero sampled SQLite descriptors,
+zero app-queue drops/write errors and thermal status 0 across 21 samples.
+Its 54,196 transmitted datagrams included 23 not received by the app, and
+sampled PSS grew from 551,346 to 1,092,702 KiB. Neither network-loss causation
+nor the separate memory growth is resolved by the SQLite ownership correction.
+
+## Identical trace ownership
+
+Repeating the exact fixture exposed an independent archive-identity defect.
+All 13 player laps retained their legacy sample arrays, but nine lacked typed
+trace links. Their samples were identical to earlier-session traces; the
+content-only manifest ID loaded the older lap's manifest and then registered
+that older lap instead of the current one. No raw samples were lost.
+
+Revision 13 scopes generated player-manifest IDs to the stable lap identity
+as well as the normalized samples. Repeated archival of the same lap remains
+idempotent. Existing archives remain readable and are not rewritten merely
+by upgrading. Registration rejects mismatched session/car/lap ownership,
+including attempts to reuse an existing manifest ID for another lap.
+Seven regressions covering session, driver, lap, restart and flashback identity
+and catalog ownership failed before the correction and pass afterward.
+Packaged revision-13 and physical recovery validation is pending.
 
 The physical transfer checks used the source Windows engine, not a newly
 installed Windows installer. Audible wake/Bluetooth behavior, screen-off

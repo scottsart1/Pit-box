@@ -834,6 +834,20 @@ class SessionCatalog:
         with self._connect() as db:
             db.execute("BEGIN IMMEDIATE")
             try:
+                owner = db.execute(
+                    """SELECT c.session_id, l.session_car_id FROM recorded_laps l
+                       JOIN session_cars c ON c.id=l.session_car_id WHERE l.id=?""",
+                    (manifest.lap_id,),
+                ).fetchone()
+                expected_owner = (session_key, manifest.session_car_id, manifest.lap_id)
+                if owner is None or tuple(owner) != expected_owner[:2]:
+                    raise ValueError("trace manifest ownership does not match its session/lap")
+                existing = db.execute(
+                    "SELECT session_id, session_car_id, lap_id FROM trace_manifests WHERE id=?",
+                    (manifest.id,),
+                ).fetchone()
+                if existing is not None and tuple(existing) != expected_owner:
+                    raise ValueError("trace manifest ownership conflicts with the saved manifest")
                 db.execute(
                     """
                     INSERT INTO trace_manifests(
