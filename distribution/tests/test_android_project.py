@@ -150,16 +150,17 @@ def test_the_microphone_is_declared_and_only_typed_when_granted():
     assert "if (microphoneGranted()) type |= ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE" in service
 
 
-@pytest.mark.parametrize("invalid", [None, "session_uid", "track_name", "current_lap", "player_position", "connected"])
+@pytest.mark.parametrize("invalid", [None, "session_uid", "track_name", "current_lap", "player_position", "connected", "speed_kph", "throttle", "brake", "traces"])
 def test_emulator_state_probe_records_latency_without_weakening_decoding_checks(tmp_path, monkeypatch, invalid):
     spec = importlib.util.spec_from_file_location("emulator_smoke", ROOT / "android/emulator-smoke.py")
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     module.OUTPUT = tmp_path
     state = {"session_uid": 918273645, "track_name": "Suzuka", "current_lap": 8,
-             "player_position": 4, "connected": True}
+             "player_position": 4, "connected": True, "speed_kph": 0, "throttle": 0,
+             "brake": 0, "traces": [{"t": 1}, {"t": 2}]}
     if invalid:
-        state[invalid] = None
+        state[invalid] = [] if invalid == "traces" else None
     calls = []
 
     def get(path, *, timeout):

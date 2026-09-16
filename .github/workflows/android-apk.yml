@@ -12,6 +12,7 @@ on:
       - tests/**
       - tools/backend_transfer_smoke.py
       - tools/transfer-ui-smoke.cjs
+      - tools/drive-trace-ui-smoke.cjs
       - distribution/tests/test_android*.py
       - .github/workflows/android-apk.yml
   workflow_dispatch:
@@ -44,6 +45,7 @@ jobs:
         run: |
           npm install --prefix "$RUNNER_TEMP/pitbox-ui" --no-save jsdom
           NODE_PATH="$RUNNER_TEMP/pitbox-ui/node_modules" node tools/transfer-ui-smoke.cjs
+          NODE_PATH="$RUNNER_TEMP/pitbox-ui/node_modules" node tools/drive-trace-ui-smoke.cjs
 
   apk:
     needs: checks

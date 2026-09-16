@@ -72,6 +72,24 @@ fixed footer. Page-action lookup now requires the entire control to fit inside
 the UI tree's scroll region and refreshes its bounds immediately before tapping.
 Regression tests cover clipped controls and navigation tabs outside the page.
 
+## Stationary lap-trace correction
+
+Physical observation exposed a separate graph defect after the earlier build
+checks passed. With live speed, throttle, brake and distance unchanged, seven
+snapshots produced six different historical curve shapes. The nonzero points
+were about 20 minutes old. Repeated stationary points filled the bounded
+30,000-sample lap buffer; FIFO eviction moved the snapshot sampler's origin,
+selecting different old speed/pedal points on every refresh.
+
+Revision 11 coalesces an unchanged stationary run to its first and latest
+samples. This retains stop duration and prevents stationary duplicates from
+evicting driving history. Real distance, speed, pedal, steering and gear changes
+remain recorded, and raw UDP capture is unchanged. DRIVE explicitly labels the
+plot as lap history by distance and separately shows current speed/pedals only
+when the car-telemetry packet is fresh. Regressions cover the full buffer,
+stop endpoints, control changes, stale readings and the shipped canvas renderer;
+the packaged emulator also verifies stationary trace coalescing.
+
 These checks used the source Windows engine, not a newly installed Windows
 installer. They do not yet establish completed live-console lap persistence,
 controller or Bluetooth audio behavior, screen-off endurance, or full-race thermal/memory

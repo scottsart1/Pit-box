@@ -168,6 +168,66 @@ async def test_full_snapshot_bounds_the_trace_payload() -> None:
 
 
 @pytest.mark.asyncio
+async def test_stationary_samples_do_not_shift_history_at_the_trace_cap() -> None:
+    """A stopped car must not make old speed/pedal curves dance on each refresh."""
+    from pitwall.config import settings
+
+    store = StateStore()
+    store.state.lap_distance_m = 6000.0
+    store.state.traces = [
+        {"t": i / 60, "d": i / 5, "speed": 120 + i % 180,
+         "throttle": float(i % 40 < 30), "brake": float(i % 40 >= 30),
+         "steer": 0.0, "gear": 5}
+        for i in range(settings.trace_max_points - 2)
+    ]
+    stopped = {"d": 6000.0, "speed": 0, "throttle": 0.0, "brake": 0.0,
+               "steer": 0.0, "gear": 1}
+    store.state.traces.extend([dict(stopped, t=500.0), dict(stopped, t=500.1)])
+    first = dict(store.state.traces[0])
+
+    def shape(snapshot):
+        return [tuple(p.get(key) for key in ("d", "speed", "throttle", "brake"))
+                for p in snapshot["traces"]]
+
+    before = shape(await store.snapshot_live())
+    for i in range(1, 101):
+        await store.update_telemetry_and_trace(
+            session_time=500.1 + i / 10, speed_kph=0, gear=1,
+            throttle=0.0, brake=0.0, steer=0.0,
+            inner_temps_c=[80.0] * 4, surface_temps_c=[70.0] * 4,
+            pressures_psi=[22.0] * 4,
+        )
+        assert shape(await store.snapshot_live()) == before
+    assert len(store.state.traces) == settings.trace_max_points
+    assert store.state.traces[0] == first
+    assert store.state.traces[-2]["t"] == 500.0, "keep when the stop began"
+    assert store.state.traces[-1]["t"] == 510.1, "keep the latest stop timestamp"
+    assert store.state.speed_kph == 0 and store.state.throttle == store.state.brake == 0
+
+
+def test_stationary_run_keeps_its_endpoints_and_real_control_changes() -> None:
+    from pitwall.state import SessionState
+
+    state = SessionState()
+    stopped = {"d": 50.0, "speed": 0, "throttle": 0.0, "brake": 0.0,
+               "steer": 0.0, "gear": 1}
+    for t in (1.0, 2.0, 3.0, 4.0):
+        StateStore._append_trace_locked(state, dict(stopped, t=t))
+    assert [p["t"] for p in state.traces] == [1.0, 4.0]
+    for t in (5.0, 6.0, 7.0):
+        StateStore._append_trace_locked(state, dict(stopped, t=t, brake=1.0))
+    assert [(p["t"], p["brake"]) for p in state.traces] == [
+        (1.0, 0.0), (4.0, 0.0), (5.0, 1.0), (7.0, 1.0),
+    ]
+    StateStore._append_trace_locked(state, dict(stopped, t=8.0, throttle=1.0))
+    StateStore._append_trace_locked(state, dict(stopped, t=9.0, steer=0.5))
+    StateStore._append_trace_locked(state, dict(stopped, t=10.0, gear=2))
+    StateStore._append_trace_locked(state, dict(stopped, t=11.0, d=50.1))
+    StateStore._append_trace_locked(state, dict(stopped, t=12.0, d=51.0, speed=5))
+    assert [p["t"] for p in state.traces[-5:]] == [8.0, 9.0, 10.0, 11.0, 12.0]
+
+
+@pytest.mark.asyncio
 async def test_live_snapshot_serializes_drivers_without_touching_histories() -> None:
     """The 4 Hz live payload drops per-lap histories without paying for them.
 

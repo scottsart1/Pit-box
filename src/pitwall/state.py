@@ -947,6 +947,23 @@ class StateStore:
             previous = traces[-1]
             distance_change = float(point["d"]) - float(previous["d"])
             time_change = float(point["t"]) - float(previous["t"])
+            if (
+                len(traces) >= 2
+                and point.get("speed") == 0
+                and time_change > 0
+                and all(
+                    point.get(key) == previous.get(key) == traces[-2].get(key)
+                    for key in ("d", "speed", "throttle", "brake", "steer", "gear")
+                )
+            ):
+                # Keep both ends of an unchanged stop, including its duration.
+                # Filling the bounded lap buffer with stationary duplicates
+                # evicts driving history and shifts the dashboard's sampling
+                # origin: the old speed/pedal curve then appears to animate.
+                # Live scalar telemetry still updates above; changed controls
+                # or distance are not coalesced. Raw UDP capture is untouched.
+                traces[-1] = point
+                return
             if distance_change < limit and time_change < settings.trace_min_interval_s:
                 return
         traces.append(point)

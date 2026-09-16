@@ -22,7 +22,7 @@ from urllib.parse import parse_qs, urlsplit
 from urllib.request import Request, urlopen
 import xml.etree.ElementTree as ET
 
-from f1.packets import PacketHeader, PacketLapData, PacketSessionData
+from f1.packets import PacketCarTelemetryData, PacketHeader, PacketLapData, PacketSessionData
 
 ROOT = Path(__file__).resolve().parent.parent
 OUTPUT = ROOT / "android" / "smoke-output"
@@ -89,7 +89,10 @@ def fixture_packets(frame: int):
     lap.lap_data[0].current_lap_num = 8
     lap.lap_data[0].car_position = 4
     lap.lap_data[0].lap_distance = 1200
-    return bytes(session), bytes(lap)
+    telemetry = PacketCarTelemetryData()
+    telemetry.header = header(6)
+    telemetry.car_telemetry_data[0].gear = 1
+    return bytes(session), bytes(lap), bytes(telemetry)
 
 
 def prove_udp(label: str, first_frame: int):
@@ -117,6 +120,8 @@ def prove_udp(label: str, first_frame: int):
     assert state["track_name"] == "Suzuka", "Session packet decoded the wrong circuit"
     assert state["current_lap"] == 8 and state["player_position"] == 4, "Lap packet did not update race state"
     assert state["connected"], "App did not report telemetry connected"
+    assert state["speed_kph"] == state["throttle"] == state["brake"] == 0, "Stationary fixture changed the live pedals"
+    assert len(state["traces"]) == 2, "Stationary duplicates grew the APK's lap trace instead of retaining stop endpoints"
 
 
 def prove_transfer_service(label: str, previous_pin: str | None = None) -> str:
@@ -379,7 +384,7 @@ def main():
         prove_udp("background", 300)
         adb("shell", "am", "start", "-W", "-n", f"{args.package}/com.yourpitbox.app.MainActivity")
         ui_passed = prove_transfer_ui()
-        print("PASS: APK startup, exact engine version, UDP parsing/background reception, transfer TLS/QR management, and identity across listener/process restart.")
+        print("PASS: APK startup, exact engine version, UDP parsing/background reception, stationary trace stability, transfer TLS/QR management, and identity across listener/process restart.")
         if ui_passed:
             print("PASS: Installed APK Connection/Transfer history UI navigation, enable action, and pairing controls.")
         print("LIMITATION: Paired-device history copying and physical Wi-Fi are not covered by this smoke check.")
