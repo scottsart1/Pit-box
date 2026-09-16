@@ -14,6 +14,10 @@ import importlib.util
 import tomllib
 from pathlib import Path
 import zipfile
+from contextlib import nullcontext
+from types import SimpleNamespace
+
+import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
 GRADLE = (ROOT / "android" / "app" / "build.gradle.kts").read_text(encoding="utf-8")
@@ -143,3 +147,33 @@ def test_the_microphone_is_declared_and_only_typed_when_granted():
     # Android 14 throws if a service claims the microphone type without the
     # permission, so the type must be conditional on the grant.
     assert "if (microphoneGranted()) type |= ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE" in service
+
+
+@pytest.mark.parametrize("invalid", [None, "session_uid", "track_name", "current_lap", "player_position", "connected"])
+def test_emulator_state_probe_records_latency_without_weakening_decoding_checks(tmp_path, monkeypatch, invalid):
+    spec = importlib.util.spec_from_file_location("emulator_smoke", ROOT / "android/emulator-smoke.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    module.OUTPUT = tmp_path
+    state = {"session_uid": 918273645, "track_name": "Suzuka", "current_lap": 8,
+             "player_position": 4, "connected": True}
+    if invalid:
+        state[invalid] = None
+    calls = []
+
+    def get(path, *, timeout):
+        calls.append((path, timeout))
+        return state
+
+    monkeypatch.setattr(module, "get", get)
+    monkeypatch.setattr(module.socket, "socket", lambda *args: nullcontext(SimpleNamespace(sendto=lambda *args: None)))
+    monkeypatch.setattr(module.time, "sleep", lambda seconds: None)
+    times = iter([10, 11.25])
+    monkeypatch.setattr(module.time, "monotonic", lambda: next(times))
+    if invalid:
+        with pytest.raises(AssertionError):
+            module.prove_udp("test", 100)
+    else:
+        module.prove_udp("test", 100)
+    assert calls == [("/api/state", 20)]
+    assert '"request_elapsed_seconds": 1.25' in (tmp_path / "test-state-timing.json").read_text()

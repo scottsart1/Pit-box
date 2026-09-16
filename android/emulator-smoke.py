@@ -33,8 +33,8 @@ def adb(*args: str, check: bool = True) -> subprocess.CompletedProcess:
     return subprocess.run(["adb", *args], check=check, capture_output=True, timeout=45)
 
 
-def get(path: str):
-    with urlopen(BASE + path, timeout=5) as response:
+def get(path: str, *, timeout: float = 5):
+    with urlopen(BASE + path, timeout=timeout) as response:
         return json.load(response)
 
 
@@ -98,7 +98,20 @@ def prove_udp(label: str, first_frame: int):
             for packet in fixture_packets(frame):
                 sender.sendto(packet, ("127.0.0.1", 20777))
             time.sleep(0.05)
-    state = get("/api/state")
+    # Fresh API-35 images can still be indexing system apps during the first
+    # session. Keep a bounded request, record its latency, and retain every
+    # decoded-state/liveness assertion; this is not a responsiveness benchmark.
+    started = time.monotonic()
+    try:
+        state = get("/api/state", timeout=20)
+    finally:
+        elapsed = time.monotonic() - started
+        (OUTPUT / f"{label}-state-timing.json").write_text(json.dumps({
+            "request_elapsed_seconds": round(elapsed, 3),
+            "request_timeout_seconds": 20,
+            "over_five_seconds": elapsed > 5,
+        }, indent=2))
+        print(f"{label}: telemetry-state request took {elapsed:.3f}s", flush=True)
     (OUTPUT / f"{label}-state.json").write_text(json.dumps(state, indent=2))
     assert state["session_uid"] == 918273645, "UDP packets did not reach the APK session parser"
     assert state["track_name"] == "Suzuka", "Session packet decoded the wrong circuit"
@@ -305,6 +318,13 @@ def prove_transfer_ui() -> bool:
 
 
 def capture(package: str):
+    # Preserve management diagnostics even if the live-state request failed.
+    # These endpoints contain neither pairing invitations nor credentials.
+    for name, path in {"final-health": "/api/health", "final-network": "/api/v1/network/status"}.items():
+        try:
+            (OUTPUT / f"{name}.json").write_text(json.dumps(get(path), indent=2))
+        except (OSError, URLError, ValueError) as error:
+            (OUTPUT / f"{name}.error.txt").write_text(str(error))
     for name, args in {
         "logcat.txt": ("logcat", "-d"),
         "crashes.txt": ("logcat", "-b", "crash", "-d"),

@@ -34,7 +34,19 @@ The source installation and original database were not modified.
 | Windows to Samsung history copy | 28,950,914 bytes; 698 rows, one session imported; no missing assets |
 | Repeat Windows to Samsung copy | Zero rows imported; all 698 rows and the session recognized as existing |
 | Samsung to Windows return copy | 28,950,916 bytes; zero rows imported; all 698 rows recognized as existing |
+| History integrity and process restart | All 64 recorded car-laps and trace checksums match Windows; every trace is ready after restarting the tablet process |
+| Synthetic F1 2026 UDP over physical Wi-Fi | 120 packets received and parsed in foreground plus 120 in background; zero rejected; expected circuit, lap and position decoded |
 | Targeted transfer, network and Android regression tests | 89 passed |
+
+The UDP fixture originated on Windows and used the actual Wi-Fi path to the
+tablet. It establishes that physical-device receiving works in foreground
+and background, but is not evidence of packets from a console. Transfers
+remained opt-in after a full process restart and retained the paired identity.
+
+The local full suite initially reported 1,644 passed and four failures because
+the existing development interpreter lacked the declared `socksio` dependency.
+All five proxy tests passed in an isolated validation interpreter with that
+dependency supplied; the existing development environment was not changed.
 
 These checks used the source Windows engine, not a newly installed Windows
 installer. They do not yet establish PS5 telemetry reception, controller or
