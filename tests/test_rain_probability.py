@@ -186,12 +186,14 @@ async def test_recomputed_plans_receive_scenario_costs(stack, monkeypatch):
                        total_laps=20, weather="Clear", track_temp_c=30, active_cars=20,
                        weather_forecast=[_forecast(20)])
     seen = []
-    original = strategy._simulate_stint
-    def capture(*args, **kwargs):
-        result = original(*args, **kwargs)
+    # Live computation now runs on an isolated worker instance. Observe the
+    # actual worker's stint inputs, not only the coordinator instance.
+    original = type(strategy)._simulate_stint
+    def capture(worker, *args, **kwargs):
+        result = original(worker, *args, **kwargs)
         seen.append(args[11] if len(args) > 11 else kwargs.get("expected_weather_penalties"))
         return result
-    monkeypatch.setattr(strategy, "_simulate_stint", capture)
+    monkeypatch.setattr(type(strategy), "_simulate_stint", capture)
     result = await strategy.recompute()
     assert result["weather_crossover"]["scenarios"]
     assert seen and all(item for item in seen)
