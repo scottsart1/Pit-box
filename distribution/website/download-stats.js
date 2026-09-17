@@ -13,6 +13,11 @@
     for (const id of ["totalAll", "totalWindows", "totalAndroid"]) byId(id).textContent = "—";
     byId("reportUpdated").textContent = "";
     byId("reportSince").textContent = "";
+    byId("historyData").hidden = true;
+    byId("historyRows").replaceChildren();
+    for (const id of ["historyAll", "historyWindows", "historyAndroid"]) byId(id).textContent = "—";
+    byId("historyPeriod").textContent = "";
+    byId("historyStatus").textContent = "";
   }
 
   function lock() {
@@ -40,6 +45,62 @@
       if (!/^\d{4}-\d{2}-\d{2}$/.test(row.day) || !validCount(row.starts) ||
           !["windows", "android"].includes(row.platform)) throw new Error("Report data could not be read. Try again.");
     }
+    if (data.history != null) validateHistory(data.history);
+  }
+
+  function validateHistory(history) {
+    const bad = () => { throw new Error("Historical data could not be read. Try again."); };
+    if (history.metric !== "historical_file_requests" || history.source !== "Cloudflare R2 analytics" ||
+        ![history.from, history.until, history.recovered_at].every(value => typeof value === "string" && Number.isFinite(Date.parse(value))) ||
+        Date.parse(history.from) >= Date.parse(history.until) ||
+        Date.parse(history.until) - Date.parse(history.from) > 366 * 86400000 ||
+        !history.totals || ![history.totals.windows, history.totals.android, history.totals.all].every(validCount) ||
+        !Array.isArray(history.daily) || history.daily.length > 730) bad();
+    const totals = {windows: 0, android: 0, all: 0}, seen = new Set();
+    for (const row of history.daily) {
+      const key = `${row.day}/${row.platform}`;
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(row.day) || row.day < history.from.slice(0, 10) ||
+          row.day > history.until.slice(0, 10) || !["windows", "android"].includes(row.platform) ||
+          !validCount(row.requests) || seen.has(key)) bad();
+      seen.add(key);
+      totals[row.platform] += row.requests;
+      totals.all += row.requests;
+    }
+    if (Object.keys(totals).some(key => !validCount(totals[key]) || totals[key] !== history.totals[key])) bad();
+  }
+
+  function renderHistory(history) {
+    byId("historyData").hidden = true;
+    byId("historyRows").replaceChildren();
+    byId("historyStatus").textContent = history
+      ? "Source: Cloudflare R2 analytics. Historical requests are not added to the live download-start totals."
+      : "Historical records have not been imported. This is unavailable history, not a zero count.";
+    if (!history) return;
+    byId("historyAll").textContent = number(history.totals.all);
+    byId("historyWindows").textContent = number(history.totals.windows);
+    byId("historyAndroid").textContent = number(history.totals.android);
+    const utc = value => new Date(value).toLocaleString(undefined, {timeZone: "UTC"});
+    byId("historyPeriod").textContent = `Coverage: ${utc(history.from)} UTC to ${utc(history.until)} UTC (end exclusive). Recovered ${utc(history.recovered_at)} UTC. Outside this window, history is not included.`;
+    const days = new Map();
+    for (const row of history.daily) {
+      if (!days.has(row.day)) days.set(row.day, {windows: 0, android: 0});
+      days.get(row.day)[row.platform] += row.requests;
+    }
+    const firstDay = Date.parse(history.from.slice(0, 10) + "T00:00:00Z");
+    const lastDay = Date.parse(new Date(Date.parse(history.until) - 1).toISOString().slice(0, 10) + "T00:00:00Z");
+    for (let stamp = lastDay; stamp >= firstDay; stamp -= 86400000) {
+      const day = new Date(stamp).toISOString().slice(0, 10);
+      const counts = days.get(day) || {windows: 0, android: 0};
+      const tr = document.createElement("tr");
+      [day, counts.windows, counts.android, counts.windows + counts.android].forEach((value, i) => {
+        const td = document.createElement(i === 0 ? "th" : "td");
+        if (i === 0) td.scope = "row";
+        td.textContent = i === 0 ? value : number(value);
+        tr.appendChild(td);
+      });
+      byId("historyRows").appendChild(tr);
+    }
+    byId("historyData").hidden = false;
   }
 
   function render(data) {
@@ -48,8 +109,8 @@
     byId("totalAndroid").textContent = number(data.totals.android);
     byId("reportUpdated").textContent = `Updated ${new Date(data.generated_at).toLocaleString()}`;
     byId("reportSince").textContent = data.first_recorded_at
-      ? `First recorded start: ${new Date(data.first_recorded_at).toLocaleString()}. Earlier downloads are not included.`
-      : "No download starts recorded yet. Earlier downloads are not included.";
+      ? `First recorded live start: ${new Date(data.first_recorded_at).toLocaleString()}. Historical requests below are not included in these totals.`
+      : "No live download starts recorded yet. Historical requests below are kept separate.";
     const days = new Map();
     for (const row of data.daily) {
       if (!days.has(row.day)) days.set(row.day, {windows: 0, android: 0});
@@ -72,6 +133,7 @@
       });
       rows.appendChild(row);
     }
+    renderHistory(data.history);
     report.hidden = false;
     form.hidden = true;
   }

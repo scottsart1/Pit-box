@@ -35,8 +35,9 @@ uploaded to R2 and before the site is published.
 
 ### Private download reporting
 
-Apply `migrations/0005_download_counts.sql` before deploying the updated Worker.
-The migration adds only `download_daily`; it does not rewrite licences, reviews
+Apply `migrations/0005_download_counts.sql` and `0006_download_history.sql` before
+deploying the updated Worker. They add `download_daily` and `download_history`;
+they do not rewrite licences, reviews
 or subscriptions. Existing downloads keep working if a counter write fails.
 
 The `/installer` and `/android` routes increment an atomic daily platform total
@@ -48,7 +49,7 @@ Legacy code-gated `/file` and website page views are not included.
 
 Only UTC day, platform, count and first/last start timestamps are stored. No
 download cookies, visitor IDs, IP addresses, emails or user-agent logs are added.
-There is no backfill: counts start when the updated Worker is deployed. Cache
+Live counts are not backfilled: they start when the counter is deployed. Cache
 control is `private, no-store`, so these routes continue to reach the counter.
 Writes run with `ctx.waitUntil`; a storage outage can undercount, not stop files.
 
@@ -65,6 +66,36 @@ loaded counts when locked. It shows all-time Windows/Android/combined totals
 and a 30-day UTC breakdown. Days before the first recorded start use a dash,
 not a reconstructed zero. The report is not indexed; server authorization,
 not an unlisted URL, protects the data. Responses are private and non-cacheable.
+
+#### Recovered history (separate metric)
+
+`history` in the authenticated response is either `null` (unavailable, not zero)
+or a `historical_file_requests` snapshot with coverage (`from` inclusive, `until`
+exclusive), source, recovery date, separate Windows/Android/combined totals and
+daily rows. The page displays its entire coverage in a separate section.
+
+Only successful Cloudflare R2 `GetObject` analytics for the actual public
+release object keys are included. Exclude uploads, metadata calls, errors,
+unrelated objects and versioned release archives. These analytics may be sampled
+and may include partial reads, retries, bots, developer reads and verification
+downloads. R2 reads are **not** the same metric as the new route-level counter;
+never add them to `download_daily` or present them as unique users/installations.
+
+Store the validated aggregate snapshot in `download_history` row `id=1` as
+`report_json`. Include `source_sha256` and queried object names in the private
+import for provenance; the API returns only its allowlisted aggregate fields.
+Use an atomic UPSERT replacing this singleton on re-import, not addition, so a
+retry cannot double counts. Keep raw query evidence and generated import SQL
+outside the public repository and assets. No credentials or visitor records are
+needed in the snapshot. Import timestamps and historical bounds must not overlap
+the live counting period; do not imply coverage outside successfully queried data.
+
+The homepage and Android setup guide share the optional release-news prompt.
+Android selection downloads `/android` without checking Windows activation
+metadata; Windows retains `/installer-info` and `/installer`. Skip/blank email
+downloads the selected platform; Cancel/Escape does not. Android signup source
+is `website-download-android`; Windows preserves `website-download`. A cancelled
+or skipped pending signup cannot later trigger an extra download.
 
 For an account-authenticated alternative, the owner can inspect `download_daily`
 directly through Cloudflare D1; never expose the database or account credential.

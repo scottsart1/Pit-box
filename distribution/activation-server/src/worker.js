@@ -115,6 +115,35 @@ async function validReportToken(request, env) {
   return difference === 0;
 }
 
+function readDownloadHistory(row) {
+  if (!row) return null;
+  const history = JSON.parse(row.report_json);
+  const validCount = value => Number.isSafeInteger(value) && value >= 0;
+  if (history.metric !== "historical_file_requests" || history.source !== "Cloudflare R2 analytics" ||
+      ![history.from, history.until, history.recovered_at].every(value => typeof value === "string" && Number.isFinite(Date.parse(value))) ||
+      Date.parse(history.from) >= Date.parse(history.until) ||
+      !history.totals || ![history.totals.windows, history.totals.android, history.totals.all].every(validCount) ||
+      !Array.isArray(history.daily) || history.daily.length > 730) throw new Error("Invalid historical snapshot");
+  const totals = {windows: 0, android: 0, all: 0}, seen = new Set();
+  for (const entry of history.daily) {
+    const key = `${entry.day}/${entry.platform}`;
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(entry.day) ||
+        entry.day < history.from.slice(0, 10) || entry.day > history.until.slice(0, 10) ||
+        !["windows", "android"].includes(entry.platform) || !validCount(entry.requests) || seen.has(key)) {
+      throw new Error("Invalid historical row");
+    }
+    seen.add(key);
+    totals[entry.platform] += entry.requests;
+    totals.all += entry.requests;
+  }
+  if (Object.keys(totals).some(key => !validCount(totals[key]) || totals[key] !== history.totals[key])) {
+    throw new Error("Historical totals do not reconcile");
+  }
+  // Return only aggregate reporting fields, not arbitrary import metadata.
+  return {metric: history.metric, source: history.source, from: history.from,
+    until: history.until, recovered_at: history.recovered_at, totals, daily: history.daily};
+}
+
 async function handleDownloadReport(request, env) {
   if (!(await validReportToken(request, env))) {
     return reportJson({code: "unauthorized", message: "Enter your download-report access key."}, 401);
@@ -128,6 +157,7 @@ async function handleDownloadReport(request, env) {
         FROM download_daily GROUP BY platform`),
       env.DB.prepare(`SELECT day, platform, starts FROM download_daily
         WHERE day >= ? ORDER BY day DESC, platform`).bind(since),
+      env.DB.prepare(`SELECT report_json FROM download_history WHERE id = 1`),
     ]);
     if (results.some(result => !result.success)) throw new Error("Report query failed");
     const totals = {windows: 0, android: 0, all: 0};
@@ -143,6 +173,7 @@ async function handleDownloadReport(request, env) {
       metric: "download_starts", generated_at: now.toISOString(),
       first_recorded_at: first, last_recorded_at: last, totals,
       daily_since: since, daily: results[1].results,
+      history: readDownloadHistory(results[2].results[0]),
     });
   } catch {
     console.warn("Download report unavailable");

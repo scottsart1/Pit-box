@@ -120,9 +120,9 @@ test('authorized report aggregates both platforms and stays private', async () =
   const env = {DOWNLOAD_REPORT_TOKEN: token, DB: {
     prepare(sql) { return {sql, bind(...values) { return {sql, values}; }}; },
     async batch(queries) {
-      assert.equal(queries.length, 2);
+      assert.equal(queries.length, 3);
       assert.match(queries[1].values[0], /^\d{4}-\d{2}-\d{2}$/);
-      return [{success: true, results: totals}, {success: true, results: daily}];
+      return [{success: true, results: totals}, {success: true, results: daily}, {success: true, results: []}];
     },
   }};
   const response = await worker.fetch(reportRequest(), env);
@@ -134,19 +134,42 @@ test('authorized report aggregates both platforms and stays private', async () =
   assert.deepEqual(data.daily, daily);
   assert.equal(data.first_recorded_at, stamp);
   assert.equal(data.metric, 'download_starts');
+  assert.equal(data.history, null);
   assert(!JSON.stringify(data).includes(token));
 });
 
 test('empty report is genuinely zero; database outage is unavailable, not zero', async () => {
   const env = {DOWNLOAD_REPORT_TOKEN: token, DB: {
     prepare() { return {bind() { return {}; }}; },
-    async batch() { return [{success: true, results: []}, {success: true, results: []}]; },
+    async batch() { return Array.from({length: 3}, () => ({success: true, results: []})); },
   }};
   const response = await worker.fetch(reportRequest(), env);
   const data = await response.json();
   assert.deepEqual(data.totals, {windows: 0, android: 0, all: 0});
   assert.equal(data.first_recorded_at, null);
   env.DB.batch = async () => { throw new Error('unavailable'); };
+  assert.equal((await worker.fetch(reportRequest(), env)).status, 503);
+});
+
+test('historical requests stay separate, reconcile and never expose import-only metadata', async () => {
+  const history = {metric: 'historical_file_requests', source: 'Cloudflare R2 analytics',
+    from: '2026-08-06T00:00:00Z', until: '2026-09-17T08:00:00Z', recovered_at: '2026-09-17T12:00:00Z',
+    totals: {windows: 260, android: 10, all: 270},
+    daily: [{day: '2026-09-16', platform: 'windows', requests: 260}, {day: '2026-09-17', platform: 'android', requests: 10}],
+    private_import_metadata: 'not-for-response'};
+  const env = {DOWNLOAD_REPORT_TOKEN: token, DB: {
+    prepare(sql) { return {sql, bind() { return {sql}; }}; },
+    async batch() { return [{success: true, results: [{platform: 'windows', starts: 1, first_started_at: '2026-09-17T10:00:00Z', last_started_at: '2026-09-17T10:00:00Z'}]},
+      {success: true, results: []}, {success: true, results: [{report_json: JSON.stringify(history)}]}]; },
+  }};
+  const data = await (await worker.fetch(reportRequest(), env)).json();
+  assert.equal(data.totals.all, 1);
+  assert.equal(data.history.totals.all, 270);
+  assert(!JSON.stringify(data).includes('not-for-response'));
+  history.totals.all = 271;
+  assert.equal((await worker.fetch(reportRequest(), env)).status, 503);
+  history.totals.all = 270;
+  history.daily.push({...history.daily[0]});
   assert.equal((await worker.fetch(reportRequest(), env)).status, 503);
 });
 

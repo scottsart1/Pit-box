@@ -32,10 +32,11 @@
       <p id="reportUpdated"></p>
       <div><button id="reportRefresh" class="button ghost" type="button">Refresh</button> <button id="reportLock" class="button ghost" type="button">Lock report</button></div>
     </div>
+    <h2>Live download starts</h2>
     <div class="report-totals">
-      <article><h2>All app downloads</h2><p id="totalAll">—</p><span>Recorded starts · all time</span></article>
-      <article><h2>Windows</h2><p id="totalWindows">—</p><span>Installer starts · all time</span></article>
-      <article><h2>Android</h2><p id="totalAndroid">—</p><span>APK starts · all time</span></article>
+      <article><h3>All app downloads</h3><p id="totalAll">—</p><span>Since live tracking began</span></article>
+      <article><h3>Windows</h3><p id="totalWindows">—</p><span>Recorded installer starts</span></article>
+      <article><h3>Android</h3><p id="totalAndroid">—</p><span>Recorded APK starts</span></article>
     </div>
     <p id="reportSince"></p>
     <h2>Daily breakdown</h2>
@@ -45,12 +46,34 @@
       <thead><tr><th scope="col">Date (UTC)</th><th scope="col">Windows</th><th scope="col">Android</th><th scope="col">Total</th></tr></thead>
       <tbody id="reportRows"></tbody></table>
     </div>
+    <section aria-labelledby="historyHeading">
+      <h2 id="historyHeading">Historical file requests</h2>
+      <p>Recovered from Cloudflare's stored analytics. These measure file reads, not the live download starts above, so the two sets of totals are kept separate.</p>
+      <p id="historyStatus">No historical snapshot loaded.</p>
+      <div id="historyData" hidden>
+        <div class="report-totals">
+          <article><h3>All historical requests</h3><p id="historyAll">—</p><span>Cloudflare-reported file reads</span></article>
+          <article><h3>Windows</h3><p id="historyWindows">—</p><span>Historical installer reads</span></article>
+          <article><h3>Android</h3><p id="historyAndroid">—</p><span>Historical APK reads</span></article>
+        </div>
+        <p id="historyPeriod"></p>
+        <p>Successful file reads only; uploads, metadata checks, failed requests and archived release files are excluded. Cloudflare analytics may be sampled. Retries, partial reads, bots, developer downloads and release checks may be included. These are not unique users or completed installations.</p>
+        <details><summary>Historical daily breakdown (UTC)</summary>
+          <p>The first and last days cover only the times shown above. A zero means no matching request was reported, not proof that nobody downloaded the app.</p>
+          <div class="table-scroll" tabindex="0" role="region" aria-label="Historical file request counts">
+            <table><caption class="sr-only">Recovered file requests by UTC day</caption>
+            <thead><tr><th scope="col">Date (UTC)</th><th scope="col">Windows</th><th scope="col">Android</th><th scope="col">Total</th></tr></thead>
+            <tbody id="historyRows"></tbody></table>
+          </div>
+        </details>
+      </div>
+    </section>
   </div>
   <aside class="callout">
     <h2>What a count means</h2>
     <p>A count is a successful full-file GET response from the Windows or Android download route, including direct links. Metadata checks, prefetch requests and all partial/Range requests are excluded. A download manager that uses only partial requests will not be counted.</p>
-    <p>Repeat full downloads and automated requests can count again. Interrupted downloads may have already started. Counts begin when tracking is enabled; earlier downloads are not reconstructed. A recording failure can undercount without blocking the download.</p>
-    <p>Only daily platform totals and first/last start timestamps are stored by this counter. No download cookies, visitor IDs, IP addresses, email addresses or user-agent logs are added.</p>
+    <p>Repeat full downloads and automated requests can count again. Interrupted downloads may have already started. Live counts begin when tracking is enabled. Recovered historical file requests appear separately because their measurement differs. A recording failure can undercount without blocking the download.</p>
+    <p>Only aggregate platform counts, coverage dates and source metadata are stored by this report. No download cookies, visitor IDs, IP addresses, email addresses or user-agent logs are added.</p>
   </aside>
   <noscript><p>Enable JavaScript to open this report. Downloads do not require this report to be open.</p></noscript>
 </main>

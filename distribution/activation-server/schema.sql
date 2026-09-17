@@ -52,3 +52,9 @@ CREATE TABLE IF NOT EXISTS download_daily (
   last_started_at TEXT NOT NULL,
   PRIMARY KEY (day, platform)
 );
+
+-- Private, independently measured historical R2 requests; migration 0006.
+CREATE TABLE IF NOT EXISTS download_history (
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  report_json TEXT NOT NULL CHECK (json_valid(report_json))
+);

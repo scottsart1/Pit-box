@@ -90,7 +90,7 @@
         </ul>
         <p class="platform-caveat">Devices using 16 KB memory pages are not supported. This is a signed APK, not a Google Play listing.</p>
         <div class="platform-actions">
-          <a class="button primary" href="https://pitwall-activation.sarthakvij123450.workers.dev/android">Download Android APK</a>
+          <a class="button primary" data-download-platform="android" href="https://pitwall-activation.sarthakvij123450.workers.dev/android">Download Android APK</a>
           <a href="guide.html#android">Android setup</a>
         </div>
       </article>
@@ -363,7 +363,8 @@
         <div class="platform-label">Android phone / tablet</div>
         <h3>Android 4.10.1 · signed APK</h3>
         <p>Install the native app on the device beside your wheel. Reception, strategy and recordings run there; no laptop or Windows installation is needed.</p>
-        <p class="download-cta"><a class="button primary" href="https://pitwall-activation.sarthakvij123450.workers.dev/android">Download Android APK</a></p>
+        <p class="download-cta"><a class="button primary" data-download-platform="android" href="https://pitwall-activation.sarthakvij123450.workers.dev/android">Download Android APK</a></p>
+        <p id="androidDownloadStatus" class="download-status" role="status" aria-live="polite"></p>
         <p class="field-help"><code>4.10.1-android.14.apk</code> · 72.7 MB</p>
         <div class="guide-warning">
           <p><strong>Android 7+ · 64-bit ARM or x86 · 4 KB memory pages only.</strong> This release does not support 16 KB memory-page devices. Direct APK download, not a Google Play listing.</p>
@@ -531,6 +532,7 @@
 <div id="emailModal" class="modal" hidden>
   <div class="modal-backdrop" data-close></div>
   <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="emailModalTitle" aria-describedby="emailModalText">
+    <p id="emailModalPlatform" class="eyebrow">App download</p>
     <h3 id="emailModalTitle">Want to hear when a new version ships?</h3>
     <p id="emailModalText">Leave an email and I will write when there is an update worth having. That is the only thing it is used for. It is optional: skip it and the download starts anyway.</p>
     <form id="emailForm" novalidate>
@@ -544,6 +546,7 @@
       <p id="emailStatus" class="download-status" role="status" aria-live="polite"></p>
       <div class="modal-foot">
         <button id="skipEmail" class="button ghost" type="button">Skip — just download</button>
+        <button class="button ghost" type="button" data-close>Cancel</button>
         <small>Unsubscribe by replying to any email.</small>
       </div>
     </form>

@@ -5,7 +5,8 @@ import test from 'node:test';
 
 const source = await readFile(new URL('../../website/download-stats.js', import.meta.url), 'utf8');
 const ids = ['reportLogin', 'reportKey', 'reportStatus', 'reportData', 'reportRefresh', 'reportRows',
-  'totalAll', 'totalWindows', 'totalAndroid', 'reportUpdated', 'reportSince', 'reportLock'];
+  'totalAll', 'totalWindows', 'totalAndroid', 'reportUpdated', 'reportSince', 'reportLock',
+  'historyData', 'historyRows', 'historyAll', 'historyWindows', 'historyAndroid', 'historyStatus', 'historyPeriod'];
 function element() {
   return {value: '', hidden: false, textContent: '', disabled: false, children: [], listeners: {},
     addEventListener(name, fn) { this.listeners[name] = fn; }, focus() {},
@@ -92,4 +93,51 @@ test('page exit clears loaded counts and credentials', async () => {
   assert.equal(app.elements.reportData.hidden, true);
   assert.equal(app.elements.totalAll.textContent, '—');
   assert.equal(app.elements.reportKey.value, '');
+});
+
+const history = {metric: 'historical_file_requests', source: 'Cloudflare R2 analytics',
+  from: '2026-08-06T07:57:51Z', until: '2026-09-17T08:10:28Z', recovered_at: '2026-09-17T12:00:00Z',
+  totals: {windows: 260, android: 10, all: 270},
+  daily: [{day: '2026-09-16', platform: 'windows', requests: 260}, {day: '2026-09-17', platform: 'android', requests: 10}]};
+
+test('historical totals, coverage and daily rows are separate and erased when locked', async () => {
+  const app = harness(async () => ({ok: true, status: 200, json: async () => ({...payload, history})}));
+  await app.login();
+  const e = app.elements;
+  assert.equal(e.totalAll.textContent, '9');
+  assert.equal(e.historyAll.textContent, '270');
+  assert.equal(e.historyWindows.textContent, '260');
+  assert.equal(e.historyAndroid.textContent, '10');
+  assert.equal(e.historyData.hidden, false);
+  assert.equal(e.historyRows.children.length, 43);
+  assert.equal(e.historyRows.children[0].children[2].textContent, '10');
+  assert.equal(e.historyRows.children[2].children[1].textContent, '0');
+  assert.match(e.historyPeriod.textContent, /UTC.*end exclusive.*Recovered/);
+  e.reportLock.listeners.click();
+  assert.equal(e.historyData.hidden, true);
+  assert.equal(e.historyAll.textContent, '—');
+  assert.equal(e.historyRows.children.length, 0);
+  assert.equal(e.historyPeriod.textContent, '');
+});
+
+test('missing history is unavailable, not a zero or invented backfill', async () => {
+  const app = harness(async () => ({ok: true, status: 200, json: async () => payload}));
+  await app.login();
+  assert.equal(app.elements.historyData.hidden, true);
+  assert.match(app.elements.historyStatus.textContent, /not a zero/);
+  assert.equal(app.elements.totalAll.textContent, '9');
+});
+
+test('inconsistent, duplicated or oversized historical data fails closed', async () => {
+  for (const broken of [
+    {...history, totals: {...history.totals, all: 271}},
+    {...history, daily: [...history.daily, history.daily[0]]},
+    {...history, from: '2020-01-01T00:00:00Z'},
+    {...history, daily: [{day: '2026-09-18', platform: 'windows', requests: 270}]},
+  ]) {
+    const app = harness(async () => ({ok: true, status: 200, json: async () => ({...payload, history: broken})}));
+    await app.login();
+    assert.equal(app.elements.reportData.hidden, true);
+    assert.equal(app.elements.historyAll.textContent, '—');
+  }
 });

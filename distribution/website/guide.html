@@ -86,7 +86,8 @@
     <div class="wrap">
       <div class="eyebrow">Android · signed APK download</div>
       <h2>Android setup — no laptop required</h2>
-      <p><a class="button primary" href="https://pitwall-activation.sarthakvij123450.workers.dev/android">Download Android APK</a></p>
+      <p><a class="button primary" data-download-platform="android" href="https://pitwall-activation.sarthakvij123450.workers.dev/android">Download Android APK</a></p>
+      <p id="androidDownloadStatus" class="download-status" role="status" aria-live="polite"></p>
       <p>The signed APK supports Android 7 or later on 64-bit ARM and x86 devices with 4 KB memory pages. Devices using 16 KB memory pages are not supported by this release. This is a direct download, not a Google Play listing; the Windows installer does not install on Android.</p>
       <div class="guide-warning"><strong>Already using the test app?</strong> The release package (<code>com.yourpitbox.app</code>) installs separately from the test package (<code>com.yourpitbox.app.debug</code>) and starts with its own library. Do not uninstall the test app or expect its history and keys to move automatically. Keep a backup, then use beta history transfer when neither device is recording. Never uninstall an existing app to force a signing-key mismatch.</div>
       <ol>
@@ -331,5 +332,27 @@
   </div>
 </footer>
 
+<div id="emailModal" class="modal" hidden>
+  <div class="modal-backdrop" data-close></div>
+  <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="emailModalTitle" aria-describedby="emailModalText">
+    <p id="emailModalPlatform" class="eyebrow">Android APK download</p>
+    <h3 id="emailModalTitle">Want to hear when a new version ships?</h3>
+    <p id="emailModalText">Leave an email and I will write when there is an update worth having. That is the only thing it is used for. It is optional: skip it and the download starts anyway.</p>
+    <form id="emailForm" novalidate>
+      <label for="emailField" class="field-label">Email (optional)</label>
+      <div class="code-entry">
+        <input id="emailField" name="email" type="email" inputmode="email" autocomplete="email" spellcheck="false" placeholder="Your email address" aria-describedby="emailStatus">
+        <button class="button primary" type="submit">Notify me and download</button>
+      </div>
+      <p id="emailStatus" class="download-status" role="status" aria-live="polite"></p>
+      <div class="modal-foot">
+        <button id="skipEmail" class="button ghost" type="button">Skip — just download</button>
+        <button class="button ghost" type="button" data-close>Cancel</button>
+        <small>Unsubscribe by replying to any email.</small>
+      </div>
+    </form>
+  </div>
+</div>
+<script src="download.js" defer></script>
 </body>
 </html>

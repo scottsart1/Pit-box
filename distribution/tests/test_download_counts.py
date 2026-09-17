@@ -1,5 +1,6 @@
 """Real SQLite validation of the exact Worker UPSERT and additive migration."""
 import re
+import json
 import sqlite3
 from pathlib import Path
 
@@ -55,3 +56,26 @@ def test_report_page_has_no_embedded_secret_and_no_browser_persistence():
     assert "all partial/Range requests are excluded" in page
     assert "not website visits, unique people or completed installations" in page
     assert "names, emails" in (ROOT / "website/index.html").read_text(encoding="utf-8")
+    assert 'id="historyData" hidden' in page
+    assert "Historical file requests" in page
+    assert "two sets of totals are kept separate" in page
+
+
+def test_history_snapshot_reimport_is_idempotent_and_never_changes_live_counts():
+    db = sqlite3.connect(":memory:")
+    db.executescript(MIGRATION)
+    history_migration = (SERVER / "migrations/0006_download_history.sql").read_text(encoding="utf-8")
+    db.executescript(history_migration)
+    db.executescript(history_migration)
+    db.execute(UPSERT, ("2026-09-17", "windows", "2026-09-17T10:00:00Z", "2026-09-17T10:00:00Z"))
+    snapshot = json.dumps({"metric": "historical_file_requests", "totals": {"all": 270}})
+    sql = "INSERT INTO download_history(id, report_json) VALUES (1, ?) ON CONFLICT(id) DO UPDATE SET report_json=excluded.report_json"
+    db.execute(sql, (snapshot,))
+    db.execute(sql, (snapshot,))
+    assert db.execute("SELECT count(*) FROM download_history").fetchone() == (1,)
+    assert db.execute("SELECT report_json FROM download_history").fetchone() == (snapshot,)
+    assert db.execute("SELECT SUM(starts) FROM download_daily").fetchone() == (1,)
+    with pytest.raises(sqlite3.IntegrityError):
+        db.execute("INSERT INTO download_history VALUES (2, '{}')")
+    with pytest.raises(sqlite3.IntegrityError):
+        db.execute("UPDATE download_history SET report_json='not json'")

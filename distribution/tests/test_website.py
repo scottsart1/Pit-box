@@ -325,6 +325,19 @@ def test_the_email_prompt_is_optional_and_says_what_it_is_for():
     assert "skip it" in EULA and "new version" in EULA
 
 
+def test_android_download_links_share_the_optional_prompt_and_keep_direct_fallback():
+    for page in (INDEX, GUIDE):
+        links = re.findall(r'<a\b[^>]*href="https://pitwall-activation\.sarthakvij123450\.workers\.dev/android"[^>]*>', page)
+        assert links
+        assert all('data-download-platform="android"' in link for link in links)
+        assert 'id="emailModal"' in page
+        assert 'id="emailModalPlatform"' in page
+        assert 'id="androidDownloadStatus"' in page
+        assert '<script src="download.js" defer></script>' in page
+    assert 'website-download-android' in DOWNLOAD_JS
+    assert 'platform === "windows" ? await installerInfo()' in DOWNLOAD_JS
+
+
 def test_reviews_can_be_posted_and_are_read_before_they_appear():
     # Anyone can leave a review from the page; nothing is shown until the
     # owner has read it, and the page says so. The script renders review
