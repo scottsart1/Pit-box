@@ -54,3 +54,10 @@ def test_ci_does_not_publish_unsigned_candidates_by_default():
     attach_option = workflow.split('attach_release:', 1)[1].split('permissions:', 1)[0]
     assert 'default: false' in attach_option
     assert workflow.index('Assert-ProductionSignature') < workflow.index('gh release create')
+
+
+def test_unsigned_direct_release_is_explicit_and_does_not_accept_bad_signatures():
+    assert 'param([switch]$AllowUnsignedRelease)' in SCRIPT
+    assert "if ($signature.Status -ne 'NotSigned')" in SCRIPT
+    assert 'Assert-ProductionSignature -Path $artifact' in SCRIPT
+    assert 'never tell users to disable security protections' in SCRIPT

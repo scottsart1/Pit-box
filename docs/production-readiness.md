@@ -1,8 +1,9 @@
 # Production release gates
 
-The 4.10.1 source and Android revision 14 are release candidates, not a
-published or certified production release. Passing source tests is necessary,
-but does not establish that a signed, installed artifact is ready to ship.
+Windows 4.10.1 is published as an owner-authorized unsigned direct download,
+with its SHA-256 and security-warning notice on the website. Android revision
+14 is being packaged as a directly downloadable release-signed APK, not a Play
+Store submission. Do not claim broader compatibility from source tests alone.
 
 ## Candidate changes
 
@@ -14,14 +15,13 @@ manual acceptance separate from reproducible automated results: prior test
 failures remain in the evidence, not silently changed to passes. Public website
 copy now labels UDP forwarding and device-to-device history transfer as beta.
 
-Artifact publication still requires the actual release packages. Local Windows
-4.10.1 output is unsigned and Android output is debug-only. Use the configured
-signing path, or obtain a specific owner decision for an unsigned Windows
-direct-download release with appropriate disclosure. Windows publisher signing
-is our release policy, not an absolute OS requirement for every direct download.
-Android's stable release key and update identity must be configured without
-uninstalling or overwriting the driver's existing debug app/history. Website
-availability must describe the artifacts actually served, not approval alone.
+The owner explicitly authorized unsigned Windows direct download and creating
+a permanent Android release key. Windows is published; Android signing material
+has been generated outside the repository. A new unsigned-preparation opt-in
+lets CI build a non-debug APK without seeing that key; local signing and final
+verification are still required before publication. Keep the existing debug
+app and its history: the public release uses the separate production package.
+Website availability must describe the artifacts actually served.
 
 ### Implemented source changes
 
@@ -56,7 +56,8 @@ as reliable; retain prior evidence alongside the owner's acceptance.
    `PITBOX_TIMESTAMP_URL`. Keep private keys in the protected certificate store
    or approved signing service, not in this repository or command arguments.
 3. Run `python -m distribution.packaging.build --installer`. Unsigned output is
-   allowed for private candidate checks only. The EXE must be signed before
+   allowed for candidate checks and an explicitly authorized unsigned direct
+   release. For publisher-signed releases the EXE must be signed before
    its integrity manifest is generated, and the finished installer signed too.
 4. Verify both artifacts with `verify-production-signature.ps1`: a valid
    trusted signature, the expected publisher and a timestamp are required.
@@ -67,9 +68,11 @@ as reliable; retain prior evidence alongside the owner's acceptance.
    real-time race on the signed candidate. Synthetic accelerated races do not
    establish voice or endurance quality.
 
-The release script and optional CI release attachment now reject unsigned
-artifacts. CI attachment is opt-in and also needs a configured signing
-pipeline; setting a thumbprint alone does not provide a certificate.
+The release script rejects unsigned artifacts by default. An owner-approved
+`-AllowUnsignedRelease` exception accepts unsigned files, not invalid or
+tampered signatures, and requires transparent website disclosure. Never disable
+firewall/antivirus/Smart App Control for distribution. CI release attachment
+still requires publisher signing; a thumbprint alone supplies no certificate.
 See [Microsoft SignTool](https://learn.microsoft.com/en-us/windows/win32/seccrypto/signtool).
 
 ## Android
@@ -88,7 +91,10 @@ See [Microsoft SignTool](https://learn.microsoft.com/en-us/windows/win32/seccryp
    A ZIP-alignment success alone does not establish ELF or runtime compatibility.
 4. Configure the existing backed-up release key via `PITBOX_KEYSTORE_PATH`,
    `PITBOX_KEYSTORE_PASSWORD`, `PITBOX_KEY_ALIAS`, `PITBOX_KEY_PASSWORD` in the
-   private build environment. Release builds reject incomplete signing.
+   private build environment. Release builds reject incomplete signing unless
+   explicitly preparing an unsigned artifact with
+   `-Ppitbox.prepareUnsignedRelease=true` for owner-local signing. Such an
+   unsigned artifact is never a public download.
    Never generate a replacement key to bypass an upgrade-signature mismatch.
 5. Run the API 36 emulator workflow and physical-device tests for Wi-Fi,
    pause/resume, flashbacks, race finish, app background/screen-off, permission

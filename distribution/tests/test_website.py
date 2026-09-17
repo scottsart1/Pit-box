@@ -613,6 +613,13 @@ def test_beta_transmission_is_distinct_from_reception_and_history_copy():
     assert "forwarding loops" in GUIDE
 
 
+def test_unsigned_windows_download_is_disclosed_without_disabling_protection():
+    assert 'Windows 4.10.1 · unsigned installer' in INDEX
+    for page in (INDEX, GUIDE):
+        assert 'Do not turn off your firewall, antivirus or Smart App Control' in page
+    assert '64c804f0f227bca4d88efa93e5d736201db9f1f3d5ee73e35cd668f1794433fd' in INDEX
+
+
 def test_cross_device_copy_is_not_promised_as_automatic_sync():
     for page in (INDEX, GUIDE):
         assert "not automatic cloud sync" in page

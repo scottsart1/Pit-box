@@ -135,6 +135,7 @@
       <div class="guide-copy">
         <div class="step-kicker"><span>4</span> Windows</div>
         <h2>Install Your Pit Box</h2>
+        <div class="guide-warning"><strong>The current Windows installer is unsigned.</strong> Windows may identify an unknown publisher or block it under your security policy. Verify the SHA-256 shown on the download page. Do not turn off your firewall, antivirus or Smart App Control to install it; wait for a signed release if your policy blocks it.</div>
         <ol>
           <li>Run <code>PitWall-Setup.exe</code> and follow the installer. It installs for your Windows account, so it does not need an administrator password.</li>
           <li>Leave <strong>Launch Your Pit Box</strong> selected at the end. The <strong>Welcome to Your Pit Box</strong> window opens.</li>
@@ -237,7 +238,7 @@
         <li>Finish the receiving device's recording and stop its telemetry listener. Keep both apps open on the same private network and enable Wi-Fi transfers on both.</li>
         <li>Use the displayed QR code or invitation to pair the devices you trust. Then select completed sessions on the sender from the receiving app.</li>
         <li>Start with a small selection. Very large libraries may exceed archive limits or time out during preparation; a larger timeout alone does not make an oversized archive importable.</li>
-        <li>In the next builds, both devices show the current stage. Preparing packages the history; sending moves the file; checking verifies it; importing saves it. A full send bar is <strong>not</strong> confirmation that the history is imported.</li>
+        <li>Version 4.10.1 adds transfer stages on both devices; older builds may show less detail. Preparing packages the history; sending moves the file; checking verifies it; importing saves it. A full send bar is <strong>not</strong> confirmation that the history is imported.</li>
         <li>Wait for completion on the receiving device, then check its Library. Matching sessions already present are skipped. Only available history is copied; previously pruned samples cannot be reconstructed.</li>
         <li>Turn transfers off and restart telemetry on the device you want to use for the next race. Check the game's UDP destination again if switching from laptop to tablet.</li>
       </ol>

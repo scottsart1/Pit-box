@@ -13,6 +13,8 @@
 # Every step stops the release on failure and says which step died. A full
 # transcript is written next to this script as release_log.txt (gitignored).
 
+param([switch]$AllowUnsignedRelease)
+
 $ErrorActionPreference = "Stop"
 Set-Location $PSScriptRoot
 Start-Transcript -Path (Join-Path $PSScriptRoot "release_log.txt") -Force | Out-Null
@@ -64,7 +66,11 @@ try {
   $python = ".\.venv\Scripts\python.exe"
 
   Step "Require production signing configuration" {
+    if ($AllowUnsignedRelease) {
+      Write-Warning "Owner-authorized unsigned direct download. Publish an unsigned notice and SHA-256; never tell users to disable security protections."
+    } else {
     Run "signing preflight" { & $python -c "from distribution.packaging.signing import configuration; configuration(required=True)" }
+    }
   }
 
   # Licensing tests generate temporary keys. The production private key is
@@ -116,9 +122,19 @@ try {
 
   Step "Verify the publisher before uploading anything" {
     . (Join-Path $PSScriptRoot 'distribution/packaging/verify-production-signature.ps1')
-    Assert-ProductionSignature -Path $installer -ExpectedThumbprint $env:PITBOX_WINDOWS_CERT_SHA1
     $frozenApp = Join-Path (Split-Path (Split-Path $installer)) 'dist/Your Pit Box/Your Pit Box.exe'
+    if ($AllowUnsignedRelease) {
+      foreach ($artifact in @($installer, $frozenApp)) {
+        $signature = Get-AuthenticodeSignature -LiteralPath $artifact
+        if ($signature.Status -ne 'NotSigned') {
+          Assert-ProductionSignature -Path $artifact -ExpectedThumbprint $env:PITBOX_WINDOWS_CERT_SHA1
+        }
+      }
+      Write-Warning "Publishing under explicit unsigned-release authorization, not as a verified publisher-signed build."
+    } else {
+    Assert-ProductionSignature -Path $installer -ExpectedThumbprint $env:PITBOX_WINDOWS_CERT_SHA1
     Assert-ProductionSignature -Path $frozenApp -ExpectedThumbprint $env:PITBOX_WINDOWS_CERT_SHA1
+    }
   }
 
   Step "Upload the installer to R2 (before the site, always)" {

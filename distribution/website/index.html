@@ -242,7 +242,7 @@ Strategy / setup / what-if  → model, high reasoning
       <a href="guide.html#telemetry-transmission">Set up beta telemetry forwarding</a>
     </div>
     <div class="callout" id="candidate-improvements">
-      <h3>Also being prepared for the next builds</h3>
+      <h3>Included in Windows 4.10.1</h3>
       <p>Transfer status on both devices separates preparing, sending, checking and importing. Progress uses real file or byte counts where available; a sent file is not called imported until the receiver confirms it. During the transfer beta, start with smaller batches for very large libraries and keep the originals until the receiving library is checked.</p>
       <p>Telemetry charts distinguish saved lap history from current inputs, so an old trace is not presented as new driving. Connection and microphone diagnostics help separate incoming game packets, microphone input and the engineer's response. These checks do not replace an end-to-end radio test.</p>
       <p>Available history means the data still stored on the sending device. Previously pruned telemetry samples cannot be recovered by transferring a session.</p>
@@ -380,6 +380,11 @@ Strategy / setup / what-if  → model, high reasoning
         <span class="field-help"><code>PitWall-Setup.exe</code> · size varies by release</span>
       </p>
       <p id="downloadStatus" class="download-status" role="status" aria-live="polite"></p>
+      <div class="callout" id="windows-release">
+        <h3>Windows 4.10.1 · unsigned installer</h3>
+        <p>This direct download is not publisher-signed. Windows may show an unknown-publisher warning, and some security policies may block it. Download only from this site and verify the checksum below. <strong>Do not turn off your firewall, antivirus or Smart App Control to install it.</strong> If your security policy blocks installation, wait for a signed release.</p>
+        <p class="field-help">SHA-256: <code style="overflow-wrap:anywhere">64c804f0f227bca4d88efa93e5d736201db9f1f3d5ee73e35cd668f1794433fd</code></p>
+      </div>
       <div id="codePanel" class="code-panel" hidden>
         <p><strong>One extra step, for a few days.</strong> The installer online right now was built before Your Pit Box went free, so the first time it starts it still asks for an activation code. Use this one. It is the same for everyone, it works on any PC, and the next installer removes the step entirely.</p>
         <div class="code-entry">

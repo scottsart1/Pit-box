@@ -55,6 +55,7 @@ function err(code, message, status, env = null) {
 // means the file can only be fetched with a code that is still in the
 // database, checked on the file request itself rather than only on the form.
 const INSTALLER_KEY = "PitWall-Setup.exe";
+const ANDROID_KEY = "YourPitBox-4.10.1-android.14.apk";
 
 // A device hash is a 64-char lowercase hex SHA-256.
 function validDeviceHash(value) {
@@ -315,7 +316,7 @@ async function handleFile(request, env, url) {
 
 // Stream the installer from the private bucket, with Range support so a
 // dropped connection resumes instead of restarting 33 MB.
-async function streamInstaller(request, env) {
+async function streamInstaller(request, env, objectKey = INSTALLER_KEY) {
   if (!env.DOWNLOADS) {
     return err("not_configured", "The download is not available yet. Email vale.scott00@gmail.com and I will send it directly.", 503, env);
   }
@@ -324,14 +325,14 @@ async function streamInstaller(request, env) {
   // script can confirm the Worker is serving the installer without pulling
   // 33 MB through wrangler's (known stale) reader.
   if (request.method === "HEAD") {
-    const meta = await env.DOWNLOADS.head(INSTALLER_KEY);
+    const meta = await env.DOWNLOADS.head(objectKey);
     if (!meta) {
       return err("not_configured", "The installer is not uploaded yet.", 503, env);
     }
     const headHeaders = new Headers(corsHeaders(env));
     meta.writeHttpMetadata(headHeaders);
     headHeaders.set("etag", meta.httpEtag);
-    headHeaders.set("content-disposition", `attachment; filename="${INSTALLER_KEY}"`);
+    headHeaders.set("content-disposition", `attachment; filename="${objectKey}"`);
     headHeaders.set("accept-ranges", "bytes");
     headHeaders.set("content-length", String(meta.size));
     return new Response(null, { status: 200, headers: headHeaders });
@@ -343,7 +344,7 @@ async function streamInstaller(request, env) {
   // Content — wrong, and enough to confuse download managers.
   const rangeHeader = request.headers.get("range");
   const object = await env.DOWNLOADS.get(
-    INSTALLER_KEY,
+    objectKey,
     rangeHeader ? { range: request.headers } : undefined
   );
   if (!object) {
@@ -358,7 +359,7 @@ async function streamInstaller(request, env) {
   const headers = new Headers(corsHeaders(env));
   object.writeHttpMetadata(headers);
   headers.set("etag", object.httpEtag);
-  headers.set("content-disposition", `attachment; filename="${INSTALLER_KEY}"`);
+  headers.set("content-disposition", `attachment; filename="${objectKey}"`);
   headers.set("accept-ranges", "bytes");
   // Keep the code out of the Referer sent to anywhere the buyer clicks next.
   headers.set("referrer-policy", "no-referrer");
@@ -537,6 +538,14 @@ export default {
     }
     if (request.method === "GET" && url.pathname === "/installer-info") {
       return handleInstallerInfo(request, env);
+    }
+    // A pinned public APK only: never accept an arbitrary R2 key from a URL.
+    if ((request.method === "GET" || request.method === "HEAD") && url.pathname === "/android") {
+      try {
+        return await streamInstaller(request, env, ANDROID_KEY);
+      } catch (e) {
+        return err("server_error", "Could not start the Android download. Try again.", 500, env);
+      }
     }
     if (request.method === "GET" && url.pathname === "/reviews") {
       return handleReviewsList(request, env);
