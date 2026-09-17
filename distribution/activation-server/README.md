@@ -33,6 +33,49 @@ uploaded to R2 and before the site is published.
 
 ## Contract
 
+### Private download reporting
+
+Apply `migrations/0005_download_counts.sql` before deploying the updated Worker.
+The migration adds only `download_daily`; it does not rewrite licences, reviews
+or subscriptions. Existing downloads keep working if a counter write fails.
+
+The `/installer` and `/android` routes increment an atomic daily platform total
+after R2 supplies an HTTP 200 full-file GET response. HEAD, failed requests,
+prefetch and all Range requests are excluded. Range-only download managers are
+therefore not counted. Repeated full GETs and automated requests may count again;
+these are **download starts**, not completed downloads, installs or unique people.
+Legacy code-gated `/file` and website page views are not included.
+
+Only UTC day, platform, count and first/last start timestamps are stored. No
+download cookies, visitor IDs, IP addresses, emails or user-agent logs are added.
+There is no backfill: counts start when the updated Worker is deployed. Cache
+control is `private, no-store`, so these routes continue to reach the counter.
+Writes run with `ctx.waitUntil`; a storage outage can undercount, not stop files.
+
+`GET /download-stats` requires `Authorization: Bearer <report-key>`. Provision a
+random, dedicated 32-byte key as the Worker secret `DOWNLOAD_REPORT_TOKEN` with
+`wrangler secret put`; never use a Cloudflare or AI-provider token for this.
+The key is read-only and exposes only aggregate counts. Missing/wrong keys get
+401, and storage failures get 503 rather than a misleading zero count. Rotate
+it by replacing the Worker secret and distributing the new key privately.
+
+The owner page is `https://yourpitbox.com/download-stats.html`. It keeps the key
+only in page memory, does not put it in URLs or browser storage, and clears
+loaded counts when locked. It shows all-time Windows/Android/combined totals
+and a 30-day UTC breakdown. Days before the first recorded start use a dash,
+not a reconstructed zero. The report is not indexed; server authorization,
+not an unlisted URL, protects the data. Responses are private and non-cacheable.
+
+For an account-authenticated alternative, the owner can inspect `download_daily`
+directly through Cloudflare D1; never expose the database or account credential.
+
+Implementation references: [Worker waitUntil](https://developers.cloudflare.com/workers/runtime-apis/context/),
+[D1 prepared statements](https://developers.cloudflare.com/d1/worker-api/prepared-statements/),
+[Worker secrets](https://developers.cloudflare.com/workers/configuration/secrets/).
+
+Rollback: revert the Worker/site to the previous version, leaving the additive
+table intact. Existing collected counts are preserved but recording pauses.
+
 ### Free edition
 
 `GET /installer` → the installer as `attachment; filename="PitWall-Setup.exe"`,

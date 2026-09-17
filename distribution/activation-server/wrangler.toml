@@ -18,5 +18,7 @@ database_id = "4360c3cd-4f56-4643-a908-85cbed0d2944"
 binding = "DOWNLOADS"
 bucket_name = "pitwall-downloads"
 
-# No secrets are needed by the worker: it holds no key. The activation URL is
-# public; abuse is bounded because a code claims exactly once.
+# DOWNLOAD_REPORT_TOKEN is a dedicated random read-only reporting secret.
+# Set it with `wrangler secret put DOWNLOAD_REPORT_TOKEN`, never in this file.
+# It grants no access to activation codes, subscriber emails or other data.
+# The Worker still holds no entitlement-signing key.

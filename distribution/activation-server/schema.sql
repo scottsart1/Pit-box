@@ -42,3 +42,13 @@ CREATE TABLE IF NOT EXISTS reviews (
 );
 
 CREATE INDEX IF NOT EXISTS idx_reviews_approved ON reviews (approved, created_at);
+
+-- Private aggregate download report. Existing databases use migration 0005.
+CREATE TABLE IF NOT EXISTS download_daily (
+  day TEXT NOT NULL,
+  platform TEXT NOT NULL CHECK (platform IN ('windows', 'android')),
+  starts INTEGER NOT NULL DEFAULT 0 CHECK (starts >= 0),
+  first_started_at TEXT NOT NULL,
+  last_started_at TEXT NOT NULL,
+  PRIMARY KEY (day, platform)
+);

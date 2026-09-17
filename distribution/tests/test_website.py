@@ -61,6 +61,8 @@ def _stage(tmp_path, monkeypatch, *, index=None, guide=None, eula=None, script=N
         script if script is not None else DOWNLOAD_JS, encoding="utf-8"
     )
     (site / "reviews.js").write_text(REVIEWS_JS, encoding="utf-8")
+    for report_file in ("download-stats.html", "download-stats.js"):
+        shutil.copyfile(DIST / "website" / report_file, site / report_file)
     monkeypatch.setattr(build_site, "SITE_DIR", site)
     return site
 

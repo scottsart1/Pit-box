@@ -416,6 +416,22 @@ td.no { color: var(--muted); }
 
 /* ---------- reviews ---------- */
 
+.report-page { padding-block: 2rem 4rem; }
+.report-page > p, .report-login { max-width: 75ch; }
+.report-page h1 { margin: .5rem 0; font-size: clamp(2rem, 5vw, 3rem); }
+.report-login { padding: 1.3rem; border: 1px solid var(--line); border-radius: var(--radius); background: var(--bg-soft); margin-block: 1.5rem; }
+.report-login[hidden], #reportData[hidden] { display: none; }
+.report-login .field-help { font-size: .875rem; color: var(--ink-2); }
+.report-toolbar { display: flex; justify-content: space-between; gap: 1rem; flex-wrap: wrap; align-items: center; margin-block: 1.5rem; }
+.report-totals { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 230px), 1fr)); gap: 1rem; }
+.report-totals article { padding: 1.4rem; border: 1px solid var(--line); border-top: 4px solid var(--accent); border-radius: var(--radius); }
+.report-totals h2 { font-size: 1.1rem; }
+.report-totals p { font-size: 2.5rem; font-weight: 800; margin: .5rem 0; overflow-wrap: anywhere; }
+.report-totals span { color: var(--ink-2); font-size: .875rem; }
+.report-page .callout { background: var(--bg-soft); }
+.report-page .callout h2 { font-size: 1.15rem; }
+.report-page .callout p + p { margin-top: .8rem; }
+
 .reviews-empty {
   border: 1px dashed var(--line);
   border-radius: var(--radius);

@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<meta name="referrer" content="no-referrer">
+<title>Download report — Your Pit Box</title>
+<meta name="description" content="Private owner report for Windows and Android download starts.">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<header class="site-header"><div class="wrap">
+  <a class="brand" href="index.html"><span class="brand-mark" aria-hidden="true"></span>Your Pit Box</a>
+  <a href="index.html#download">Back to downloads</a>
+</div></header>
+<main class="wrap report-page">
+  <div class="eyebrow">Private owner report</div>
+  <h1>App downloads</h1>
+  <p>Windows and Android download starts, counted at the download server. These are not website visits, unique people or completed installations.</p>
+  <form id="reportLogin" class="report-login">
+    <label for="reportKey" class="field-label">Download-report access key</label>
+    <div class="code-entry">
+      <input id="reportKey" name="reportKey" type="password" autocomplete="off" required maxlength="256" aria-describedby="keyHelp">
+      <button class="button primary" type="submit">Open report</button>
+    </div>
+    <p id="keyHelp" class="field-help">Use the dedicated report key saved privately during deployment, not an AI-provider or Cloudflare key. It is kept only in this page's memory until you lock or close it.</p>
+  </form>
+  <p id="reportStatus" role="status" aria-live="polite">Enter your access key to load the counts.</p>
+  <div id="reportData" hidden>
+    <div class="report-toolbar">
+      <p id="reportUpdated"></p>
+      <div><button id="reportRefresh" class="button ghost" type="button">Refresh</button> <button id="reportLock" class="button ghost" type="button">Lock report</button></div>
+    </div>
+    <div class="report-totals">
+      <article><h2>All app downloads</h2><p id="totalAll">—</p><span>Recorded starts · all time</span></article>
+      <article><h2>Windows</h2><p id="totalWindows">—</p><span>Installer starts · all time</span></article>
+      <article><h2>Android</h2><p id="totalAndroid">—</p><span>APK starts · all time</span></article>
+    </div>
+    <p id="reportSince"></p>
+    <h2>Daily breakdown</h2>
+    <p>Last 30 calendar days, including today. Dates use UTC.</p>
+    <div class="table-scroll" tabindex="0" role="region" aria-label="Daily app download counts">
+      <table><caption class="sr-only">Windows and Android download starts by UTC day</caption>
+      <thead><tr><th scope="col">Date (UTC)</th><th scope="col">Windows</th><th scope="col">Android</th><th scope="col">Total</th></tr></thead>
+      <tbody id="reportRows"></tbody></table>
+    </div>
+  </div>
+  <aside class="callout">
+    <h2>What a count means</h2>
+    <p>A count is a successful full-file GET response from the Windows or Android download route, including direct links. Metadata checks, prefetch requests and all partial/Range requests are excluded. A download manager that uses only partial requests will not be counted.</p>
+    <p>Repeat full downloads and automated requests can count again. Interrupted downloads may have already started. Counts begin when tracking is enabled; earlier downloads are not reconstructed. A recording failure can undercount without blocking the download.</p>
+    <p>Only daily platform totals and first/last start timestamps are stored by this counter. No download cookies, visitor IDs, IP addresses, email addresses or user-agent logs are added.</p>
+  </aside>
+  <noscript><p>Enable JavaScript to open this report. Downloads do not require this report to be open.</p></noscript>
+</main>
+<script src="download-stats.js" defer></script>
+</body>
+</html>

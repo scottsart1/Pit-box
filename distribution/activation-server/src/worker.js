@@ -57,6 +57,99 @@ function err(code, message, status, env = null) {
 const INSTALLER_KEY = "PitWall-Setup.exe";
 const ANDROID_KEY = "YourPitBox-4.10.1-android.14.apk";
 
+// Count starts only after R2 supplies a successful response. No per-visitor
+// data is stored. HEAD, prefetch and all Range requests are deliberately
+// excluded: retries/chunked resumes must not inflate the headline number.
+// Full GET retries still count again; this is not a unique-user/install count.
+async function countDownloadStart(request, response, env, ctx, platform) {
+  response.headers.set("cache-control", "private, no-store");
+  const purpose = `${request.headers.get("purpose") || ""} ${request.headers.get("sec-purpose") || ""}`;
+  if (request.method !== "GET" || response.status !== 200 ||
+      request.headers.has("range") || /prefetch/i.test(purpose)) return response;
+  const record = async () => {
+    const stamp = new Date().toISOString();
+    await env.DB.prepare(
+      `INSERT INTO download_daily (day, platform, starts, first_started_at, last_started_at)
+       VALUES (?, ?, 1, ?, ?)
+       ON CONFLICT(day, platform) DO UPDATE SET
+         starts = download_daily.starts + 1,
+         first_started_at = MIN(download_daily.first_started_at, excluded.first_started_at),
+         last_started_at = MAX(download_daily.last_started_at, excluded.last_started_at)`
+    ).bind(stamp.slice(0, 10), platform, stamp, stamp).run();
+  };
+  // Analytics must never prevent or buffer a download. Log only a fixed
+  // diagnostic, not request URLs, headers, visitor data or credentials.
+  const pending = record().catch(() => console.warn("Download count could not be recorded"));
+  if (ctx && typeof ctx.waitUntil === "function") ctx.waitUntil(pending);
+  else await pending;
+  return response;
+}
+
+function reportJson(body, status = 200) {
+  return new Response(status === 204 ? null : JSON.stringify(body), {
+    status,
+    headers: {
+      "content-type": "application/json",
+      "cache-control": "private, no-store",
+      "access-control-allow-origin": "https://yourpitbox.com",
+      "access-control-allow-methods": "GET, OPTIONS",
+      "access-control-allow-headers": "authorization",
+      "vary": "Origin",
+      "x-content-type-options": "nosniff",
+    },
+  });
+}
+
+async function validReportToken(request, env) {
+  const expected = env.DOWNLOAD_REPORT_TOKEN;
+  const supplied = request.headers.get("authorization") || "";
+  if (typeof expected !== "string" || expected.length < 32 || supplied.length > 512) return false;
+  // Fixed-length digest comparison avoids comparing a secret prefix directly.
+  const encoder = new TextEncoder();
+  const hashes = await Promise.all([supplied, `Bearer ${expected}`].map(
+    value => crypto.subtle.digest("SHA-256", encoder.encode(value))
+  ));
+  const left = new Uint8Array(hashes[0]), right = new Uint8Array(hashes[1]);
+  let difference = 0;
+  for (let i = 0; i < left.length; i++) difference |= left[i] ^ right[i];
+  return difference === 0;
+}
+
+async function handleDownloadReport(request, env) {
+  if (!(await validReportToken(request, env))) {
+    return reportJson({code: "unauthorized", message: "Enter your download-report access key."}, 401);
+  }
+  try {
+    const now = new Date();
+    const since = new Date(now.getTime() - 29 * 86400000).toISOString().slice(0, 10);
+    const results = await env.DB.batch([
+      env.DB.prepare(`SELECT platform, SUM(starts) AS starts,
+        MIN(first_started_at) AS first_started_at, MAX(last_started_at) AS last_started_at
+        FROM download_daily GROUP BY platform`),
+      env.DB.prepare(`SELECT day, platform, starts FROM download_daily
+        WHERE day >= ? ORDER BY day DESC, platform`).bind(since),
+    ]);
+    if (results.some(result => !result.success)) throw new Error("Report query failed");
+    const totals = {windows: 0, android: 0, all: 0};
+    let first = null, last = null;
+    for (const row of results[0].results) {
+      if (!(row.platform === "windows" || row.platform === "android")) continue;
+      totals[row.platform] = Number(row.starts);
+      totals.all += Number(row.starts);
+      if (!first || row.first_started_at < first) first = row.first_started_at;
+      if (!last || row.last_started_at > last) last = row.last_started_at;
+    }
+    return reportJson({
+      metric: "download_starts", generated_at: now.toISOString(),
+      first_recorded_at: first, last_recorded_at: last, totals,
+      daily_since: since, daily: results[1].results,
+    });
+  } catch {
+    console.warn("Download report unavailable");
+    return reportJson({code: "unavailable", message: "Counts are temporarily unavailable. Try again."}, 503);
+  }
+}
+
 // A device hash is a 64-char lowercase hex SHA-256.
 function validDeviceHash(value) {
   return typeof value === "string" && /^[0-9a-f]{64}$/.test(value);
@@ -516,8 +609,14 @@ async function handleReviewSubmit(request, env) {
 }
 
 export default {
-  async fetch(request, env) {
+  async fetch(request, env, ctx) {
     const url = new URL(request.url);
+
+    if (url.pathname === "/download-stats") {
+      if (request.method === "OPTIONS") return reportJson(null, 204);
+      if (request.method === "GET") return handleDownloadReport(request, env);
+      return reportJson({code: "method_not_allowed"}, 405);
+    }
 
     // Preflight. Must answer before any POST from the website is even sent.
     if (request.method === "OPTIONS") {
@@ -531,7 +630,8 @@ export default {
     // The free edition: the site's Download button lands here.
     if ((request.method === "GET" || request.method === "HEAD") && url.pathname === "/installer") {
       try {
-        return await handleInstaller(request, env);
+        const response = await handleInstaller(request, env);
+        return await countDownloadStart(request, response, env, ctx, "windows");
       } catch (e) {
         return err("server_error", "Could not start the download. Try again.", 500, env);
       }
@@ -542,7 +642,8 @@ export default {
     // A pinned public APK only: never accept an arbitrary R2 key from a URL.
     if ((request.method === "GET" || request.method === "HEAD") && url.pathname === "/android") {
       try {
-        return await streamInstaller(request, env, ANDROID_KEY);
+        const response = await streamInstaller(request, env, ANDROID_KEY);
+        return await countDownloadStart(request, response, env, ctx, "android");
       } catch (e) {
         return err("server_error", "Could not start the Android download. Try again.", 500, env);
       }
