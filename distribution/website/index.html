@@ -16,6 +16,7 @@
     <nav class="site-nav" aria-label="Sections">
       <a href="#demo">Demo</a>
       <a href="#what">What it does</a>
+      <a href="#devices">Windows &amp; Android</a>
       <a href="#how">How it works</a>
       <a href="#screens">Screens</a>
       <a href="guide.html">Setup guide</a>
@@ -163,9 +164,10 @@
           back instantly and cost nothing.
         </p>
         <p>
-          Your data stays on your PC. The database, the raw 60&nbsp;Hz traces and
-          your Windows username are never uploaded. Only compact situation
-          summaries go out, and only for questions that genuinely need judgement.
+          Your recordings stay on your device unless you explicitly export or
+          transfer them. The database and raw 60&nbsp;Hz traces are not sent to
+          your AI provider. Model-backed questions use compact situation
+          summaries and selected computed results.
         </p>
       </div>
       <div class="flow" role="img" aria-label="Routing diagram: exact telemetry questions and unsolicited calls are handled by local deterministic code; only interpretation and strategy reasoning reach the model.">
@@ -189,7 +191,7 @@ Strategy / setup / what-if  → model, high reasoning
 <section id="new">
   <div class="wrap">
     <h2>New in the latest updates</h2>
-    <p class="section-lede">Every download gets the current build. Recent releases added:</p>
+    <p class="section-lede">Recent Windows releases added the features below. See <a href="#devices">Windows &amp; Android</a> for platform availability and beta transfer features.</p>
     <div class="split">
       <ul class="req-list">
         <li><span class="tick" aria-hidden="true">✓</span> <span><strong>Wet-weather calls that read the track, not the sky.</strong> The engineer estimates how wet the surface actually is &mdash; from the rain, from how fast a track soaks and how slowly it dries, from your lap times and the rest of the field's, and from what you tell it &mdash; then projects it over the laps you have left. It knows a spin from a shower, tells you which lap to box on rather than &ldquo;box now&rdquo;, leaves you out when the forecast clears before the flag, and asks what you can see when the call is too close to make for you.</span></li>
@@ -205,6 +207,45 @@ Strategy / setup / what-if  → model, high reasoning
         <li><span class="tick" aria-hidden="true">✓</span> <span><strong>A proper Settings page.</strong> Engineer name, voice, radio verbosity, wake phrase, proactive cadence, telemetry detail and storage budgets &mdash; all in the app.</span></li>
         <li><span class="tick" aria-hidden="true">✓</span> <span><strong>Sharper strategy calls.</strong> Stop plans price in traffic and overtaking cost, explain <em>why</em> a stop is mandatory, and never contradict themselves mid-lap.</span></li>
       </ul>
+    </div>
+  </div>
+</section>
+
+<section id="devices" class="soft" aria-labelledby="devices-title">
+  <div class="wrap">
+    <div class="eyebrow">Choose where your engineer runs</div>
+    <h2 id="devices-title">Windows at your desk. Android beside the wheel.</h2>
+    <p class="section-lede">The Windows download is available now. The Android release download is being prepared. Telemetry transmission and device-to-device history transfers are beta features; each device keeps its own recordings.</p>
+    <div class="cards">
+      <article class="card">
+        <h3>Windows · available</h3>
+        <p>Run the engineer alongside your PC game, or receive telemetry from your PS5 over the same home network. Open Your Pit Box from the Start Menu; saved sessions stay on that computer.</p>
+        <a href="#download">Get the Windows installer</a>
+      </article>
+      <article class="card">
+        <h3>Android · release download pending</h3>
+        <p>The native app runs the telemetry receiver and engineer on a compatible 64-bit Android phone or tablet. It does not need the laptop to run the engine. Microphone permission is needed for spoken commands; voice services use your own OpenAI key.</p>
+        <p><strong>No public Android download yet.</strong> The signed release package is being prepared. There is no iPhone, iPad or macOS release available.</p>
+        <a href="guide.html#android">Read the Android setup guide</a>
+      </article>
+      <article class="card">
+        <h3>Take your history with you · beta</h3>
+        <p>Pair two devices on the same private network using a QR code or invitation, then choose completed sessions to copy. The receiving app checks the archive before importing it and skips matching history already present.</p>
+        <p><strong>This is a manual history transfer, not automatic cloud sync.</strong> Live telemetry, API keys and microphone permissions are not synced. Stop telemetry on the receiving device before importing; keep playing after the transfer has finished or stopped.</p>
+        <a href="guide.html#history-transfer">How history transfer works</a>
+      </article>
+    </div>
+    <div class="callout" id="telemetry-transmission">
+      <h3>Telemetry transmission · beta</h3>
+      <p>Optional UDP forwarding sends live game packets to another app or device. It is best-effort: a sent packet does not confirm that the other device received it. Check incoming telemetry on the destination before relying on it during a race.</p>
+      <p>This is separate from receiving the game's telemetry directly and from copying saved sessions. Neither forwarding nor history transfer provides automatic cloud sync. Use trusted destinations on your private network.</p>
+      <a href="guide.html#telemetry-transmission">Set up beta telemetry forwarding</a>
+    </div>
+    <div class="callout" id="candidate-improvements">
+      <h3>Also being prepared for the next builds</h3>
+      <p>Transfer status on both devices separates preparing, sending, checking and importing. Progress uses real file or byte counts where available; a sent file is not called imported until the receiver confirms it. During the transfer beta, start with smaller batches for very large libraries and keep the originals until the receiving library is checked.</p>
+      <p>Telemetry charts distinguish saved lap history from current inputs, so an old trace is not presented as new driving. Connection and microphone diagnostics help separate incoming game packets, microphone input and the engineer's response. These checks do not replace an end-to-end radio test.</p>
+      <p>Available history means the data still stored on the sending device. Previously pruned telemetry samples cannot be recovered by transferring a session.</p>
     </div>
   </div>
 </section>
@@ -267,7 +308,7 @@ Strategy / setup / what-if  → model, high reasoning
         <div class="callout">
           <h3>macOS is not ready yet</h3>
           <p>
-            Your Pit Box is Windows-only today. The macOS build is in progress; it is
+            The public download is Windows-only today; the Android release download is being prepared. The macOS build is in progress; it is
             not sold or promised here until it exists and has been tested on real
             hardware.
           </p>
@@ -336,7 +377,7 @@ Strategy / setup / what-if  → model, high reasoning
     <div class="buy">
       <p class="download-cta">
         <button id="downloadButton" class="button primary" type="button">Download for Windows</button>
-        <span class="field-help"><code>PitWall-Setup.exe</code>, about 33&nbsp;MB</span>
+        <span class="field-help"><code>PitWall-Setup.exe</code> · size varies by release</span>
       </p>
       <p id="downloadStatus" class="download-status" role="status" aria-live="polite"></p>
       <div id="codePanel" class="code-panel" hidden>
@@ -438,7 +479,12 @@ Strategy / setup / what-if  → model, high reasoning
 
     <details>
       <summary>What data leaves my computer?</summary>
-      <p>Compact situation summaries and selected computed results, only for questions that need model judgement, and only to the AI provider you configured — OpenAI by default. The database, the raw 60&nbsp;Hz trace files and your Windows username are never uploaded. Cloud transcription sends recorded audio clips to OpenAI; optional Realtime voice streams microphone audio to OpenAI while a radio session is active.</p>
+      <p>Compact situation summaries and selected computed results go to the AI provider you configured when a question needs model judgement. The database and raw trace files are not uploaded to the AI provider. Cloud transcription sends recorded audio clips to OpenAI; optional Realtime voice streams microphone audio to OpenAI while a radio session is active. In builds with history transfer, explicitly copying sessions sends their saved history and available traces to your paired device on the local network; it does not create a cloud account or sync your API keys.</p>
+    </details>
+
+    <details>
+      <summary>Will my laptop and tablet automatically stay in sync?</summary>
+      <p>No. Each device records and stores its own sessions. With beta history transfers, you pair devices and choose which completed sessions to copy. A history transfer does not forward the game's live UDP feed: point the game at the receiving device's current address shown in Connection, or separately configure beta UDP forwarding. Do not start an import while that device is recording.</p>
     </details>
 
     <details>

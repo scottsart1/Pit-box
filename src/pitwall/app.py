@@ -140,6 +140,7 @@ session_assembler = SessionAssembler(
     batch_sink=full_field_archive.submit,
     invalidation_sink=full_field_archive.submit,
     field_trace_hz=settings.field_trace_hz,
+    retain_finalized_samples=False,
 )
 packet_health = PacketHealthTracker(
     reorder_window_s=settings.packet_loss_confirm_ms / 1000.0,
@@ -172,6 +173,13 @@ maintenance_task: asyncio.Task[None] | None = None
 catalog_task: asyncio.Task[None] | None = None
 corner_rebuild_task: asyncio.Task[None] | None = None
 interfaces_task: asyncio.Task[None] | None = None
+post_race_tasks: set[asyncio.Task[None]] = set()
+POST_RACE_TIMEOUT_S = 60.0
+
+
+def _briefing_session_key(snapshot: dict[str, object]) -> tuple[int, int]:
+    return (int(snapshot.get("session_uid", 0) or 0),
+            int(snapshot.get("restart_epoch", 0) or 0))
 
 
 async def _connection_watchdog() -> None:
@@ -242,26 +250,34 @@ async def _event_persistence_worker() -> None:
             store.event_queue.task_done()
 
 
-async def _persist_briefing(kind: str, payload: dict[str, object]) -> dict[str, object]:
+async def _persist_briefing(
+    kind: str, payload: dict[str, object], *, origin: dict[str, object] | None = None,
+) -> dict[str, object]:
     try:
         text = await brain.narrate_briefing(kind, payload)
     except Exception as exc:
         log.warning("Briefing narration fell back to deterministic text: %s", exc)
         text = briefing.fallback_text(kind, payload)
-    snapshot = await store.snapshot_analysis()
+    snapshot = origin if origin is not None else await store.snapshot_analysis()
     save_state = dict(snapshot)
     if payload.get("track_id") is not None:
         save_state["track_id"] = int(payload["track_id"])
     await database.save_briefing(save_state, kind, payload, text)
-    briefings = dict(snapshot.get("briefings", {}))
-    briefings[kind] = {"payload": payload, "text": text}
-    await store.update(briefings=briefings)
+    expected = _briefing_session_key(snapshot)
+
+    def publish(state):  # type: ignore[no-untyped-def]
+        if (int(state.session_uid), int(state.restart_epoch)) == expected:
+            briefings = dict(state.briefings)
+            briefings[kind] = {"payload": payload, "text": text}
+            state.briefings = briefings
+
+    await store.mutate(publish)
     return {"kind": kind, "payload": payload, "text": text}
 
 
 async def _persist_finished_session() -> None:
-    """Persist and debrief the final result in the packet-handling cycle."""
-    snapshot = await store.snapshot_live()
+    """Persist the result now; keep optional provider/audio latency off UDP."""
+    snapshot = await store.snapshot_analysis()
     await database.upsert_session(snapshot)
     game_uid = int(snapshot.get("session_uid", 0) or 0)
     if game_uid:
@@ -269,12 +285,42 @@ async def _persist_finished_session() -> None:
             session_id(game_uid, int(snapshot.get("restart_epoch", 0) or 0)),
             status="complete",
         )
+    # Cancel superseded optional work without waiting inside the packet
+    # consumer. Retain references until completion and bound the backlog even
+    # if an external provider takes time to honour cancellation.
+    for task in tuple(post_race_tasks):
+        task.cancel()
+    if len(post_race_tasks) >= 2:
+        log.warning("Post-race debrief skipped: previous optional work is still stopping")
+        return
+    task = asyncio.create_task(_debrief_finished_session(snapshot), name="pitwall-post-race")
+    post_race_tasks.add(task)
+    task.add_done_callback(post_race_tasks.discard)
+
+
+async def _debrief_finished_session(snapshot: dict[str, object]) -> None:
     try:
-        result = await _persist_briefing("post_race", await briefing.post_race())
-        if voice is not None:
-            await voice.speak_text(str(result["text"]))
+        async with asyncio.timeout(POST_RACE_TIMEOUT_S):
+            result = await _persist_briefing(
+                "post_race", await briefing.post_race(state=snapshot), origin=snapshot,
+            )
+            current = await store.peek("session_uid", "restart_epoch")
+            if voice is not None and _briefing_session_key(current) == _briefing_session_key(snapshot):
+                await voice.speak_text(str(result["text"]))
+    except asyncio.CancelledError:
+        raise
+    except TimeoutError:
+        log.warning("Post-race debrief timed out; the final result is already saved")
     except Exception as exc:
         log.warning("Post-race debrief could not be generated: %s", exc)
+
+
+async def _stop_post_race_debriefs() -> None:
+    tasks = tuple(post_race_tasks)
+    for task in tasks:
+        task.cancel()
+    if tasks:
+        await asyncio.gather(*tasks, return_exceptions=True)
 
 
 async def _persist_qualifying_lap() -> None:
@@ -471,6 +517,7 @@ async def lifespan(app: FastAPI):
             batch_sink=full_field_archive.submit,
             invalidation_sink=full_field_archive.submit,
             field_trace_hz=settings.field_trace_hz,
+            retain_finalized_samples=False,
         )
     await full_field_archive.start()
     recovery = await asyncio.to_thread(trace_store.recover_pending_writes)
@@ -551,6 +598,7 @@ async def lifespan(app: FastAPI):
     # Stop accepting datagrams first. The parser's connection_lost callback
     # closes its bounded consumer before capture and state are finalized.
     await network_service.stop_listener()
+    await _stop_post_race_debriefs()
     session_assembler.shutdown()
     await full_field_archive.stop()
     if capture_coordinator.running or capture_service.running:

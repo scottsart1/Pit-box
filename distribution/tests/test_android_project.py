@@ -89,6 +89,25 @@ def test_the_backend_is_a_source_root_not_a_copy():
     assert 'srcDir("../../src")' in GRADLE
 
 
+def test_candidate_targets_android_16_and_ci_tests_that_platform():
+    assert "compileSdk = 36" in GRADLE and "targetSdk = 36" in GRADLE
+    assert "platforms;android-36" in WORKFLOW and "api-level: 36" in WORKFLOW
+    assert "val androidRevision = 14" in GRADLE
+
+
+def test_release_signing_cannot_silently_produce_unsigned_apk():
+    assert "val signingConfigured = missingSigning.isEmpty()" in GRADLE
+    assert "check(signingConfigured)" in GRADLE
+    assert 'it.name == "preReleaseBuild"' in GRADLE
+    assert "dependsOn(verifyReleaseSigning)" in GRADLE
+    assert 'providers.gradleProperty("pitbox.prepareUnsignedRelease")' in GRADLE
+    assert '.map { it == "true" }.getOrElse(false)' in GRADLE
+    assert 'check(!signingConfigured)' in GRADLE
+    assert 'Do not publish this artifact' in GRADLE
+    assert 'android-release-unsigned-${{ github.sha }}' in WORKFLOW
+    assert "isDebuggable = false" in GRADLE
+
+
 def test_the_workflow_builds_wheels_before_the_apk():
     assert "build-wheels.sh" in WORKFLOW
     assert WORKFLOW.index("build-wheels.sh") < WORKFLOW.index("assembleDebug")

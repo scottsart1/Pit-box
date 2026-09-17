@@ -24,3 +24,8 @@ Thumbs.db
 desktop.ini
 marketing/videos/
 release_log.txt
+# Release credentials belong in an external secret store, never source control.
+*.jks
+*.keystore
+*.pfx
+*.p12

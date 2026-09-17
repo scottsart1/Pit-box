@@ -27,8 +27,11 @@ import threading
 import time
 import uuid
 import zipfile
+from datetime import datetime
 from pathlib import Path, PurePosixPath
 from typing import Any, Iterator
+
+from .transfer_progress import ProgressCallback, TransferProgress
 
 FORMAT = "pitwall-history"
 FORMAT_VERSION = 1
@@ -91,6 +94,20 @@ def _row_digest(table: str, row: dict[str, Any]) -> str:
     if table in {"track_models", "segment_models"}:
         row = {key: value for key, value in row.items() if key != "active"}
     return _digest(row)
+
+
+def _catalog_end_timestamp(value: str) -> float:
+    """Use a recorded closure, never the export time, for recovered legacy rows."""
+    try:
+        ended = datetime.fromisoformat(value)
+        if ended.tzinfo is None:
+            raise ValueError("missing timezone")
+        timestamp = ended.timestamp()
+        if not math.isfinite(timestamp) or timestamp <= 0:
+            raise ValueError("invalid closure")
+        return timestamp
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise HistoryTransferError("The catalog has no valid closure time for a recovered legacy session") from exc
 
 
 def _hash_file(path: Path) -> str:
@@ -197,14 +214,16 @@ class HistoryTransferService:
         return str(db.execute("SELECT origin FROM history_transfer_identity WHERE singleton=1").fetchone()[0])
 
     @contextlib.contextmanager
-    def _snapshot(self, directory: Path) -> Iterator[tuple[sqlite3.Connection, str]]:
+    def _snapshot(self, directory: Path, progress: TransferProgress | None = None) -> Iterator[tuple[sqlite3.Connection, str]]:
         with _LOCK, contextlib.closing(_connect(self.database_path)) as live:
             origin = self._state(live)
             live.commit()
             target = directory / "snapshot.sqlite3"
             self._space(directory, self.database_path.stat().st_size * 2)
             with contextlib.closing(_connect(target)) as snapshot:
-                live.backup(snapshot, pages=256)
+                live.backup(snapshot, pages=256, progress=(
+                    lambda status, remaining, total: progress("snapshot", total - remaining, total, "pages")
+                ) if progress else None)
                 if snapshot.execute("PRAGMA quick_check").fetchone()[0] != "ok":
                     raise HistoryTransferError("History snapshot failed its integrity check")
                 yield snapshot, origin
@@ -314,14 +333,18 @@ class HistoryTransferService:
                                          "(SELECT legacy_session_uid FROM recorded_sessions WHERE id IN chosen AND legacy_session_uid IS NOT NULL)")]
         return predicates, sessions, warnings
 
-    def export_bundle(self, session_ids: list[str] | None, destination: Path) -> dict[str, Any]:
+    def export_bundle(self, session_ids: list[str] | None, destination: Path, *,
+                      progress: ProgressCallback | None = None) -> dict[str, Any]:
+        report = TransferProgress(progress)
+        report("snapshot")
         destination = Path(destination).resolve()
         destination.parent.mkdir(parents=True, exist_ok=True)
         if destination.exists():
             raise HistoryTransferError("Export destination already exists")
         with tempfile.TemporaryDirectory(prefix="pitwall-export-", dir=destination.parent) as tmp:
             scratch = Path(tmp)
-            with self._snapshot(scratch) as (db, origin):
+            with self._snapshot(scratch, report) as (db, origin):
+                report("records", 0, unit="rows")
                 schema = _schema(db)
                 predicates, sessions, warnings = self._select(db, session_ids)
                 manifest: dict[str, Any] = {"format": FORMAT, "version": FORMAT_VERSION,
@@ -331,6 +354,8 @@ class HistoryTransferService:
                     "excluded": ["credentials", "device settings", "network profiles", "active recordings", "analysis job queue"]}
                 artifacts: dict[tuple[str, str], dict[str, Any]] = {}
                 rows_path = scratch / "rows.jsonl"
+                rows_written = 0
+                recovered_legacy = 0
                 with rows_path.open("w", encoding="utf-8", newline="\n") as stream:
                     for table in TABLES:
                         count = 0
@@ -348,11 +373,26 @@ class HistoryTransferService:
                             envelope = {"table": table, "row": _encoded(row), "origin": receipt["origin"] if receipt else origin,
                                         "key": receipt["source_key"] if receipt else local_key,
                                         "digest": receipt["source_digest"] if receipt else digest}
+                            if table == "sessions" and not row["ended_at"]:
+                                # Crash recovery closes the canonical session but older
+                                # builds left its legacy row open. Preserve that row's
+                                # source digest for idempotency/round trips; only its
+                                # portable representation uses the recorded closure.
+                                closed = db.execute("""SELECT MAX(ended_at) FROM recorded_sessions
+                                    WHERE id IN chosen AND legacy_session_uid=?
+                                    AND status IN ('complete','incomplete') AND ended_at IS NOT NULL
+                                    AND NOT EXISTS (SELECT 1 FROM recorded_sessions
+                                        WHERE legacy_session_uid=? AND status='recording')""",
+                                    (row["session_uid"], row["session_uid"])).fetchone()[0]
+                                envelope["row"]["ended_at"] = _catalog_end_timestamp(closed)
+                                recovered_legacy += 1
                             line = _json(envelope)
                             if len(line.encode()) > MAX_ROW_BYTES:
                                 raise HistoryTransferError("A history row exceeds the portable format limit")
                             stream.write(line + "\n")
                             count += 1
+                            rows_written += 1
+                            report("records", rows_written, unit="rows")
                             if table in {"trace_chunks", "raw_captures", "track_models"}:
                                 root = {"trace_chunks": "traces", "raw_captures": "captures", "track_models": "models"}[table]
                                 rel = _relative(row["relative_path"])
@@ -363,14 +403,23 @@ class HistoryTransferService:
                                 rel = _relative(f"manifests/{row['id']}.json")
                                 artifacts[("traces", rel)] = {"root": "traces", "path": rel, "kind": table}
                         manifest["tables"][table] = {"columns": schema[table], "rows": count}
+                report("records", rows_written, rows_written, "rows")
+                if recovered_legacy:
+                    manifest["warnings"].append(
+                        f"Used existing catalog closure times for {recovered_legacy} recovered legacy sessions; "
+                        "their catalog status and the source database are unchanged.")
                 manifest["rows_bytes"] = rows_path.stat().st_size
                 manifest["rows_sha256"] = _hash_file(rows_path)
                 archive_path = scratch / "export.pitbox"
                 self._space(scratch, rows_path.stat().st_size)
                 total = rows_path.stat().st_size
+                file_count = len(artifacts) + 1
+                report("packing", 0, file_count, "files")
                 with zipfile.ZipFile(archive_path, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=1, allowZip64=True) as archive:
                     archive.write(rows_path, "rows.jsonl")
                     for index, artifact in enumerate(artifacts.values()):
+                        # Count entries processed, including reported missing files.
+                        report("packing", index + 1, file_count, "files")
                         path = _safe(self.roots[artifact["root"]], artifact["path"])
                         if not path.is_file():
                             manifest["missing_assets"].append(artifact)
@@ -395,6 +444,8 @@ class HistoryTransferService:
                         if written != size:
                             raise HistoryTransferError("History artifact changed while exporting")
                         manifest["assets"].append({**artifact, "entry": entry, "bytes": size, "sha256": digest.hexdigest()})
+                    report("packing", file_count, file_count, "files")
+                    report("finalizing")
                     manifest["completeness"] = "available-history" if not manifest["missing_assets"] else "missing-artifacts"
                     manifest["warnings"].append("Previously pruned samples cannot be reconstructed; available-history does not guarantee every original telemetry sample.")
                     payload = _json(manifest).encode()
@@ -496,7 +547,10 @@ class HistoryTransferService:
         if written != size or digest.hexdigest() != expected:
             raise HistoryTransferError("Archive checksum mismatch")
 
-    def _stage(self, archive: zipfile.ZipFile, scratch: Path, schema: dict[str, Any], version: int) -> tuple[dict[str, Any], sqlite3.Connection]:
+    def _stage(self, archive: zipfile.ZipFile, scratch: Path, schema: dict[str, Any], version: int,
+               progress: TransferProgress | None = None) -> tuple[dict[str, Any], sqlite3.Connection]:
+        report = progress or TransferProgress()
+        report("extracting")
         manifest = self._inventory(archive, schema, version)
         self._space(scratch, self._summary(manifest)["unpacked_bytes"] * 3)
         row_path = scratch / "rows.jsonl"
@@ -509,6 +563,9 @@ class HistoryTransferService:
                 CREATE TABLE mappings(table_name TEXT, source_key TEXT, local_key TEXT,
                 PRIMARY KEY(table_name, source_key));""")
             counts = dict.fromkeys(TABLES, 0)
+            row_count = sum(v["rows"] for v in manifest["tables"].values())
+            rows_checked = 0
+            report("checking_rows", 0, row_count, "rows")
             previous_table = -1
             with row_path.open("rb") as stream:
                 while line := stream.readline(MAX_ROW_BYTES + 2):
@@ -528,11 +585,16 @@ class HistoryTransferService:
                     self._validate_portable_row(table, row)
                     staging.execute("INSERT INTO rows(table_name,local_source_key,origin,source_key,digest,body) VALUES(?,?,?,?,?,?)", (table, _key(row, _pk(schema, table)), value["origin"], value["key"], value["digest"], _json(_encoded(row))))
                     counts[table] += 1
+                    rows_checked += 1
+                    report("checking_rows", rows_checked, row_count, "rows")
             if counts != {k: v["rows"] for k, v in manifest["tables"].items()}:
                 raise HistoryTransferError("History row counts do not match the inventory")
+            report("extracting", 0, len(manifest["assets"]), "files")
             for index, asset in enumerate(manifest["assets"]):
                 self._copy_checked(archive, asset["entry"], scratch / f"asset-{index}", asset["bytes"], asset["sha256"])
+                report("extracting", index + 1, len(manifest["assets"]), "files")
             staging.commit()
+            report("checking_links")
             self._validate_relationships(staging, schema, manifest, scratch)
             return manifest, staging
         except Exception:
@@ -633,7 +695,8 @@ class HistoryTransferService:
         row = db.execute(f'SELECT * FROM "{table}" WHERE ' + " AND ".join(f'"{c}"=?' for c in columns), values).fetchone()
         return dict(row) if row is not None else None
 
-    def import_bundle(self, path: Path) -> dict[str, Any]:
+    def import_bundle(self, path: Path, *, progress: ProgressCallback | None = None) -> dict[str, Any]:
+        report = TransferProgress(progress)
         path = Path(path).resolve()
         self.data_root.mkdir(parents=True, exist_ok=True)
         published: list[Path] = []
@@ -642,13 +705,15 @@ class HistoryTransferService:
                 origin = self._state(db)
                 db.commit()
                 schema = _schema(db)
-                manifest, staged = self._stage(archive, Path(tmp), schema, db.execute("PRAGMA user_version").fetchone()[0])
+                manifest, staged = self._stage(archive, Path(tmp), schema, db.execute("PRAGMA user_version").fetchone()[0], report)
                 with contextlib.closing(staged):
                     counts = {"imported_rows": 0, "skipped_rows": 0, "imported_sessions": 0, "skipped_sessions": 0}
                     db.execute("BEGIN IMMEDIATE")
                     db.execute("PRAGMA defer_foreign_keys=ON")
                     try:
+                        row_count = sum(v["rows"] for v in manifest["tables"].values())
                         for item in staged.execute("SELECT * FROM rows ORDER BY seq"):
+                            report("importing_rows", counts["imported_rows"] + counts["skipped_rows"], row_count, "rows")
                             table = item["table_name"]
                             row = self._validate_row(json.loads(item["body"]), schema[table])
                             keys = _pk(schema, table)
@@ -719,9 +784,12 @@ class HistoryTransferService:
                                         counts["imported_sessions"] += 1
                                 db.execute("INSERT INTO history_transfer_receipts VALUES(?,?,?,?,?,?)", (item["origin"], table, item["source_key"], item["digest"], local_key, _row_digest(table, self._lookup(db, table, keys, local_key))))
                             staged.execute("INSERT INTO mappings VALUES(?,?,?)", (table, item["local_source_key"], local_key))
+                        report("importing_rows", row_count, row_count, "rows")
+                        report("checking_links")
                         if db.execute("PRAGMA foreign_key_check").fetchone() is not None:
                             raise HistoryTransferError("Imported history failed relationship validation")
                         for index, asset in enumerate(manifest["assets"]):
+                            report("saving_files", index, len(manifest["assets"]), "files")
                             target = self._asset_path(asset)
                             if target.exists():
                                 if not target.is_file() or _hash_file(target) != asset["sha256"]:
@@ -736,6 +804,8 @@ class HistoryTransferService:
                                 shutil.copyfileobj(source, output, 1024 * 1024)
                                 output.flush()
                                 os.fsync(output.fileno())
+                        report("saving_files", len(manifest["assets"]), len(manifest["assets"]), "files")
+                        report("committing")
                         db.commit()
                         return {"status": "imported", **self._summary(manifest), **counts, "conflicts": []}
                     except Exception:

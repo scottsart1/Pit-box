@@ -41,7 +41,6 @@ def test_pyproject_agrees_with_the_package() -> None:
 
 
 def test_the_installer_default_agrees_with_the_package() -> None:
-    build = _source("distribution", "packaging", "build.py")
-    match = re.search(r'version: str = "([0-9.]+)"', build)
-    assert match, "build_installer must declare a default version"
-    assert match.group(1) == pitwall.__version__
+    from distribution.packaging.build import package_version
+
+    assert package_version() == pitwall.__version__

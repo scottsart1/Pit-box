@@ -1,7 +1,7 @@
 const API_BASE = "/api/v1/transfers";
 const HAS_DOM = typeof window !== "undefined" && typeof document !== "undefined";
 const TERMINAL = new Set(["completed", "failed", "conflict"]);
-const state = { active: false, timer: null, refreshing: false, busy: false, status: null, peer: null, sessions: [], selected: new Set(), catalogRequest: 0, peerSignature: "", jobSignature: "", announcedJobs: new Set() };
+const state = { active: false, timer: null, refreshing: false, busy: false, stale: false, status: null, peer: null, sessions: [], selected: new Set(), catalogRequest: 0, peerSignature: "", jobSignature: "", announcedJobs: new Set() };
 const byId = (id) => HAS_DOM ? document.getElementById(id) : null;
 
 export function transferError(payload, fallback = "The request could not be completed.") {
@@ -21,7 +21,20 @@ export function formatTransferBytes(value) {
 }
 
 export function transferJobLabel(value) {
-  return { queued: "Waiting to start", preparing: "Preparing history", downloading: "Copying history", importing: "Adding sessions to this device", completed: "History copied", failed: "Transfer needs attention", conflict: "History needs review" }[value] || "Checking transfer";
+  return { queued: "Waiting to start", preparing: "Preparing history", downloading: "Copying history", verifying: "Checking received history", importing: "Adding sessions to this device", completed: "History copied", failed: "Transfer needs attention", conflict: "History needs review" }[value] || "Checking transfer";
+}
+
+export function transferStage(job, outgoing = false) {
+  const phases = { snapshot: "Copying database snapshot", records: "Gathering history records", packing: "Packing file entries", finalizing: "Finalizing archive", checksum: "Checking archive checksum", extracting: "Extracting and checking files", checking_rows: "Checking history records", checking_links: "Checking history relationships", importing_rows: "Merging history records", saving_files: "Saving detail files", committing: "Committing history safely" };
+  const copying = outgoing ? ["sending", "sent", "interrupted"].includes(job.status) : job.status === "downloading";
+  const event = copying ? { done: outgoing ? job.bytes_sent : job.bytes_received, total: job.total_bytes, unit: "bytes" } : job.progress || {};
+  const label = copying ? (outgoing ? "Sending archive" : "Receiving archive") : phases[event.phase] || (job.status === "preparing" ? (outgoing ? "Preparing export" : "Preparing on the sending device") : transferJobLabel(job.status));
+  const unit = ["bytes", "files", "rows", "pages"].includes(event.unit) ? event.unit : null;
+  const done = unit && Number.isSafeInteger(event.done) && event.done >= 0 ? event.done : null;
+  const total = done !== null && Number.isSafeInteger(event.total) && event.total > 0 && event.total >= done ? event.total : null;
+  const count = value => unit === "bytes" ? formatTransferBytes(value) : value.toLocaleString();
+  const detail = done === null ? "Working — total not available yet" : total === null ? `${count(done)} ${unit === "bytes" ? "processed" : `${unit} processed`} · total not available yet` : `${count(done)} of ${count(total)}${unit === "bytes" ? "" : ` ${unit === "files" ? "file entries" : unit}`}`;
+  return { label, done, total, detail };
 }
 
 export function sessionIdentity(session) { return String(session?.session_id ?? session?.id ?? ""); }
@@ -76,6 +89,7 @@ async function api(path, options = {}) {
 }
 
 function activeJobs() { return (state.status?.jobs || []).some((job) => !TERMINAL.has(job.status)); }
+function activeTransfers() { return activeJobs() || (state.status?.exports || []).some((job) => ["preparing", "sending"].includes(job.status)); }
 function setBusy(value) {
   state.busy = value;
   for (const id of ["transferEnable", "transferDisable", "transferInvite", "transferPair", "transferRefresh"]) {
@@ -98,6 +112,7 @@ async function mutate(message, operation) {
 
 function renderStatus(payload) {
   state.status = payload;
+  state.stale = false;
   const running = Boolean(payload?.running);
   byId("transferBadge").dataset.state = running ? "healthy" : "neutral";
   text("transferBadge", running ? "Wi-Fi transfers on" : "Off");
@@ -110,7 +125,7 @@ function renderStatus(payload) {
   text("transferEndpoint", running ? `Available on your home network${payload.endpoint ? ` · ${payload.endpoint}` : ""}. Keep both apps open during transfers.` : "Enable transfers on both devices. Turning transfers off does not remove your saved history.");
   if (!running) { byId("transferInvitation").value = ""; byId("transferInvitationPanel").hidden = true; byId("transferInvitationQr").removeAttribute("src"); }
   renderPeers(payload.peers || []);
-  renderJobs(payload.jobs || []);
+  renderJobs(payload.jobs || [], payload.exports || []);
   setBusy(state.busy);
 }
 
@@ -133,10 +148,17 @@ async function refresh({ announce = false } = {}) {
   if (state.refreshing) return;
   state.refreshing = true;
   try {
+    const wasStale = state.stale;
     const payload = await api("/status"); renderStatus(payload);
     if (payload.error) notice(payload.error, "error");
-    else if (announce) notice(payload.running ? "Ready. Pair another device or browse an existing pairing below." : "Wi-Fi transfers are off. Give this device a name, then enable transfers.");
-  } catch (error) { notice(error.message, "error"); text("transferBadge", "Unavailable"); byId("transferBadge").dataset.state = "error"; }
+    else if (announce || wasStale) notice(payload.running ?
+      (payload.jobs?.length || payload.exports?.length ? "Transfer status is shown below. Check the receiving device for the final import result." : "Ready. Pair another device or browse an existing pairing below.") :
+      "Wi-Fi transfers are off. Give this device a name, then enable transfers.");
+  } catch (error) {
+    notice(`${error.message} Progress below is the last known state.`, "error");
+    text("transferBadge", "Unavailable"); byId("transferBadge").dataset.state = "error";
+    state.stale = true; renderJobs(state.status?.jobs || [], state.status?.exports || []);
+  }
   finally { state.refreshing = false; }
 }
 
@@ -260,21 +282,46 @@ async function pull() {
   });
 }
 
-function renderJobs(jobs) {
-  const signature = JSON.stringify(jobs);
+function renderStage(card, job, outgoing = false) {
+  const stage = transferStage(job, outgoing);
+  const percent = stage.total === null ? "" : ` · ${Math.floor(100 * stage.done / stage.total)}% of this stage`;
+  card.append(textElement("div", "transfer-stage", `${stage.label}${percent}`));
+  if (!state.stale || stage.total !== null) {
+    const progress = document.createElement("progress");
+    progress.setAttribute("aria-label", `${stage.label}${percent}${state.stale ? " (last known)" : ""}`);
+    if (stage.total !== null) { progress.max = stage.total; progress.value = stage.done; }
+    card.append(progress);
+  }
+  card.append(textElement("div", "field-help", stage.detail));
+}
+function directionLabel(card, job, outgoing) {
+  const peer = state.status?.peers?.find(peer => peer.id === job.peer_id);
+  card.append(textElement("div", "transfer-direction", `${outgoing ? "Sending to" : "Receiving from"} ${peer?.name || "paired device"}`));
+  if (state.stale) card.append(textElement("p", "transfer-stale", "Updates unavailable — last known progress shown."));
+}
+function renderJobs(jobs, exports = []) {
+  const signature = JSON.stringify([jobs, exports, state.stale, state.status?.peers]);
   if (signature === state.jobSignature) return;
   state.jobSignature = signature;
-  const host = byId("transferJobs"); host.replaceChildren(); byId("transferJobsPanel").hidden = !jobs.length;
+  const host = byId("transferJobs"); host.replaceChildren(); byId("transferJobsPanel").hidden = !jobs.length && !exports.length;
+  for (const job of [...exports].reverse()) {
+    const card = textElement("article", "transfer-job", ""); card.dataset.status = job.status; card.dataset.direction = "outgoing";
+    directionLabel(card, job, true);
+    const header = textElement("div", "section-heading", "");
+    const label = { preparing: "Preparing history", ready: "Ready to send", sending: "Sending history", sent: "File sent — check receiving device", interrupted: "Sending interrupted", failed: "Export needs attention", expired: "Export expired" }[job.status] || "Checking export";
+    header.append(textElement("strong", "", label), textElement("span", "field-help", `${job.session_ids?.length ?? 0} sessions`)); card.append(header);
+    if (["preparing", "sending", "sent", "interrupted"].includes(job.status)) renderStage(card, job, true);
+    const detail = { ready: "Archive prepared. Waiting for the receiving device to download it.", sent: "Sending is finished. The receiving device still needs to verify and import the archive; check it for the final result.", interrupted: "The connection stopped. Retry on the receiving device to resume copying.", expired: "This cached export has expired. Retry on the receiving device to prepare another." }[job.status];
+    if (detail) card.append(textElement("p", "field-help", detail));
+    if (job.status === "failed") card.append(textElement("p", "field-help", `${job.error || "Could not prepare history."} Retry on the receiving device.`));
+    host.append(card);
+  }
   for (const job of [...jobs].reverse().slice(0, 8)) {
-    const card = textElement("article", "transfer-job", ""); card.dataset.status = job.status;
+    const card = textElement("article", "transfer-job", ""); card.dataset.status = job.status; card.dataset.direction = "incoming";
+    directionLabel(card, job, false);
     const header = textElement("div", "section-heading", "");
     header.append(textElement("strong", "", transferJobLabel(job.status)), textElement("span", "field-help", `${job.session_ids?.length ?? ""}${job.session_ids ? " sessions" : ""}`)); card.append(header);
-    if (!TERMINAL.has(job.status)) {
-      const progress = document.createElement("progress"); progress.setAttribute("aria-label", transferJobLabel(job.status));
-      if (job.status === "downloading" && Number(job.total_bytes) > 0) { progress.max = Number(job.total_bytes); progress.value = Math.min(Number(job.bytes_received) || 0, progress.max); }
-      card.append(progress);
-    }
-    if (job.status === "downloading") card.append(textElement("div", "field-help", `${formatTransferBytes(job.bytes_received ?? 0)}${job.total_bytes ? ` of ${formatTransferBytes(job.total_bytes)}` : " copied"}`));
+    if (!TERMINAL.has(job.status)) renderStage(card, job);
     if (job.status === "completed") {
       const result = job.result || {};
       const description = [];
@@ -314,8 +361,8 @@ function acceptInvitation(invitation) {
 function openTransfers() { byId("tab-connection")?.click(); byId("transferPanel")?.scrollIntoView({ block: "start" }); byId("transferPanel")?.focus({ preventScroll: true }); }
 function schedule() {
   clearTimeout(state.timer); state.timer = null;
-  if (document.hidden || (!state.active && !activeJobs())) return;
-  state.timer = setTimeout(async () => { if (!state.busy) await refresh(); schedule(); }, activeJobs() ? 1500 : 5000);
+  if (document.hidden || (!state.active && !activeTransfers())) return;
+  state.timer = setTimeout(async () => { if (!state.busy) await refresh(); schedule(); }, activeTransfers() ? 1500 : 5000);
 }
 function setActive(value) { state.active = value; if (value && !document.hidden) void refresh({ announce: !state.status }).finally(schedule); else schedule(); }
 
@@ -334,7 +381,7 @@ function initialize() {
   byId("libraryOpenTransfers").addEventListener("click", openTransfers);
   byId("connectionRunChecks").addEventListener("click", () => { byId("diagnoseNetwork")?.click(); byId("diagnoseNetwork")?.scrollIntoView({ block: "center" }); });
   window.addEventListener("pitwall:pagechange", (event) => setActive(event.detail?.page === "connection"));
-  document.addEventListener("visibilitychange", () => { if (document.hidden) schedule(); else if (state.active || activeJobs()) void refresh().finally(schedule); });
+  document.addEventListener("visibilitychange", () => { if (document.hidden) schedule(); else if (state.active || activeTransfers()) void refresh().finally(schedule); });
   window.PitWallTransfers = { acceptInvitation, open: openTransfers };
   setActive(byId("connection").classList.contains("active"));
 }

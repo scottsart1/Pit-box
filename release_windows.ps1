@@ -63,6 +63,10 @@ try {
   if (-not (Test-Path ".venv\Scripts\python.exe")) { throw "No .venv found. Run install_windows.ps1 first." }
   $python = ".\.venv\Scripts\python.exe"
 
+  Step "Require production signing configuration" {
+    Run "signing preflight" { & $python -c "from distribution.packaging.signing import configuration; configuration(required=True)" }
+  }
+
   # Licensing tests generate temporary keys. The production private key is
   # only needed to issue paid licences, never to test or build the app.
 
@@ -73,7 +77,9 @@ try {
   }
 
   Step "Pull the release commit" {
-    Run "git pull" { git pull }
+    $changes = & git status --porcelain
+    if ($LASTEXITCODE -ne 0 -or $changes) { throw "Release requires a clean checkout. Preserve and commit reviewed changes first." }
+    Run "git pull" { git pull --ff-only }
   }
 
   Step "Install dependencies (including packaging tools)" {
@@ -107,6 +113,13 @@ try {
   $bytes = (Get-Item $installer).Length
   $sha = (Get-FileHash $installer -Algorithm SHA256).Hash
   Write-Host "Installer: $bytes bytes, SHA-256 $sha" -ForegroundColor Green
+
+  Step "Verify the publisher before uploading anything" {
+    . (Join-Path $PSScriptRoot 'distribution/packaging/verify-production-signature.ps1')
+    Assert-ProductionSignature -Path $installer -ExpectedThumbprint $env:PITBOX_WINDOWS_CERT_SHA1
+    $frozenApp = Join-Path (Split-Path (Split-Path $installer)) 'dist/Your Pit Box/Your Pit Box.exe'
+    Assert-ProductionSignature -Path $frozenApp -ExpectedThumbprint $env:PITBOX_WINDOWS_CERT_SHA1
+  }
 
   Step "Upload the installer to R2 (before the site, always)" {
     Run "wrangler r2 object put" {

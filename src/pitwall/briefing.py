@@ -420,8 +420,11 @@ class BriefingEngine:
             },
         }
 
-    async def post_race(self) -> dict[str, Any]:
-        state = await self.store.snapshot_analysis()
+    async def post_race(self, *, state: dict[str, Any] | None = None) -> dict[str, Any]:
+        # A deferred debrief must use the chequered-flag snapshot, not whichever
+        # session happens to be live after a slow database/provider response.
+        if state is None:
+            state = await self.store.snapshot_analysis()
         session_uid = int(state.get("session_uid", 0) or 0)
         base = await self.database.session_debrief(session_uid)
         classification = dict(state.get("final_classification", {}) or {})

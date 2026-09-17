@@ -590,6 +590,48 @@ def test_macos_is_not_advertised_as_available():
     assert "Windows 10 or 11" in INDEX
 
 
+def test_android_download_is_not_advertised_before_release_packaging():
+    section = INDEX.split('id="devices"', 1)[1].split("</section>", 1)[0]
+    assert "Windows · available" in section
+    assert "Android · release download pending" in section
+    assert "No public Android download yet" in section
+    assert "signed release package is being prepared" in section
+    assert not re.search(r'href="[^"]+\.apk(?:[?#][^"]*)?"', INDEX)
+    assert "full-length race" in GUIDE.lower()
+
+
+def test_beta_transmission_is_distinct_from_reception_and_history_copy():
+    for page in (INDEX, GUIDE):
+        transmission = page.split('id="telemetry-transmission"', 1)[1]
+        assert "Telemetry transmission · beta" in transmission
+        assert "best-effort" in transmission
+        assert "UDP forwarding" in transmission
+    assert 'href="guide.html#telemetry-transmission"' in INDEX
+    assert "Take your history with you · beta" in INDEX
+    assert "Device-to-device history transfer · beta" in GUIDE
+    assert "packet count alone does not prove delivery" in GUIDE
+    assert "forwarding loops" in GUIDE
+
+
+def test_cross_device_copy_is_not_promised_as_automatic_sync():
+    for page in (INDEX, GUIDE):
+        assert "not automatic cloud sync" in page
+        assert "API keys" in page
+        assert "previously pruned" in page.lower()
+    assert "Stop telemetry on the receiving device" in INDEX
+    assert "not</strong> confirmation" in GUIDE
+    assert "do not force-close the app" in GUIDE
+    assert 'href="guide.html#history-transfer"' in INDEX
+    assert 'id="history-transfer"' in GUIDE
+
+
+def test_voice_setup_separates_credentials_mic_and_audio_output():
+    android = GUIDE.split('id="android"', 1)[1].split("</section>", 1)[0]
+    for check in ("microphone access", "test the provider key", "Bluetooth routing",
+                  "does not verify the microphone or speaker"):
+        assert check in android
+
+
 def test_no_destructive_tamper_response_is_claimed():
     # The kill-switch was dropped for refuse-to-run; the EULA must match the
     # code, and must not disclose a behaviour that no longer exists.

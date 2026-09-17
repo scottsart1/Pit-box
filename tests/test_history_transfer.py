@@ -73,6 +73,81 @@ def _rewrite(path: Path, *, row_change=None, manifest_change=None, extra=None) -
 
 
 @pytest.mark.asyncio
+async def test_measured_export_import_progress_and_observer_failures_are_advisory(tmp_path):
+    source, outgoing = await _installation(tmp_path / "source")
+    dest, incoming = await _installation(tmp_path / "dest")
+    key = await _session(source, 501, trace=True)
+    bundle = tmp_path / "progress.pitbox"
+    exported, imported = [], []
+    outgoing.export_bundle([key], bundle, progress=exported.append)
+    assert {e["phase"] for e in exported} >= {"snapshot", "records", "packing", "finalizing"}
+    assert next(e for e in reversed(exported) if e["phase"] == "packing") == {
+        "phase": "packing", "done": 3, "total": 3, "unit": "files"}
+    result = incoming.import_bundle(bundle, progress=imported.append)
+    assert result["status"] == "imported"
+    assert {e["phase"] for e in imported} >= {"checking_rows", "extracting", "checking_links", "importing_rows", "saving_files", "committing"}
+    assert imported[-1] == {"phase": "committing"}, "Completion is only reported by the caller after commit"
+    for event in exported + imported:
+        assert set(event) <= {"phase", "done", "total", "unit"}
+        if "total" in event:
+            assert 0 <= event["done"] <= event["total"]
+    def broken_observer(event):
+        raise RuntimeError("The progress display went away")
+    second = tmp_path / "second.pitbox"
+    outgoing.export_bundle([key], second, progress=broken_observer)
+    repeated = incoming.import_bundle(second, progress=broken_observer)
+    assert repeated["status"] == "imported" and repeated["imported_rows"] == 0
+    assert _count(dest, "recorded_sessions") == 1
+
+
+@pytest.mark.parametrize("value", [None, [], {"phase": []}, {"phase": "unknown"},
+    {"phase": "packing", "unit": [], "path": "private"},
+    {"phase": "packing", "unit": "files", "done": True, "total": -1},
+    {"phase": "packing", "unit": "files", "done": 5, "total": 3}])
+def test_untrusted_progress_is_bounded_and_whitelisted(value):
+    from pitwall.transfer_progress import public_progress
+    result = public_progress(value)
+    if result:
+        assert set(result) <= {"phase", "done", "total", "unit"}
+        if "total" in result:
+            assert result["total"] >= result.get("done", 0)
+        assert "done" not in result or type(result["done"]) is int
+
+
+@pytest.mark.asyncio
+async def test_recovered_legacy_closure_exports_without_mutating_source_or_breaking_roundtrip(tmp_path):
+    source, outgoing = await _installation(tmp_path / "source")
+    dest, incoming = await _installation(tmp_path / "dest")
+    key = await _session(source, 701, trace=True)
+    with sqlite3.connect(source.path) as db:
+        db.execute("UPDATE sessions SET ended_at=NULL WHERE session_uid=701")
+        db.execute("UPDATE recorded_sessions SET status='incomplete' WHERE id=?", (key,))
+    bundle = tmp_path / "recovered.pitbox"
+    exported = outgoing.export_bundle([key], bundle)
+    assert any("closure times for 1 recovered" in warning for warning in exported["warnings"])
+    assert incoming.import_bundle(bundle)["imported_sessions"] == 1
+    with sqlite3.connect(dest.path) as db:
+        assert db.execute("SELECT status FROM recorded_sessions WHERE id=?", (key,)).fetchone()[0] == "incomplete"
+        assert db.execute("SELECT ended_at FROM sessions WHERE session_uid=701").fetchone()[0] > 0
+    assert incoming.import_bundle(bundle)["imported_rows"] == 0
+    returned = tmp_path / "returned.pitbox"
+    incoming.export_bundle([key], returned)
+    report = outgoing.import_bundle(returned)
+    assert report["status"] == "imported" and report["imported_rows"] == 0
+    with sqlite3.connect(source.path) as db:
+        assert db.execute("SELECT ended_at FROM sessions WHERE session_uid=701").fetchone()[0] is None
+        assert db.execute("SELECT status FROM recorded_sessions WHERE id=?", (key,)).fetchone()[0] == "incomplete"
+    assert _count(dest, "feedback") == _count(source, "feedback") == 1
+
+
+@pytest.mark.parametrize("value", [None, "", "not-a-date", "2026-09-01T10:00:00", "1970-01-01T00:00:00+00:00"])
+def test_legacy_recovery_requires_an_existing_valid_catalog_closure(value):
+    from pitwall.history_transfer import _catalog_end_timestamp
+    with pytest.raises(HistoryTransferError, match="valid closure time"):
+        _catalog_end_timestamp(value)
+
+
+@pytest.mark.asyncio
 async def test_complete_bidirectional_transfer_preserves_trace_feedback_and_idempotency(tmp_path):
     source, outgoing = await _installation(tmp_path / "source")
     dest, incoming = await _installation(tmp_path / "destination")

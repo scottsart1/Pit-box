@@ -17,6 +17,7 @@ not blocked on owning a Mac.
 from __future__ import annotations
 
 import argparse
+import ast
 import importlib.util
 import os
 import platform
@@ -27,6 +28,8 @@ import sys
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
+
+from .signing import sign_windows_artifact
 
 DIST_ROOT = Path(__file__).resolve().parents[1]
 REPO_ROOT = DIST_ROOT.parent
@@ -173,13 +176,29 @@ def write_eula(app_dir: Path) -> Path:
     return target
 
 
-def build_installer(app_dir: Path, version: str = "4.10.0") -> Path | None:
+def package_version() -> str:
+    """Read the checked-out version without requiring an editable install."""
+    source = REPO_ROOT / "src" / "pitwall" / "__init__.py"
+    for node in ast.parse(source.read_text(encoding="utf-8")).body:
+        if isinstance(node, ast.Assign) and any(
+            isinstance(target, ast.Name) and target.id == "__version__"
+            for target in node.targets
+        ):
+            value = ast.literal_eval(node.value)
+            if isinstance(value, str) and re.fullmatch(r"\d+\.\d+\.\d+", value):
+                return value
+    raise ValueError("The engine package must declare a semantic release version.")
+
+
+def build_installer(app_dir: Path, version: str | None = None) -> Path | None:
     """Compile the one-click installer, if Inno Setup is available.
 
     Returns None rather than failing the build when it is absent: the zip is
     still a valid deliverable, and the compiler is a separate download that
     only matters when cutting a release.
     """
+    if version is None:
+        version = package_version()
     compiler = _inno_compiler()
     if compiler is None:
         print(
@@ -200,6 +219,8 @@ def build_installer(app_dir: Path, version: str = "4.10.0") -> Path | None:
         str(Path(__file__).resolve().parent / "pitwall.iss"),
     ])
     produced = OUTPUT_DIR / "PitWall-Setup.exe"
+    if produced.exists():
+        sign_windows_artifact(produced)
     return produced if produced.exists() else None
 
 
@@ -285,6 +306,8 @@ def build_windows() -> Path:
         raise SystemExit(f"expected an executable at {executable}")
 
     write_eula(produced)
+    # Signing rewrites the executable: stamp integrity only after that step.
+    sign_windows_artifact(executable)
     digest = stamp_manifest(produced, executable)
     print(f"Integrity manifest stamped: {digest[:16]}…")
 

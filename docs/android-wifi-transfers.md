@@ -41,6 +41,34 @@ partial bytes can resume, including after a restart. Source exports expire
 after one hour; an expired export starts a fresh download. Turning sharing off
 pauses copying. An import already committing finishes its transaction.
 
+### Progress on both devices
+
+The transfer panel shows outgoing exports as well as incoming copies, above
+the pairing controls. Each card names the other device and distinguishes
+preparation, copying, verification and import. Bars measure **the current
+stage**, not a guessed percentage of the entire transfer. Snapshot pages,
+records, file entries and network bytes come from the operation itself.
+File-entry counts include missing entries checked during export; the receiving
+device's completion report still lists missing-detail warnings.
+
+When a stage has no known total, the panel shows an indeterminate loading bar
+and any available count. A failed status refresh marks the display as last
+known progress and stops indeterminate animation. Retry resumes the existing
+download where possible, without retaining a stale preparation percentage.
+
+**File sent** on the sender only confirms the archive was written to the
+connection. It does not confirm a successful import. The receiving device
+verifies the archive and commits its history before showing **History copied**.
+Check that device for the final result or any conflict. Neither device needs
+new permissions for these indicators.
+
+Progress fields are optional protocol metadata, so older transfer-capable
+builds still work; an older sender cannot provide detailed preparation counts.
+Progress is throttled in memory and does not add per-file journal writes or
+change archive limits, preparation timeouts, import transactions or TLS checks.
+
+### Network changes
+
 If an IP address changes, turn sharing off and on, then pair again using a new
 invitation. Allow the app's TCP port 20778 through the Windows firewall on the
 private network when needed. Never expose or forward this port on the router.

@@ -577,6 +577,7 @@ class SessionAssembler:
         player_max_samples_per_group: int = 24_000,
         max_open_laps: int = 96,
         max_finalized_batches: int = 512,
+        retain_finalized_samples: bool = True,
         max_event_history: int = 2_048,
         max_live_groups: int = 768,
         max_groups_per_lap: int = 64,
@@ -613,6 +614,7 @@ class SessionAssembler:
             max_session_uids=int(max_session_uid_history),
         )
         self.batch_sink = batch_sink
+        self.retain_finalized_samples = bool(retain_finalized_samples)
         self.invalidation_sink = invalidation_sink
         self.field_trace_hz = float(field_trace_hz)
         self.max_samples_per_group = int(max_samples_per_group)
@@ -658,6 +660,12 @@ class SessionAssembler:
 
     @property
     def finalized_batches(self) -> tuple[FinalizedLapBatch, ...]:
+        """Recent batches, without trace groups in metadata-only live mode.
+
+        Emitted results and the archive sink always receive the full batch.
+        Only the assembler's rewind bookkeeping can omit already-handed-off
+        samples; offline callers retain the existing full-history default.
+        """
         return tuple(self._finalized)
 
     @property
@@ -687,7 +695,13 @@ class SessionAssembler:
     def _remember_batch(self, batch: FinalizedLapBatch) -> None:
         if len(self._finalized) == self._finalized.maxlen:
             self._counters.finalized_history_drops += 1
-        self._finalized.append(batch)
+        # The live app's archive worker owns emitted samples until persisted.
+        # Retaining another 512 full car-laps here can keep hundreds of MB
+        # alive throughout a race. Flashback reconciliation only reads batch
+        # identity, time/frame bounds and validity, never these trace groups.
+        self._finalized.append(
+            batch if self.retain_finalized_samples else replace(batch, groups=())
+        )
         self._counters.lap_batches_emitted += 1
         if not batch.complete:
             self._counters.incomplete_laps += 1

@@ -1,6 +1,7 @@
 """Observed 202-packet rotation gap, exercised with deterministic barriers."""
 
 import asyncio
+from datetime import datetime, timezone
 
 import pytest
 
@@ -40,6 +41,36 @@ def recorded(root, catalog):
                    and frame.source == ("127.0.0.1", 29999) for frame in frames)
         result.append((session, [frame.data.decode() for frame in frames]))
     return result
+
+
+@pytest.mark.asyncio
+async def test_rotations_with_identical_clock_ticks_keep_distinct_captures(tmp_path, monkeypatch):
+    # Windows wall-clock granularity and clock corrections can repeat a tick.
+    # Capture identity must not depend on wall time being unique.
+    import pitwall.capture_service as capture_module
+
+    class FrozenClock:
+        @staticmethod
+        def now(tz):
+            return datetime(2026, 9, 17, 0, 0, 0, 123456, tzinfo=timezone.utc)
+
+    monkeypatch.setattr(capture_module, "datetime", FrozenClock)
+    service = CaptureService(tmp_path, queue_size=32)
+    catalog = PausedCatalog()
+    coordinator = SessionCaptureCoordinator(service, catalog, tmp_path)
+    await coordinator.start()
+    try:
+        assert offer(service, "startup")
+        for session in ("a", "b", "c"):
+            coordinator.observe_session(session)
+            await coordinator.wait_idle()
+            assert offer(service, session)
+    finally:
+        await coordinator.stop()
+    assert recorded(tmp_path, catalog) == [(None, ["startup"]), ("a", ["a"]),
+                                          ("b", ["b"]), ("c", ["c"])]
+    assert len({path for _, path in catalog.records}) == 4
+    assert service.snapshot().write_errors == 0
 
 
 @pytest.mark.asyncio

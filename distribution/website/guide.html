@@ -36,6 +36,7 @@
         <div class="hero-actions">
           <a class="button primary" href="#step-1">Start with the download</a>
           <a class="button ghost" href="#troubleshooting">Troubleshooting</a>
+          <a class="button ghost" href="#android">Android &amp; history transfer</a>
         </div>
       </div>
       <aside class="guide-status" aria-label="Setup at a glance">
@@ -79,7 +80,7 @@
         <ol>
           <li>Open the <a href="index.html#download">Download</a> section and select <strong>Download for Windows</strong>.</li>
           <li>A prompt offers to take your email so you hear about new versions. Leave one and choose <strong>Notify me and download</strong>, or choose <strong>Skip — just download</strong>. Either way the download starts.</li>
-          <li>Save <code>PitWall-Setup.exe</code>. It is about 33&nbsp;MB.</li>
+          <li>Save <code>PitWall-Setup.exe</code>. The download size varies by release.</li>
         </ol>
         <div class="guide-tip"><strong>There is no code and no account.</strong> The download is the complete application. If you installed a version from before it went free, run this installer over the top; your sessions and settings are kept.</div>
       </div>
@@ -208,6 +209,61 @@
         <div class="shot"><img src="img/02-drive-radio-feed.png" alt="The real Your Pit Box Drive screen with live race data, strategy panels, engineer radio feed, wake-word status, and push-to-talk controls." width="1600" height="1560" loading="lazy"></div>
         <figcaption>The radio is heard through the PC. Your Pit Box does not overlay or install anything in the game, on PS5 / PC.</figcaption>
       </figure>
+    </div>
+  </section>
+
+  <section id="android" class="guide-help soft">
+    <div class="wrap">
+      <div class="eyebrow">Android · release download pending</div>
+      <h2>Using the native Android app</h2>
+      <p>The signed Android release download is being prepared. These steps are for people who already have the app; the public Windows download does not install on a tablet. Do not uninstall an existing Android app to force an update: a different signing key or package can leave your saved history behind. Back up first and use an approved, compatible update.</p>
+      <ol>
+        <li>Connect the Android device and console to the same private home network. Open Your Pit Box on the tablet; the laptop is not required for the native Android engine.</li>
+        <li>Open <strong>Connection</strong> and use that device's recommended address as the game's <strong>UDP IP Address</strong>, with port <strong>20777</strong> and format <strong>2026</strong>. A tablet's address can change when it reconnects to Wi-Fi.</li>
+        <li>Start an on-track session and confirm <strong>Receiving telemetry</strong>. A listening socket or a saved lap chart alone does not prove that fresh packets are arriving.</li>
+        <li>For radio, save and test the provider key in Connection, allow Android microphone access, and enable voice in the app. Speech services need an OpenAI key and internet access; the dashboard can receive telemetry without voice.</li>
+        <li>Check microphone input separately from the reply. If the app hears input but you hear nothing, check the selected output, media volume and Bluetooth routing. A key test does not verify the microphone or speaker.</li>
+      </ol>
+      <p>Before a full-length race, check your microphone, selected speaker or headset, wake phrase and background settings on the device you will use. A short radio check verifies that setup, not every Bluetooth device or power-saving mode.</p>
+    </div>
+  </section>
+
+  <section id="history-transfer" class="guide-help">
+    <div class="wrap">
+      <div class="eyebrow">Device-to-device history transfer · beta</div>
+      <h2>Copy completed sessions between devices</h2>
+      <p><strong>History transfer is manual, not automatic cloud sync.</strong> Each device keeps its own library. Pairing does not sync keys, microphone permissions or a live race. This feature is beta: keep the originals until you have checked the receiving library.</p>
+      <ol>
+        <li>Finish the receiving device's recording and stop its telemetry listener. Keep both apps open on the same private network and enable Wi-Fi transfers on both.</li>
+        <li>Use the displayed QR code or invitation to pair the devices you trust. Then select completed sessions on the sender from the receiving app.</li>
+        <li>Start with a small selection. Very large libraries may exceed archive limits or time out during preparation; a larger timeout alone does not make an oversized archive importable.</li>
+        <li>In the next builds, both devices show the current stage. Preparing packages the history; sending moves the file; checking verifies it; importing saves it. A full send bar is <strong>not</strong> confirmation that the history is imported.</li>
+        <li>Wait for completion on the receiving device, then check its Library. Matching sessions already present are skipped. Only available history is copied; previously pruned samples cannot be reconstructed.</li>
+        <li>Turn transfers off and restart telemetry on the device you want to use for the next race. Check the game's UDP destination again if switching from laptop to tablet.</li>
+      </ol>
+      <details>
+        <summary>It timed out, or I want to play now</summary>
+        <p>Do not delete your library, uninstall the app or repeatedly start new copies. Check both devices first: the sender may still be preparing the same export. Retry the existing failed transfer when appropriate, or choose a smaller batch after it has stopped. To pause transfers, turn Wi-Fi transfers off and wait until no job is preparing, downloading or importing before restarting telemetry. An import already saving history must finish safely; do not force-close the app.</p>
+      </details>
+      <details>
+        <summary>What is actually transferred?</summary>
+        <p>The selected sessions and their available history, traces and linked reference data are copied over the local network. This is not a complete device backup. API keys, private connection settings and microphone permissions stay on their original device. Keep a separate recoverable backup before replacing an app or making a major upgrade.</p>
+      </details>
+    </div>
+  </section>
+
+  <section id="telemetry-transmission" class="guide-help soft">
+    <div class="wrap">
+      <div class="eyebrow">Telemetry transmission · beta</div>
+      <h2>Forward live telemetry to another app or device</h2>
+      <p>Optional UDP forwarding is separate from saved-session transfers and from receiving game telemetry directly. A forwarded packet is best-effort, not a delivery receipt.</p>
+      <ol>
+        <li>First confirm that the sending engineer shows <strong>Receiving telemetry</strong> from the game.</li>
+        <li>In <strong>Connection → UDP forwarding</strong>, add the destination app's address and listening port. Prefer a trusted destination on the same private network.</li>
+        <li>Enable that target and check the receiving app for fresh telemetry. The sender's packet count alone does not prove delivery.</li>
+        <li>Avoid forwarding loops or sending both a direct and forwarded feed to the same receiver. If reception is unreliable, disable forwarding and point the game directly at the engineer you are using.</li>
+      </ol>
+      <p>Beta forwarding does not copy your saved library, API keys or microphone permissions. Do not forward telemetry to a public address unless you intend to share it with that destination.</p>
     </div>
   </section>
 

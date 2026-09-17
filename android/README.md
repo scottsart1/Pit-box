@@ -58,7 +58,7 @@ using a name they do not provide.
 
 ## Building
 
-Prerequisites: JDK 17+, Android SDK with `platforms;android-35` and
+Prerequisites: JDK 17 or 21, Android SDK with `platforms;android-36` and
 `build-tools;35.0.0`, Python 3.13 on PATH (or `-Ppitbox.buildPython=`),
 Python 3.12 with `cibuildwheel` and `uv` for the wheels, and Rust.
 
@@ -92,16 +92,18 @@ a new certificate as an in-place upgrade path.
 
 For distribution, configure an existing, securely backed-up signing key via
 `PITBOX_KEYSTORE_PATH`, `PITBOX_KEYSTORE_PASSWORD`, `PITBOX_KEY_ALIAS`, and
-`PITBOX_KEY_PASSWORD`, then run `./gradlew assembleRelease`. Without those
-variables Gradle can produce an unsigned release build for compilation
-checks, which is not installable. Never check a key or its passwords into
+`PITBOX_KEY_PASSWORD`, then run `./gradlew assembleRelease` (or `bundleRelease`
+for a Play submission). Release builds now fail closed if signing is absent
+or incomplete. Use `assembleDebug` for candidate compilation checks.
+Never generate a replacement signing identity to get around an update error.
+Never check a key or its passwords into
 the repository. See [Android app signing](https://developer.android.com/studio/publish/app-signing).
 
 ### Executable emulator verification
 
 `.github/workflows/android-apk.yml` runs on the implementation branch and
 relevant pull requests. After building the APK for both ABIs, it launches an
-API 35 x86_64 Pixel C tablet emulator and runs `emulator-smoke.py`. To run it
+API 36 x86_64 Pixel C tablet emulator and runs `emulator-smoke.py`. To run it
 with an already booted emulator, from the repository root:
 
 ```bash

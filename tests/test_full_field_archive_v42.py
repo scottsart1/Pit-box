@@ -21,15 +21,17 @@ from pitwall.trace_store import TraceStore
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("retain_samples", [True, False])
 async def test_opponent_batch_is_archived_and_player_batch_is_left_to_legacy_path(
-    tmp_path: Path,
+    tmp_path: Path, retain_samples: bool,
 ) -> None:
     database = PitWallDatabase(tmp_path / "pitwall.sqlite3")
     await database.initialize()
     trace_store = TraceStore(tmp_path / "traces")
     archive = FullFieldArchiveService(database.path, trace_store, queue_size=8)
     await archive.start()
-    assembler = SessionAssembler(batch_sink=archive.submit, field_trace_hz=20)
+    assembler = SessionAssembler(batch_sink=archive.submit, field_trace_hz=20,
+                                 retain_finalized_samples=retain_samples)
 
     def stamp(frame: int, time_s: float) -> EventStamp:
         return EventStamp(

@@ -203,11 +203,13 @@ def test_full_field_coalescing_keeps_player_rate_and_emits_trace_store_batches(
     assert counters.samples_dropped == 0
 
 
-def test_flashback_invalidates_open_and_persisted_branch_without_mixing_samples() -> (
+@pytest.mark.parametrize("retain_samples", [True, False])
+def test_flashback_invalidates_open_and_persisted_branch_without_mixing_samples(retain_samples) -> (
     None
 ):
     invalidations = []
-    assembler = SessionAssembler(invalidation_sink=invalidations.append)
+    assembler = SessionAssembler(invalidation_sink=invalidations.append,
+                                 retain_finalized_samples=retain_samples)
     begin(assembler)
     participant(assembler, 0, "Player", driver_id=7)
 
@@ -242,6 +244,28 @@ def test_flashback_invalidates_open_and_persisted_branch_without_mixing_samples(
     assert post.invalidated is False
     assert post.groups[0].sample_count == 1
     assert post.groups[0].samples[0]["speed_mps"] == 80.0
+
+
+def test_live_bookkeeping_releases_sample_groups_but_sink_and_result_keep_exact_data():
+    emitted = []
+    assembler = SessionAssembler(batch_sink=emitted.append, retain_finalized_samples=False)
+    begin(assembler)
+    participant(assembler, 0, "Player", driver_id=7)
+    for lap in range(1, 41):
+        base = lap * 100
+        for offset in range(10):
+            assembler.consume(sample_event("session-a", 0, lap, base + offset,
+                                           speed=lap + offset, distance=offset))
+        result = complete_lap(assembler, 0, lap, base + 11).finalized_batches[0]
+        assert emitted[-1] is result
+        assert result.sample_count == 10
+        assert [row["speed_mps"] for row in result.groups[0].samples] == list(range(lap, lap + 10))
+    history = assembler.finalized_batches
+    assert len(history) == 40
+    assert sum(batch.sample_count for batch in history) == 0
+    assert [batch.batch_id for batch in history] == [batch.batch_id for batch in emitted]
+    assert all(batch.complete and batch.valid for batch in history)
+    assert sum(batch.sample_count for batch in emitted) == 400
 
 
 def test_identity_revision_closes_old_lap_and_session_restart_epochs_are_distinct() -> (

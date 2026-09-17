@@ -33,6 +33,8 @@ from socketserver import ThreadingMixIn
 from typing import Any, Callable
 from urllib.parse import quote, urlsplit
 
+from .transfer_progress import ProgressCallback, TransferProgress, public_progress
+
 PROTOCOL_VERSION = 1
 DEFAULT_PORT = 20778
 INVITATION_TTL = 300
@@ -53,11 +55,16 @@ class TransferError(RuntimeError):
         self.status = status
 
 
-def _sha256(path: Path) -> str:
+def _sha256(path: Path, progress: ProgressCallback | None = None) -> str:
     digest = hashlib.sha256()
+    report = TransferProgress(progress)
+    total, done = path.stat().st_size, 0
+    report("checksum", done, total, "bytes")
     with path.open("rb") as stream:
         for chunk in iter(lambda: stream.read(CHUNK_SIZE), b""):
             digest.update(chunk)
+            done += len(chunk)
+            report("checksum", done, total, "bytes")
     return digest.hexdigest()
 
 
@@ -275,19 +282,25 @@ class _TransferHandler(BaseHTTPRequestHandler):
         if range_value:
             self.send_header("Content-Range", f"bytes {start}-{size - 1}/{size}")
         self.end_headers()
-        with path.open("rb") as stream:
-            stream.seek(start)
-            while chunk := stream.read(CHUNK_SIZE):
-                # Revocation/stop interrupts an in-flight stream at a chunk boundary.
-                try:
-                    self.service._authenticate(self.headers.get("Authorization", ""))
-                except TransferError:
-                    # HTTP headers have already been sent; end this stream
-                    # rather than append a JSON error to the archive body.
-                    self.close_connection = True
-                    return
-                self.wfile.write(chunk)
-        self.close_connection = True
+        sent = start
+        self.service._delivery_progress(bundle["id"], "sending", sent)
+        try:
+            with path.open("rb") as stream:
+                stream.seek(start)
+                while chunk := stream.read(CHUNK_SIZE):
+                    # Revocation/stop interrupts an in-flight stream at a chunk boundary.
+                    try:
+                        self.service._authenticate(self.headers.get("Authorization", ""))
+                    except TransferError:
+                        # Headers have been sent; do not append JSON to the archive.
+                        return
+                    self.wfile.write(chunk)
+                    sent += len(chunk)
+                    self.service._delivery_progress(bundle["id"], "sending", sent)
+        finally:
+            # Socket writes do NOT confirm that the receiver imported anything.
+            self.service._delivery_progress(bundle["id"], "sent" if sent == size else "interrupted", sent)
+            self.close_connection = True
 
 
 class PeerTransferService:
@@ -375,6 +388,9 @@ class PeerTransferService:
                         and archive.is_file() and archive.stat().st_size == bundle.get("size")
                         and _valid_pin(bundle.get("sha256"))):
                     bundle["path"] = str(archive)
+                    # There is no live stream after restart, even if one was saved.
+                    bundle.pop("delivery_status", None)
+                    bundle.pop("bytes_sent", None)
                     self._bundles[key] = bundle
             for key, job in list(saved.get("jobs", {}).items())[-50:]:
                 if not _valid_id(key) or job.get("peer_id") not in self._peers:
@@ -557,7 +573,29 @@ class PeerTransferService:
     @staticmethod
     def _public_job(job: dict[str, Any]) -> dict[str, Any]:
         keys = ("id", "peer_id", "session_ids", "status", "bytes_received", "total_bytes", "result", "error")
-        return {key: job.get(key) for key in keys}
+        return {key: job.get(key) for key in keys} | {"progress": public_progress(job.get("progress"))}
+
+    def _public_export(self, bundle: dict[str, Any]) -> dict[str, Any]:
+        status = bundle["status"]
+        if status == "ready":
+            status = bundle.get("delivery_status", "ready")
+            if status in {"ready", "interrupted"} and self._clock() - bundle["created_at"] > BUNDLE_TTL:
+                status = "expired"
+        return {"id": bundle["id"], "peer_id": bundle["peer_id"],
+                "session_ids": bundle["session_ids"], "status": status,
+                "progress": public_progress(bundle.get("progress")),
+                "bytes_sent": bundle.get("bytes_sent", 0), "total_bytes": bundle.get("size"),
+                "error": bundle.get("error")}
+
+    def _progress(self, record: dict[str, Any], event: dict[str, Any] | None) -> None:
+        # Deliberately in memory only: progress must not fsync the journal per row/file.
+        with self._lock:
+            record["progress"] = event
+
+    def _delivery_progress(self, bundle_id: str, status: str, sent: int) -> None:
+        with self._lock:
+            if bundle_id in self._bundles:
+                self._bundles[bundle_id].update(delivery_status=status, bytes_sent=sent)
 
     def status(self) -> dict[str, Any]:
         with self._lock:
@@ -565,7 +603,8 @@ class PeerTransferService:
                 "device_id": self.device_id, "device_name": self.device_name,
                 "endpoint": self._endpoint, "certificate_sha256": self._pin,
                 "error": self._error, "peers": [self._public_peer(p) for p in self._peers.values()],
-                "jobs": [self._public_job(j) for j in self._jobs.values()]}
+                "jobs": [self._public_job(j) for j in self._jobs.values()],
+                "exports": [self._public_export(b) for b in self._bundles.values()]}
 
     def invite(self) -> dict[str, Any]:
         self._refresh_networks()
@@ -762,7 +801,8 @@ class PeerTransferService:
 
     @staticmethod
     def _public_bundle(bundle: dict[str, Any]) -> dict[str, Any]:
-        return {key: bundle.get(key) for key in ("id", "status", "size", "sha256", "error")}
+        return {key: bundle.get(key) for key in ("id", "status", "size", "sha256", "error")} | {
+            "progress": public_progress(bundle.get("progress"))}
 
     def _prepare_bundle(self, peer_id: str, values: Any) -> dict[str, Any]:
         ids = self._session_ids(values)
@@ -798,11 +838,12 @@ class PeerTransferService:
         path = Path(bundle["path"])
         try:
             with self._export_lock:
-                self.history.export_bundle(bundle["session_ids"], path)
+                self.history.export_bundle(bundle["session_ids"], path,
+                    progress=lambda event: self._progress(bundle, event))
             size = path.stat().st_size
             if size > MAX_BUNDLE:
                 raise TransferError("This transfer exceeds 8 GiB. Select fewer sessions.", "bundle_too_large")
-            digest = _sha256(path)
+            digest = _sha256(path, lambda event: self._progress(bundle, event))
             with self._lock:
                 bundle.update(status="ready", size=size, sha256=digest)
         except Exception as exc:
@@ -861,7 +902,7 @@ class PeerTransferService:
                 raise TransferError("Only a failed transfer can be retried.", "invalid_job_state", 409)
             if any(j["status"] not in {"completed", "failed", "conflict"} for j in self._jobs.values()):
                 raise TransferError("Wait for the current transfer to finish.", "transfer_busy", 409)
-            job.update(status="queued", error=None, cancelled=False)
+            job.update(status="queued", error=None, cancelled=False, progress=None)
             self._save_transfers()
             self._pool.submit(self._pull, job)
             return self._public_job(job)
@@ -880,7 +921,7 @@ class PeerTransferService:
             self._check_job(job)
             self._refresh_networks()
             peer = self._peer(job["peer_id"])
-            job["status"] = "preparing"
+            job.update(status="preparing", progress=None)
             previous = job.get("bundle") or {}
             bundle = job.get("bundle")
             if bundle:
@@ -896,6 +937,7 @@ class PeerTransferService:
             if not _valid_id(bundle.get("id")):
                 raise TransferError("Peer returned an invalid export identifier.", "invalid_response")
             job["bundle"] = bundle
+            self._progress(job, public_progress(bundle.get("progress")))
             deadline = time.monotonic() + 900
             while bundle.get("status") == "preparing":
                 self._check_job(job)
@@ -903,6 +945,7 @@ class PeerTransferService:
                     raise TransferError("Export preparation timed out. Select fewer sessions and retry.", "export_timeout")
                 time.sleep(1)
                 bundle = self._request(peer, "GET", "/v1/bundles/" + bundle["id"])
+                self._progress(job, public_progress(bundle.get("progress")))
             if bundle.get("status") != "ready":
                 raise TransferError(str(bundle.get("error") or "The peer could not prepare the export.")[:400], "export_failed")
             if (not isinstance(bundle.get("size"), int) or not 0 < bundle["size"] <= MAX_BUNDLE
@@ -916,13 +959,14 @@ class PeerTransferService:
             self._download(peer, bundle, job)
             self._check_job(job)
             path = Path(job["partial"])
-            if not hmac.compare_digest(_sha256(path), bundle["sha256"]):
+            job.update(status="verifying", progress=None)
+            if not hmac.compare_digest(_sha256(path, lambda event: self._progress(job, event)), bundle["sha256"]):
                 path.unlink(missing_ok=True)
                 job["bytes_received"] = 0
                 raise TransferError("The downloaded archive failed its integrity check. Retry the transfer.", "checksum_mismatch")
-            job["status"] = "importing"
+            job.update(status="importing", progress=None)
             self._check_idle()
-            report = self.history.import_bundle(path)
+            report = self.history.import_bundle(path, progress=lambda event: self._progress(job, event))
             # Polling and persisted progress need counts, not a second copy of
             # every session and artifact in a months-long archive inventory.
             job["result"] = {key: report[key] for key in (
@@ -945,7 +989,7 @@ class PeerTransferService:
         if offset > bundle["size"]:
             path.unlink()
             offset = 0
-        job.update(status="downloading", bytes_received=offset)
+        job.update(status="downloading", bytes_received=offset, progress=None)
         if offset == bundle["size"]:
             return
         # Allow additional room for extraction/SQLite import; fail before reading.

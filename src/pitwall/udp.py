@@ -556,6 +556,10 @@ class F1DatagramProtocol(asyncio.DatagramProtocol):
                     await self.store.set_packet_queue_stats(
                         self.packet_queue.qsize(), self.packet_queue.maxsize
                     )
+                    # Queue.get and uncontended state locks can both complete
+                    # without suspending. Yield even for malformed packets so
+                    # a sustained backlog cannot starve HTTP or shutdown work.
+                    await asyncio.sleep(0)
 
     async def _handle(
         self, packet: Any, received: ReceivedDatagram | None = None

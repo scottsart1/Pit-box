@@ -147,6 +147,14 @@ h2 { font-size: clamp(1.5rem, 3vw, 2rem); letter-spacing: -.02em; margin: 0 0 .6
 }
 .card h3 { margin: 0 0 .5rem; font-size: 1.05rem; }
 .card p { margin: 0; color: var(--ink-2); font-size: .95rem; }
+#devices .card { min-width: 0; }
+#devices .card p, #devices .callout p { font-size: 1rem; }
+#devices .card p + p, #devices .callout p + p { margin-top: .85rem; }
+#devices .card > a { display: inline-flex; align-items: center; min-height: 44px; margin-top: .8rem; }
+#devices .cards { grid-template-columns: repeat(auto-fit, minmax(min(100%, 270px), 1fr)); }
+#candidate-improvements { margin-top: 1.5rem; }
+#android p, #android li, #history-transfer p, #history-transfer li { font-size: 1rem; }
+#android li, #history-transfer li { margin-bottom: .75rem; }
 
 /* ---------- how it works ---------- */
 

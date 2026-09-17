@@ -3,6 +3,8 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+import io
+import threading
 from pathlib import Path
 
 from fastapi import FastAPI
@@ -137,7 +139,7 @@ async def test_recording_import_block_and_conflicts_have_distinct_terminal_state
             b.pull(a.device_id, [key])
         assert error.value.code == "recording_active"
         b._is_recording = lambda: False
-        incoming.import_bundle = lambda path: {"status": "conflict", "imported_sessions": 0, "conflicts": []}
+        incoming.import_bundle = lambda path, **kwargs: {"status": "conflict", "imported_sessions": 0, "conflicts": []}
         result = await finished(b, b.pull(a.device_id, [key]))
         assert result["status"] == "conflict"
     finally:
@@ -161,6 +163,117 @@ def test_management_api_rejects_remote_and_cross_origin_requests(tmp_path, heade
             if expected == 200:
                 assert response.headers["cache-control"] == "no-store"
                 assert "incoming_token" not in response.text
+    finally:
+        peer.close()
+
+
+@pytest.mark.asyncio
+async def test_preparing_progress_visible_on_both_devices_and_sent_is_not_imported(tmp_path):
+    source, outgoing = await _installation(tmp_path / "source")
+    dest, incoming = await _installation(tmp_path / "dest")
+    key = await _session(source, 301, trace=True)
+    a, b = service(outgoing, source.path.parent), service(incoming, dest.path.parent)
+    release = threading.Event()
+    original_export = outgoing.export_bundle
+    original_import = incoming.import_bundle
+    importing = threading.Event()
+    finish_import = threading.Event()
+
+    def paused_export(ids, path, *, progress):
+        def observed(event):
+            progress(event)
+            if event["phase"] == "packing" and event.get("done") == 0:
+                assert release.wait(10), "test did not release export"
+        return original_export(ids, path, progress=observed)
+
+    def paused_import(path, *, progress):
+        importing.set()
+        assert finish_import.wait(10), "test did not release import"
+        return original_import(path, progress=progress)
+
+    outgoing.export_bundle, incoming.import_bundle = paused_export, paused_import
+    try:
+        a.start(port=0); b.start(port=0); b.pair(a.invite()["invitation"])
+        job = b.pull(a.device_id, [key])
+        for _ in range(160):
+            received = b.job(job["id"])
+            if (received.get("progress") or {}).get("phase") == "packing":
+                break
+            await asyncio.sleep(.05)
+        assert received["progress"] == {"phase": "packing", "done": 0, "total": 3, "unit": "files"}
+        sending = a.status()["exports"][0]
+        assert sending["status"] == "preparing" and sending["progress"] == received["progress"]
+        assert not {"path", "incoming_token", "outgoing_token", "partial"} & sending.keys()
+        release.set()
+        for _ in range(160):
+            if importing.is_set():
+                break
+            await asyncio.sleep(.05)
+        assert importing.is_set()
+        sending = a.status()["exports"][0]
+        assert sending["status"] == "sent"
+        assert sending["bytes_sent"] == sending["total_bytes"] > 0
+        assert b.job(job["id"])["status"] == "importing"
+        assert _count(dest, "recorded_sessions") == 0
+        finish_import.set()
+        assert (await finished(b, job))["status"] == "completed"
+        assert a.status()["exports"][0]["status"] == "sent", "Socket writes do not acknowledge import"
+    finally:
+        release.set(); finish_import.set()
+        a.close(); b.close()
+
+
+@pytest.mark.asyncio
+async def test_peer_without_optional_progress_fields_still_transfers(tmp_path):
+    source, outgoing = await _installation(tmp_path / "source")
+    dest, incoming = await _installation(tmp_path / "dest")
+    key = await _session(source, 401)
+    a, b = service(outgoing, source.path.parent), service(incoming, dest.path.parent)
+    request = b._request
+    def old_peer(*args, **kwargs):
+        result = request(*args, **kwargs)
+        result.pop("progress", None)
+        return result
+    b._request = old_peer
+    try:
+        a.start(port=0); b.start(port=0); b.pair(a.invite()["invitation"])
+        assert (await finished(b, b.pull(a.device_id, [key])))["status"] == "completed"
+    finally:
+        a.close(); b.close()
+
+
+def test_sender_byte_progress_freezes_on_interruption_and_resumes_from_range(tmp_path, monkeypatch):
+    from pitwall import peer_transfer
+    monkeypatch.setattr(peer_transfer, "CHUNK_SIZE", 4)
+    peer = service(None, tmp_path)
+    path = peer.cache / ("export-" + "a" * 32 + ".pitbox")
+    path.write_bytes(b"0123456789")
+    bundle = {"id": "a" * 32, "peer_id": "b" * 32, "session_ids": ["test"],
+              "created_at": peer._clock(), "status": "ready", "size": 10, "sha256": "0" * 64, "path": str(path)}
+    peer._bundles[bundle["id"]] = bundle
+    peer._authenticate = lambda value: {}
+    class BrokenStream(io.BytesIO):
+        def write(self, data):
+            if self.tell():
+                raise OSError("connection lost")
+            return super().write(data)
+    handler = peer_transfer._TransferHandler.__new__(peer_transfer._TransferHandler)
+    handler.server = type("Server", (), {"service": peer})()
+    handler.headers = {"Range": "bytes=3-"}
+    handler.send_response = handler.send_header = lambda *args: None
+    handler.end_headers = lambda: None
+    handler.wfile = BrokenStream()
+    try:
+        with pytest.raises(OSError):
+            handler._content(dict(bundle))
+        assert peer.status()["exports"][0]["status"] == "interrupted"
+        assert peer.status()["exports"][0]["bytes_sent"] == 7
+        handler.headers["Range"] = "bytes=7-"
+        handler.wfile = io.BytesIO()
+        handler._content(dict(bundle))
+        assert handler.wfile.getvalue() == b"789"
+        assert peer.status()["exports"][0]["status"] == "sent"
+        assert peer.status()["exports"][0]["bytes_sent"] == 10
     finally:
         peer.close()
 

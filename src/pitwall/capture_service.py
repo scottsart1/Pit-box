@@ -7,6 +7,7 @@ from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 from . import __version__
 from .capture import (
@@ -191,9 +192,13 @@ class CaptureService:
         metadata: dict[str, Any] | None = None,
     ) -> None:
         if relative_path is None:
-            year = datetime.now(UTC).strftime("%Y")
-            stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S.%fZ")
-            relative_path = Path(year) / f"capture-{stamp}.pwcap"
+            now = datetime.now(UTC)
+            year = now.strftime("%Y")
+            stamp = now.strftime("%Y%m%dT%H%M%S.%fZ")
+            # A wall-clock tick can repeat during rapid session rotations or
+            # a clock correction. Keep sortable timestamps, but use independent
+            # identity and retain CaptureWriter's exclusive-create safeguards.
+            relative_path = Path(year) / f"capture-{stamp}-{uuid4().hex}.pwcap"
         destination = self._safe_destination(relative_path)
         destination.parent.mkdir(parents=True, exist_ok=True)
         capture_metadata = {

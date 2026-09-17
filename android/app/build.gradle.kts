@@ -16,17 +16,27 @@ val nativeConstraints = rootProject.layout.projectDirectory.file("native-require
 // engine than the source which Chaquopy actually packages.
 val backendVersion = Regex("__version__ = \"([^\"]+)\"")
     .find(rootProject.file("../src/pitwall/__init__.py").readText())!!.groupValues[1]
-val androidRevision = 13
+val androidRevision = 14
 val signingPath = providers.environmentVariable("PITBOX_KEYSTORE_PATH").orNull
+val signingVariables = listOf("PITBOX_KEYSTORE_PATH", "PITBOX_KEYSTORE_PASSWORD",
+    "PITBOX_KEY_ALIAS", "PITBOX_KEY_PASSWORD")
+val missingSigning = signingVariables.filter {
+    providers.environmentVariable(it).orNull.isNullOrBlank()
+}
+val signingConfigured = missingSigning.isEmpty()
+// Explicit packaging-only path for CI. This output is not installable or
+// publishable until the owner signs and verifies it on the release machine.
+val prepareUnsignedRelease = providers.gradleProperty("pitbox.prepareUnsignedRelease")
+    .map { it == "true" }.getOrElse(false)
 
 android {
     namespace = "com.yourpitbox.app"
-    compileSdk = 35
+    compileSdk = 36
 
     defaultConfig {
         applicationId = "com.yourpitbox.app"
         minSdk = 24
-        targetSdk = 35
+        targetSdk = 36
         versionCode = androidRevision
         versionName = "$backendVersion-android.$androidRevision"
         ndk {
@@ -36,9 +46,9 @@ android {
     }
 
     signingConfigs {
-        if (!signingPath.isNullOrBlank()) {
+        if (signingConfigured) {
             create("distribution") {
-                storeFile = file(signingPath)
+                storeFile = file(signingPath!!)
                 storePassword = providers.environmentVariable("PITBOX_KEYSTORE_PASSWORD").get()
                 keyAlias = providers.environmentVariable("PITBOX_KEY_ALIAS").get()
                 keyPassword = providers.environmentVariable("PITBOX_KEY_PASSWORD").get()
@@ -54,8 +64,9 @@ android {
             versionNameSuffix = "-debug"
         }
         release {
+            isDebuggable = false
             isMinifyEnabled = false
-            if (!signingPath.isNullOrBlank()) {
+            if (signingConfigured) {
                 signingConfig = signingConfigs.getByName("distribution")
             }
         }
@@ -81,6 +92,24 @@ val copyDashboard by tasks.registering(Sync::class) {
     into(layout.buildDirectory.dir("generated/pitbox-assets/static"))
 }
 tasks.named("preBuild") { dependsOn(copyDashboard) }
+
+val verifyReleaseSigning by tasks.registering {
+    doLast {
+        if (prepareUnsignedRelease) {
+            check(!signingConfigured) { "Do not combine unsigned preparation with release signing credentials." }
+            logger.warn("Preparing an UNSIGNED release APK for offline signing. Do not publish this artifact.")
+        } else {
+        check(signingConfigured) {
+            "Release signing is required. Configure the existing, backed-up key: " +
+                missingSigning.joinToString(", ") + ". Use assembleDebug for unsigned candidate checks."
+        }
+        check(file(signingPath!!).isFile) { "The configured release keystore does not exist." }
+        }
+    }
+}
+tasks.matching { it.name == "preReleaseBuild" }.configureEach {
+    dependsOn(verifyReleaseSigning)
+}
 
 chaquopy {
     defaultConfig {

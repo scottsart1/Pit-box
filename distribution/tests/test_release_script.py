@@ -40,3 +40,17 @@ def test_the_tests_gate_the_build_and_the_build_gates_the_deploys():
 def test_the_wrapper_scopes_the_policy_bypass_to_one_process():
     assert "-ExecutionPolicy Bypass" in WRAPPER
     assert "release_windows.ps1" in WRAPPER
+
+
+def test_public_upload_requires_signing_and_clean_fast_forward_checkout():
+    assert SCRIPT.index('configuration(required=True)') < SCRIPT.index('-m distribution.packaging.build --installer')
+    assert SCRIPT.index('Assert-ProductionSignature -Path $installer') < SCRIPT.index('r2 object put pitwall-downloads')
+    assert 'Assert-ProductionSignature -Path $frozenApp' in SCRIPT
+    assert 'git status --porcelain' in SCRIPT and 'git pull --ff-only' in SCRIPT
+
+
+def test_ci_does_not_publish_unsigned_candidates_by_default():
+    workflow = (ROOT / '.github/workflows/windows-installer.yml').read_text(encoding='utf-8')
+    attach_option = workflow.split('attach_release:', 1)[1].split('permissions:', 1)[0]
+    assert 'default: false' in attach_option
+    assert workflow.index('Assert-ProductionSignature') < workflow.index('gh release create')
