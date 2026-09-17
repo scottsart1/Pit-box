@@ -619,10 +619,13 @@ def test_beta_transmission_is_distinct_from_reception_and_history_copy():
     assert "forwarding loops" in GUIDE
 
 
-def test_unsigned_windows_download_is_disclosed_without_disabling_protection():
+def test_unsigned_windows_notice_remains_without_removed_installation_wording():
     assert 'Windows 4.10.1 · unsigned installer' in INDEX
+    assert 'The current Windows installer is unsigned.' in GUIDE
     for page in (INDEX, GUIDE):
-        assert 'Do not turn off your firewall, antivirus or Smart App Control' in page
+        assert 'unknown publisher' in page or 'unknown-publisher' in page
+        assert 'Do not turn off your firewall, antivirus or Smart App Control' not in page
+        assert 'wait for a signed release' not in page
     assert '64c804f0f227bca4d88efa93e5d736201db9f1f3d5ee73e35cd668f1794433fd' in INDEX
 
 
