@@ -14,6 +14,7 @@ import socket
 import subprocess
 import sys
 import tempfile
+from urllib.request import build_opener, ProxyHandler
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
@@ -26,6 +27,8 @@ def main():
     parser.add_argument("--version", required=True)
     parser.add_argument("--output-parent", type=Path, required=True)
     parser.add_argument("--stress", action="store_true")
+    parser.add_argument("--check-usage", action="store_true",
+                        help="Verify packaged 4.10.2+ default-off and persisted decline, without sending reports")
     parser.add_argument("--capture-min-free-gb", type=float, default=2.0,
                         help="Test-process-only recording reserve; product default is 2 GiB")
     args = parser.parse_args()
@@ -68,6 +71,23 @@ def main():
                                        startupinfo=startup, creationflags=subprocess.CREATE_NO_WINDOW)
             smoke.wait_for_health(process, web_port, args.version, data, 120)
             summary["checks"].append("frozen_startup" if iteration == 0 else "frozen_restart")
+            if args.check_usage:
+                usage = smoke.request_json(web_port, "/api/v1/usage")
+                if usage.get("enabled") is not False or usage.get("decided") is not bool(iteration):
+                    raise smoke.SmokeFailure("Packaged usage choice did not start off or persist a decline")
+                if iteration == 0:
+                    opener = build_opener(ProxyHandler({}))
+                    with opener.open(f"http://127.0.0.1:{web_port}/static/js/usage.js", timeout=10) as response:
+                        if b"/api/v1/usage" not in response.read():
+                            raise smoke.SmokeFailure("Packaged usage-control asset is missing")
+                    declined = smoke.request_json(web_port, "/api/v1/usage", method="POST", body={"enabled": False})
+                    if declined.get("enabled") is not False or declined.get("decided") is not True:
+                        raise smoke.SmokeFailure("Packaged decline was not accepted")
+                    smoke.request_json(web_port, "/api/v1/usage/active", method="POST")
+                    saved = json.loads((data / "usage-reporting.json").read_text())
+                    if saved.get("installation_id") is not None or saved.get("pending") != []:
+                        raise smoke.SmokeFailure("Declined usage created an identity or queued events")
+                summary["checks"].append("packaged_usage_decline" if iteration == 0 else "packaged_usage_decline_survives_restart")
             if iteration == 0:
                 summary["transfer"] = smoke.exercise_transfers(web_port)
                 smoke.exercise_telemetry(process, web_port, udp_port)

@@ -117,7 +117,11 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: PitWall-Setup-${{ steps.version.outputs.version }}
-          path: ${{ steps.installer.outputs.path }}
+          # Retain the exact frozen runtime too: the owner can test it with
+          # isolated data without replacing an existing Inno installation.
+          path: |
+            ${{ steps.installer.outputs.path }}
+            ${{ env.PITWALL_BUILD_DIR }}/artifacts/YourPitBox-windows.zip
           if-no-files-found: error
 
       - name: Require a trusted publisher signature before public attachment
