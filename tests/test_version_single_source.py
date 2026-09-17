@@ -40,6 +40,12 @@ def test_pyproject_agrees_with_the_package() -> None:
     assert project["version"] == pitwall.__version__
 
 
+def test_dashboard_title_and_visible_brand_agree_with_the_package() -> None:
+    dashboard = _source("static", "index.html")
+    assert f"<title>Your Pit Box {pitwall.__version__}</title>" in dashboard
+    assert f'YOUR PIT BOX {pitwall.__version__}</span>' in dashboard
+
+
 def test_the_installer_default_agrees_with_the_package() -> None:
     from distribution.packaging.build import package_version
 
