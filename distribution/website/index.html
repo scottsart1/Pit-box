@@ -215,7 +215,7 @@ Strategy / setup / what-if  → model, high reasoning
   <div class="wrap">
     <div class="eyebrow">Choose where your engineer runs</div>
     <h2 id="devices-title">Windows at your desk. Android beside the wheel.</h2>
-    <p class="section-lede">The Windows download is available now. The Android release download is being prepared. Telemetry transmission and device-to-device history transfers are beta features; each device keeps its own recordings.</p>
+    <p class="section-lede">Download the Windows installer or the signed Android APK. Telemetry transmission and device-to-device history transfers are beta features; each device keeps its own recordings.</p>
     <div class="cards">
       <article class="card">
         <h3>Windows · available</h3>
@@ -223,9 +223,10 @@ Strategy / setup / what-if  → model, high reasoning
         <a href="#download">Get the Windows installer</a>
       </article>
       <article class="card">
-        <h3>Android · release download pending</h3>
+        <h3>Android · APK available</h3>
         <p>The native app runs the telemetry receiver and engineer on a compatible 64-bit Android phone or tablet. It does not need the laptop to run the engine. Microphone permission is needed for spoken commands; voice services use your own OpenAI key.</p>
-        <p><strong>No public Android download yet.</strong> The signed release package is being prepared. There is no iPhone, iPad or macOS release available.</p>
+        <p><strong>Android 7 or later · 64-bit ARM or x86 · 4 KB memory pages.</strong> Devices using 16 KB memory pages are not supported by this release. This is a direct APK download, not a Google Play listing. There is no iPhone, iPad or macOS release available.</p>
+        <a class="button primary" href="https://pitwall-activation.sarthakvij123450.workers.dev/android">Download Android APK</a>
         <a href="guide.html#android">Read the Android setup guide</a>
       </article>
       <article class="card">
@@ -308,7 +309,7 @@ Strategy / setup / what-if  → model, high reasoning
         <div class="callout">
           <h3>macOS is not ready yet</h3>
           <p>
-            The public download is Windows-only today; the Android release download is being prepared. The macOS build is in progress; it is
+            Windows and Android downloads are available. The macOS build is in progress; it is
             not sold or promised here until it exists and has been tested on real
             hardware.
           </p>
@@ -384,6 +385,12 @@ Strategy / setup / what-if  → model, high reasoning
         <h3>Windows 4.10.1 · unsigned installer</h3>
         <p>This direct download is not publisher-signed. Windows may show an unknown-publisher warning, and some security policies may block it. Download only from this site and verify the checksum below. <strong>Do not turn off your firewall, antivirus or Smart App Control to install it.</strong> If your security policy blocks installation, wait for a signed release.</p>
         <p class="field-help">SHA-256: <code style="overflow-wrap:anywhere">64c804f0f227bca4d88efa93e5d736201db9f1f3d5ee73e35cd668f1794433fd</code></p>
+      </div>
+      <div class="callout" id="android-release">
+        <h3>Android 4.10.1 · signed APK</h3>
+        <p><a class="button ghost" href="https://pitwall-activation.sarthakvij123450.workers.dev/android">Download Android APK</a></p>
+        <p>For compatible 64-bit Android 7+ devices with 4 KB memory pages. This release does not support 16 KB memory-page devices. Keep Play Protect enabled. Read the <a href="guide.html#android">APK installation and test-app migration guide</a> before installing.</p>
+        <p class="field-help">SHA-256: <code style="overflow-wrap:anywhere">82cc6256a15bfa966ea1b23436efc996ffe33f6f5d5e8ef20acfd30efbe4e204</code></p>
       </div>
       <div id="codePanel" class="code-panel" hidden>
         <p><strong>One extra step, for a few days.</strong> The installer online right now was built before Your Pit Box went free, so the first time it starts it still asks for an activation code. Use this one. It is the same for everyone, it works on any PC, and the next installer removes the step entirely.</p>

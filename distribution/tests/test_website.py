@@ -590,13 +590,17 @@ def test_macos_is_not_advertised_as_available():
     assert "Windows 10 or 11" in INDEX
 
 
-def test_android_download_is_not_advertised_before_release_packaging():
+def test_android_release_is_a_signed_direct_apk_with_compatibility_limits():
     section = INDEX.split('id="devices"', 1)[1].split("</section>", 1)[0]
     assert "Windows · available" in section
-    assert "Android · release download pending" in section
-    assert "No public Android download yet" in section
-    assert "signed release package is being prepared" in section
-    assert not re.search(r'href="[^"]+\.apk(?:[?#][^"]*)?"', INDEX)
+    assert "Android · APK available" in section
+    assert 'href="https://pitwall-activation.sarthakvij123450.workers.dev/android"' in section
+    assert "16 KB memory pages are not supported" in section
+    assert "not a Google Play listing" in section
+    assert "82cc6256a15bfa966ea1b23436efc996ffe33f6f5d5e8ef20acfd30efbe4e204" in INDEX
+    assert "Keep Play Protect enabled" in GUIDE
+    assert "installs separately from the test package" in GUIDE
+    assert "Do not uninstall the test app" in GUIDE
     assert "full-length race" in GUIDE.lower()
 
 

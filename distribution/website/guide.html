@@ -215,16 +215,20 @@
 
   <section id="android" class="guide-help soft">
     <div class="wrap">
-      <div class="eyebrow">Android · release download pending</div>
+      <div class="eyebrow">Android · signed APK download</div>
       <h2>Using the native Android app</h2>
-      <p>The signed Android release download is being prepared. These steps are for people who already have the app; the public Windows download does not install on a tablet. Do not uninstall an existing Android app to force an update: a different signing key or package can leave your saved history behind. Back up first and use an approved, compatible update.</p>
+      <p><a class="button primary" href="https://pitwall-activation.sarthakvij123450.workers.dev/android">Download Android APK</a></p>
+      <p>The signed APK supports Android 7 or later on 64-bit ARM and x86 devices with 4 KB memory pages. Devices using 16 KB memory pages are not supported by this release. This is a direct download, not a Google Play listing; the Windows installer does not install on Android.</p>
+      <div class="guide-warning"><strong>Already using the test app?</strong> The release package (<code>com.yourpitbox.app</code>) installs separately from the test package (<code>com.yourpitbox.app.debug</code>) and starts with its own library. Do not uninstall the test app or expect its history and keys to move automatically. Keep a backup, then use beta history transfer when neither device is recording. Never uninstall an existing app to force a signing-key mismatch.</div>
       <ol>
+        <li>Download the APK from this site and check the SHA-256 on the download page. Open it; if Android asks, grant installation permission to the browser or file manager you used, then turn that permission back off after installing. Keep Play Protect enabled. Do not bypass an incompatible-device or security-policy block.</li>
         <li>Connect the Android device and console to the same private home network. Open Your Pit Box on the tablet; the laptop is not required for the native Android engine.</li>
         <li>Open <strong>Connection</strong> and use that device's recommended address as the game's <strong>UDP IP Address</strong>, with port <strong>20777</strong> and format <strong>2026</strong>. A tablet's address can change when it reconnects to Wi-Fi.</li>
         <li>Start an on-track session and confirm <strong>Receiving telemetry</strong>. A listening socket or a saved lap chart alone does not prove that fresh packets are arriving.</li>
         <li>For radio, save and test the provider key in Connection, allow Android microphone access, and enable voice in the app. Speech services need an OpenAI key and internet access; the dashboard can receive telemetry without voice.</li>
         <li>Check microphone input separately from the reply. If the app hears input but you hear nothing, check the selected output, media volume and Bluetooth routing. A key test does not verify the microphone or speaker.</li>
       </ol>
+      <p>Future updates to the release app use the same permanent signing identity. Install a verified release update over the release app; do not remove its saved data.</p>
       <p>Before a full-length race, check your microphone, selected speaker or headset, wake phrase and background settings on the device you will use. A short radio check verifies that setup, not every Bluetooth device or power-saving mode.</p>
     </div>
   </section>
