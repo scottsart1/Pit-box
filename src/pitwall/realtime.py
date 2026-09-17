@@ -557,6 +557,8 @@ class RealtimeRadio:
             return
         await self.store.append_radio(role, cleaned)
         if role == "driver":
+            if getattr(self.store, "usage_event", None):
+                self.store.usage_event("voice")
             await self.store.update(radio_last_transcript=cleaned)
         if self.on_transcript is not None:
             with contextlib.suppress(Exception):

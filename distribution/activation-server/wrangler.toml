@@ -2,6 +2,16 @@ name = "pitwall-activation"
 main = "src/worker.js"
 compatibility_date = "2025-01-01"
 
+# Draft usage endpoint: bounded native-client reports, no rate-limit identifiers
+# stored in the analytics database. Keep the namespace unique to this product.
+[[ratelimits]]
+name = "USAGE_RATE_LIMITER"
+namespace_id = "4102"
+simple = { limit = 300, period = 60 }
+
+[triggers]
+crons = ["17 3 * * *"]
+
 # D1 gives us a strongly-consistent, free-tier database. The atomic
 # claim (UPDATE ... WHERE claimed=0) needs that consistency; KV would not be
 # safe for single-use enforcement. Create the DB, then paste its id here:

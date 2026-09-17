@@ -31,7 +31,7 @@ class PullRequest(_Input):
     session_ids: list[str] = Field(min_length=1, max_length=500)
 
 
-def create_transfer_router(service: PeerTransferService) -> APIRouter:
+def create_transfer_router(service: PeerTransferService, *, usage_record=None) -> APIRouter:
     async def local_only(request: Request, response: Response) -> None:
         response.headers["Cache-Control"] = "no-store"
         if not request.client or not is_loopback_host(request.client.host):
@@ -83,7 +83,10 @@ def create_transfer_router(service: PeerTransferService) -> APIRouter:
 
     @router.post("/peers/{peer_id}/pull")
     async def pull(peer_id: str, body: PullRequest) -> dict[str, Any]:
-        return await invoke(service.pull, peer_id, body.session_ids)
+        result = await invoke(service.pull, peer_id, body.session_ids)
+        if usage_record:
+            usage_record("transfer")
+        return result
 
     @router.get("/jobs/{job_id}")
     async def job(job_id: str) -> dict[str, Any]:

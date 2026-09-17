@@ -40,6 +40,7 @@ from .api.sessions import create_sessions_router
 from .api.storage import create_storage_router
 from .api.track_models import create_track_models_router
 from .api.transfers import create_transfer_router
+from .api.usage import create_usage_router
 from .audio import AudioService
 from .brain import EngineerBrain
 from .briefing import BriefingEngine
@@ -85,6 +86,7 @@ from .trace_store import RecoveryReport, TraceStore
 from .track_model_service import TrackModelService
 from .udp import TRACKS, F1DatagramProtocol, classify_session
 from .voice import NativeVoiceController
+from .usage_reporting import UsageReporting
 from .web_security import LanAccessMiddleware, is_loopback_host
 
 log = logging.getLogger(__name__)
@@ -95,6 +97,8 @@ database = PitWallDatabase(settings.data_dir / "pitwall.sqlite3")
 # run before any service below constructs from `settings`, which is why it
 # reads SQLite synchronously here instead of through the async wrapper.
 apply_saved_overrides(settings, database.path)
+usage_reporting = UsageReporting(settings.data_dir / "usage-reporting.json")
+store.usage_event = usage_reporting.record
 network_profiles = NetworkProfileRepository(database.path)
 trace_store = TraceStore(
     settings.trace_dir,
@@ -192,6 +196,7 @@ async def _connection_watchdog() -> None:
             settings.disconnect_after_s, settings.presence_grace_s
         )
         snapshot = await store.snapshot_live()
+        usage_reporting.observe_racing(snapshot)
         # Keep full per-car traces for the cars the analysis actually reads
         # back — in a race that is the player, the teammate, the podium and
         # the cars the player started among. Practice and qualifying keep
@@ -483,6 +488,7 @@ async def lifespan(app: FastAPI):
     global corner_rebuild_task
     settings.data_dir.mkdir(parents=True, exist_ok=True)
     await database.initialize()
+    await usage_reporting.start()
     stale_sessions = await database.catalog.finalize_recording_sessions()
     if stale_sessions:
         log.info(
@@ -660,6 +666,7 @@ async def lifespan(app: FastAPI):
         await database.catalog.finalize_session(
             active_session.id, status="incomplete"
         )
+    await usage_reporting.stop()
 
 
 # The one version string lives in pitwall/__init__.py. /api/health reports
@@ -693,7 +700,8 @@ def _rebind_provider_clients() -> None:
 
 app.include_router(create_credentials_router(on_change=_rebind_provider_clients))
 app.include_router(create_network_router(network_service))
-app.include_router(create_transfer_router(peer_transfer))
+app.include_router(create_transfer_router(peer_transfer, usage_record=usage_reporting.record))
+app.include_router(create_usage_router(usage_reporting))
 app.include_router(
     create_sessions_router(
         database.catalog,
@@ -702,7 +710,7 @@ app.include_router(
         enqueue_reprocess=analysis_jobs.submit,
     )
 )
-app.include_router(create_analysis_router(comparison_service))
+app.include_router(create_analysis_router(comparison_service, usage_record=usage_reporting.record))
 app.include_router(create_field_router(field_service))
 app.include_router(create_storage_router(storage_service))
 app.include_router(create_track_models_router(track_model_service))

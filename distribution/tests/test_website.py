@@ -61,7 +61,7 @@ def _stage(tmp_path, monkeypatch, *, index=None, guide=None, eula=None, script=N
         script if script is not None else DOWNLOAD_JS, encoding="utf-8"
     )
     (site / "reviews.js").write_text(REVIEWS_JS, encoding="utf-8")
-    for report_file in ("download-stats.html", "download-stats.js"):
+    for report_file in ("download-stats.html", "download-stats.js", "usage-stats.html", "usage-stats.js"):
         shutil.copyfile(DIST / "website" / report_file, site / report_file)
     monkeypatch.setattr(build_site, "SITE_DIR", site)
     return site
@@ -362,7 +362,7 @@ def test_reviews_can_be_posted_and_are_read_before_they_appear():
 
 def test_the_eula_sections_are_numbered_contiguously():
     # A section was removed; the numbering must not have gaps or duplicates.
-    numbers = [int(n) for n in re.findall(r"<h2>(\d+)\.", EULA)]
+    numbers = [int(n) for n in re.findall(r"<h2(?:\s[^>]*)?>(\d+)\.", EULA)]
     assert numbers == list(range(1, len(numbers) + 1)), numbers
 
 

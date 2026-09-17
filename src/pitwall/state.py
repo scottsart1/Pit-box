@@ -530,6 +530,7 @@ class SessionState:
 class StateStore:
     def __init__(self) -> None:
         self._lock = asyncio.Lock()
+        self.usage_event: Callable[[str], None] | None = None
         self.state = SessionState()
         self._packet_times: deque[float] = deque()
         self.lap_queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue(maxsize=8)
@@ -1171,6 +1172,8 @@ class StateStore:
         async with self._lock:
             self.state.radio_log.append({"role": role, "text": text})
             self.state.radio_log = self.state.radio_log[-100:]
+        if role == "engineer" and text and self.usage_event:
+            self.usage_event("engineer")
 
     async def append_event(self, event_type: str, payload: dict[str, Any]) -> None:
         queued: dict[str, Any]

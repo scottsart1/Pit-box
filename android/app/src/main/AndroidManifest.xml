@@ -22,7 +22,7 @@
 
     <application
         android:name=".PitBoxApplication"
-        android:label="Your Pit Box"
+        android:label="${pitboxAppLabel}"
         android:icon="@mipmap/ic_launcher"
         android:theme="@style/Theme.PitBox"
         android:networkSecurityConfig="@xml/network_security_config"

@@ -1003,6 +1003,14 @@ OpenAI transcription when cloud voice is enabled.
 
 Never commit or share `.env`.
 
+The optional usage-reporting draft is off until a user explicitly chooses to
+share. It sends only daily yes/no activity and feature flags, platform/version
+and a random resettable installation ID. It never includes telemetry values,
+recordings, radio text, names, credentials or history files. The local bounded
+outbox is `PitWallData/usage-reporting.json`, is excluded from history transfers,
+and is cleared on opt-out. See [the draft release checklist](docs/USAGE_REPORTING_DRAFT.md)
+for retention, metric definitions, verification and deployment status.
+
 ## Troubleshooting
 
 ### Engineer model fails

@@ -92,7 +92,17 @@ def test_the_backend_is_a_source_root_not_a_copy():
 def test_candidate_targets_android_16_and_ci_tests_that_platform():
     assert "compileSdk = 36" in GRADLE and "targetSdk = 36" in GRADLE
     assert "platforms;android-36" in WORKFLOW and "api-level: 36" in WORKFLOW
-    assert "val androidRevision = 14" in GRADLE
+    assert "val androidRevision = 15" in GRADLE
+
+
+def test_isolated_release_qa_package_cannot_replace_existing_apps():
+    assert 'providers.gradleProperty("pitbox.qaPackage")' in GRADLE
+    assert 'check(!qaPackage || prepareUnsignedRelease)' in GRADLE
+    assert 'applicationId = if (qaPackage) "com.yourpitbox.app.qa" else "com.yourpitbox.app"' in GRADLE
+    assert 'if (qaPackage) "Your Pit Box QA" else "Your Pit Box"' in GRADLE
+    assert 'android-qa-unsigned-${{ github.sha }}' in WORKFLOW
+    assert WORKFLOW.index('name: android-release-unsigned-') < WORKFLOW.index('-Ppitbox.qaPackage=true')
+    assert 'android:label="${pitboxAppLabel}"' in (ROOT / 'android/app/src/main/AndroidManifest.xml').read_text()
 
 
 def test_release_signing_cannot_silently_produce_unsigned_apk():

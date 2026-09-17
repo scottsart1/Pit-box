@@ -639,9 +639,151 @@ async function handleReviewSubmit(request, env) {
   return json({ ok: true, pending: true }, 200, env);
 }
 
+// Optional app usage. Only daily yes/no flags, with an explicit consent version.
+// Installation IDs are random/resettable, hashed before storage, never returned
+// by the owner report, and never joined to subscriber emails or download logs.
+const USAGE_EVENTS = new Set(["app_started", "app_used", "racing", "engineer", "voice", "analysis", "transfer"]);
+const dayBefore = (days, now = Date.now()) => new Date(now - days * 86400000).toISOString().slice(0, 10);
+const exactKeys = (object, keys) => object && typeof object === "object" && !Array.isArray(object) &&
+  Object.keys(object).length === keys.length && keys.every(key => Object.hasOwn(object, key));
+
+function usageJson(body, status = 200) {
+  // Native backend calls only: don't enable cross-origin browser ingestion.
+  return new Response(JSON.stringify(body), {status, headers: {
+    "content-type": "application/json", "cache-control": "private, no-store",
+    "x-content-type-options": "nosniff",
+    ...(status === 429 ? {"retry-after": "60"} : {}),
+  }});
+}
+
+async function readUsageBody(request) {
+  if (request.headers.get("content-type")?.split(";")[0].trim() !== "application/json") return null;
+  if (Number(request.headers.get("content-length") || 0) > 8192 || !request.body) return null;
+  const reader = request.body.getReader();
+  const chunks = [];
+  let length = 0;
+  while (true) {
+    const {value, done} = await reader.read();
+    if (done) break;
+    length += value.byteLength;
+    if (length > 8192) { await reader.cancel(); return null; }
+    chunks.push(value);
+  }
+  const bytes = new Uint8Array(length);
+  let offset = 0;
+  for (const value of chunks) { bytes.set(value, offset); offset += value.byteLength; }
+  try { return JSON.parse(new TextDecoder().decode(bytes)); } catch { return null; }
+}
+
+async function handleUsage(request, env) {
+  try {
+    // Fail closed if the rate-limit binding was not configured at deployment.
+    if (!env.USAGE_RATE_LIMITER) return usageJson({code: "unavailable"}, 503);
+    const limit = await env.USAGE_RATE_LIMITER.limit({key: request.headers.get("cf-connecting-ip") || "unknown"});
+    if (!limit.success) return usageJson({code: "rate_limited"}, 429);
+    const data = await readUsageBody(request);
+    if (!exactKeys(data, ["consent_version", "installation_id", "platform", "version", "events"]) ||
+        data.consent_version !== 1 || !["windows", "android"].includes(data.platform) ||
+        typeof data.installation_id !== "string" || !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(data.installation_id) ||
+        typeof data.version !== "string" || data.version.length > 40 || !/^\d+\.\d+\.\d+(?:[.-][a-zA-Z0-9]+)*$/.test(data.version) ||
+        !Array.isArray(data.events) || !data.events.length || data.events.length > 28) {
+      return usageJson({code: "invalid_report"}, 400);
+    }
+    const today = dayBefore(0), cutoff = dayBefore(6);
+    for (const item of data.events) {
+      if (!exactKeys(item, ["day", "event"]) || typeof item.day !== "string" ||
+          !/^\d{4}-\d{2}-\d{2}$/.test(item.day) || item.day < cutoff || item.day > today ||
+          !Number.isFinite(Date.parse(item.day)) || new Date(item.day).toISOString().slice(0, 10) !== item.day ||
+          !USAGE_EVENTS.has(item.event)) return usageJson({code: "invalid_report"}, 400);
+    }
+    const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(data.installation_id));
+    const identity = Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, "0")).join("");
+    const existing = await env.DB.prepare("SELECT platform FROM usage_installations WHERE installation_hash = ?").bind(identity).first();
+    if (existing && existing.platform !== data.platform) return usageJson({code: "platform_mismatch"}, 409);
+    const days = data.events.map(item => item.day).sort();
+    const statements = [env.DB.prepare(`INSERT INTO usage_installations
+      (installation_hash, platform, version, first_day, last_day, consent_version) VALUES (?, ?, ?, ?, ?, 1)
+      ON CONFLICT(installation_hash) DO UPDATE SET
+        version = CASE WHEN excluded.last_day >= usage_installations.last_day THEN excluded.version ELSE usage_installations.version END,
+        first_day = MIN(usage_installations.first_day, excluded.first_day),
+        last_day = MAX(usage_installations.last_day, excluded.last_day)`)
+      .bind(identity, data.platform, data.version, days[0], days.at(-1))];
+    for (const item of data.events) statements.push(env.DB.prepare(
+      "INSERT OR IGNORE INTO usage_daily (installation_hash, day, event) VALUES (?, ?, ?)"
+    ).bind(identity, item.day, item.event));
+    const results = await env.DB.batch(statements);
+    if (results.some(result => !result.success)) throw new Error("Usage write failed");
+    return usageJson({ok: true});
+  } catch {
+    console.warn("Optional usage report unavailable");
+    return usageJson({code: "unavailable"}, 503);
+  }
+}
+
+async function purgeUsage(env) {
+  const cutoff = dayBefore(89);
+  // Separate prepared statements; D1 batch is atomic.
+  await env.DB.batch([
+    env.DB.prepare("DELETE FROM usage_daily WHERE day < ?").bind(cutoff),
+    env.DB.prepare("DELETE FROM usage_installations WHERE last_day < ?").bind(cutoff),
+  ]);
+}
+
+async function handleUsageReport(request, env) {
+  if (!(await validReportToken(request, env))) return reportJson({code: "unauthorized"}, 401);
+  try {
+    const today = dayBefore(0), cutoff = dayBefore(89);
+    const result = await env.DB.batch([
+      env.DB.prepare(`SELECT platform, COUNT(*) AS installations,
+        SUM(first_day >= ?) AS new_30d FROM usage_installations WHERE last_day >= ? GROUP BY platform`).bind(dayBefore(29), cutoff),
+      env.DB.prepare(`SELECT i.platform, d.event, COUNT(DISTINCT d.installation_hash) AS installations,
+        COUNT(*) AS active_days FROM usage_daily d JOIN usage_installations i USING(installation_hash)
+        WHERE d.day >= ? GROUP BY i.platform, d.event`).bind(dayBefore(29)),
+      env.DB.prepare(`SELECT i.platform,
+        COUNT(DISTINCT CASE WHEN d.day >= ? THEN d.installation_hash END) AS active_7d,
+        COUNT(DISTINCT CASE WHEN d.day = ? THEN d.installation_hash END) AS active_today
+        FROM usage_daily d JOIN usage_installations i USING(installation_hash)
+        WHERE d.event = 'app_used' AND d.day >= ? GROUP BY i.platform`).bind(dayBefore(6), today, dayBefore(6)),
+      env.DB.prepare(`SELECT day, event, i.platform, COUNT(*) AS installations
+        FROM usage_daily d JOIN usage_installations i USING(installation_hash)
+        WHERE day >= ? GROUP BY day, event, i.platform ORDER BY day DESC`).bind(dayBefore(29)),
+      env.DB.prepare(`SELECT platform, version, COUNT(*) AS installations FROM usage_installations
+        WHERE last_day >= ? GROUP BY platform, version ORDER BY installations DESC LIMIT 50`).bind(dayBefore(29)),
+      ...[1, 7, 30].map(days => env.DB.prepare(`SELECT i.platform, COUNT(*) AS eligible,
+        SUM(EXISTS(SELECT 1 FROM usage_daily d WHERE d.installation_hash = i.installation_hash
+          AND d.event = 'app_used' AND d.day = date(i.first_day, ?))) AS returned
+        FROM usage_installations i WHERE i.first_day >= ? AND i.first_day <= ?
+        GROUP BY i.platform`).bind(`+${days} days`, cutoff, dayBefore(days))),
+    ]);
+    if (result.some(item => !item.success)) throw new Error("Usage report failed");
+    return reportJson({metric: "opted_in_installations", generated_at: new Date().toISOString(),
+      since: cutoff, activity_since: dayBefore(29), installations: result[0].results,
+      features: result[1].results, recent: result[2].results, daily: result[3].results,
+      versions: result[4].results,
+      retention: [1, 7, 30].map((day, index) => ({day, platforms: result[5 + index].results})),
+    });
+  } catch {
+    console.warn("Usage dashboard unavailable");
+    return reportJson({code: "unavailable"}, 503);
+  }
+}
+
 export default {
+  async scheduled(controller, env, ctx) {
+    ctx.waitUntil(purgeUsage(env));
+  },
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
+
+    if (url.pathname === "/usage") {
+      if (request.method !== "POST") return usageJson({code: "method_not_allowed"}, 405);
+      return handleUsage(request, env);
+    }
+    if (url.pathname === "/usage-stats") {
+      if (request.method === "OPTIONS") return reportJson(null, 204);
+      if (request.method === "GET") return handleUsageReport(request, env);
+      return reportJson({code: "method_not_allowed"}, 405);
+    }
 
     if (url.pathname === "/download-stats") {
       if (request.method === "OPTIONS") return reportJson(null, 204);

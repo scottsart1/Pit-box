@@ -44,7 +44,7 @@ What the design **does** guarantee:
   entitlement without the private key.
 - **A code activates exactly once, globally.** Enforced by one atomic online
   claim at first activation. Two people with the same code cannot both activate.
-- **After activation, the app runs fully offline.** No ongoing phone-home.
+- **Local features remain usable offline after activation.** No mandatory licensing callback. Optional usage reporting follows the explicit user choice described in `docs/USAGE_REPORTING_DRAFT.md`; AI-provider features still require their provider connection.
 - **A license is bound to the machine it activated on.** Copying the license
   file to another machine fails the device check.
 

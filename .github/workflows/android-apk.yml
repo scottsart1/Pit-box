@@ -51,6 +51,9 @@ jobs:
           npm install --prefix "$RUNNER_TEMP/pitbox-ui" --no-save jsdom
           NODE_PATH="$RUNNER_TEMP/pitbox-ui/node_modules" node tools/transfer-ui-smoke.cjs
           NODE_PATH="$RUNNER_TEMP/pitbox-ui/node_modules" node tools/drive-trace-ui-smoke.cjs
+          NODE_PATH="$RUNNER_TEMP/pitbox-ui/node_modules" node tools/usage-ui-smoke.cjs
+      - name: Optional usage ingestion and owner report checks (local fixtures only)
+        run: node --test distribution/activation-server/tests/*.mjs
 
   apk:
     needs: checks
@@ -119,6 +122,20 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: android-release-unsigned-${{ github.sha }}
+          path: android/app/build/outputs/apk/release/
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Prepare isolated release-mode QA APK for physical-device testing
+        if: github.event_name == 'workflow_dispatch' && inputs.prepare_release_apk
+        working-directory: android
+        run: ./gradlew --no-daemon assembleRelease -Ppitbox.prepareUnsignedRelease=true -Ppitbox.qaPackage=true -Ppitbox.buildPython=${{ steps.py313.outputs.python-path }}
+
+      - name: Retain isolated QA signing input (never a public download)
+        if: github.event_name == 'workflow_dispatch' && inputs.prepare_release_apk
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-qa-unsigned-${{ github.sha }}
           path: android/app/build/outputs/apk/release/
           if-no-files-found: error
           retention-days: 7

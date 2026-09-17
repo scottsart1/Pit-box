@@ -356,8 +356,16 @@ def assert_stress_strategy(state: dict) -> bool:
             and (rec.get("inventory_feasible") is not None or strategy.get("confidence") != "low")):
         raise SmokeFailure("Stress strategy presents unknown spare inventory as confirmed")
     rule = rec.get("compound_rule") or {}
-    if rule.get("conditional_on_future_wet_use") and rule.get("wet_waiver"):
-        raise SmokeFailure("Stress strategy counts planned wet use as already completed")
+    if rule.get("conditional_on_future_wet_use"):
+        # The recommended rule is a projection: its wet waiver can be true
+        # conditional on a future stop. Only the separately observed rule may
+        # claim that wet use has already happened. Checking the projected
+        # field here rejected correctly conditional plans before lap one.
+        observed = strategy.get("observed_compound_rule") or {}
+        if observed.get("wet_waiver") is not False:
+            raise SmokeFailure("Stress strategy counts planned wet use as already completed or omits observed evidence")
+        if "only if" not in str(rec.get("instruction", "")).lower():
+            raise SmokeFailure("Stress strategy does not explain its conditional future wet use")
     for name in ("position_probabilities", "outcome_distribution"):
         probabilities = rec.get(name) or {}
         if probabilities:

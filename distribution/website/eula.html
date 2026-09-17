@@ -35,7 +35,7 @@
 <main class="wrap legal">
 
 <h1>Licence terms</h1>
-<p class="updated">Last updated 2 September 2026. Plain English on purpose — if anything here is unclear, email <a href="mailto:vale.scott00@gmail.com">vale.scott00@gmail.com</a> and I will explain it.</p>
+<p class="updated">Last updated 17 September 2026. Plain English on purpose — if anything here is unclear, email <a href="mailto:vale.scott00@gmail.com">vale.scott00@gmail.com</a> and I will explain it.</p>
 
 <h2>1. What you are getting</h2>
 <p>A free licence to use Your Pit Box on your own computers, for as long as you like, for your own personal use. You are not buying anything, and you do not own the software itself.</p>
@@ -62,9 +62,13 @@
   <li>The spoken radio (speech-to-text and the engineer's voice) always uses OpenAI. Without an OpenAI key the engineer answers typed questions using the provider you configured, and stays silent on the radio.</li>
 </ul>
 
-<h2>5. What data goes where</h2>
-<p>Your telemetry stays on your computer. The session database, the raw 60&nbsp;Hz trace files and your Windows username are never uploaded anywhere.</p>
-<p>When you ask a question that genuinely needs judgement, a compact summary of the situation and selected computed results are sent to the AI provider you configured — OpenAI by default, or Claude, DeepSeek, Kimi or your own compatible endpoint if you chose one — so it can answer. With cloud transcription, recorded audio clips are sent to OpenAI for transcription. If you enable the optional Realtime voice mode, microphone audio is streamed to OpenAI while a radio session is active. Nothing is sent to me, and there is no analytics or telemetry reporting back to the developer.</p>
+<h2 id="privacy">5. What data goes where</h2>
+<p>Your session database and raw telemetry traces stay on the device unless you explicitly export or transfer them to another device. They are not included in developer usage reports.</p>
+<p>When you ask a question that genuinely needs judgement, a compact summary of the situation and selected computed results are sent to the AI provider you configured — OpenAI by default, or Claude, DeepSeek, Kimi or your own compatible endpoint if you chose one — so it can answer. With cloud transcription, recorded audio clips are sent to OpenAI for transcription. If you enable the optional Realtime voice mode, microphone audio is streamed to OpenAI while a radio session is active.</p>
+<h3>Optional usage statistics</h3>
+<p>The app asks whether you want to share basic usage statistics to improve Your Pit Box. Sharing is off until you choose it, and declining does not limit any feature. You can change this in Settings → Privacy &amp; usage reporting.</p>
+<p>If enabled, the app sends its platform and version, a random installation ID, and daily yes/no flags for app opens, active use, working driving telemetry, engineer replies, voice commands, lap comparisons and history-transfer starts. These help the developer understand adoption and return use. No telemetry values, race files, audio, conversation text, names, email addresses, API keys or hardware identifiers are included. The reports go over HTTPS to the developer's Cloudflare-hosted service. The installation ID is hashed before storage; the owner dashboard shows aggregate statistics. It is not linked to newsletter subscriptions, download requests or identities on other devices.</p>
+<p>Offline reports can wait on your device for up to 7 days. Turning sharing off clears queued reports and the local ID; turning it on again creates a new ID. Reports already received are not automatically erased by turning sharing off. Daily records are retained for up to 90 calendar days, with scheduled daily cleanup; basic installation metadata is retained until 90 days without activity. Our hosting service processes network addresses to deliver requests and limit abuse, but network addresses are not stored in the usage database or shown in the usage report. Questions about this data can be sent to <a href="mailto:vale.scott00@gmail.com">vale.scott00@gmail.com</a>.</p>
 <p>The download page offers to take an email address, and you can skip it. If you give one, it is stored on my Cloudflare account together with the date, and it is used for exactly one thing: telling you when a new version ships. It is not sold, shared or linked to anything the software does. Reply to any of those emails, or write to me, and I will delete it.</p>
 <p>If you leave a review on the site, the name and text you enter are published once I have read them, with the month you wrote them; I do not edit reviews. An email address you add with a review is used only to reply to you about it: it is not shown and not added to the update list. To keep spam out, a review is stored with a one-way hash of the connection it came from, which cannot be turned back into an address. Write to me and I will remove a review you posted.</p>
 
@@ -81,7 +85,7 @@
 
 <h2>9. Ending the licence</h2>
 <p>You can stop using Your Pit Box and delete it at any time. I may end your licence if you sell or redistribute the software.</p>
-<p>If I stop supporting Your Pit Box, your existing installation keeps working. It runs offline and phones nothing home, so it does not stop when a server does.</p>
+<p>If I stop supporting Your Pit Box, your existing installation keeps working for local telemetry and analysis. Optional usage reporting cannot stop the app if its server is unavailable. Features using AI providers still depend on those providers.</p>
 
 <h2>10. Not affiliated with anyone</h2>
 <p>Your Pit Box is an independent project. It is not affiliated with, endorsed by, sponsored by, or connected to Formula&nbsp;1, Formula One Management, the FIA, Electronic Arts, or Codemasters. All trademarks belong to their owners.</p>

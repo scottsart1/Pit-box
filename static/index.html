@@ -32,8 +32,8 @@
 @keyframes bootspin{to{transform:rotate(360deg)}}
 .brutal-toggle{color:var(--muted)}.brutal-on .brutal-toggle{color:var(--red);font-weight:800;text-transform:uppercase;letter-spacing:.06em}.brutal-on{border-color:var(--red)}
 </style>
-<link rel="stylesheet" href="/static/css/v42.css?v=4.10.1">
-<link rel="stylesheet" href="/static/css/transfers.css?v=4.10.1">
+<link rel="stylesheet" href="/static/css/v42.css?v=4.10.2">
+<link rel="stylesheet" href="/static/css/transfers.css?v=4.10.2">
 </head>
 <body><div id="bootOverlay" aria-live="polite"><div style="text-align:center"><div style="font-weight:800;letter-spacing:3px;font-size:22px;margin-bottom:18px">YOUR PIT BOX</div><div class="boot-ring"></div><div id="bootNote" class="small muted" style="margin-top:16px">Starting your pit box…</div></div></div><div id="radioRail" class="radio-rail"></div><div id="dashPopover" role="dialog" aria-label="Dashboard cards"><div class="label">Dashboard cards</div><div id="dashList"></div></div><div id="raceControlBlip" class="rc-blip" role="status" aria-live="assertive" hidden></div><div class="app">
 <header class="top"><span class="brand">YOUR PIT BOX 4.10.1</span><span><i id="udpDot" class="dot"></i> <span id="udp">Waiting for UDP</span></span><span id="session">—</span><span id="track">—</span><span id="eng" class="status pill">standing by</span><button id="dashConfig" class="button ghost" style="margin-left:10px;padding:6px 12px" title="Choose which dashboard cards are shown, and drag to rearrange them.">⚙ Dashboard</button><button id="quitApp" class="button ghost" style="margin-left:10px;padding:6px 12px" title="Your Pit Box keeps running after you close this tab. Use this to stop it.">Quit Your Pit Box</button></header>
@@ -450,6 +450,21 @@
     <div class="quit-actions"><button id="quitCancel" class="button ghost" type="button">Keep racing</button><button id="quitConfirm" class="button" type="button">Quit Your Pit Box</button></div>
   </div>
 </div>
+<aside id="usagePrompt" class="card" aria-labelledby="usagePromptHeading" hidden style="position:fixed;right:16px;bottom:44px;z-index:2200;width:min(480px,calc(100vw - 32px));box-shadow:0 6px 24px #0009">
+  <b id="usagePromptHeading">Help improve Your Pit Box</b>
+  <p class="small">Share basic usage statistics? Daily app opens, active use, driving and feature-use flags are linked to a random installation ID. No race traces, recordings, messages or API keys.</p>
+  <p class="small muted">Optional. Change your choice anytime in Settings.</p>
+  <div class="controls" style="flex-wrap:wrap"><button id="usageYes" class="button ghost" type="button">Yes, share basic usage statistics</button><button id="usageNo" class="button ghost" type="button">No thanks</button></div>
+  <p id="usagePromptStatus" class="small" role="status"></p>
+</aside>
+<section id="usageSettings" class="card" aria-labelledby="usageSettingsHeading">
+  <h2 id="usageSettingsHeading" style="font-size:16px">Privacy &amp; usage reporting</h2>
+  <label><input id="usageToggle" type="checkbox" disabled> Share basic usage statistics to improve Your Pit Box</label>
+  <p class="small muted">Optional; off until you choose. The app works normally either way.</p>
+  <details><summary>What is shared?</summary><p class="small">Your platform, app version, a random installation ID and daily yes/no flags for app opens, active use, driving, engineer replies, voice commands, lap comparisons and transfer starts. No telemetry values, recordings, conversations, names, API keys or files. Sent securely to the developer's Cloudflare-hosted service; not linked to newsletter signups.</p>
+  <p class="small">Reports wait locally for up to 7 days when offline. Turning sharing off clears unsent reports and the local ID. Turning it on again creates a new ID. Received daily reports expire after 90 days; installation metadata expires after 90 days without activity. The owner sees aggregate counts, not a list of drivers. Hosting services process network addresses to deliver and protect requests; addresses are not stored in the usage database.</p></details>
+  <p id="usageStatus" class="small muted" role="status">Loading your choice…</p>
+</section>
 <script>
 const $=id=>document.getElementById(id);let lastState=null,lastRadio=-1,objectiveTarget=10,lastAuxLap=-1,lastRivalKey='',rivalCache={};const PREF_FIELDS={prefRear:'rear_stability',prefTraction:'traction',prefRotation:'rotation',prefTyre:'tyre_life',prefStraight:'straight_line'};const esc=s=>String(s??'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
 function fmt(ms){if(!ms)return'—';const m=Math.floor(ms/60000),r=ms%60000;return`${m}:${String(Math.floor(r/1000)).padStart(2,'0')}.${String(r%1000).padStart(3,'0')}`}
@@ -714,8 +729,9 @@ $('rivalCompare').ontoggle=()=>{lastRivalKey='';loadRivals()};$('objectiveDown')
      install can run the previous release's JS against the new backend. The
      navigated document (this file) is revalidated, so versioned subresource
      URLs bust reliably on upgrade. Keep in step with the app version. -->
-<script type="module" src="/static/js/connection.js?v=4.10.1"></script>
-<script type="module" src="/static/js/workspaces.js?v=4.10.1"></script>
-<script type="module" src="/static/js/transfers.js?v=4.10.1"></script>
-<script type="module" src="/static/js/strategy.js?v=4.10.1"></script>
+<script type="module" src="/static/js/connection.js?v=4.10.2"></script>
+<script type="module" src="/static/js/workspaces.js?v=4.10.2"></script>
+<script type="module" src="/static/js/transfers.js?v=4.10.2"></script>
+<script type="module" src="/static/js/strategy.js?v=4.10.2"></script>
+<script src="/static/js/usage.js?v=4.10.2" defer></script>
 </body></html>

@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<meta name="referrer" content="no-referrer">
+<title>Usage report — Your Pit Box</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<header class="site-header"><div class="wrap"><a class="brand" href="index.html"><span class="brand-mark" aria-hidden="true"></span>Your Pit Box</a><a href="download-stats.html">Download history</a></div></header>
+<main class="wrap report-page">
+  <div class="eyebrow">Private owner report</div>
+  <h1>From downloading to driving.</h1>
+  <p>Understand real use across Windows and Android. Usage figures cover opted-in installations, not unique people or every customer.</p>
+  <form id="usageReportLogin" class="report-login">
+    <label for="usageReportKey" class="field-label">Owner report access key</label>
+    <div class="code-entry"><input id="usageReportKey" type="password" autocomplete="off" required maxlength="256" aria-describedby="usageKeyHelp"><button class="button primary" type="submit">Open report</button></div>
+    <p id="usageKeyHelp" class="field-help">Use the same dedicated key as the download report. Kept in page memory only; never in a URL or browser storage.</p>
+  </form>
+  <p id="usageReportStatus" role="status" aria-live="polite">Enter your key. Older app versions do not submit usage reports.</p>
+  <div id="usageReportData" hidden>
+    <div class="report-toolbar"><p id="usageReportUpdated"></p><div><button id="usageReportRefresh" class="button ghost" type="button">Refresh</button> <button id="usageReportLock" class="button ghost" type="button">Lock report</button></div></div>
+    <section aria-labelledby="journeyHeading"><h2 id="journeyHeading">Last 30 calendar days</h2>
+      <p id="usageReportPeriod"></p>
+      <div class="table-scroll" tabindex="0"><table><caption>Journey signals by platform — not a linked conversion funnel</caption><thead><tr><th scope="col">Signal</th><th scope="col">Windows</th><th scope="col">Android</th><th scope="col">All installations</th></tr></thead><tbody id="usageJourneyRows"></tbody></table></div>
+      <p>Downloads are file starts, not people. They are not linked to app identities. Active and racing rows include returning installations, so dividing these rows does not produce a valid conversion rate. One person using two devices can count twice; resetting sharing creates a new identity.</p>
+    </section>
+    <section aria-labelledby="retentionHeading"><h2 id="retentionHeading">Do they come back?</h2>
+      <p>Exact-day return after first reported use, measured on day 1, 7 and 30 in UTC. Only eligible opted-in installations are included. Recent cohorts are not treated as failures.</p>
+      <div class="table-scroll" tabindex="0"><table><caption>Exact-day retention, cohorts first seen in the last 90 days</caption><thead><tr><th scope="col">Return day</th><th scope="col">Windows</th><th scope="col">Android</th><th scope="col">Combined</th></tr></thead><tbody id="usageRetentionRows"></tbody></table></div>
+    </section>
+    <section aria-labelledby="featuresHeading"><h2 id="featuresHeading">Features used</h2><p>Distinct reporting installations in the last 30 days, not numbers of button presses or successful race completions.</p>
+      <div class="table-scroll" tabindex="0"><table><caption>Feature adoption by platform</caption><thead><tr><th scope="col">Feature</th><th scope="col">Windows</th><th scope="col">Android</th><th scope="col">All</th></tr></thead><tbody id="usageFeatureRows"></tbody></table></div>
+    </section>
+    <details><summary>App version breakdown</summary><div class="table-scroll" tabindex="0"><table><caption>Most recently reported versions for installations seen in the last 30 days (up to 50 rows)</caption><thead><tr><th scope="col">Platform</th><th scope="col">Version</th><th scope="col">Installations</th></tr></thead><tbody id="usageVersionRows"></tbody></table></div></details>
+  </div>
+  <aside class="callout"><h2>What these signals can tell you</h2><p>Working driving telemetry requires at least 60 consecutive seconds of fresh, advancing, unpaused driving data. Background app launches alone are not active use. Transfer starts do not confirm successful imports.</p><p>Reports are voluntary and self-reported, not billing records. Offline devices can report up to 7 days late. Declined sharing, old versions and removed apps are unobserved. Raw daily reports expire after 90 days, and inactive installation metadata is removed after 90 days without activity. There is no historical app-use backfill and no cross-device person tracking.</p></aside>
+  <noscript>Enable JavaScript to open the private report.</noscript>
+</main>
+<script src="usage-stats.js?v=usage-draft-1" defer></script>
+</body>
+</html>

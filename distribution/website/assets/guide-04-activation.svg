@@ -55,7 +55,7 @@
       <text x="42" y="99" class="ink" font-size="28" font-weight="800">Welcome to Your Pit Box</text>
       <text x="42" y="134" class="copy" font-size="17">Your Pit Box is free. Paste an OpenAI API key for the race</text>
       <text x="42" y="158" class="copy" font-size="17">engineer, or skip and add one later from the Connection tab.</text>
-      <text x="42" y="190" class="muted" font-size="15">Your API key is stored only on this machine. Nothing is sent to me.</text>
+      <text x="42" y="190" class="muted" font-size="15">Your key is stored locally and never included in usage reports.</text>
 
       <text x="42" y="259" class="ink" font-size="17" font-weight="700">OpenAI API key</text>
       <text x="42" y="281" class="muted" font-size="14">(optional)</text>

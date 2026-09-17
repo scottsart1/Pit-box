@@ -126,7 +126,7 @@ def service_compatibility(exc: ReferenceCompatibilityError) -> dict[str, Any]:
     }
 
 
-def create_analysis_router(service: ComparisonService) -> APIRouter:
+def create_analysis_router(service: ComparisonService, *, usage_record=None) -> APIRouter:
     router = APIRouter(prefix="/api/v1", tags=["analysis"])
 
     @router.get("/laps/{lap_id}/trace", response_model=TraceResponse)
@@ -180,12 +180,15 @@ def create_analysis_router(service: ComparisonService) -> APIRouter:
     )
     async def create_comparison(request: ComparisonCreate) -> dict[str, Any]:
         try:
-            return await service.create_comparison(
+            result = await service.create_comparison(
                 request.candidate_lap_id,
                 reference_kind=request.reference.kind,
                 reference_lap_id=request.reference.lap_id,
                 allow_caveated_reference=request.allow_caveated_reference,
             )
+            if usage_record:
+                usage_record("analysis")
+            return result
         except ComparisonServiceError as exc:
             _raise_service_error(exc)
             raise AssertionError("unreachable") from exc
@@ -193,7 +196,10 @@ def create_analysis_router(service: ComparisonService) -> APIRouter:
     @router.get("/comparisons/{comparison_id}", response_model=ComparisonResponse)
     async def comparison(comparison_id: str) -> dict[str, Any]:
         try:
-            return await service.get_comparison(comparison_id)
+            result = await service.get_comparison(comparison_id)
+            if usage_record:
+                usage_record("analysis")
+            return result
         except ComparisonServiceError as exc:
             _raise_service_error(exc)
             raise AssertionError("unreachable") from exc

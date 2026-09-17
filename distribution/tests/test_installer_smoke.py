@@ -31,6 +31,42 @@ def fixture_state() -> dict:
             "drivers": [{"name": "Smoke Driver"}, {"name": "Smoke Rival"}]}
 
 
+def conditional_wet_strategy() -> dict:
+    from pitwall.strategy import StrategyEngine
+
+    race = {"mode_profile": "race", "tyre": {"compound": "MEDIUM"}}
+    return {"strategy": {
+        "available": True,
+        "observed_compound_rule": StrategyEngine._compound_rule(race),
+        "recommended": {
+            "projected_time_s": 2400.0,
+            "compound_rule": StrategyEngine._compound_rule(race, ["INTER"]),
+            "instruction": "Legal only if the planned wet tyre is actually used.",
+        },
+    }}
+
+
+def test_stress_gate_distinguishes_projected_and_observed_wet_waiver():
+    # This is the contract of StrategyEngine._compound_rule(state, future):
+    # the projected waiver is true while observed compliance remains false.
+    assert smoke.assert_stress_strategy(conditional_wet_strategy())
+
+
+@pytest.mark.parametrize("observed", [{"wet_waiver": True}, {}, None])
+def test_stress_gate_rejects_completed_or_missing_wet_evidence(observed):
+    state = conditional_wet_strategy()
+    state["strategy"]["observed_compound_rule"] = observed
+    with pytest.raises(smoke.SmokeFailure, match="observed evidence"):
+        smoke.assert_stress_strategy(state)
+
+
+def test_stress_gate_rejects_unqualified_future_wet_instruction():
+    state = conditional_wet_strategy()
+    state["strategy"]["recommended"]["instruction"] = "The compound requirement is already met."
+    with pytest.raises(smoke.SmokeFailure, match="does not explain"):
+        smoke.assert_stress_strategy(state)
+
+
 def populate_database(data: Path) -> None:
     capture = data / "captures" / "fixture.pwcap"
     capture.parent.mkdir(exist_ok=True)

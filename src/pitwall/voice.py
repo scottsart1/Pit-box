@@ -1056,6 +1056,8 @@ class NativeVoiceController:
         )
 
     async def _run_command(self, command: str, source: str) -> None:
+        if getattr(self.store, "usage_event", None):
+            self.store.usage_event("voice")
         route = self.brain.classify_request(command)
         ack_kind = "standby" if route == "deep" else "copy"
         snapshot = await self.store.snapshot_live()

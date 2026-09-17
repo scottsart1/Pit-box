@@ -16,7 +16,7 @@ val nativeConstraints = rootProject.layout.projectDirectory.file("native-require
 // engine than the source which Chaquopy actually packages.
 val backendVersion = Regex("__version__ = \"([^\"]+)\"")
     .find(rootProject.file("../src/pitwall/__init__.py").readText())!!.groupValues[1]
-val androidRevision = 14
+val androidRevision = 15
 val signingPath = providers.environmentVariable("PITBOX_KEYSTORE_PATH").orNull
 val signingVariables = listOf("PITBOX_KEYSTORE_PATH", "PITBOX_KEYSTORE_PASSWORD",
     "PITBOX_KEY_ALIAS", "PITBOX_KEY_PASSWORD")
@@ -28,17 +28,25 @@ val signingConfigured = missingSigning.isEmpty()
 // publishable until the owner signs and verifies it on the release machine.
 val prepareUnsignedRelease = providers.gradleProperty("pitbox.prepareUnsignedRelease")
     .map { it == "true" }.getOrElse(false)
+// A release-mode QA package can coexist with legacy, differently signed apps.
+// The public release is always built separately with this flag absent.
+val qaPackage = providers.gradleProperty("pitbox.qaPackage")
+    .map { it == "true" }.getOrElse(false)
+check(!qaPackage || prepareUnsignedRelease) {
+    "The isolated QA package is only prepared unsigned for owner-local signing."
+}
 
 android {
     namespace = "com.yourpitbox.app"
     compileSdk = 36
 
     defaultConfig {
-        applicationId = "com.yourpitbox.app"
+        applicationId = if (qaPackage) "com.yourpitbox.app.qa" else "com.yourpitbox.app"
+        manifestPlaceholders["pitboxAppLabel"] = if (qaPackage) "Your Pit Box QA" else "Your Pit Box"
         minSdk = 24
         targetSdk = 36
         versionCode = androidRevision
-        versionName = "$backendVersion-android.$androidRevision"
+        versionName = "$backendVersion-android.$androidRevision" + if (qaPackage) "-qa" else ""
         ndk {
             // 64-bit phones and tablets, plus the x86_64 emulator.
             abiFilters += listOf("arm64-v8a", "x86_64")
