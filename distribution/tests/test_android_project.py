@@ -92,7 +92,7 @@ def test_the_backend_is_a_source_root_not_a_copy():
 def test_candidate_targets_android_16_and_ci_tests_that_platform():
     assert "compileSdk = 36" in GRADLE and "targetSdk = 36" in GRADLE
     assert "platforms;android-36" in WORKFLOW and "api-level: 36" in WORKFLOW
-    assert "val androidRevision = 15" in GRADLE
+    assert "val androidRevision = 16" in GRADLE
 
 
 def test_isolated_release_qa_package_cannot_replace_existing_apps():

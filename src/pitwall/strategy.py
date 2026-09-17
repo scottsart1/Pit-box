@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import math
 import re
 import time
@@ -370,6 +371,12 @@ class StrategyEngine:
         # not yet been the faster plan for long enough to be spoken.
         self._pending_switch: tuple[tuple[Any, ...], float] | None = None
         self._pending_switch_context: tuple[Any, ...] | None = None
+        # Planning is CPU-heavy. Keep one isolated worker per engine and
+        # coalesce live callers, rather than blocking HTTP/UDP or enqueueing
+        # one thread job per telemetry update. Workers never mutate live state.
+        self._compute_gate = asyncio.Lock()
+        self._recompute_task: asyncio.Task[dict[str, Any]] | None = None
+        self._closing = False
 
     @staticmethod
     def _valid_laps(state: dict[str, Any]) -> list[dict[str, Any]]:
@@ -2798,21 +2805,95 @@ class StrategyEngine:
             bool((plan.get("compound_rule") or {}).get("change_outstanding")),
         )
 
-    async def recompute(self) -> dict[str, Any]:
-        state = await self.store.snapshot_analysis()
-        previous_strategy = dict(state.get("strategy", {}) or {})
-        historical = await self.database.tyre_history_model(
-            int(state.get("track_id", -1)), context=state
+    def start(self) -> None:
+        self._closing = False
+
+    async def stop(self) -> None:
+        self._closing = True
+        if self._recompute_task is not None:
+            await asyncio.gather(self._recompute_task, return_exceptions=True)
+        # A cancelled caller cannot release this gate while its thread is
+        # still running. Wait for hypothetical planning work as well.
+        async with self._compute_gate:
+            pass
+
+    @staticmethod
+    def _live_context(state: Any) -> tuple[Any, ...]:
+        def get(obj: Any, key: str) -> Any:
+            return obj.get(key) if isinstance(obj, dict) else getattr(obj, key, None)
+
+        tyre = get(state, "tyre")
+        return (
+            *(get(state, name) for name in (
+                "session_uid", "restart_epoch", "timeline_epoch", "track_id",
+                "player_car_index", "mode_profile", "total_laps", "current_lap",
+                "race_control_phase", "game_paused", "red_flag_active",
+                "strategy_override", "strategy_risk_appetite", "race_plan",
+                "driver_tyre_feedback", "driver_grip_feedback", "tyre_sets",
+                "weather", "rain_now_pct", "rain_next_15_pct",
+            )),
+            get(tyre, "compound"), get(tyre, "age_laps"),
         )
-        historical = infer_unrun_compounds(historical)
-        plan = self.compute(state, historical)
-        plan = self._stabilize_radio_plan(state, previous_strategy, plan)
-        await self.store.update(strategy=plan)
-        key = self._snapshot_key(state, plan)
-        if key != self._last_snapshot_key:
-            self._last_snapshot_key = key
-            await self.database.save_strategy_snapshot(state, plan)
-        return plan
+
+    async def _compute_isolated(
+        self, state: dict[str, Any], historical: dict[str, Any],
+    ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+        async with self._compute_gate:
+            worker = StrategyEngine(self.store, self.database)
+            task = asyncio.create_task(asyncio.to_thread(worker.compute, state, historical))
+            try:
+                plan = await asyncio.shield(task)
+            except asyncio.CancelledError:
+                # Python cannot cancel a running thread. Retain the gate until
+                # it exits, and discard its private pool/result on cancellation.
+                await asyncio.gather(task, return_exceptions=True)
+                raise
+            return plan, worker._candidate_pool
+
+    async def recompute(self) -> dict[str, Any]:
+        if self._closing:
+            return (await self.store.peek("strategy"))["strategy"]
+        if self._recompute_task is None or self._recompute_task.done():
+            self._recompute_task = asyncio.create_task(
+                self._recompute_latest(), name="pitwall-strategy-recompute"
+            )
+        # Cancelling one request must not abandon the worker or another caller.
+        return await asyncio.shield(self._recompute_task)
+
+    async def _recompute_latest(self) -> dict[str, Any]:
+        for _ in range(2):
+            if self._closing:
+                break
+            state = await self.store.snapshot_analysis()
+            context = self._live_context(state)
+            previous_strategy = dict(state.get("strategy", {}) or {})
+            historical = await self.database.tyre_history_model(
+                int(state.get("track_id", -1)), context=state
+            )
+            plan, pool = await self._compute_isolated(state, infer_unrun_compounds(historical))
+            applied = False
+
+            def publish(live: Any) -> None:
+                nonlocal plan, applied
+                # Check and publish under the same store lock; a session reset,
+                # flashback, tyre change or driver override must win this race.
+                if self._closing or self._live_context(live) != context:
+                    return
+                self._candidate_pool = pool
+                plan = self._stabilize_radio_plan(state, previous_strategy, plan)
+                live.strategy = plan
+                applied = True
+
+            await self.store.mutate(publish)
+            if not applied:
+                continue
+            key = self._snapshot_key(state, plan)
+            if key != self._last_snapshot_key:
+                await self.database.save_strategy_snapshot(state, plan)
+                self._last_snapshot_key = key
+            return plan
+        # Telemetry changed repeatedly: do not publish or persist a stale plan.
+        return (await self.store.peek("strategy"))["strategy"]
 
     def compute(
         self,
@@ -4355,7 +4436,7 @@ class StrategyEngine:
         }
         # The driver asked a what-if question, not to replace the live plan or
         # its hysteresis pool. Compute the same model in a separate instance.
-        scenario = StrategyEngine(self.store, self.database).compute(query_state, historical)
+        scenario, _ = await self._compute_isolated(query_state, historical)
         plan = scenario.get("recommended", {})
         if (not plan.get("legal") or not plan.get("feasible")
                 or (plan.get("box_laps") or [None])[0] != box_lap):
@@ -4513,7 +4594,7 @@ class StrategyEngine:
             resolved_track, context=planning_state
         )
         historical = infer_unrun_compounds(historical)
-        computed = self.compute(planning_state, historical)
+        computed, _ = await self._compute_isolated(planning_state, historical)
         plans = [
             plan
             for plan in (computed.get("plans") or [])
@@ -4577,7 +4658,7 @@ class StrategyEngine:
             int(state.get("track_id", -1)), context=state
         )
         historical = infer_unrun_compounds(historical)
-        base = self.compute(state, historical)
+        base, _ = await self._compute_isolated(state, historical)
         text = scenario.lower()
         compound = next(
             (

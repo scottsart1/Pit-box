@@ -150,11 +150,20 @@ async def _create_endpoint(
     host: str,
     port: int,
 ) -> tuple[ClosableDatagramTransport, asyncio.DatagramProtocol]:
-    transport, protocol = await asyncio.get_running_loop().create_datagram_endpoint(
-        factory,
-        local_addr=(host, port),
-        family=socket.AF_INET,
-    )
+    # The OS queue precedes datagram_received and is not covered by our Python
+    # queue-drop counter. Allow bounded burst headroom while the event loop is
+    # scheduled or a short GIL-held section finishes, especially on Windows.
+    receiver = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        receiver.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 4 * 1024 * 1024)
+        receiver.setblocking(False)
+        receiver.bind((host, port))
+        transport, protocol = await asyncio.get_running_loop().create_datagram_endpoint(
+            factory, sock=receiver,
+        )
+    except BaseException:
+        receiver.close()
+        raise
     return cast(ClosableDatagramTransport, transport), protocol
 
 

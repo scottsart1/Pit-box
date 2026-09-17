@@ -105,6 +105,23 @@ jobs:
           "`n- Installed artifact smoke: install, frozen startup, 25-lap UDP stress, full SQLite integrity, persistence/restart, shutdown, uninstall/data retention passed." >> $env:GITHUB_STEP_SUMMARY
           "- Transfer management is exercised through the installed EXE; diagnostics state whether the runner had a usable private LAN for TLS/QR checks." >> $env:GITHUB_STEP_SUMMARY
 
+      - name: Counted full-field UDP reception and responsiveness
+        id: counted
+        timeout-minutes: 8
+        shell: pwsh
+        run: |
+          python tools/counted-telemetry-smoke.py --executable "$env:PITWALL_BUILD_DIR/dist/Your Pit Box/Your Pit Box.exe" --version "${{ steps.version.outputs.version }}" --output-parent "$env:RUNNER_TEMP"
+          if ($LASTEXITCODE -ne 0) { throw "Counted UDP reception/responsiveness failed" }
+
+      - name: Preserve counted telemetry evidence
+        if: ${{ always() && steps.counted.outputs.diagnostics != '' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: PitWall-counted-telemetry-${{ steps.version.outputs.version }}
+          path: ${{ steps.counted.outputs.diagnostics }}
+          if-no-files-found: error
+          retention-days: 7
+
       - name: Preserve installer-smoke diagnostics
         if: ${{ always() && steps.smoke.outputs.diagnostics != '' }}
         uses: actions/upload-artifact@v4

@@ -483,6 +483,7 @@ def _report_trace_recovery(recovery: RecoveryReport) -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    strategy.start()
     global voice, proactive, watchdog_task, event_persistence_task
     global maintenance_task, catalog_task, interfaces_task, session_assembler
     global corner_rebuild_task
@@ -661,6 +662,7 @@ async def lifespan(app: FastAPI):
     if voice:
         await voice.shutdown()
     await analysis.stop()
+    await strategy.stop()
     active_session = session_assembler.session
     if active_session is not None:
         await database.catalog.finalize_session(
