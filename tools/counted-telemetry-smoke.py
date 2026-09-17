@@ -82,10 +82,10 @@ def main():
                     send(replay.build_session(0, 0, 25, 1))
                     send(replay.build_car_status(cars, 0, 0))
                     send(replay.build_car_damage(cars, 0, 0))
+                    emission_start = time.monotonic()
                     for frame in range(1, 6001):
                         if stop.is_set():
                             break
-                        tick = time.monotonic()
                         session_time = frame / 60
                         for car in cars:
                             car.race_time = session_time
@@ -111,10 +111,12 @@ def main():
                             send(replay.build_participants(cars, session_time, frame))
                             send(replay.build_lap_positions(cars, session_time, frame))
                             send(replay.build_history(cars[(frame // 60) % len(cars)], session_time, frame))
-                        # Windows Event.wait uses a coarser timeout clock than
-                        # Python 3.12 time.sleep; do not accidentally halve the
-                        # intended packet rate through timeout quantization.
-                        time.sleep(max(0, 1 / 60 - (time.monotonic() - tick)))
+                        # Schedule against one absolute clock. Per-frame sleeps
+                        # accumulate scheduler overshoot on hosted Windows and
+                        # silently lower the offered load. Late frames catch up;
+                        # the unchanged elapsed/count checks still reject a host
+                        # that cannot generate the intended sustained rate.
+                        time.sleep(max(0, emission_start + frame / 60 - time.monotonic()))
             except Exception as exc:
                 emitter_errors.append(str(exc))
 

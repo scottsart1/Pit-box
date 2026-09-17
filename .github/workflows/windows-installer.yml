@@ -132,8 +132,11 @@ jobs:
           retention-days: 7
 
       - uses: actions/upload-artifact@v4
+        if: ${{ always() && steps.installer.outputs.path != '' }}
         with:
           name: PitWall-Setup-${{ steps.version.outputs.version }}
+          # A failed smoke may retain private diagnostic artifacts, but never
+          # bypasses either verification or the public-release signature gate.
           # Retain the exact frozen runtime too: the owner can test it with
           # isolated data without replacing an existing Inno installation.
           path: |
