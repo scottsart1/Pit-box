@@ -3,8 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Your Pit Box — a real race engineer for F1 25: 2026 Season Pack</title>
-<meta name="description" content="Your Pit Box turns F1 25: 2026 Season Pack telemetry from your PS5 / PC into a live race engineer: strategy calls, corner coaching and spoken radio, computed locally on your own PC.">
+<title>Your Pit Box — standalone race engineer for Windows &amp; Android</title>
+<meta name="description" content="Run Your Pit Box independently on Windows or Android. Live F1 25: 2026 Season Pack telemetry, strategy, radio, lap analysis and Setup Lab — no laptop needed for Android.">
 <link rel="canonical" href="https://yourpitbox.com/">
 <link rel="stylesheet" href="styles.css">
 </head>
@@ -14,16 +14,11 @@
   <div class="wrap">
     <a class="brand" href="#top"><span class="brand-mark" aria-hidden="true"></span> Your Pit Box</a>
     <nav class="site-nav" aria-label="Sections">
-      <a href="#demo">Demo</a>
-      <a href="#what">What it does</a>
       <a href="#devices">Windows &amp; Android</a>
+      <a href="#what">Capabilities</a>
       <a href="#how">How it works</a>
-      <a href="#screens">Screens</a>
+      <a href="#demo">Demo</a>
       <a href="guide.html">Setup guide</a>
-      <a href="#requirements">Requirements</a>
-      <a href="#download">Download</a>
-      <a href="#reviews">Reviews</a>
-      <a href="#coffee">Buy me a coffee</a>
     </nav>
     <div class="header-actions">
       <a class="button primary" href="#download">Download free</a>
@@ -36,19 +31,20 @@
 <section class="hero">
   <div class="wrap hero-grid">
     <div>
-      <div class="eyebrow">For F1 25: 2026 Season Pack on PS5 / PC</div>
-      <h1>A race engineer that actually reads your telemetry.</h1>
+      <div class="eyebrow">Windows + Android · two standalone apps</div>
+      <h1>Your race engineer.<br>On the device beside you.</h1>
       <p class="lede">
-        Your Pit Box listens to the UDP feed from your PS5 / PC, runs the
-        strategy, tyre and corner maths locally on your PC, and talks to you
-        over the radio while you drive. Every number is computed from telemetry
-        by deterministic code — never invented by a language model.
+        Live strategy, spoken radio and a clearer view of every lap. Run the
+        engineer on your Windows PC or your Android phone or tablet. Each app
+        receives the game directly, runs the same telemetry engine locally,
+        and keeps its own session history. Android does not need a laptop.
       </p>
       <div class="hero-actions">
-        <a class="button primary" href="#download">Download free</a>
-        <a class="button ghost" href="#how">How it works</a>
+        <a class="button primary" href="#windows-release">Get Windows</a>
+        <a class="button primary" href="#android-release">Get Android APK</a>
       </div>
-      <p class="price-note">Free. No code, no account, no subscription. Windows 10 or 11.</p>
+      <p class="price-note">Both apps are free. No code, no account, no subscription. Optional AI and voice use your own paid API account.</p>
+      <p class="hero-game">For <strong>F1 25: 2026 Season Pack</strong> on PS5 / PC. <a href="#requirements">Check device requirements</a>.</p>
     </div>
     <figure>
       <div class="shot">
@@ -58,6 +54,184 @@
       </div>
       <figcaption>The Drive screen at Silverstone. The race shown is synthetic, but every screen on this page is the real application, not a mockup.</figcaption>
     </figure>
+  </div>
+</section>
+
+<section id="devices" class="soft" aria-labelledby="devices-title">
+  <div class="wrap">
+    <div class="eyebrow">Choose either. You do not need both.</div>
+    <h2 id="devices-title">Same engineer. Two independent apps.</h2>
+    <p class="section-lede">The telemetry receiver, strategy engine, dashboard and session library run on the device you choose. Android is not a remote screen for Windows, and Windows does not need a tablet.</p>
+    <div class="platform-grid">
+      <article class="platform-card">
+        <div class="platform-label">01 / Desktop</div>
+        <h3>Windows · available</h3>
+        <p class="platform-intro">Your engineer alongside the game.</p>
+        <p>Play on the same PC, or receive telemetry from your PS5 or another PC over your home network. Launch from the Start Menu; the dashboard opens in your browser while the engine runs on that computer.</p>
+        <ul>
+          <li>Local strategy, radio, analysis and saved sessions.</li>
+          <li>Use the PC's microphone, speakers or headset for radio.</li>
+          <li>Windows 10 or 11. Current installer is unsigned.</li>
+        </ul>
+        <div class="platform-actions">
+          <a class="button primary" href="#windows-release">Get Windows</a>
+          <a href="guide.html#step-1">Windows setup</a>
+        </div>
+      </article>
+      <article class="platform-card">
+        <div class="platform-label">02 / Phone &amp; tablet</div>
+        <h3>Android · APK available</h3>
+        <p class="platform-intro">Leave the laptop out of the setup.</p>
+        <p>The native Android app receives the game's telemetry directly and runs the same engine on your phone or tablet. It keeps its own recordings and uses that device's microphone and audio output.</p>
+        <ul>
+          <li>Local strategy, radio, analysis and saved sessions.</li>
+          <li>No Windows host or remote-desktop connection required.</li>
+          <li>Android 7 or later · 64-bit ARM or x86 · 4 KB memory pages.</li>
+        </ul>
+        <p class="platform-caveat">Devices using 16 KB memory pages are not supported. This is a signed APK, not a Google Play listing.</p>
+        <div class="platform-actions">
+          <a class="button primary" href="https://pitwall-activation.sarthakvij123450.workers.dev/android">Download Android APK</a>
+          <a href="guide.html#android">Android setup</a>
+        </div>
+      </article>
+    </div>
+    <p class="section-footnote">Choose the app that receives this race. Point the game's UDP destination at that device. Using both is optional; <a href="#move-between">transfers and forwarding are separate beta features</a>, not automatic cloud sync.</p>
+  </div>
+</section>
+
+<section id="what" aria-labelledby="capabilities-title">
+  <div class="wrap">
+    <div class="eyebrow">Included in both apps</div>
+    <h2 id="capabilities-title">From the first packet to the post-race review.</h2>
+    <p class="section-lede">One place to read the race, make a call and find the next improvement. Both apps use the same engine and dashboard; device permissions and audio setup are configured separately.</p>
+    <div class="race-cycle" aria-label="Race workflow">
+      <a href="guide.html">Before the race <span>Connect &amp; check</span></a>
+      <a href="#live-capabilities">During the race <span>Drive &amp; decide</span></a>
+      <a href="#review-capabilities">After the race <span>Compare &amp; improve</span></a>
+    </div>
+    <div class="capability-group" id="live-capabilities">
+      <h3>While you drive</h3>
+      <div class="cards">
+        <article class="card"><h4>Live race dashboard</h4><p>Timing tower, gaps, tyres, fuel, ERS, damage and speed, throttle and brake traces. Recorded lap history is distinguished from current inputs and a stale or paused feed.</p></article>
+        <article class="card"><h4>Strategy you can change</h4><p>Ranked pit plans, tyre choices, traffic and undercut estimates. Edit the stint timeline, explore alternatives and use wet-weather estimates to inform the next stop.</p></article>
+        <article class="card"><h4>A two-way radio</h4><p>Ask about a gap, rival or strategy by voice or typed message. Enable proactive calls for changing race conditions. Spoken radio needs an OpenAI key, internet and working microphone/audio permissions.</p></article>
+      </div>
+    </div>
+    <div class="capability-group" id="review-capabilities">
+      <h3>When the session ends</h3>
+      <div class="cards">
+        <article class="card"><h4>Lap and corner analysis</h4><p>Compare recorded laps by distance. Review braking, apex speed, exits and racing-line differences against a suitable reference. Findings depend on the clean laps and samples available.</p></article>
+        <article class="card"><h4>Setup Lab</h4><p>Use your recorded laps to inspect corner-by-corner losses and setup suggestions. Separate driving differences from setup hypotheses before making a change.</p></article>
+        <article class="card"><h4>A library on your device</h4><p>Reopen recorded sessions without the game running. Review stints, available traces and post-race summaries. Control storage budgets; retained history depends on those settings.</p></article>
+      </div>
+    </div>
+    <div class="capability-group">
+      <h3>Make the engineer yours</h3>
+      <div class="cards">
+        <article class="card"><h4>Voice, personality and layout</h4><p>Set the engineer's name, voice, wake phrase and radio verbosity. Arrange Drive cards, tune proactive calls and choose the optional, explicitly profane Brutal mode.</p></article>
+        <article class="card"><h4>Choose the reasoning provider</h4><p>Use OpenAI, Claude (Anthropic), DeepSeek, Kimi or a configured OpenAI-compatible endpoint for model-backed answers. The spoken radio always uses OpenAI. Manage provider keys in Connection.</p></article>
+        <article class="card"><h4>Check the actual connection</h4><p>See whether the receiver is listening or receiving fresh packets, find the device address and inspect connection health. Test credentials, microphone input and audio output as separate checks.</p></article>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="new" class="soft">
+  <div class="wrap">
+    <div class="eyebrow">The current release · 4.10.1</div>
+    <h2>More than a second download.</h2>
+    <div class="release-grid">
+      <article><h3>Android runs the engine</h3><p>The signed APK puts reception, strategy and your session library on the Android device itself. Windows is an alternative, not a prerequisite.</p></article>
+      <article><h3>Current inputs have context</h3><p>Telemetry charts distinguish recorded lap history from what the car is doing now. A trace on screen is not proof of a fresh feed.</p></article>
+      <article><h3>Transfers show their stages <span class="beta-label">Beta</span></h3><p>Both devices distinguish preparing, sending, checking and importing, with real counts where available. Completion is confirmed by the receiver.</p></article>
+      <article><h3>Clearer checks before radio</h3><p>Connection and microphone diagnostics help isolate the problem. A valid key, detected input and audible reply are three different checks.</p></article>
+    </div>
+    <p class="section-footnote">Windows 4.10.1 and Android 4.10.1 (revision 14). Existing screenshots and demos illustrate the shared dashboard; older captures may show earlier versions.</p>
+  </div>
+</section>
+
+<section id="how">
+  <div class="wrap">
+    <div class="eyebrow">Local telemetry. Optional cloud conversation.</div>
+    <h2>The numbers come from the engine.</h2>
+    <p class="section-lede">On Windows or Android, code computes the telemetry and strategy results. When you ask for model-backed interpretation, the model receives compact context and selected computed results, not your raw recording database.</p>
+    <div class="split">
+      <div>
+        <h3>On your device</h3>
+        <p>Receiving telemetry, recording sessions, calculating race data and reviewing saved laps do not require an AI subscription or an internet connection. Local answers can report gaps, temperatures, damage and strategy status without a model call.</p>
+        <p>Your recordings stay on your device unless you explicitly export or transfer them. Available analysis depends on the quality and amount of recorded data; missing inputs are not a promise of a complete result.</p>
+      </div>
+      <div>
+        <h3>When you enable AI and voice</h3>
+        <p>Model-backed interpretation uses the provider you configure. Spoken radio uses OpenAI speech services; it needs internet and your own OpenAI API key. Provider usage is billed to you separately.</p>
+        <p>Cloud transcription sends audio clips to OpenAI. Optional Realtime voice streams microphone audio to OpenAI while a radio session is active. Configure voice on each device and check where its sound plays.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="move-between" class="soft">
+  <div class="wrap">
+    <div class="eyebrow">Optional · for people using more than one device</div>
+    <h2>Independent does not mean automatically synced.</h2>
+    <p class="section-lede">Each app works on its own and owns its own library. Pair only when you want to copy saved sessions or forward a live feed. Neither is needed to receive the game directly.</p>
+    <div class="platform-grid">
+      <article class="card">
+        <h3>Take your history with you · beta</h3>
+        <p>Pair two devices on the same private network using a QR code or invitation, then choose completed sessions to copy. The receiver checks the archive before importing and skips matching history already present.</p>
+        <p><strong>This is a manual history transfer, not automatic cloud sync.</strong> API keys, microphone permissions and live telemetry are not synced. Stop telemetry on the receiving device before importing.</p>
+        <a href="guide.html#history-transfer">Copy saved sessions</a>
+      </article>
+      <article class="card" id="telemetry-transmission">
+        <h3>Telemetry transmission · beta</h3>
+        <p>Optional UDP forwarding sends live game packets to another app or device. It is best-effort: a sent packet does not confirm receipt. Check incoming telemetry on the destination before relying on it during a race.</p>
+        <p>Forwarding does not copy the saved library. Use trusted destinations on your private network and avoid forwarding loops or duplicate feeds.</p>
+        <a href="guide.html#telemetry-transmission">Set up beta telemetry forwarding</a>
+      </article>
+    </div>
+    <div class="callout" id="candidate-improvements">
+      <h3>Follow the transfer all the way to the receiving library</h3>
+      <ol class="transfer-stages" aria-label="History transfer stages">
+        <li><strong>Prepare</strong><span>Package selected history</span></li>
+        <li><strong>Send</strong><span>Move the archive</span></li>
+        <li><strong>Check</strong><span>Verify the received file</span></li>
+        <li><strong>Import</strong><span>Save to the destination library</span></li>
+      </ol>
+      <p>A full send bar is not an import receipt. Very large libraries can still hit archive limits or timeouts: start with small batches and keep the originals until the receiving Library is checked. Previously pruned samples cannot be recovered by transferring a session.</p>
+    </div>
+  </div>
+</section>
+
+<section id="screens" class="soft">
+  <div class="wrap">
+    <h2>Inside the shared dashboard</h2>
+    <p class="section-lede">These are real captures from earlier desktop builds, including a recorded Las Vegas race. Android uses the same dashboard inside the native app; these are not Android screenshots.</p>
+    <div class="gallery">
+      <figure>
+        <div class="shot"><img src="img/10-drive-vegas.png" alt="The Drive screen mid-race at Las Vegas: full timing tower, live telemetry trace, tyre wear and temperatures, and ranked stop plans with a stay-out call." loading="lazy"></div>
+        <figcaption>Drive — the race, the car, and the call, on one screen.</figcaption>
+      </figure>
+      <figure>
+        <div class="shot"><img src="img/11-strategy-vegas.png" alt="The Strategy workspace: current recommendation with confidence, a click-editable stint timeline with the tyre cliff marked, and the engineer's strategy radio conversation." loading="lazy"></div>
+        <figcaption>Strategy — ranked plans, a click-editable stint timeline, and the conversation that settles it.</figcaption>
+      </figure>
+      <figure>
+        <div class="shot"><img src="img/12-setup-corner-insights.png" alt="Setup Lab showing a complete recommended setup and corner-by-corner findings that say where time is lost and whether the fix is the car or the driving." loading="lazy"></div>
+        <figcaption>Setup Lab — corner by corner, it tells you whether it&rsquo;s the car or the driving.</figcaption>
+      </figure>
+      <figure>
+        <div class="shot"><img src="img/13-settings.png" alt="The Settings page with engineer, proactive radio, telemetry storage and application settings, each showing where its current value comes from." loading="lazy"></div>
+        <figcaption>Settings — tune the engineer and the app without touching a config file.</figcaption>
+      </figure>
+      <figure>
+        <div class="shot"><img src="img/03-connection-center.png" alt="The Connection Center showing a receiving state, the recommended PS5 / PC IP address, and ranked network adapters with reasons." loading="lazy"></div>
+        <figcaption>Connection — recommended PS5 / PC IP, ranked adapters, packet health.</figcaption>
+      </figure>
+      <figure>
+        <div class="shot"><img src="img/14-library-vegas.png" alt="The Library listing fifty saved sessions with size, quality and per-session actions, plus the telemetry storage budget." loading="lazy"></div>
+        <figcaption>Library — retained sessions and traces, reviewable without the game running.</figcaption>
+      </figure>
+    </div>
   </div>
 </section>
 
@@ -105,194 +279,15 @@
   </div>
 </section>
 
-<section id="what" class="soft">
-  <div class="wrap">
-    <h2>What it does</h2>
-    <p class="section-lede">
-      Your Pit Box reads all 24 cars from every packet, not just yours, so a question
-      about a rival is answered with that rival's data.
-    </p>
-    <div class="cards">
-      <article class="card">
-        <h3>Strategy that plays the result</h3>
-        <p>Plans are ranked by projected finishing position and championship points, not just elapsed time. Undercut maths accounts for cold-tyre out-laps, and it will not recommend a plan that finishes the race disqualified.</p>
-      </article>
-      <article class="card">
-        <h3>Radio you can talk to</h3>
-        <p>Ask for the gap, a rival's last two laps, or what changes the call. Say the wake word or use a button. It can be interrupted mid-sentence, and it remembers standing instructions across sessions.</p>
-      </article>
-      <article class="card">
-        <h3>Calls you didn't ask for</h3>
-        <p>Rival pit stops as they happen, a car behind closing over a rolling window, safety-car delta breaches, damage, and power-unit wear heading for a grid penalty.</p>
-      </article>
-      <article class="card">
-        <h3>Corner coaching with numbers</h3>
-        <p>Not "brake later" but "brake 8 metres later while protecting apex speed" — measured against your own personal best, with differences below the noise floor left unsaid.</p>
-      </article>
-      <article class="card">
-        <h3>Sessions you can reopen</h3>
-        <p>Recorded sessions replay without the game running. Compare two laps distance-aligned, see where the time actually went, and keep a permanent history of every stint.</p>
-      </article>
-      <article class="card">
-        <h3>A connection screen that tells the truth</h3>
-        <p>It separates "the socket is open" from "real telemetry is arriving", recommends the right LAN address for your PS5 / PC, and names the actual bind conflict when something else owns the port.</p>
-      </article>
-    </div>
-  </div>
-</section>
-
-<section id="how">
-  <div class="wrap">
-    <h2>The part that matters</h2>
-    <p class="section-lede">
-      Most "AI" tools hand your telemetry to a language model and hope. Your Pit Box
-      does the opposite: deterministic code computes every number, and the model
-      is only allowed to say them out loud.
-    </p>
-    <div class="split">
-      <div>
-        <p>
-          That split is the whole design. A model that invents a lap time sounds
-          exactly as confident as one that read it, and mid-race you cannot tell
-          the difference. So the model never sees raw telemetry to interpret — it
-          receives computed results from an allow-listed set of tools and narrates
-          them.
-        </p>
-        <p>
-          Common questions never reach a model at all. Gaps, tyre temperatures,
-          damage and strategy status are answered locally, which is why they come
-          back instantly and cost nothing.
-        </p>
-        <p>
-          Your recordings stay on your device unless you explicitly export or
-          transfer them. The database and raw 60&nbsp;Hz traces are not sent to
-          your AI provider. Model-backed questions use compact situation
-          summaries and selected computed results.
-        </p>
-      </div>
-      <div class="flow" role="img" aria-label="Routing diagram: exact telemetry questions and unsolicited calls are handled by local deterministic code; only interpretation and strategy reasoning reach the model.">
-<span class="dim"># where each request goes</span>
-
-Exact telemetry / commands  <span class="hl">→ local, deterministic</span>
-Unsolicited radio calls     <span class="hl">→ local, deterministic</span>
-Normal interpretation       → model, low reasoning
-Strategy / setup / what-if  → model, high reasoning
-
-<span class="dim"># the model can only call allow-listed
-# tools, with validated arguments and a
-# bounded number of rounds. it has no
-# filesystem, shell, network or database
-# access of any kind.</span>
-      </div>
-    </div>
-  </div>
-</section>
-
-<section id="new">
-  <div class="wrap">
-    <h2>New in the latest updates</h2>
-    <p class="section-lede">Recent Windows releases added the features below. See <a href="#devices">Windows &amp; Android</a> for platform availability and beta transfer features.</p>
-    <div class="split">
-      <ul class="req-list">
-        <li><span class="tick" aria-hidden="true">✓</span> <span><strong>Wet-weather calls that read the track, not the sky.</strong> The engineer estimates how wet the surface actually is &mdash; from the rain, from how fast a track soaks and how slowly it dries, from your lap times and the rest of the field's, and from what you tell it &mdash; then projects it over the laps you have left. It knows a spin from a shower, tells you which lap to box on rather than &ldquo;box now&rdquo;, leaves you out when the forecast clears before the flag, and asks what you can see when the call is too close to make for you.</span></li>
-        <li><span class="tick" aria-hidden="true">✓</span> <span><strong>Brutal mode.</strong> One toggle on the Drive page and the engineer stops being polite: bottom five or slower than target, and you hear about it &mdash; bluntly, with swearing, and always with the number that earned it. Same facts, same safety calls, no manners.</span></li>
-        <li><span class="tick" aria-hidden="true">✓</span> <span><strong>Choose your AI engine.</strong> The engineer's reasoning now runs on OpenAI, Claude (Anthropic), DeepSeek, Kimi (Moonshot&nbsp;AI), or any OpenAI-compatible endpoint &mdash; your key, your choice, switchable live from the dashboard. The spoken radio stays on OpenAI.</span></li>
-        <li><span class="tick" aria-hidden="true">✓</span> <span><strong>Corner-by-corner setup insight.</strong> The Setup Lab reads your own recorded laps and says where the car costs you time, in seconds, per corner &mdash; and honestly tells you when the loss is driving, not setup.</span></li>
-        <li><span class="tick" aria-hidden="true">✓</span> <span><strong>Racing-line coaching.</strong> Your quick laps become the reference: &ldquo;your quick laps release two metres further right on exit&rdquo; &mdash; measured from your own telemetry, never invented.</span></li>
-        <li><span class="tick" aria-hidden="true">✓</span> <span><strong>A click-editable strategy timeline.</strong> Click a stint to change its tyre, click the lap axis to move the stop. The engineer takes your plan as seriously as a radio call.</span></li>
-      </ul>
-      <ul class="req-list">
-        <li><span class="tick" aria-hidden="true">✓</span> <span><strong>Keys managed in the app.</strong> One key per provider, saved from the Connection tab, checked with a zero-cost test before saving, never shown again afterwards &mdash; and never sent anywhere except its own provider.</span></li>
-        <li><span class="tick" aria-hidden="true">✓</span> <span><strong>A dashboard you arrange.</strong> Show, hide and reorder the Drive cards; collapse the telemetry trace. It remembers.</span></li>
-        <li><span class="tick" aria-hidden="true">✓</span> <span><strong>A proper Settings page.</strong> Engineer name, voice, radio verbosity, wake phrase, proactive cadence, telemetry detail and storage budgets &mdash; all in the app.</span></li>
-        <li><span class="tick" aria-hidden="true">✓</span> <span><strong>Sharper strategy calls.</strong> Stop plans price in traffic and overtaking cost, explain <em>why</em> a stop is mandatory, and never contradict themselves mid-lap.</span></li>
-      </ul>
-    </div>
-  </div>
-</section>
-
-<section id="devices" class="soft" aria-labelledby="devices-title">
-  <div class="wrap">
-    <div class="eyebrow">Choose where your engineer runs</div>
-    <h2 id="devices-title">Windows at your desk. Android beside the wheel.</h2>
-    <p class="section-lede">Download the Windows installer or the signed Android APK. Telemetry transmission and device-to-device history transfers are beta features; each device keeps its own recordings.</p>
-    <div class="cards">
-      <article class="card">
-        <h3>Windows · available</h3>
-        <p>Run the engineer alongside your PC game, or receive telemetry from your PS5 over the same home network. Open Your Pit Box from the Start Menu; saved sessions stay on that computer.</p>
-        <a href="#download">Get the Windows installer</a>
-      </article>
-      <article class="card">
-        <h3>Android · APK available</h3>
-        <p>The native app runs the telemetry receiver and engineer on a compatible 64-bit Android phone or tablet. It does not need the laptop to run the engine. Microphone permission is needed for spoken commands; voice services use your own OpenAI key.</p>
-        <p><strong>Android 7 or later · 64-bit ARM or x86 · 4 KB memory pages.</strong> Devices using 16 KB memory pages are not supported by this release. This is a direct APK download, not a Google Play listing. There is no iPhone, iPad or macOS release available.</p>
-        <a class="button primary" href="https://pitwall-activation.sarthakvij123450.workers.dev/android">Download Android APK</a>
-        <a href="guide.html#android">Read the Android setup guide</a>
-      </article>
-      <article class="card">
-        <h3>Take your history with you · beta</h3>
-        <p>Pair two devices on the same private network using a QR code or invitation, then choose completed sessions to copy. The receiving app checks the archive before importing it and skips matching history already present.</p>
-        <p><strong>This is a manual history transfer, not automatic cloud sync.</strong> Live telemetry, API keys and microphone permissions are not synced. Stop telemetry on the receiving device before importing; keep playing after the transfer has finished or stopped.</p>
-        <a href="guide.html#history-transfer">How history transfer works</a>
-      </article>
-    </div>
-    <div class="callout" id="telemetry-transmission">
-      <h3>Telemetry transmission · beta</h3>
-      <p>Optional UDP forwarding sends live game packets to another app or device. It is best-effort: a sent packet does not confirm that the other device received it. Check incoming telemetry on the destination before relying on it during a race.</p>
-      <p>This is separate from receiving the game's telemetry directly and from copying saved sessions. Neither forwarding nor history transfer provides automatic cloud sync. Use trusted destinations on your private network.</p>
-      <a href="guide.html#telemetry-transmission">Set up beta telemetry forwarding</a>
-    </div>
-    <div class="callout" id="candidate-improvements">
-      <h3>Included in Windows 4.10.1</h3>
-      <p>Transfer status on both devices separates preparing, sending, checking and importing. Progress uses real file or byte counts where available; a sent file is not called imported until the receiver confirms it. During the transfer beta, start with smaller batches for very large libraries and keep the originals until the receiving library is checked.</p>
-      <p>Telemetry charts distinguish saved lap history from current inputs, so an old trace is not presented as new driving. Connection and microphone diagnostics help separate incoming game packets, microphone input and the engineer's response. These checks do not replace an end-to-end radio test.</p>
-      <p>Available history means the data still stored on the sending device. Previously pruned telemetry samples cannot be recovered by transferring a session.</p>
-    </div>
-  </div>
-</section>
-
-<section id="screens" class="soft">
-  <div class="wrap">
-    <h2>Every screen</h2>
-    <p class="section-lede">Real captures from a running build, replaying a real Las Vegas race — nothing staged, nothing mocked up.</p>
-    <div class="gallery">
-      <figure>
-        <div class="shot"><img src="img/10-drive-vegas.png" alt="The Drive screen mid-race at Las Vegas: full timing tower, live telemetry trace, tyre wear and temperatures, and ranked stop plans with a stay-out call." loading="lazy"></div>
-        <figcaption>Drive — the race, the car, and the call, on one screen.</figcaption>
-      </figure>
-      <figure>
-        <div class="shot"><img src="img/11-strategy-vegas.png" alt="The Strategy workspace: current recommendation with confidence, a click-editable stint timeline with the tyre cliff marked, and the engineer's strategy radio conversation." loading="lazy"></div>
-        <figcaption>Strategy — ranked plans, a click-editable stint timeline, and the conversation that settles it.</figcaption>
-      </figure>
-      <figure>
-        <div class="shot"><img src="img/12-setup-corner-insights.png" alt="Setup Lab showing a complete recommended setup and corner-by-corner findings that say where time is lost and whether the fix is the car or the driving." loading="lazy"></div>
-        <figcaption>Setup Lab — corner by corner, it tells you whether it&rsquo;s the car or the driving.</figcaption>
-      </figure>
-      <figure>
-        <div class="shot"><img src="img/13-settings.png" alt="The Settings page with engineer, proactive radio, telemetry storage and application settings, each showing where its current value comes from." loading="lazy"></div>
-        <figcaption>Settings — tune the engineer and the app without touching a config file.</figcaption>
-      </figure>
-      <figure>
-        <div class="shot"><img src="img/03-connection-center.png" alt="The Connection Center showing a receiving state, the recommended PS5 / PC IP address, and ranked network adapters with reasons." loading="lazy"></div>
-        <figcaption>Connection — recommended PS5 / PC IP, ranked adapters, packet health.</figcaption>
-      </figure>
-      <figure>
-        <div class="shot"><img src="img/14-library-vegas.png" alt="The Library listing fifty saved sessions with size, quality and per-session actions, plus the telemetry storage budget." loading="lazy"></div>
-        <figcaption>Library — every session kept, reviewable without the game running.</figcaption>
-      </figure>
-    </div>
-  </div>
-</section>
-
 <section id="requirements">
   <div class="wrap">
     <h2>What you need</h2>
     <div class="split">
       <ul class="req-list">
         <li><span class="tick" aria-hidden="true">✓</span> <span><strong>F1 25: 2026 Season Pack</strong> on PS5 / PC, with UDP telemetry set to format <strong>2026</strong>.</span></li>
-        <li><span class="tick" aria-hidden="true">✓</span> <span>A <strong>Windows 10 or 11 PC</strong> on the same home network as a PS5 or second PC running the game — or just the one PC running both.</span></li>
-        <li><span class="tick" aria-hidden="true">✓</span> <span>An <strong>OpenAI API key</strong> of your own — or, for the engineer's reasoning, a <strong>Claude (Anthropic), DeepSeek or Kimi</strong> key instead. The spoken radio always uses the OpenAI key. You paste it once when the app first starts.</span></li>
-        <li><span class="tick" aria-hidden="true">✓</span> <span>A microphone and speakers, if you want to talk to it. Everything else works without them.</span></li>
+        <li><span class="tick" aria-hidden="true">✓</span> <span>Either a <strong>Windows 10 or 11 PC</strong> or a compatible <strong>Android 7+ phone or tablet</strong> (64-bit ARM/x86, 4 KB memory pages). Use the same private network as the game, or run Windows and the game on one PC. You do not need both apps.</span></li>
+        <li><span class="tick" aria-hidden="true">✓</span> <span>For optional voice, an <strong>OpenAI API key</strong>, internet, microphone access and speakers or a headset. For model-backed reasoning you can instead choose <strong>Claude (Anthropic), DeepSeek or Kimi</strong>. The spoken radio always uses the OpenAI key.</span></li>
+        <li><span class="tick" aria-hidden="true">✓</span> <span>No API key is required to start with telemetry, local strategy and saved-session analysis. Audio setup and keys are configured separately on each device.</span></li>
       </ul>
       <div>
         <div class="callout">
@@ -300,18 +295,16 @@ Strategy / setup / what-if  → model, high reasoning
           <p>
             Your Pit Box itself is free. The engineer's voice and reasoning run on
             your own account with the provider you choose — OpenAI by default —
-            so those calls appear on that provider's bill, not mine. Most
-            questions are answered locally and cost nothing at all, but a long
-            race with heavy radio use will run up a small charge. You set API
+            so those calls appear on that provider's bill, not mine. Local answers need no model call. Voice and model-backed usage costs depend
+            on the provider and how much you use them. You set API
             usage and billing controls on the provider's own dashboard.
           </p>
         </div>
         <div class="callout">
           <h3>macOS is not ready yet</h3>
           <p>
-            Windows and Android downloads are available. The macOS build is in progress; it is
-            not sold or promised here until it exists and has been tested on real
-            hardware.
+            Windows and Android downloads are available. There is no macOS,
+            iPhone or iPad release available. The Android APK is not an iOS app.
           </p>
         </div>
       </div>
@@ -319,102 +312,71 @@ Strategy / setup / what-if  → model, high reasoning
   </div>
 </section>
 
-<section class="soft">
+<section class="soft" id="connectivity">
   <div class="wrap">
-    <h2>How it compares</h2>
-    <p class="section-lede">
-      Against the two things most drivers actually use instead. This describes
-      categories of tool, not any particular product.
-    </p>
-    <div class="table-scroll">
+    <h2>What works without internet?</h2>
+    <p class="section-lede">The same split applies to both apps. A local game connection is still needed for live telemetry.</p>
+    <div class="table-scroll" tabindex="0" role="region" aria-label="Feature connectivity requirements">
       <table>
-        <caption class="sr-only">Feature comparison between the in-game display, a telemetry overlay, and Your Pit Box</caption>
-        <thead>
-          <tr><th scope="col">&nbsp;</th><th scope="col">In-game display</th><th scope="col">A telemetry overlay</th><th scope="col">Your Pit Box</th></tr>
-        </thead>
+        <caption class="sr-only">Local and online capabilities on Windows and Android</caption>
+        <thead><tr><th scope="col">Capability</th><th scope="col">Connection needed</th><th scope="col">What to expect</th></tr></thead>
         <tbody>
-          <tr><th scope="row">Shows live telemetry</th><td class="yes">Yes</td><td class="yes">Yes</td><td class="yes">Yes</td></tr>
-          <tr><th scope="row">Reads all 24 cars, not just yours</th><td class="no">Partly</td><td class="no">Varies</td><td class="yes">Yes</td></tr>
-          <tr><th scope="row">Ranks stop plans by finishing position</th><td class="no">No</td><td class="no">No</td><td class="yes">Yes</td></tr>
-          <tr><th scope="row">Answers spoken questions mid-lap</th><td class="no">No</td><td class="no">No</td><td class="yes">Yes</td></tr>
-          <tr><th scope="row">Calls rival stops as they happen</th><td class="no">No</td><td class="no">No</td><td class="yes">Yes</td></tr>
-          <tr><th scope="row">Corner coaching with measured deltas</th><td class="no">No</td><td class="no">Some</td><td class="yes">Yes</td></tr>
-          <tr><th scope="row">Keeps a permanent session history</th><td class="no">No</td><td class="no">Some</td><td class="yes">Yes</td></tr>
-          <tr><th scope="row">Runs without an internet connection</th><td class="yes">Yes</td><td class="yes">Yes</td><td class="no">Radio needs it</td></tr>
-          <tr><th scope="row">Ongoing cost</th><td class="yes">None</td><td class="yes">None</td><td class="no">Your AI provider usage</td></tr>
+          <tr><th scope="row">Live telemetry &amp; local strategy</th><td>Game feed on your device or private network</td><td>No AI key required</td></tr>
+          <tr><th scope="row">Library, lap comparison &amp; local analysis</th><td>None for saved data</td><td>Uses retained sessions and available samples</td></tr>
+          <tr><th scope="row">Spoken radio &amp; model-backed answers</th><td>Internet</td><td>Your AI provider usage; OpenAI for speech</td></tr>
+          <tr><th scope="row">Saved-history transfer · beta</th><td>Paired devices on a private network</td><td>Manual copy, not cloud sync</td></tr>
+          <tr><th scope="row">UDP forwarding · beta</th><td>Reachable destination on your network</td><td>Live packets, not a library transfer</td></tr>
         </tbody>
       </table>
     </div>
   </div>
 </section>
 
-<section id="coffee">
-  <div class="wrap">
-    <h2>Free. If it helps you, buy me a coffee.</h2>
-    <p class="section-lede">Your Pit Box is free to download and free to keep — no code, no account, no subscription. It is a one-person project; if it earns you a position, a coffee keeps it going.</p>
-    <div class="buy">
-      <div class="amount">Free</div>
-      <div class="once">every download is the full app — nothing held back, nothing expires</div>
-      <p style="margin-top:1rem">
-        <a class="button primary" href="https://paypal.me/sarthakvij298" target="_blank" rel="noopener noreferrer">Buy me a coffee on PayPal</a>
-      </p>
-      <p class="price-note" style="margin-top:1.2rem">
-        Prefer Venmo? <span class="handle">@scott-v-sv</span>. Any amount, entirely
-        optional, and it changes nothing about what you download.
-      </p>
-      <p class="price-note">
-        A coffee is a thank-you, not a purchase: nothing unlocks and it is not
-        refundable. The only thing that ever costs money is your own AI
-        provider usage, billed by that provider to you.
-      </p>
-    </div>
-  </div>
-</section>
-
 <section id="download" class="soft">
   <div class="wrap">
+    <div class="eyebrow">Two apps. One choice to get started.</div>
     <h2>Download Your Pit Box</h2>
-    <p class="section-lede">Free, for Windows 10 or 11. There is no code and no account — the button starts the download.</p>
-    <div class="buy">
-      <p class="download-cta">
-        <button id="downloadButton" class="button primary" type="button">Download for Windows</button>
-        <span class="field-help"><code>PitWall-Setup.exe</code> · size varies by release</span>
-      </p>
-      <p id="downloadStatus" class="download-status" role="status" aria-live="polite"></p>
-      <div class="callout" id="windows-release">
+    <p class="section-lede">Free, with no code and no account. Choose the device that will receive your game's telemetry. You can add the other app later; it is not required.</p>
+    <div class="platform-grid download-grid">
+      <article class="platform-card" id="windows-release">
+        <div class="platform-label">Windows 10 / 11</div>
         <h3>Windows 4.10.1 · unsigned installer</h3>
-        <p>This direct download is not publisher-signed. Windows may show an unknown-publisher warning, and some security policies may block it. Download only from this site and verify the checksum below. <strong>Do not turn off your firewall, antivirus or Smart App Control to install it.</strong> If your security policy blocks installation, wait for a signed release.</p>
-        <p class="field-help">SHA-256: <code style="overflow-wrap:anywhere">64c804f0f227bca4d88efa93e5d736201db9f1f3d5ee73e35cd668f1794433fd</code></p>
-      </div>
-      <div class="callout" id="android-release">
-        <h3>Android 4.10.1 · signed APK</h3>
-        <p><a class="button ghost" href="https://pitwall-activation.sarthakvij123450.workers.dev/android">Download Android APK</a></p>
-        <p>For compatible 64-bit Android 7+ devices with 4 KB memory pages. This release does not support 16 KB memory-page devices. Keep Play Protect enabled. Read the <a href="guide.html#android">APK installation and test-app migration guide</a> before installing.</p>
-        <p class="field-help">SHA-256: <code style="overflow-wrap:anywhere">82cc6256a15bfa966ea1b23436efc996ffe33f6f5d5e8ef20acfd30efbe4e204</code></p>
-      </div>
-      <div id="codePanel" class="code-panel" hidden>
-        <p><strong>One extra step, for a few days.</strong> The installer online right now was built before Your Pit Box went free, so the first time it starts it still asks for an activation code. Use this one. It is the same for everyone, it works on any PC, and the next installer removes the step entirely.</p>
-        <div class="code-entry">
-          <output id="freeCode" class="free-code" aria-label="Shared activation code">PITW-…</output>
-          <button id="copyCode" class="button ghost" type="button">Copy code</button>
+        <p>Install for your Windows account, then open Your Pit Box from the Start Menu. The engine runs on this PC and opens its dashboard in your browser.</p>
+        <p class="download-cta"><button id="downloadButton" class="button primary" type="button">Download for Windows</button></p>
+        <p class="field-help"><code>PitWall-Setup.exe</code> · 38.4 MB</p>
+        <p id="downloadStatus" class="download-status" role="status" aria-live="polite"></p>
+        <div class="guide-warning">
+          <p>This direct download is not publisher-signed. Windows may show an unknown-publisher warning, and some security policies may block it. Download only from this site and verify the checksum.</p>
+          <p><strong>Do not turn off your firewall, antivirus or Smart App Control to install it.</strong> If your security policy blocks installation, wait for a signed release.</p>
         </div>
-      </div>
-      <p class="field-help">
-        The button first offers to take your email so I can tell you about new
-        versions. That is optional — skip it and the download starts anyway.
-        If the download does not start at all, email
-        <a href="mailto:vale.scott00@gmail.com">vale.scott00@gmail.com</a> and
-        I will send the installer directly.
-      </p>
+        <details class="checksum"><summary>Verify the Windows download</summary><p>SHA-256: <code>64c804f0f227bca4d88efa93e5d736201db9f1f3d5ee73e35cd668f1794433fd</code></p></details>
+        <div id="codePanel" class="code-panel" hidden>
+          <p><strong>For a historical installer only.</strong> If the installer was built before Your Pit Box went free, it asks for an activation code. Use the code supplied below. The current release needs no code.</p>
+          <div class="code-entry">
+            <output id="freeCode" class="free-code" aria-label="Shared activation code">PITW-…</output>
+            <button id="copyCode" class="button ghost" type="button">Copy code</button>
+          </div>
+        </div>
+        <p class="field-help">The Windows button offers an optional email signup for release news. Skip it to download without subscribing.</p>
+        <a href="guide.html#step-1">Windows installation &amp; first radio check</a>
+      </article>
+      <article class="platform-card" id="android-release">
+        <div class="platform-label">Android phone / tablet</div>
+        <h3>Android 4.10.1 · signed APK</h3>
+        <p>Install the native app on the device beside your wheel. Reception, strategy and recordings run there; no laptop or Windows installation is needed.</p>
+        <p class="download-cta"><a class="button primary" href="https://pitwall-activation.sarthakvij123450.workers.dev/android">Download Android APK</a></p>
+        <p class="field-help"><code>4.10.1-android.14.apk</code> · 72.7 MB</p>
+        <div class="guide-warning">
+          <p><strong>Android 7+ · 64-bit ARM or x86 · 4 KB memory pages only.</strong> This release does not support 16 KB memory-page devices. Direct APK download, not a Google Play listing.</p>
+          <p>Keep Play Protect enabled. Grant installation permission only to the browser or file manager used, then turn it off after installing. Do not bypass a security-policy or incompatible-device block.</p>
+        </div>
+        <details class="checksum"><summary>Verify the Android download</summary><p>SHA-256: <code>82cc6256a15bfa966ea1b23436efc996ffe33f6f5d5e8ef20acfd30efbe4e204</code></p></details>
+        <p><strong>Already have the test app?</strong> The production app installs separately and starts with its own library. Keep your test app and history until you have made a backup and checked the transfer.</p>
+        <a href="guide.html#android">APK installation &amp; test-app migration guide</a>
+      </article>
     </div>
-
-    <ol class="steps" style="margin-top:2rem;max-width:640px">
-      <li><div><strong>Download and run the installer.</strong> It installs for you only, so Windows will not ask for an administrator password. Already have a version installed? Run the new installer over it; your sessions and settings are kept.</div></li>
-      <li><div><strong>Your Pit Box starts by itself</strong> at the end of the installer and asks, once, for your OpenAI API key. Paste it, or choose <strong>Skip for now</strong> and add it later from the Connection tab. Then follow the setup guide to connect your PS5 / PC.</div></li>
-      <li><div><strong>After that, just open it</strong> from the Start Menu or the desktop icon. It goes straight to the dashboard. Allow <strong>20–30 seconds</strong> for it to start, and a little longer on a busy PC — it opens your browser itself once it is ready.</div></li>
-    </ol>
-    <p class="guide-prompt"><strong>Setting up for the first time?</strong> Follow the <a href="guide.html">illustrated setup guide</a> from download through your first live radio check.</p>
-    <p class="guide-prompt"><strong>Installed an earlier version with an activation code?</strong> It keeps working as it is. The <a href="diagnostics.html">activation diagnostics</a> are still here if that code is ever rejected.</p>
+    <p class="guide-prompt"><strong>Setting up for the first time?</strong> The <a href="guide.html">illustrated setup guide</a> has separate Android and Windows paths. Telemetry works without voice; add a provider key when you want model-backed answers or spoken radio.</p>
+    <p class="guide-prompt">If a download fails, contact <a href="mailto:vale.scott00@gmail.com">vale.scott00@gmail.com</a>. For earlier Windows installs that used an activation code, <a href="diagnostics.html">activation diagnostics</a> remain available.</p>
   </div>
 </section>
 
@@ -471,12 +433,12 @@ Strategy / setup / what-if  → model, high reasoning
 
     <details>
       <summary>Does it work on PS5 / PC, or only one platform?</summary>
-      <p>Both. Your Pit Box's telemetry receiver has no platform-specific code — it reads standard F1 2026 UDP packets the same way regardless of whether they come from a PS5 or the PC version of the game, and it runs on your Windows PC rather than on the console. The <a href="guide.html#step-6">setup guide</a> covers both: PS5 / PC on your home network, or the game and Your Pit Box sharing one PC. This is based on the packet format and receiver code rather than a dedicated PC hardware test; if you hit anything unexpected, email me and I will help sort it out.</p>
+      <p>PS5 / PC describes where the game runs. Windows / Android describes where the engineer runs. Send the game's F1 2026 UDP feed to either engineer over your private network, or use loopback when the game and Windows app share a PC. Android does not need a Windows host. The receiver uses the same packet parser; packet-format support does not guarantee every router or device setup. Follow the <a href="guide.html">setup guide for your chosen app</a>.</p>
     </details>
 
     <details>
       <summary>Will it get me banned, or count as cheating?</summary>
-      <p>No. It reads the telemetry stream the game is designed to broadcast, the same one used by overlays, sim dashboards and motion rigs. It never sends inputs to the game and never touches its files.</p>
+      <p>Your Pit Box reads the game's exported UDP telemetry; it does not send driving inputs or modify game files. Check the rules of any league or event you enter: this is not a guarantee of permission in every competition.</p>
     </details>
 
     <details>
@@ -490,8 +452,8 @@ Strategy / setup / what-if  → model, high reasoning
     </details>
 
     <details>
-      <summary>What data leaves my computer?</summary>
-      <p>Compact situation summaries and selected computed results go to the AI provider you configured when a question needs model judgement. The database and raw trace files are not uploaded to the AI provider. Cloud transcription sends recorded audio clips to OpenAI; optional Realtime voice streams microphone audio to OpenAI while a radio session is active. In builds with history transfer, explicitly copying sessions sends their saved history and available traces to your paired device on the local network; it does not create a cloud account or sync your API keys.</p>
+      <summary>What data leaves my device?</summary>
+      <p>Compact situation summaries and selected computed results go to the AI provider you configured when a question needs model judgement. The database and raw trace files are not uploaded to the AI provider. Cloud transcription sends recorded audio clips to OpenAI; optional Realtime voice streams microphone audio to OpenAI while a radio session is active. With beta history transfer, explicitly copying sessions sends their saved history and available traces to your paired device on the local network; it does not create a cloud account or sync your API keys.</p>
     </details>
 
     <details>
@@ -511,7 +473,7 @@ Strategy / setup / what-if  → model, high reasoning
 
     <details>
       <summary>What do you do with my email?</summary>
-      <p>The download prompt asks for an email address, and you can skip it. If you give one, it is stored with the date on my Cloudflare account and used for exactly one thing: telling you when a new version ships. No newsletter, nothing sold or shared, and a reply to any of those emails removes you. The app itself never sends me anything.</p>
+      <p>The Windows download prompt asks for an email address, and you can skip it. The Android APK link downloads directly. If you give one, it is stored with the date on my Cloudflare account and used for exactly one thing: telling you when a new version ships. No newsletter, nothing sold or shared, and a reply to any of those emails removes you. The app itself never sends me anything.</p>
     </details>
 
     <details>
@@ -526,6 +488,29 @@ Strategy / setup / what-if  → model, high reasoning
   </div>
 </section>
 
+<section id="coffee">
+  <div class="wrap">
+    <h2>Free. If it helps you, buy me a coffee.</h2>
+    <p class="section-lede">Your Pit Box is free to download and free to keep — no code, no account, no subscription. It is a one-person project; if it earns you a position, a coffee keeps it going.</p>
+    <div class="buy">
+      <div class="amount">Free</div>
+      <div class="once">every download is the full app — nothing held back, nothing expires</div>
+      <p style="margin-top:1rem">
+        <a class="button primary" href="https://paypal.me/sarthakvij298" target="_blank" rel="noopener noreferrer">Buy me a coffee on PayPal</a>
+      </p>
+      <p class="price-note" style="margin-top:1.2rem">
+        Prefer Venmo? <span class="handle">@scott-v-sv</span>. Any amount, entirely
+        optional, and it changes nothing about what you download.
+      </p>
+      <p class="price-note">
+        A coffee is a thank-you, not a purchase: nothing unlocks and it is not
+        refundable. The only thing that ever costs money is your own AI
+        provider usage, billed by that provider to you.
+      </p>
+    </div>
+  </div>
+</section>
+
 </main>
 
 <footer class="site-footer">
@@ -534,7 +519,7 @@ Strategy / setup / what-if  → model, high reasoning
       <strong style="color:#fff">Your Pit Box</strong> — an independent project, not affiliated with, endorsed by, or connected to Formula&nbsp;1, the FIA, Electronic Arts, or Codemasters. All trademarks belong to their owners.
     </div>
     <div>
-      <a href="guide.html">Setup guide</a> · <a href="diagnostics.html">Diagnostics</a> · <a href="eula.html">Licence terms</a>
+      <a href="guide.html">Setup guide</a> · <a href="#reviews">Reviews</a> · <a href="#coffee">Buy me a coffee</a> · <a href="diagnostics.html">Diagnostics</a> · <a href="eula.html">Licence terms</a>
     </div>
   </div>
 </footer>

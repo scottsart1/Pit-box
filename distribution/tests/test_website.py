@@ -13,7 +13,9 @@ import re
 import shutil
 import subprocess
 import sys
+from html.parser import HTMLParser
 from pathlib import Path
+from urllib.parse import urlsplit
 
 import pytest
 
@@ -670,11 +672,79 @@ def test_the_independence_disclaimer_is_present():
     assert "not affiliated" in EULA.lower()
 
 
-def test_the_comparison_admits_where_pit_wall_loses():
-    # A comparison table where the product wins every row is an advert, not a
-    # comparison. These two rows are the honest losses.
-    assert "Radio needs it" in INDEX
-    assert "Your AI provider usage" in INDEX
+def test_connectivity_table_discloses_online_requirements_and_cost():
+    # The old generic competitor comparison is now a concrete requirement
+    # table. Keep the meaningful limitation, not the old marketing wording.
+    section = INDEX.split('id="connectivity"', 1)[1].split("</section>", 1)[0]
+    radio_row = re.search(r"<tr><th[^>]*>Spoken radio.*?</tr>", section).group(0)
+    assert "Internet" in radio_row
+    assert "Your AI provider usage" in radio_row
+    assert "OpenAI for speech" in radio_row
+    assert "No AI key required" in section
+
+
+def test_platform_choice_is_the_primary_story_not_a_windows_appendix():
+    hero = re.search(r'<section class="hero">(.*?)</section>', INDEX, re.S).group(1)
+    for page in (INDEX, GUIDE):
+        title = re.search(r"<title>(.*?)</title>", page).group(1)
+        description = re.search(r'<meta name="description" content="([^"]+)"', page).group(1)
+        assert "Windows" in title and "Android" in title
+        assert "Windows" in description and "Android" in description
+    assert 'href="#windows-release"' in hero and 'href="#android-release"' in hero
+    assert "Android does not need a laptop" in hero
+    assert INDEX.index('id="devices"') < INDEX.index('id="what"') < INDEX.index('id="demo"')
+    downloads = INDEX.split('id="download"', 1)[1].split("</section>", 1)[0]
+    for platform in ("windows", "android"):
+        assert f'<article class="platform-card" id="{platform}-release">' in downloads
+    assert 'href="#android"' in GUIDE and 'href="#step-1"' in GUIDE
+    assert GUIDE.index('id="android"') < GUIDE.index('id="step-1"')
+    assert "Android is not a remote screen for Windows" in INDEX
+
+
+def test_shared_capabilities_are_separate_from_optional_beta_pairing():
+    capabilities = INDEX.split('id="what"', 1)[1].split("</section>", 1)[0]
+    for capability in ("Live race dashboard", "Strategy you can change", "two-way radio",
+                       "Lap and corner analysis", "Setup Lab", "library on your device",
+                       "reasoning provider", "actual connection"):
+        assert capability in capabilities
+    pairing = INDEX.split('id="move-between"', 1)[1].split("</section>", 1)[0]
+    assert "Neither is needed to receive the game directly" in pairing
+    assert "not automatic cloud sync" in pairing
+    assert "Very large libraries can still hit archive limits or timeouts" in pairing
+    assert "earlier desktop builds" in INDEX and "not Android screenshots" in INDEX
+
+
+@pytest.mark.parametrize("page_name", build_site.PAGES)
+def test_source_links_and_ids_survive_platform_reorganization(page_name):
+    class References(HTMLParser):
+        def __init__(self):
+            super().__init__()
+            self.ids = []
+            self.links = []
+
+        def handle_starttag(self, tag, attrs):
+            attrs = dict(attrs)
+            if attrs.get("id"):
+                self.ids.append(attrs["id"])
+            if tag == "a" and attrs.get("href"):
+                self.links.append(attrs["href"])
+
+    parsed = {}
+    for name in build_site.PAGES:
+        parser = References()
+        parser.feed((DIST / "website" / name).read_text(encoding="utf-8"))
+        parsed[name] = parser
+    current = parsed[page_name]
+    assert len(current.ids) == len(set(current.ids)), f"Duplicate ID in {page_name}"
+    for href in current.links:
+        link = urlsplit(href)
+        if link.scheme or link.netloc:
+            continue
+        target = link.path or page_name
+        if target in parsed:
+            assert not link.fragment or link.fragment in parsed[target].ids, href
+        else:
+            assert (DIST / "website" / target).is_file(), href
 
 
 def test_multi_provider_claims_carry_the_voice_caveat():

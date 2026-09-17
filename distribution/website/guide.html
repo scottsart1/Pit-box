@@ -3,8 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Set up Your Pit Box — illustrated customer guide</title>
-<meta name="description" content="Set up Your Pit Box from the free, no-code Windows download and your OpenAI API key through PS5 / PC telemetry and your first live race-engineer radio check.">
+<title>Set up Your Pit Box — Android &amp; Windows guides</title>
+<meta name="description" content="Choose the standalone Android APK or no-code Windows download. Set up game telemetry, optional radio and your first session, with separate installation paths and beta history-transfer guidance.">
 <link rel="canonical" href="https://yourpitbox.com/guide">
 <link rel="stylesheet" href="styles.css">
 </head>
@@ -14,8 +14,8 @@
   <div class="wrap">
     <a class="brand" href="index.html#top"><span class="brand-mark" aria-hidden="true"></span> Your Pit Box</a>
     <nav class="site-nav" aria-label="Sections">
-      <a href="index.html#demo">Demo</a>
-      <a href="index.html#what">What it does</a>
+      <a href="index.html#devices">Windows &amp; Android</a>
+      <a href="index.html#what">Capabilities</a>
       <a href="guide.html" aria-current="page">Setup guide</a>
       <a href="index.html#requirements">Requirements</a>
       <a href="index.html#coffee">Buy me a coffee</a>
@@ -30,19 +30,19 @@
   <section class="guide-hero">
     <div class="wrap guide-hero-grid">
       <div>
-        <div class="eyebrow">Customer setup</div>
-        <h1>From download to your first radio check.</h1>
-        <p class="lede">Follow these seven steps in order. You will download and install Your Pit Box (it is free — no code, no account), create your own OpenAI API key, connect the Windows companion to your PS5 / PC, and confirm that live telemetry and radio are ready.</p>
+        <div class="eyebrow">Two independent apps · choose your setup</div>
+        <h1>Your device.<br>Your first live session.</h1>
+        <p class="lede">Install on Android or Windows, point the game's telemetry at that device, then check the incoming feed. You do not need both apps. Start with telemetry and local strategy; add a provider key and microphone access when you want the radio.</p>
         <div class="hero-actions">
-          <a class="button primary" href="#step-1">Start with the download</a>
+          <a class="button primary" href="#android">Set up Android</a>
+          <a class="button primary" href="#step-1">Set up Windows</a>
           <a class="button ghost" href="#troubleshooting">Troubleshooting</a>
-          <a class="button ghost" href="#android">Android &amp; history transfer</a>
         </div>
       </div>
       <aside class="guide-status" aria-label="Setup at a glance">
-        <div><strong>7</strong><span>guided steps</span></div>
-        <div><strong>10–15</strong><span>minutes for most setups</span></div>
-        <div><strong>PS5 / PC</strong><span>same network, or one PC for both</span></div>
+        <div><strong>Android</strong><span>Native app. No laptop needed.</span></div>
+        <div><strong>Windows</strong><span>Local engine and browser dashboard.</span></div>
+        <div><strong>PS5 / PC</strong><span>The game sends to your chosen device.</span></div>
       </aside>
     </div>
   </section>
@@ -50,17 +50,26 @@
   <section class="guide-intro soft">
     <div class="wrap">
       <div class="guide-companion-note">
-        <div class="guide-companion-icon" aria-hidden="true">PC</div>
-        <div><strong>Your Pit Box runs beside the game, not inside it.</strong> Keep Your Pit Box open on your Windows PC while you drive on PS5 / PC. Telemetry travels over your home network (or, if the game runs on the same PC as Your Pit Box, over that computer's own loopback address), and the engineer speaks through the PC's microphone and speakers.</div>
+        <div class="guide-companion-icon" aria-hidden="true">UDP</div>
+        <div><strong>Your Pit Box runs beside the game, not inside it.</strong> Keep the app running on your chosen Android device or Windows PC. That device receives telemetry, computes the race data and keeps the recordings. Its microphone captures your questions; its speakers or headset play the engineer's replies.</div>
       </div>
       <h2>Have these ready</h2>
       <div class="guide-checklist">
         <div><span aria-hidden="true">✓</span><p><strong>Nothing to buy</strong><br>Your Pit Box is free. No code, no account.</p></div>
-        <div><span aria-hidden="true">✓</span><p><strong>An OpenAI Platform account</strong><br>API billing is separate from a ChatGPT subscription.</p></div>
-        <div><span aria-hidden="true">✓</span><p><strong>A Windows 10 or 11 PC</strong><br>On the same home network as a PS5 or second PC, or the one PC running the game.</p></div>
+        <div><span aria-hidden="true">✓</span><p><strong>A compatible device</strong><br>Windows 10/11 or Android 7+, 64-bit ARM/x86, 4 KB memory pages. Android 16 KB devices are not supported by this APK.</p></div>
+        <div><span aria-hidden="true">✓</span><p><strong>For optional spoken radio</strong><br>An OpenAI API key, internet and microphone/audio access. API billing is separate from a ChatGPT subscription.</p></div>
         <div><span aria-hidden="true">✓</span><p><strong>F1 25: 2026 Season Pack on PS5 / PC</strong><br>Updated and ready to start an on-track session.</p></div>
       </div>
-      <nav class="guide-jumps" aria-label="Setup steps">
+      <nav class="guide-jumps" aria-label="Choose a setup or transfer guide">
+        <a href="#android">Android setup</a>
+        <a href="#step-1">Windows setup</a>
+        <a href="#history-transfer">History transfer · beta</a>
+        <a href="#telemetry-transmission">UDP forwarding · beta</a>
+      </nav>
+      <details class="guide-step-index">
+      <summary>Windows walkthrough — seven illustrated steps</summary>
+      <p>Steps 2 and 3 are optional if you are starting without AI or voice. Android users should start with the Android instructions, not the Windows installer.</p>
+      <nav class="guide-jumps" aria-label="Windows setup steps">
         <a href="#step-1"><span>1</span>Download</a>
         <a href="#step-2"><span>2</span>API billing</a>
         <a href="#step-3"><span>3</span>Create key</a>
@@ -69,14 +78,35 @@
         <a href="#step-6"><span>6</span>Connect game</a>
         <a href="#step-7"><span>7</span>Drive</a>
       </nav>
+      </details>
+    </div>
+  </section>
+
+  <section id="android" class="guide-help soft">
+    <div class="wrap">
+      <div class="eyebrow">Android · signed APK download</div>
+      <h2>Android setup — no laptop required</h2>
+      <p><a class="button primary" href="https://pitwall-activation.sarthakvij123450.workers.dev/android">Download Android APK</a></p>
+      <p>The signed APK supports Android 7 or later on 64-bit ARM and x86 devices with 4 KB memory pages. Devices using 16 KB memory pages are not supported by this release. This is a direct download, not a Google Play listing; the Windows installer does not install on Android.</p>
+      <div class="guide-warning"><strong>Already using the test app?</strong> The release package (<code>com.yourpitbox.app</code>) installs separately from the test package (<code>com.yourpitbox.app.debug</code>) and starts with its own library. Do not uninstall the test app or expect its history and keys to move automatically. Keep a backup, then use beta history transfer when neither device is recording. Never uninstall an existing app to force a signing-key mismatch.</div>
+      <ol>
+        <li>Download the APK from this site and check the SHA-256 on the download page. Open it; if Android asks, grant installation permission to the browser or file manager you used, then turn that permission back off after installing. Keep Play Protect enabled. Do not bypass an incompatible-device or security-policy block.</li>
+        <li>Connect the Android device and your PS5 or gaming PC to the same private home network. Open Your Pit Box on the tablet; the laptop is not required for the native Android engine.</li>
+        <li>Open <strong>Connection</strong> and use that device's recommended address as the game's <strong>UDP IP Address</strong>, with port <strong>20777</strong> and format <strong>2026</strong>. A tablet's address can change when it reconnects to Wi-Fi.</li>
+        <li>Start an on-track session and confirm <strong>Receiving telemetry</strong>. A listening socket or a saved lap chart alone does not prove that fresh packets are arriving.</li>
+        <li>For radio, save and test the provider key in Connection, allow Android microphone access, and enable voice in the app. Speech services need an OpenAI key and internet access; the dashboard can receive telemetry without voice. The optional <a href="#step-2">billing</a> and <a href="#step-3">key creation</a> instructions apply to either app.</li>
+        <li>Check microphone input separately from the reply. If the app hears input but you hear nothing, check the selected output, media volume and Bluetooth routing. A key test does not verify the microphone or speaker.</li>
+      </ol>
+      <p>Future updates to the release app use the same permanent signing identity. Install a verified release update over the release app; do not remove its saved data.</p>
+      <p>Before a full-length race, check your microphone, selected speaker or headset, wake phrase and background settings on the device you will use. A short radio check verifies that setup, not every Bluetooth device or power-saving mode.</p>
     </div>
   </section>
 
   <section id="step-1" class="guide-step">
     <div class="wrap guide-step-grid">
       <div class="guide-copy">
-        <div class="step-kicker"><span>1</span> Free download</div>
-        <h2>Download the installer</h2>
+        <div class="step-kicker"><span>1</span> Windows walkthrough</div>
+        <h2>Download the Windows installer</h2>
         <ol>
           <li>Open the <a href="index.html#download">Download</a> section and select <strong>Download for Windows</strong>.</li>
           <li>A prompt offers to take your email so you hear about new versions. Leave one and choose <strong>Notify me and download</strong>, or choose <strong>Skip — just download</strong>. Either way the download starts.</li>
@@ -94,8 +124,9 @@
   <section id="step-2" class="guide-step soft">
     <div class="wrap guide-step-grid guide-step-reverse">
       <div class="guide-copy">
-        <div class="step-kicker"><span>2</span> OpenAI Platform</div>
+        <div class="step-kicker"><span>2</span> Optional radio setup · both platforms</div>
         <h2>Turn on API billing</h2>
+        <p>This is optional for telemetry and local strategy. If you are starting without AI or voice, go straight to <a href="#step-4">Windows installation</a>, or return to <a href="#android">Android setup</a>.</p>
         <ol>
           <li>Sign in at the <a href="https://platform.openai.com/" target="_blank" rel="noopener noreferrer">OpenAI Platform</a>. This may use the same login as ChatGPT, but it has separate billing.</li>
           <li>Open the <a href="https://platform.openai.com/settings/organization/billing/overview" target="_blank" rel="noopener noreferrer">API billing overview</a> and add payment details or buy API credits.</li>
@@ -113,7 +144,7 @@
   <section id="step-3" class="guide-step">
     <div class="wrap guide-step-grid">
       <div class="guide-copy">
-        <div class="step-kicker"><span>3</span> OpenAI Platform</div>
+        <div class="step-kicker"><span>3</span> Optional radio setup · both platforms</div>
         <h2>Create and copy your API key</h2>
         <ol>
           <li>Open the <a href="https://platform.openai.com/api-keys" target="_blank" rel="noopener noreferrer">API keys page</a>.</li>
@@ -156,7 +187,8 @@
     <div class="wrap guide-step-grid">
       <div class="guide-copy">
         <div class="step-kicker"><span>5</span> Your Pit Box</div>
-        <h2>Confirm the key and copy the PC address</h2>
+        <h2>Copy the PC address and check any saved key</h2>
+        <p>If you have not configured AI or voice, skip the key test and copy the telemetry address. You can add a key later without reinstalling.</p>
         <ol>
           <li>Your Pit Box starts its local server and opens the dashboard in your browser by itself. <strong>Give it 20–30 seconds</strong> — it loads the strategy engine, opens the telemetry socket and starts the audio device before the dashboard appears. Nothing is wrong during that wait. Then select the <strong>Connection</strong> tab.</li>
           <li>Under <strong>AI provider &amp; API keys</strong>, keep <strong>OpenAI</strong> selected as the key being managed and select <strong>Test saved key</strong>. A successful test confirms that the saved OpenAI API key can authenticate with OpenAI.</li>
@@ -182,8 +214,8 @@
           <li>Set the <strong>UDP IP Address</strong>: on a <strong>PS5</strong> or a <strong>second PC</strong>, enter the address Your Pit Box recommended in the previous step; if the game runs on <strong>this same PC as Your Pit Box</strong>, enter <code>127.0.0.1</code> instead. Set <strong>UDP Port</strong> to <code>20777</code>, and select UDP format <strong>2026</strong>.</li>
           <li>Start or join an on-track session. Return to Your Pit Box and wait for the badge to say <strong>Receiving telemetry</strong>.</li>
         </ol>
-        <div class="guide-warning"><strong>Listening is only halfway there.</strong> It means Windows opened the socket. Only <strong>Receiving telemetry</strong> proves that valid game packets have arrived.</div>
-        <div class="guide-tip"><strong>A second PC needs one firewall allowance.</strong> Windows Firewall prompts to allow Your Pit Box on private networks the first time it listens; accept that prompt so a second PC's packets can reach it. Running the game on the same PC as Your Pit Box skips this entirely — loopback traffic never crosses the firewall.</div>
+        <div class="guide-warning"><strong>Listening is only halfway there.</strong> It means the app opened the socket. <strong>Receiving telemetry</strong> and fresh packet activity show that valid game packets are arriving.</div>
+        <div class="guide-tip"><strong>For a Windows receiver on your private network:</strong> if Windows Firewall prompts, allow Your Pit Box on private networks so your PS5 or another PC can send telemetry. Do not disable the firewall. For a same-PC setup, send to <code>127.0.0.1</code>. An Android receiver uses the tablet's own address, not the laptop's.</div>
       </div>
       <figure class="guide-figure">
         <div class="shot guide-shot"><img src="assets/guide-05-ps5-udp.svg" alt="Illustration of the F1 telemetry settings with UDP Telemetry On, a private PC IP address, port 20777, and UDP format 2026 highlighted." width="1200" height="700" loading="lazy"></div>
@@ -213,25 +245,7 @@
     </div>
   </section>
 
-  <section id="android" class="guide-help soft">
-    <div class="wrap">
-      <div class="eyebrow">Android · signed APK download</div>
-      <h2>Using the native Android app</h2>
-      <p><a class="button primary" href="https://pitwall-activation.sarthakvij123450.workers.dev/android">Download Android APK</a></p>
-      <p>The signed APK supports Android 7 or later on 64-bit ARM and x86 devices with 4 KB memory pages. Devices using 16 KB memory pages are not supported by this release. This is a direct download, not a Google Play listing; the Windows installer does not install on Android.</p>
-      <div class="guide-warning"><strong>Already using the test app?</strong> The release package (<code>com.yourpitbox.app</code>) installs separately from the test package (<code>com.yourpitbox.app.debug</code>) and starts with its own library. Do not uninstall the test app or expect its history and keys to move automatically. Keep a backup, then use beta history transfer when neither device is recording. Never uninstall an existing app to force a signing-key mismatch.</div>
-      <ol>
-        <li>Download the APK from this site and check the SHA-256 on the download page. Open it; if Android asks, grant installation permission to the browser or file manager you used, then turn that permission back off after installing. Keep Play Protect enabled. Do not bypass an incompatible-device or security-policy block.</li>
-        <li>Connect the Android device and console to the same private home network. Open Your Pit Box on the tablet; the laptop is not required for the native Android engine.</li>
-        <li>Open <strong>Connection</strong> and use that device's recommended address as the game's <strong>UDP IP Address</strong>, with port <strong>20777</strong> and format <strong>2026</strong>. A tablet's address can change when it reconnects to Wi-Fi.</li>
-        <li>Start an on-track session and confirm <strong>Receiving telemetry</strong>. A listening socket or a saved lap chart alone does not prove that fresh packets are arriving.</li>
-        <li>For radio, save and test the provider key in Connection, allow Android microphone access, and enable voice in the app. Speech services need an OpenAI key and internet access; the dashboard can receive telemetry without voice.</li>
-        <li>Check microphone input separately from the reply. If the app hears input but you hear nothing, check the selected output, media volume and Bluetooth routing. A key test does not verify the microphone or speaker.</li>
-      </ol>
-      <p>Future updates to the release app use the same permanent signing identity. Install a verified release update over the release app; do not remove its saved data.</p>
-      <p>Before a full-length race, check your microphone, selected speaker or headset, wake phrase and background settings on the device you will use. A short radio check verifies that setup, not every Bluetooth device or power-saving mode.</p>
-    </div>
-  </section>
+
 
   <section id="history-transfer" class="guide-help">
     <div class="wrap">
@@ -283,15 +297,15 @@
         </details>
         <details>
           <summary>Your Pit Box says Listening</summary>
-          <p>Start an on-track session, recheck the address (the recommended PC address for a PS5 or second PC, or <code>127.0.0.1</code> for a same-PC setup), port <code>20777</code>, and format <code>2026</code>, then select <strong>Run diagnostics</strong>. For a second PC or a PS5, make sure it is on the same home network and that Windows Firewall allows Your Pit Box on private networks.</p>
+          <p>Start an on-track session. Recheck the receiving device's address in Connection, port <code>20777</code> and format <code>2026</code>, then select <strong>Run diagnostics</strong>. Use the Android address for Android, the PC address for Windows, or <code>127.0.0.1</code> only when the game and engineer run on the same PC. Make sure both devices share the private network; for Windows reception, allow the app through the firewall on private networks without disabling protection.</p>
         </details>
         <details>
-          <summary>The dashboard did not open</summary>
+          <summary>Windows: the dashboard did not open</summary>
           <p>First, give it <strong>20–30 seconds</strong>. Your Pit Box opens the browser itself, but only once the strategy engine, telemetry socket and audio device are up, so a launch that looks like nothing is happening is usually just a launch still in progress.</p>
           <p>If it has been longer than that, leave Your Pit Box running and open <a href="http://127.0.0.1:8000">http://127.0.0.1:8000</a> on that same PC. The address is local to the computer and is not a public website.</p>
         </details>
         <details>
-          <summary>Closing the browser did not stop Your Pit Box</summary>
+          <summary>Windows: closing the browser did not stop Your Pit Box</summary>
           <p>That is deliberate. The dashboard is only a window onto Your Pit Box; the app itself keeps running so it can carry on recording telemetry and answering on the radio while the browser is closed. There is no console window and no tray icon, so nothing visible tells you it is still there.</p>
           <p>To stop it, open the dashboard and use <strong>Quit Your Pit Box</strong> in the top-right corner. It finishes and saves any session being recorded first, then closes. Allow about <strong>20 seconds</strong> for it to shut down fully before starting it again.</p>
         </details>
@@ -312,7 +326,7 @@
 
 <footer class="site-footer">
   <div class="wrap footer-row">
-    <div><strong style="color:#fff">Your Pit Box</strong> — an independent Windows companion for F1 telemetry.</div>
+    <div><strong style="color:#fff">Your Pit Box</strong> — standalone race engineering on Windows and Android.</div>
     <div><a href="index.html">Home</a> · <a href="eula.html">Licence terms</a></div>
   </div>
 </footer>
