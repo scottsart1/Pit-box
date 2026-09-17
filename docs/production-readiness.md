@@ -2,8 +2,10 @@
 
 Windows 4.10.1 is published as an owner-authorized unsigned direct download,
 with its SHA-256 and security-warning notice on the website. Android revision
-14 is being packaged as a directly downloadable release-signed APK, not a Play
-Store submission. Do not claim broader compatibility from source tests alone.
+14 is published as a directly downloadable release-signed APK, not a Play
+Store submission. Android support is limited to 4 KB memory-page devices;
+16 KB devices are unsupported because some embedded native libraries do not
+satisfy ELF alignment requirements. Do not claim broader compatibility.
 
 ## Candidate changes
 
@@ -16,12 +18,18 @@ failures remain in the evidence, not silently changed to passes. Public website
 copy now labels UDP forwarding and device-to-device history transfer as beta.
 
 The owner explicitly authorized unsigned Windows direct download and creating
-a permanent Android release key. Windows is published; Android signing material
-has been generated outside the repository. A new unsigned-preparation opt-in
-lets CI build a non-debug APK without seeing that key; local signing and final
-verification are still required before publication. Keep the existing debug
+a permanent Android release key. Both downloads are published. Android signing
+material is protected outside the repository. An unsigned-preparation opt-in
+lets CI build a non-debug APK without seeing that key; local signing, signature
+verification and exact public-download checksum checks are complete. Keep the existing debug
 app and its history: the public release uses the separate production package.
 Website availability must describe the artifacts actually served.
+
+The release CI run passed 1,526 source/bridge tests plus integration and
+sibling-debug emulator checks for startup, UDP, restart and background/transfer
+UI. These checks are not physical-race endurance or runtime testing of the
+exact locally signed release APK. Public Windows/APK downloads passed checksum,
+size, MIME and partial-content checks; all 65 final website tests passed.
 
 ### Implemented source changes
 
@@ -37,8 +45,8 @@ Website availability must describe the artifacts actually served.
   Windows returns identical clock values across session boundaries.
 - The UDP consumer yields after each 32-packet batch, including malformed
   packets, so a continuously nonempty queue cannot monopolize the event loop.
-- Website copy distinguishes released Windows functionality, Android testing
-  and candidate transfer improvements. There is no automatic cloud sync.
+- Website copy distinguishes released Windows/Android downloads, Android
+  compatibility limits and beta transfer features. There is no automatic cloud sync.
 
 Large-history export preparation and transfer timeouts remain documented beta
 limitations. Progress reporting is not a throughput fix. Document small batches
