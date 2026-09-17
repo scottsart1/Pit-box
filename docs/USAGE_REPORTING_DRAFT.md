@@ -8,6 +8,14 @@ download artifacts remain unchanged. No production analytics events were
 submitted during these tests. Never overwrite or uninstall the owner's
 differently signed legacy Android apps to test the candidate.
 
+Candidate builds are now complete. Windows installer CI and Android CI passed;
+the signed, non-debuggable `Your Pit Box QA` APK was installed alongside the
+owner's unchanged tablet apps. Local Windows startup/persistence/transfer checks
+and physical Android Wi-Fi/restart checks passed, but Windows stress testing
+reproduced a timeout and independently counted packet loss. **Do not publish
+the candidate as production-ready on the strength of the green CI alone.** See
+[the current release QA record](release-qa-2026-09-17.md) for artifacts and failures.
+
 ## User choice and scope
 
 - Sharing is **off until explicitly chosen**, including on existing installs.
@@ -113,24 +121,32 @@ Current results:
 - Website draft assembled successfully (about 9.4 MB); source validation passed.
   Visual browser QA is still pending: the
   browser connection could not initialize on this host; no visual pass claimed.
-- The tablet subsequently connected over wireless ADB. Its existing debug app
-  passed basic dashboard/settings/background-health checks, but the new draft
-  is not installed. No new signed APK or packaged Windows installer has been
-  built or installed. See [the September 17 release QA record](release-qa-2026-09-17.md)
-  for the complete 1,801-test suite, packaged Windows race/restart checks,
-  corrected test oracle, stress-latency caveats and remaining artifact gates.
+- Subsequent candidate CI passed 1,808 Windows Python tests (1 skip), 1,551
+  Android/shared-engine Python tests and all 47 Node tests. Actual Windows
+  4.10.2 and isolated signed Android revision 15 passed default-off and persisted
+  decline checks without sending usage reports. Opt-in network delivery remains
+  source-process/loopback-fixture evidence, not live production delivery.
+- Physical Android background Wi-Fi received and recorded all 5,400 counted
+  fixture datagrams and reopened the fixture history after restart. Physical UI
+  clicks remain blocked by the PIN screen. The actual Windows candidate's
+  lower-load lifecycle passed, but its accelerated-race timeout and independently
+  measured full-field UDP loss remain unresolved; see the release QA record.
 
 ## When deployment is explicitly resumed
 
 1. Confirm the tablet connection; inspect package/signature/version and preserve history.
    A production-signed package must not overwrite/uninstall a differently signed
    debug package. The existing transfer is paused; do not resume it implicitly.
-2. Obtain adequate laptop disk space before packaging. Only about 230 MB was
-   free during draft testing; no user recordings or backups were deleted.
-3. Complete browser/device UI QA, actual opt-out/restart checks, and full CI.
+2. Check laptop disk space before further packaging. The owner cleared Downloads;
+   the new candidate was tested with the normal 2 GiB capture reserve. Do not
+   delete saved recordings or backups to make room.
+3. Resolve Windows responsiveness/receive-loss failures and complete remaining
+   browser/physical-device UI QA. Preserve failed-run evidence and independent
+   sent/received comparisons; do not just increase timeout thresholds.
    Confirm the Cloudflare rate-limit namespace is unused before provisioning it.
-4. Allocate new app/Android versions, build trusted artifacts, retain rollback
-   versions, sign Android with the existing permanent key. Never expose keys.
+4. If fixes change shipped code, allocate new app/Android versions and rebuild
+   and retest both artifacts. Retain rollback versions and sign Android with
+   the existing permanent key. Never expose keys.
 5. Apply additive migration `0007_optional_usage.sql`, deploy Worker with its
    rate-limit binding/cleanup schedule and existing report secret. Smoke-test
    using an isolated staging database first. Verify retention and denied access.
