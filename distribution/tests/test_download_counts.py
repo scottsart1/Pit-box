@@ -59,6 +59,10 @@ def test_report_page_has_no_embedded_secret_and_no_browser_persistence():
     assert 'id="historyData" hidden' in page
     assert "Historical file requests" in page
     assert "two sets of totals are kept separate" in page
+    assert 'id="combinedAll"' in page
+    assert page.index('id="combinedAll"') < page.index('id="totalAll"')
+    assert "mixed-method activity total" in page
+    assert "download-stats.js?v=" in page
 
 
 def test_history_snapshot_reimport_is_idempotent_and_never_changes_live_counts():

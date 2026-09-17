@@ -17,7 +17,7 @@
 <main class="wrap report-page">
   <div class="eyebrow">Private owner report</div>
   <h1>App downloads</h1>
-  <p>Windows and Android download starts, counted at the download server. These are not website visits, unique people or completed installations.</p>
+  <p>Windows and Android download activity, including recovered history. These are not website visits, unique people or completed installations.</p>
   <form id="reportLogin" class="report-login">
     <label for="reportKey" class="field-label">Download-report access key</label>
     <div class="code-entry">
@@ -32,23 +32,34 @@
       <p id="reportUpdated"></p>
       <div><button id="reportRefresh" class="button ghost" type="button">Refresh</button> <button id="reportLock" class="button ghost" type="button">Lock report</button></div>
     </div>
-    <h2>Live download starts</h2>
+    <section aria-labelledby="overviewHeading">
+      <h2 id="overviewHeading">Recorded download activity</h2>
+      <div class="report-totals">
+        <article><h3>Combined activity</h3><p id="combinedAll">—</p><span>Historical requests + live starts</span></article>
+        <article><h3>Windows</h3><p id="combinedWindows">—</p><span>Historical requests + live starts</span></article>
+        <article><h3>Android</h3><p id="combinedAndroid">—</p><span>Historical requests + live starts</span></article>
+      </div>
+      <p id="combinedSources"></p>
+      <p>This is a mixed-method activity total, not a verified download or installation count. Historical requests can include retries, partial reads and testing. The original measurements remain separate below.</p>
+    </section>
+    <h2>Live starts only</h2>
     <div class="report-totals">
-      <article><h3>All app downloads</h3><p id="totalAll">—</p><span>Since live tracking began</span></article>
+      <article><h3>All live starts</h3><p id="totalAll">—</p><span>Since live tracking began</span></article>
       <article><h3>Windows</h3><p id="totalWindows">—</p><span>Recorded installer starts</span></article>
       <article><h3>Android</h3><p id="totalAndroid">—</p><span>Recorded APK starts</span></article>
     </div>
     <p id="reportSince"></p>
-    <h2>Daily breakdown</h2>
+    <details><summary>Live daily breakdown (UTC)</summary>
     <p>Last 30 calendar days, including today. Dates use UTC.</p>
     <div class="table-scroll" tabindex="0" role="region" aria-label="Daily app download counts">
       <table><caption class="sr-only">Windows and Android download starts by UTC day</caption>
       <thead><tr><th scope="col">Date (UTC)</th><th scope="col">Windows</th><th scope="col">Android</th><th scope="col">Total</th></tr></thead>
       <tbody id="reportRows"></tbody></table>
     </div>
+    </details>
     <section aria-labelledby="historyHeading">
       <h2 id="historyHeading">Historical file requests</h2>
-      <p>Recovered from Cloudflare's stored analytics. These measure file reads, not the live download starts above, so the two sets of totals are kept separate.</p>
+      <p>Recovered from Cloudflare's stored analytics. These measure file reads, not the live download starts above. The two sets of totals are kept separate here; the overview adds them only as mixed-method activity.</p>
       <p id="historyStatus">No historical snapshot loaded.</p>
       <div id="historyData" hidden>
         <div class="report-totals">
@@ -77,6 +88,6 @@
   </aside>
   <noscript><p>Enable JavaScript to open this report. Downloads do not require this report to be open.</p></noscript>
 </main>
-<script src="download-stats.js" defer></script>
+<script src="download-stats.js?v=20260917-overview" defer></script>
 </body>
 </html>

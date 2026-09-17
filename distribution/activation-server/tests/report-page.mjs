@@ -6,7 +6,8 @@ import test from 'node:test';
 const source = await readFile(new URL('../../website/download-stats.js', import.meta.url), 'utf8');
 const ids = ['reportLogin', 'reportKey', 'reportStatus', 'reportData', 'reportRefresh', 'reportRows',
   'totalAll', 'totalWindows', 'totalAndroid', 'reportUpdated', 'reportSince', 'reportLock',
-  'historyData', 'historyRows', 'historyAll', 'historyWindows', 'historyAndroid', 'historyStatus', 'historyPeriod'];
+  'historyData', 'historyRows', 'historyAll', 'historyWindows', 'historyAndroid', 'historyStatus', 'historyPeriod',
+  'combinedAll', 'combinedWindows', 'combinedAndroid', 'combinedSources'];
 function element() {
   return {value: '', hidden: false, textContent: '', disabled: false, children: [], listeners: {},
     addEventListener(name, fn) { this.listeners[name] = fn; }, focus() {},
@@ -108,6 +109,10 @@ test('historical totals, coverage and daily rows are separate and erased when lo
   assert.equal(e.historyAll.textContent, '270');
   assert.equal(e.historyWindows.textContent, '260');
   assert.equal(e.historyAndroid.textContent, '10');
+  assert.equal(e.combinedAll.textContent, '279');
+  assert.equal(e.combinedWindows.textContent, '267');
+  assert.equal(e.combinedAndroid.textContent, '12');
+  assert.match(e.combinedSources.textContent, /270 historical file requests \+ 9 live download starts/);
   assert.equal(e.historyData.hidden, false);
   assert.equal(e.historyRows.children.length, 43);
   assert.equal(e.historyRows.children[0].children[2].textContent, '10');
@@ -118,6 +123,8 @@ test('historical totals, coverage and daily rows are separate and erased when lo
   assert.equal(e.historyAll.textContent, '—');
   assert.equal(e.historyRows.children.length, 0);
   assert.equal(e.historyPeriod.textContent, '');
+  assert.equal(e.combinedAll.textContent, '—');
+  assert.equal(e.combinedSources.textContent, '');
 });
 
 test('missing history is unavailable, not a zero or invented backfill', async () => {
@@ -126,6 +133,21 @@ test('missing history is unavailable, not a zero or invented backfill', async ()
   assert.equal(app.elements.historyData.hidden, true);
   assert.match(app.elements.historyStatus.textContent, /not a zero/);
   assert.equal(app.elements.totalAll.textContent, '9');
+  assert.equal(app.elements.combinedAll.textContent, '—');
+  assert.match(app.elements.combinedSources.textContent, /unavailable/);
+});
+
+test('combined overview includes history without changing any source counter', async () => {
+  const data = {...payload, history, totals: {windows: 1, android: 2, all: 3},
+    daily: [{day: '2026-09-17', platform: 'windows', starts: 1}, {day: '2026-09-17', platform: 'android', starts: 2}]};
+  const app = harness(async () => ({ok: true, status: 200, json: async () => data}));
+  await app.login();
+  assert.equal(app.elements.combinedAll.textContent, '273');
+  assert.equal(app.elements.combinedWindows.textContent, '261');
+  assert.equal(app.elements.combinedAndroid.textContent, '12');
+  assert.equal(app.elements.totalAll.textContent, '3');
+  assert.equal(app.elements.historyAll.textContent, '270');
+  assert.equal(data.totals.all, 3);
 });
 
 test('inconsistent, duplicated or oversized historical data fails closed', async () => {

@@ -73,6 +73,12 @@ not an unlisted URL, protects the data. Responses are private and non-cacheable.
 or a `historical_file_requests` snapshot with coverage (`from` inclusive, `until`
 exclusive), source, recovery date, separate Windows/Android/combined totals and
 daily rows. The page displays its entire coverage in a separate section.
+The first-screen overview adds history and live starts only as clearly labelled
+**mixed-method recorded activity**, not verified downloads or installations.
+The source counters and database rows remain unchanged and separately visible.
+Missing history leaves the combined overview unavailable, rather than implying
+that the live count alone covers all history. Detailed daily tables are collapsed
+so the historical summary is not buried beneath 30 rows of live-only data.
 
 Only successful Cloudflare R2 `GetObject` analytics for the actual public
 release object keys are included. Exclude uploads, metadata calls, errors,

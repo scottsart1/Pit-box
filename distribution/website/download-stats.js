@@ -18,6 +18,8 @@
     for (const id of ["historyAll", "historyWindows", "historyAndroid"]) byId(id).textContent = "—";
     byId("historyPeriod").textContent = "";
     byId("historyStatus").textContent = "";
+    for (const id of ["combinedAll", "combinedWindows", "combinedAndroid"]) byId(id).textContent = "—";
+    byId("combinedSources").textContent = "";
   }
 
   function lock() {
@@ -45,7 +47,12 @@
       if (!/^\d{4}-\d{2}-\d{2}$/.test(row.day) || !validCount(row.starts) ||
           !["windows", "android"].includes(row.platform)) throw new Error("Report data could not be read. Try again.");
     }
-    if (data.history != null) validateHistory(data.history);
+    if (data.history != null) {
+      validateHistory(data.history);
+      if (["windows", "android", "all"].some(key => !validCount(data.totals[key] + data.history.totals[key]))) {
+        throw new Error("Combined data could not be read. Try again.");
+      }
+    }
   }
 
   function validateHistory(history) {
@@ -104,6 +111,12 @@
   }
 
   function render(data) {
+    for (const [platform, id] of [["all", "combinedAll"], ["windows", "combinedWindows"], ["android", "combinedAndroid"]]) {
+      byId(id).textContent = data.history ? number(data.totals[platform] + data.history.totals[platform]) : "—";
+    }
+    byId("combinedSources").textContent = data.history
+      ? `${number(data.history.totals.all)} historical file requests + ${number(data.totals.all)} live download starts. Different counting methods; see coverage and limitations below.`
+      : "Historical records are unavailable, so a combined total cannot be shown. The live counts below are still available.";
     byId("totalAll").textContent = number(data.totals.all);
     byId("totalWindows").textContent = number(data.totals.windows);
     byId("totalAndroid").textContent = number(data.totals.android);
@@ -157,7 +170,7 @@
       if (current !== generation) return;
       validate(data);
       render(data);
-      status.textContent = "Counts loaded. A download start does not confirm installation.";
+      status.textContent = data.history ? "History and live counts loaded. The overview combines activity measured in two different ways." : "Live counts loaded; historical activity is unavailable.";
     } catch (error) {
       if (current !== generation) return;
       clearReport();
