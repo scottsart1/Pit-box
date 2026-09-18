@@ -1,13 +1,19 @@
-# Your Pit Box 4.10.0 candidate — AI race engineer for PS5 and Windows
+# Your Pit Box 4.11.0 — AI race engineer and driver dashboard
 
-This strategy candidate is **unpublished**. Model tests pass, but observed
-reception and persistence failures and the pending Windows artifact gate block
-release. See the [final validation record](docs/strategy-final-validation-2026-09.md)
-and [release handoff](docs/strategy-release-handoff.md).
+[Download Windows or Android](https://yourpitbox.com/#download),
+[try the Driver Dashboard](https://your-pit-box-driver-dashboard.sarthakvij123450.chatgpt.site/),
+or read the [release verification](docs/release-qa-4.11.0.md).
 
 Your Pit Box receives **F1 26** telemetry (UDP format **2026**) from a PS5, runs deterministic
 strategy/corner/setup analysis locally, keeps persistent SQLite history, answers spoken questions,
 makes proactive radio calls, and serves a live dashboard at `http://127.0.0.1:8000`.
+
+The **Driver Dashboard** tab offers six racing layouts with prominent race-control
+flags, driver numbers, gaps ahead and behind, lap comparisons and optional resource
+cards. Automatic display profiles adapt to phones, unfolded screens, tablets and
+laptops; manual profiles, number size, contrast, units and card order are saved.
+See the [dashboard guide](static/driver-dashboard/README.md) for live data and
+offline demo use.
 
 The engineer's reasoning runs on the AI provider of your choice — **OpenAI**,
 **Anthropic (Claude)**, **DeepSeek**, **Kimi (Moonshot AI)**, or any
