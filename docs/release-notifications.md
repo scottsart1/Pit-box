@@ -53,6 +53,11 @@ is used. Replacing a same-version artifact is unsupported: increment the version
 
 ## Delivery boundary
 
+**4.12.0 update:** both new public binaries now contain the checker. Their
+download bytes, website checksums and published metadata have been verified;
+see [release QA](release-qa-4.12.0.md). The older baseline history below remains
+for reference.
+
 The existing downloadable 4.11.0 binaries predate this checker. They cannot acquire
 it remotely. A new packaged release must include this source; users need that one
 manual upgrade before subsequent releases can show the flag. Publishing backend

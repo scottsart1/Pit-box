@@ -1,5 +1,10 @@
 # Optional radio setup walkthrough
 
+Published in 4.12.0 on Windows and Android. See
+[the release verification](release-qa-4.12.0.md) for final packaged tests,
+physical tablet checks and public download receipts. The preview notes below
+describe development before publication.
+
 ## Open the development preview on this laptop
 
 Run `tools/open-onboarding-preview.ps1` with PowerShell. It uses the sibling
