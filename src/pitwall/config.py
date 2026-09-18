@@ -163,13 +163,13 @@ class Settings(BaseSettings):
     # Capture, trace, analysis and live-delivery budgets.  Environment values
     # are installation defaults; mutable network/retention profiles are stored
     # separately and never rewrite .env.
-    capture_mode: str = "balanced"  # minimal | balanced | full_fidelity
+    capture_mode: str = "full_fidelity"  # minimal | balanced | full_fidelity
     raw_capture: str = "rolling"  # off | rolling | full
     # Which cars keep full traces during RACES: "focused" stores the player,
     # teammate, podium and grid neighbours (the cars analysis reads back);
     # "all" keeps every car — for installs where disk is cheaper than detail
     # lost. Practice and qualifying always keep everyone.
-    field_trace_scope: str = "focused"  # focused | all
+    field_trace_scope: str = "all"  # focused | all
     field_trace_hz: int = 20
     capture_max_gb: float = 20.0
     capture_min_free_gb: float = 2.0

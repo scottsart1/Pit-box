@@ -4,7 +4,7 @@
   const byId = id => document.getElementById(id);
   const prompt = byId("usagePrompt"), toggle = byId("usageToggle"), status = byId("usageStatus");
   const card = byId("usageSettings");
-  byId("settingsGroups").before(card);
+  byId("settingsGroups").after(card);
   let enabled = false, busy = false;
   let lastInteraction = Date.now();
   const signal = () => { lastInteraction = Date.now(); };

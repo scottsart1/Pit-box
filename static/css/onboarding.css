@@ -1,0 +1,50 @@
+.onboarding {
+  width: min(620px, calc(100vw - 24px));
+  max-height: calc(100vh - 24px);
+  max-height: calc(100dvh - 24px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 24px;
+  border: 1px solid var(--line, #263542);
+  border-radius: 16px;
+  color: #eef4f8;
+  background: var(--card, #121b24);
+  box-shadow: 0 20px 80px #000a;
+  font-size: 15px;
+  line-height: 1.55;
+}
+.onboarding::backdrop { background: #04080ded; }
+.onboarding:not([open]), .onboarding [hidden] { display: none !important; }
+.onboarding h2 { font-size: 25px; line-height: 1.2; margin: 8px 0 16px; }
+.onboarding li { margin: 8px 0; }
+.onboarding ol, .onboarding ul { padding-left: 22px; }
+.onboarding-top, .onboarding-actions { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; justify-content: space-between; }
+.onboarding-actions { margin-top: 22px; padding-top: 16px; border-top: 1px solid var(--line, #263542); }
+.onboarding .button { min-height: 44px; font: inherit; font-weight: 650; }
+.onboarding .button:disabled { cursor: not-allowed; opacity: .5; }
+.onboarding a, .onboarding-link { color: #8dcfff; text-decoration: underline; text-underline-offset: 3px; }
+.onboarding-link { background: none; border: none; padding: 0; font: inherit; cursor: pointer; }
+.onboarding input { display: block; margin: 8px 0; width: 100%; min-width: 0; min-height: 44px; padding: 10px; border: 1px solid #607c90; border-radius: 8px; background: #080f16; color: #eef4f8; font: inherit; }
+.onboarding :focus-visible { outline: 2px solid #8dcfff; outline-offset: 3px; }
+.onboarding-status { background: #080f16; border-left: 3px solid #5dafff; padding: 10px 12px; overflow-wrap: anywhere; }
+.onboarding meter { display: block; width: 100%; height: 22px; margin-top: 6px; }
+.onboarding .small { font-size: 13px; }
+.onboarding-network { border: 1px solid #3d647f; border-radius: 10px; padding: 14px; background: #080f16; }
+.onboarding-network h3 { font-size: 17px; margin: 0 0 12px; }
+.onboarding-network-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 12px 0; }
+.onboarding-network output { display: block; font: 700 24px/1.4 Consolas, monospace; user-select: all; overflow-wrap: anywhere; }
+.onboarding-network-row > div { min-width: 0; }
+.app-tour { position: fixed; right: 12px; bottom: 6px; z-index: 2800; width: min(460px, calc(100vw - 24px)); max-height: 48vh; max-height: 48dvh; overflow: auto; padding: 16px; border: 1px solid #689bbf; border-radius: 12px; background: #111c27; color: #eef4f8; box-shadow: 0 6px 28px #0009; line-height: 1.5; }
+.app-tour[hidden] { display: none !important; }
+.app-tour h2 { font-size: 19px; margin: 12px 0 8px; }
+.app-tour p { font-size: 14px; margin: 8px 0; }
+.app-tour .onboarding-actions { margin-top: 12px; padding-top: 12px; }
+.app-tour .button { min-height: 42px; }
+.app-tour :focus-visible { outline: 2px solid #8dcfff; outline-offset: 3px; }
+.app-tour-highlight { outline: 3px solid #8dcfff !important; outline-offset: -3px; }
+.app.app-tour-active { height: calc(100vh - var(--app-tour-space, 240px)); height: calc(100dvh - var(--app-tour-space, 240px)); }
+@media (max-width: 480px) {
+  .onboarding { padding: 16px; }
+  .onboarding h2 { font-size: 22px; }
+  .onboarding-actions .button { flex: 1 1 auto; }
+}

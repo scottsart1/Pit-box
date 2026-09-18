@@ -3,7 +3,7 @@
   "use strict";
   const get = id => document.getElementById(id);
   const card = get("updateSettings"), status = get("updateStatus"), toggle = get("updateToggle");
-  get("settingsGroups").before(card);
+  get("usageSettings").after(card);
   const banner = document.createElement("a");
   banner.className = "button ghost"; banner.hidden = true; banner.target = "_blank"; banner.rel = "noopener noreferrer";
   document.querySelector("header.top").appendChild(banner);

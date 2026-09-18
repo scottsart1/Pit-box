@@ -4,7 +4,7 @@ import vm from 'node:vm';
 import test from 'node:test';
 const source = await readFile(new URL('../../../static/js/updates.js', import.meta.url), 'utf8');
 const settle = async () => { for (let i = 0; i < 8; i++) await new Promise(resolve => setImmediate(resolve)); };
-function element() { return {listeners: {}, hidden: false, disabled: false, textContent: '', checked: false, before() {}, appendChild(child) { this.child = child; }, removeAttribute(key) { delete this[key]; }, addEventListener(name, fn) { this.listeners[name] = fn; }}; }
+function element() { return {listeners: {}, hidden: false, disabled: false, textContent: '', checked: false, before() {}, after() {}, appendChild(child) { this.child = child; }, removeAttribute(key) { delete this[key]; }, addEventListener(name, fn) { this.listeners[name] = fn; }}; }
 function harness(data) {
   const elements = new Map(), header = element(), calls = [], timers = [];
   const get = id => { if (!elements.has(id)) elements.set(id, element()); return elements.get(id); };

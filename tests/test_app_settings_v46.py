@@ -62,6 +62,31 @@ def test_wake_enabled_is_deliberately_not_adjustable_here():
     assert "wake_enabled" not in SETTINGS_SPEC
 
 
+def test_new_install_uses_all_cars_full_trace_detail_and_proactive_calls(monkeypatch):
+    from pitwall.config import Settings
+
+    for name in ("PITWALL_FIELD_TRACE_SCOPE", "PITWALL_CAPTURE_MODE", "PITWALL_PROACTIVE_ENABLED", "PITWALL_RAW_CAPTURE"):
+        monkeypatch.delenv(name, raising=False)
+    defaults = Settings(_env_file=None)
+    assert defaults.field_trace_scope == "all"
+    assert defaults.capture_mode == "full_fidelity"
+    assert defaults.proactive_enabled is True
+    assert defaults.raw_capture == "rolling"  # not requested to change
+    assert defaults.capture_min_free_gb == 2.0  # keep storage safeguards
+
+
+def test_new_defaults_do_not_overwrite_existing_user_choices(tmp_path):
+    from pitwall.config import Settings
+
+    db = tmp_path / "preferences.sqlite3"
+    chosen = {"field_trace_scope": "focused", "capture_mode": "balanced", "proactive_enabled": False}
+    _seed(db, chosen)
+    live = Settings(_env_file=None)
+    apply_saved_overrides(live, db)
+    for name, value in chosen.items():
+        assert getattr(live, name) == value
+
+
 def test_missing_database_or_table_means_no_overrides(tmp_path):
     assert load_saved(tmp_path / "absent.sqlite3") == {}
     empty = tmp_path / "empty.sqlite3"

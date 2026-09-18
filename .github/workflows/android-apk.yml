@@ -13,6 +13,7 @@ on:
       - tools/backend_transfer_smoke.py
       - tools/transfer-ui-smoke.cjs
       - tools/drive-trace-ui-smoke.cjs
+      - tools/onboarding-ui-smoke.cjs
       - distribution/tests/test_android*.py
       - .github/workflows/android-apk.yml
   workflow_dispatch:
@@ -52,6 +53,7 @@ jobs:
           NODE_PATH="$RUNNER_TEMP/pitbox-ui/node_modules" node tools/transfer-ui-smoke.cjs
           NODE_PATH="$RUNNER_TEMP/pitbox-ui/node_modules" node tools/drive-trace-ui-smoke.cjs
           NODE_PATH="$RUNNER_TEMP/pitbox-ui/node_modules" node tools/usage-ui-smoke.cjs
+          NODE_PATH="$RUNNER_TEMP/pitbox-ui/node_modules" node tools/onboarding-ui-smoke.cjs
       - name: Driver dashboard data and responsive profile regressions
         run: node --test tests/driver_dashboard.test.mjs
       - name: Optional usage ingestion and owner report checks (local fixtures only)
