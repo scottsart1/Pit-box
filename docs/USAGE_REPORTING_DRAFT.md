@@ -1,8 +1,9 @@
 # Optional usage reporting — release preparation
 
-Status: 17 September 2026. The owner explicitly resumed building, testing and
-public website deployment. Current candidate: Windows/shared engine 4.10.4,
-Android revision 17. See the [release QA record](release-qa-4.10.4.md) for final publication evidence.
+Status: **published and verified, 17 September 2026**. Windows/shared engine
+4.10.4 and signed Android revision 17 are publicly downloadable from
+https://yourpitbox.com. The owner reporting service and website privacy copy are
+deployed. See the [release QA record](release-qa-4.10.4.md) for publication evidence.
 Never overwrite or uninstall the owner's differently signed legacy Android apps
 to test the candidate. No synthetic usage reports are submitted to production.
 
@@ -147,9 +148,9 @@ that choice and fixture history. Real native-client opt-in delivery was tested
 against the isolated QA service, never by injecting reports into production.
 The laptop browser runtime could not initialize; no local browser visual pass
 is claimed. See [the final release QA record](release-qa-4.10.4.md) for timings,
-artifacts, remaining limits and the eventual deployment receipt.
+artifacts, remaining limits and the completed deployment receipt.
 
-## Deployment checklist (owner authorization resumed)
+## Completed deployment checklist / future-release reference
 
 1. Confirm the tablet connection; inspect package/signature/version and preserve history.
    A production-signed package must not overwrite/uninstall a differently signed

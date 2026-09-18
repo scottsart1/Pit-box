@@ -1,6 +1,7 @@
 # Your Pit Box 4.10.4 — release verification
 
-Status: release gates passed; publication verification is recorded below when complete.
+Status: **published and verified** at https://yourpitbox.com on 17 September 2026
+(US Eastern; production checks completed after 00:26 UTC on 18 September).
 The owner explicitly requested building, testing and public website deployment.
 
 Source: `029eb130430af8210b0596936767646af6b91a83`.
@@ -120,6 +121,63 @@ Usage reports require explicit opt-in and contain bounded daily flags, not race
 recordings, audio, messages, keys or hardware identifiers. Installations are not
 unique people; separate download totals are not a linked conversion funnel.
 
-Rollback baseline and staged service evidence are in the 4.10.3 preparation record.
-Final artifact hashes, device checks, deployed versions and public verification
-will be added after those actions actually complete.
+## Production publication receipt
+
+- Website/Worker release commit: `8f90d1f5b13349084e3ebf115b689277d2b74d60`.
+  App binaries remain built from source `029eb13` listed above.
+- Existing Cloudflare Pages project `pitwall`, production branch `main`:
+  deployment `4882dbb0-4a70-4e25-8621-1a318744f9e7`,
+  https://4882dbb0.pitwall-2k7.pages.dev; custom domain https://yourpitbox.com.
+- Existing Worker `pitwall-activation`:
+  version `53941911-5257-4f73-a053-4566b1723bf6`, 100% traffic;
+  deployment `ad5a167e-c656-4f0d-a03f-fbc4ae31b0ef`.
+  Rate-limit namespace 4102 and daily 03:17 UTC retention trigger deployed.
+- Existing D1 database: only additive `0007_optional_usage.sql` applied (five
+  statements). Existing tables/data retained. Post-migration bookmark:
+  `000002b3-00000006-000050ea-789b6af8d1facfa351e7442c6aaf9d03`.
+- Existing private R2 bucket: uploaded `YourPitBox-4.10.4-android.17.apk`,
+  `releases/windows/4.10.4/PitWall-Setup-b2e62d08.exe`, and public-download
+  backing object `PitWall-Setup.exe`. Both old versioned release objects remain.
+
+Public verification read and hashed **every byte of both downloads**, matching
+the sizes and SHA-256 values above. Full and short range requests returned 206
+with correct MIME types and byte ranges. Range/HEAD checks avoid incrementing
+download-start counters; no fake production download or usage event was injected.
+`installer-info` correctly reports no activation code required.
+
+Eleven served website files passed content checks on the custom domain. JavaScript
+and CSS matched exactly; HTML matched after reversing only observed Cloudflare
+email-obfuscation/Insights transforms. This is HTTP/content verification, not an
+unavailable local browser visual pass.
+
+Both private reports returned 200 with the existing owner key and `no-store`;
+unauthenticated requests returned 401, and GET on the ingestion route returned
+405. Historical download records were identical to the pre-release snapshot,
+and totals did not decrease. The private report is available at
+https://yourpitbox.com/usage-stats.html using the existing report access key.
+
+Local evidence retained outside the repository:
+
+- `production-release/2026-09-17-v4.10.4/public-verification.json`
+- `production-release/2026-09-17-v4.10.4/owner-reports-before.json`
+- `production-release/2026-09-17-v4.10.4/owner-reports-after.json`
+- `website-deployment-evidence/verification-powershell-20260918T002628Z.json`
+- Final CI logs, signed artifacts, package parity/signature evidence and all
+  successful **and failed** device/runtime checks referenced above.
+
+After verification, the temporary `pitwall-activation-qa` Worker and
+`pitwall-usage-qa` database (`50643faa-dd2d-40df-9084-546c0be54560`) were deleted.
+Only synthetic staging fixtures were removed; their local test evidence remains.
+The QA APK remains installed but was stopped. Existing user apps, all real history,
+the paused transfer and local backups were not changed by publication.
+
+## Rollback
+
+The [4.10.3 preparation record](release-qa-4.10.3.md) records the old Pages/Worker
+versions and retained 4.10.1 binaries. To roll back, restore the previous Pages
+deployment and Worker version, and copy the retained versioned Windows 4.10.1
+object back to `PitWall-Setup.exe`, then recheck served hashes. The old Worker
+selects the retained Android revision 14 object. The additive usage tables may
+remain: do **not** rewind the customer database and discard new activity merely
+to roll back app binaries. Do not uninstall or downgrade users' Android apps over
+their histories; a device rollback needs a separate, data-preserving plan.
