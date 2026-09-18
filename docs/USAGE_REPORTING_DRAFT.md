@@ -1,20 +1,18 @@
-# Optional usage reporting — local draft, not deployed
+# Optional usage reporting — release preparation
 
-Status: 17 September 2026. The owner has resumed candidate builds and testing.
-Development-branch CI artifacts and an isolated tablet QA package are in scope;
-public releases, Cloudflare deployments and database migrations remain paused.
-Candidate version: Windows/shared engine 4.10.2, Android revision 15. The released
-download artifacts remain unchanged. No production analytics events were
-submitted during these tests. Never overwrite or uninstall the owner's
-differently signed legacy Android apps to test the candidate.
+Status: 17 September 2026. The owner explicitly resumed building, testing and
+public website deployment. Current candidate: Windows/shared engine 4.10.4,
+Android revision 17. See the [release QA record](release-qa-4.10.4.md) for final publication evidence.
+Never overwrite or uninstall the owner's differently signed legacy Android apps
+to test the candidate. No synthetic usage reports are submitted to production.
 
-Candidate builds are now complete. Windows installer CI and Android CI passed;
+The earlier 4.10.2 candidate builds completed. Windows installer CI and Android CI passed;
 the signed, non-debuggable `Your Pit Box QA` APK was installed alongside the
 owner's unchanged tablet apps. Local Windows startup/persistence/transfer checks
 and physical Android Wi-Fi/restart checks passed, but Windows stress testing
-reproduced a timeout and independently counted packet loss. **Do not publish
-the candidate as production-ready on the strength of the green CI alone.** See
-[the current release QA record](release-qa-2026-09-17.md) for artifacts and failures.
+reproduced a timeout and independently counted packet loss. **That candidate was
+withheld from publication.** See
+[the historical 4.10.2 QA record](release-qa-2026-09-17.md) for artifacts and failures.
 
 ## User choice and scope
 
@@ -30,7 +28,7 @@ the candidate as production-ready on the strength of the green CI alone.** See
 - No microphone data, transcripts, race/session IDs, telemetry values, API keys,
   names, emails, hardware identifiers or history files enter reporting payloads.
 - A brief choice plus plain-language privacy details replaces the old,
-  incompatible “nothing is sent to the developer” promise in draft terms.
+  incompatible “nothing is sent to the developer” promise in the release terms.
 
 ## What is counted
 
@@ -101,11 +99,12 @@ python -m distribution.website.build_site --check
 ```
 
 The DOM smoke uses the existing `qa-ui/node_modules` through `NODE_PATH`.
-All usage requests in tests go to mocks or an in-memory loopback receiver.
+Usage requests in local tests go to mocks or an in-memory loopback receiver;
+live service integration tests use a separate QA Worker and QA database only.
 The real-app smoke uses temporary data, isolated ports, no keys and no audio;
 it does not start or change the installed desktop app or touch saved sessions.
 
-Current results:
+Earlier draft/candidate results (preserved; not the final release result):
 
 - 265 Python tests passed; 1 pre-existing platform-dependent test skipped.
   Covers reporting plus state, startup/settings, analysis, voice/realtime,
@@ -132,7 +131,25 @@ Current results:
   lower-load lifecycle passed, but its accelerated-race timeout and independently
   measured full-field UDP loss remain unresolved; see the release QA record.
 
-## When deployment is explicitly resumed
+## Final 4.10.4 verification
+
+The earlier receive-loss and routine-health scanning failures were fixed without
+relaxing packet-count or response-timeout checks. Final CI passed 1,827 Windows
+Python tests (1 platform skip), 1,570 Android/shared Python tests and 47 Node tests.
+Updated website validation passed 74 Python tests. The packaged Windows app on
+the laptop and signed Android QA build on the physical tablet each received and
+recorded all 18,604 independently counted full-field fixture packets without
+request timeouts. Android reported zero kernel socket drops as well.
+
+Physical Android Settings and the expanded privacy disclosure were visually
+checked after the tablet was unlocked: sharing remained off. Restart retained
+that choice and fixture history. Real native-client opt-in delivery was tested
+against the isolated QA service, never by injecting reports into production.
+The laptop browser runtime could not initialize; no local browser visual pass
+is claimed. See [the final release QA record](release-qa-4.10.4.md) for timings,
+artifacts, remaining limits and the eventual deployment receipt.
+
+## Deployment checklist (owner authorization resumed)
 
 1. Confirm the tablet connection; inspect package/signature/version and preserve history.
    A production-signed package must not overwrite/uninstall a differently signed
@@ -140,7 +157,7 @@ Current results:
 2. Check laptop disk space before further packaging. The owner cleared Downloads;
    the new candidate was tested with the normal 2 GiB capture reserve. Do not
    delete saved recordings or backups to make room.
-3. Resolve Windows responsiveness/receive-loss failures and complete remaining
+3. Verify Windows responsiveness/receive-loss fixes and available
    browser/physical-device UI QA. Preserve failed-run evidence and independent
    sent/received comparisons; do not just increase timeout thresholds.
    Confirm the Cloudflare rate-limit namespace is unused before provisioning it.
@@ -153,7 +170,7 @@ Current results:
 6. Publish matching website/privacy copy and artifact references together;
    verify served digests and both download prompts, without altering the old
    counters or presenting historical requests as unique downloads.
-7. Install and test on the owner's laptop/tablet without deleting history;
+7. Test isolated packaged builds on the owner's laptop/tablet without deleting history;
    retain clear rollback steps. New public usage begins only after users opt in.
 
 Worker API reference checked against official documentation:

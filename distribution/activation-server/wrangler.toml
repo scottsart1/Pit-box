@@ -2,7 +2,7 @@ name = "pitwall-activation"
 main = "src/worker.js"
 compatibility_date = "2025-01-01"
 
-# Draft usage endpoint: bounded native-client reports, no rate-limit identifiers
+# Optional usage endpoint: bounded native-client reports, no rate-limit identifiers
 # stored in the analytics database. Keep the namespace unique to this product.
 [[ratelimits]]
 name = "USAGE_RATE_LIMITER"
@@ -21,9 +21,8 @@ binding = "DB"
 database_name = "pitwall-licenses"
 database_id = "4360c3cd-4f56-4643-a908-85cbed0d2944"
 
-# The installer. Deliberately a PRIVATE bucket streamed through the Worker
-# rather than a public r2.dev URL, so the file cannot be fetched without a code
-# that is still in the database. See handleFile in src/worker.js.
+# Private artifact storage streamed through the Worker. Public release download
+# routes do not require activation codes; legacy code routes remain supported.
 [[r2_buckets]]
 binding = "DOWNLOADS"
 bucket_name = "pitwall-downloads"

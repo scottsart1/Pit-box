@@ -1,4 +1,4 @@
--- Draft only: no production migration until the owner resumes deployment.
+-- Additive optional usage reporting; existing downloads and customers unchanged.
 -- No race data, audio, text, emails, addresses or hardware identifiers.
 CREATE TABLE IF NOT EXISTS usage_installations (
   installation_hash TEXT PRIMARY KEY,
