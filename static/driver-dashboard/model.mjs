@@ -50,7 +50,8 @@ export function normalizeState(s,{ageMs=0,transport='live',now=Date.now()}={}) {
   const array=a=>Array.from({length:4},(_,i)=>finite(a?.[i]));
   const freshGroup=id=>transport==='demo'||(finite(s.packet_group_freshness?.[id])!==null&&(now/1000-s.packet_group_freshness[id])<5);
   const carData=fresh&&freshGroup('6'),statusData=fresh&&freshGroup('7'),damageData=fresh&&freshGroup('10');
-  return {fresh,transport,paused:!!s.game_paused,flag:raceFlag(s,{fresh}),track:String(s.track_name||'Waiting for session'),session:String(s.session_type||'No session'),
+  const flag=fresh&&(!freshGroup('1')||!freshGroup('7'))?makeFlag('unknown','#91a6b8','RACE CONTROL UNAVAILABLE','Follow in-game race control. Awaiting current flag data.'):raceFlag(s,{fresh});
+  return {fresh,transport,paused:!!s.game_paused,flag,track:String(s.track_name||'Waiting for session'),session:String(s.session_type||'No session'),
     lap:positive(s.current_lap),total:positive(s.total_laps),position:positive(s.player_position),field:positive(s.active_cars)||drivers.length||null,player:car(player),ahead:car(ahead),behind:car(behind),
     drivers:drivers.filter(d=>d.active!==false||d.car_idx===s.player_car_index).sort((a,b)=>(a.position||999)-(b.position||999)).map(car),
     current:positive(s.current_lap_time_ms),last:positive(s.last_lap_ms),best,delta,reference,invalid:!!s.current_lap_invalid,sector:finite(s.sector),
