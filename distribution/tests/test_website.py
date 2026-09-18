@@ -33,6 +33,33 @@ REVIEWS_JS = (DIST / "website" / "reviews.js").read_text(encoding="utf-8")
 
 REAL_ENDPOINT = "https://activation.pitwall.app"
 
+
+def test_owner_dashboard_has_separate_private_login_copy_all_and_automatic_refresh():
+    owner = (DIST / "website" / "owner.html").read_text(encoding="utf-8")
+    script = (DIST / "website" / "owner.js").read_text(encoding="utf-8")
+    assert 'id="ownerData" hidden' in owner
+    assert 'id="copyAllEmails"' in owner
+    assert 'id="ownerAuto"' in owner
+    assert 'id="emailCopyText"' in owner
+    assert 'opted-in' in owner.lower()
+    assert 'not a linked customer funnel' in owner
+    assert 'localStorage' not in script and 'sessionStorage' not in script
+    assert 'innerHTML' not in script
+    assert 'before=${data.next}' in script
+    assert 'addresses.size !== expectedTotal' in script
+
+
+def test_owner_dashboard_security_headers_are_packaged_and_third_party_scripts_disallowed():
+    headers = (DIST / "website" / "_headers").read_text(encoding="utf-8")
+    assert '_headers' in build_site.ASSETS
+    assert 'owner.html' in build_site.PAGES
+    for route in ('/owner.html', '/owner\n'):
+        assert route in headers
+    assert "script-src 'self'" in headers
+    assert "frame-ancestors 'none'" in headers
+    assert 'X-Frame-Options: DENY' in headers
+    assert 'Cache-Control: private, no-store' in headers
+
 # download.js now carries the deployed Worker's URL, so the placeholder has to
 # be reintroduced deliberately to test that the guard still catches it. Built
 # by substitution rather than hardcoded so it cannot drift from the real file.
@@ -61,7 +88,7 @@ def _stage(tmp_path, monkeypatch, *, index=None, guide=None, eula=None, script=N
         script if script is not None else DOWNLOAD_JS, encoding="utf-8"
     )
     (site / "reviews.js").write_text(REVIEWS_JS, encoding="utf-8")
-    for report_file in ("download-stats.html", "download-stats.js", "usage-stats.html", "usage-stats.js"):
+    for report_file in ("download-stats.html", "download-stats.js", "usage-stats.html", "usage-stats.js", "owner.html", "owner.js", "owner.css", "_headers"):
         shutil.copyfile(DIST / "website" / report_file, site / report_file)
     monkeypatch.setattr(build_site, "SITE_DIR", site)
     return site

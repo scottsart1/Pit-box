@@ -33,6 +33,46 @@ uploaded to R2 and before the site is published.
 
 ## Contract
 
+### Private owner dashboard
+
+`https://yourpitbox.com/owner.html` combines download starts, separately labelled
+historical file requests, newsletter subscribers, opted-in activity, feature use,
+app versions and exact-day retention. Collection continues independently of the
+page. The page refreshes every minute while visible/unlocked and locks after
+15 minutes without interaction or 5 minutes hidden. There is no new app tracking,
+website visitor tracking or app release; 4.10.4 and its privacy choice are unchanged.
+
+The read-only `/owner/overview` and `/owner/subscribers` routes require a separate
+random `OWNER_DASHBOARD_TOKEN` (at least 32 bytes of entropy), not the aggregate-only
+`DOWNLOAD_REPORT_TOKEN`. Reusing the same key is rejected. The old report key cannot
+read emails. `OWNER_RATE_LIMITER` is required and fails closed if missing. Keys are
+compared using fixed-size SHA-256 digests; query-string keys are never accepted.
+Routes allow only GET/OPTIONS, restrict browser origins to the canonical and www
+site, and return `private, no-store`. Authentication is server-side on every read;
+an unlisted/noindex page is not the security boundary. Anyone possessing the owner
+key can access the dashboard: protect and rotate it like a password.
+
+The owner page stores credentials/data only in memory and clears them on lock or
+page exit. Its security headers prohibit framing and third-party scripts, including
+hosting analytics injection. Private data is never embedded in public HTML. The
+password key should be delivered through the owner's protected local credential
+file, not committed, printed in logs or sent in a URL.
+
+Subscriber pagination uses integer row cursors (not email addresses in URLs), a
+fixed high-water row and bounded pages of at most 200. Copy all loads the full
+snapshot, verifies completeness and copies one address per line; a failed page
+never silently copies a partial list. The browser export cap is 50,000 addresses.
+Clipboard refusal provides a selectable plain-text fallback. Copying sends no
+mail, and copied text remains in the system clipboard after the dashboard locks.
+Only release-news subscribers are included, not reviewers' contact addresses.
+
+No schema migration is required. Existing download/usage reports and subscriber
+rows are unchanged. SQL tests use a disposable in-memory database; production
+verification performs read-only checks and does not create fixture subscribers.
+
+Rollback: restore the previous Worker and Pages deployment. The owner page then
+becomes unavailable; existing app downloads, reports and user data remain intact.
+
 ### Private download reporting
 
 Apply `migrations/0005_download_counts.sql` and `0006_download_history.sql` before
@@ -127,9 +167,8 @@ not been uploaded yet.
 - `503 { code: "not_ready" }` — the `subscribers` table has not been created
   yet. The website treats this as a soft failure and starts the download.
 
-The table is only ever read by hand (`wrangler d1 execute pitwall-licenses
---remote --command "SELECT email, created_at FROM subscribers"`); nothing
-sends mail automatically.
+The owner dashboard reads this table through its separately authenticated,
+read-only subscriber endpoint. Nothing sends mail automatically.
 
 `GET /installer-info` → `{ "needs_code": bool, "code": "PITW-..." | null }`.
 `needs_code` is true while the `settings` row `installer_needs_code` is `"1"`,

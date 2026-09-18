@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow, noarchive">
+<meta name="referrer" content="no-referrer">
+<title>Owner dashboard — Your Pit Box</title>
+<link rel="stylesheet" href="styles.css">
+<link rel="stylesheet" href="owner.css?v=20260918">
+</head>
+<body class="owner-page">
+<header class="owner-header"><div class="wrap"><a class="brand" href="index.html"><span class="brand-mark" aria-hidden="true"></span>Your Pit Box</a><span>Owner dashboard</span><button id="ownerLock" class="button ghost" type="button" hidden>Lock dashboard</button></div></header>
+<main class="wrap owner-main">
+  <section id="ownerLoginPanel" class="owner-login" aria-labelledby="loginHeading">
+    <div class="eyebrow">Private access</div><h1 id="loginHeading">Your product, at a glance.</h1>
+    <p>Downloads, subscribers and actual app use in one place.</p>
+    <form id="ownerLogin"><label for="ownerKey">Owner dashboard access key</label><div class="code-entry"><input id="ownerKey" type="password" autocomplete="off" spellcheck="false" required minlength="32" maxlength="256"><button id="ownerOpen" class="button primary" type="submit">Open dashboard</button></div></form>
+    <p class="owner-note">Use your private dashboard key, not your Cloudflare, AI-provider or older statistics key. The key stays in page memory, never in a URL or browser storage.</p>
+  </section>
+  <p id="ownerStatus" role="status" aria-live="polite">Locked. No private data is loaded.</p>
+  <div id="ownerData" hidden>
+    <div class="owner-title"><div><div class="eyebrow">Product overview</div><h1>From downloads to race day.</h1><p id="ownerUpdated">—</p></div><div class="owner-actions"><label><input id="ownerAuto" type="checkbox" checked> Auto-refresh every minute</label><button id="ownerRefresh" class="button ghost" type="button">Refresh now</button></div></div>
+    <nav class="owner-nav" aria-label="Dashboard sections"><a href="#downloadSection">Downloads</a><a href="#emailSection">Emails</a><a href="#usageSection">App use &amp; retention</a></nav>
+    <div class="owner-metrics">
+      <article><h2>Live download starts</h2><p id="metricDownloads">—</p><span>Since live tracking began</span></article>
+      <article><h2>Starts · last 30 days</h2><p id="metricRecentDownloads">—</p><span id="metricPlatformSplit">Windows / Android</span></article>
+      <article><h2>Email subscribers</h2><p id="metricEmails">—</p><span id="metricNewEmails">Release-news signups</span></article>
+      <article><h2>Active installations · 7 days</h2><p id="metricActive">—</p><span>Opted-in app use, not just launches</span></article>
+      <article><h2>Driving · 30 days</h2><p id="metricRacing">—</p><span>60 seconds of qualifying telemetry</span></article>
+      <article><h2>Day 7 return</h2><p id="metricRetention">—</p><span>Exact-day return; eligible installations</span></article>
+    </div>
+    <section id="downloadSection" class="owner-section"><div class="owner-section-title"><h2>Downloads</h2><span>Windows and Android · UTC dates</span></div><p id="downloadAvailability"></p>
+      <div class="table-scroll" tabindex="0"><table><caption>Live download starts by platform</caption><thead><tr><th>Platform</th><th>All live starts</th><th>Last 30 days</th></tr></thead><tbody id="downloadPlatformRows"></tbody></table></div>
+      <details><summary>Daily trend · last 30 days</summary><div class="table-scroll" tabindex="0"><table><caption>Daily download starts</caption><thead><tr><th>Date</th><th>Windows</th><th>Android</th><th>Total</th><th>Trend</th></tr></thead><tbody id="downloadDailyRows"></tbody></table></div></details>
+      <div class="owner-history"><h3>Recovered history</h3><p id="historyOverview">—</p><p id="historyCoverage" class="owner-note"></p></div>
+      <p class="owner-note">Starts are not website visits, completed downloads, installations or unique people. Repeat requests can count again; partial/Range requests are excluded. Historical file reads use a different measurement and remain separate.</p>
+    </section>
+    <section id="emailSection" class="owner-section"><div class="owner-section-title"><h2>Email subscribers</h2><button id="copyAllEmails" class="button primary" type="button" disabled>Copy all emails</button></div><p>People who requested release news through the website. Copying does not send any email.</p><p id="emailStatus" role="status" aria-live="polite"></p>
+      <div class="table-scroll" tabindex="0"><table><caption>Subscriber email addresses, signup dates and sources</caption><thead><tr><th>Email</th><th>Signed up (UTC)</th><th>Source</th></tr></thead><tbody id="emailRows"></tbody></table></div>
+      <button id="loadMoreEmails" class="button ghost" type="button" hidden>Load more</button>
+      <div id="emailCopyFallback" hidden><label for="emailCopyText">Clipboard unavailable. Select and copy these addresses manually.</label><textarea id="emailCopyText" rows="6" readonly spellcheck="false"></textarea><button id="selectEmails" class="button ghost" type="button">Select all addresses</button></div>
+      <details><summary>Where signups come from</summary><div class="table-scroll" tabindex="0"><table><caption>Subscriber totals by signup source</caption><thead><tr><th>Source</th><th>Subscribers</th></tr></thead><tbody id="signupSourceRows"></tbody></table></div></details>
+      <p class="owner-note">Copy all includes every address in a fresh, paginated snapshot, not only the visible rows. Treat this list as private and use it for the release updates people requested.</p>
+    </section>
+    <section id="usageSection" class="owner-section"><div class="owner-section-title"><h2>App use &amp; retention</h2><span>Opted-in installations only</span></div><p id="usageAvailability"></p>
+      <div class="table-scroll" tabindex="0"><table><caption>Product-use signals in the last 30 calendar days</caption><thead><tr><th>Signal</th><th>Windows</th><th>Android</th><th>All</th></tr></thead><tbody id="usageSignalRows"></tbody></table></div>
+      <h3>Do they come back?</h3><div class="table-scroll" tabindex="0"><table><caption>Exact-day retention after first reported use</caption><thead><tr><th>Return day</th><th>Windows</th><th>Android</th><th>Combined</th></tr></thead><tbody id="retentionRows"></tbody></table></div>
+      <details><summary>App versions in use</summary><div class="table-scroll" tabindex="0"><table><caption>Most recently reported app versions, last 30 days</caption><thead><tr><th>Platform</th><th>Version</th><th>Installations</th></tr></thead><tbody id="versionRows"></tbody></table></div></details>
+      <p class="owner-note">Downloads, email signups and usage are separate signals, not a linked customer funnel. One person can have several installations. Usage excludes people who declined sharing and older builds; no historical app use can be reconstructed. Offline reports can arrive up to 7 days late. Transfers count starts, not completed imports.</p>
+    </section>
+    <p class="owner-note">Data collection continues when this page is closed. Auto-refresh runs while this page is visible and unlocked. The dashboard locks after 15 minutes without interaction or 5 minutes hidden. Locking clears loaded data; anything you copied remains in your system clipboard.</p>
+  </div>
+  <noscript>Enable JavaScript to unlock the private dashboard.</noscript>
+</main>
+<script src="owner.js?v=20260918" defer></script>
+</body>
+</html>

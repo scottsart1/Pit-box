@@ -101,7 +101,10 @@ function reportJson(body, status = 200) {
 }
 
 async function validReportToken(request, env) {
-  const expected = env.DOWNLOAD_REPORT_TOKEN;
+  return validPrivateToken(request, env.DOWNLOAD_REPORT_TOKEN);
+}
+
+async function validPrivateToken(request, expected) {
   const supplied = request.headers.get("authorization") || "";
   if (typeof expected !== "string" || expected.length < 32 || supplied.length > 512) return false;
   // Fixed-length digest comparison avoids comparing a secret prefix directly.
@@ -148,6 +151,10 @@ async function handleDownloadReport(request, env) {
   if (!(await validReportToken(request, env))) {
     return reportJson({code: "unauthorized", message: "Enter your download-report access key."}, 401);
   }
+  return readDownloadReport(env);
+}
+
+async function readDownloadReport(env) {
   try {
     const now = new Date();
     const since = new Date(now.getTime() - 29 * 86400000).toISOString().slice(0, 10);
@@ -731,6 +738,10 @@ async function purgeUsage(env) {
 
 async function handleUsageReport(request, env) {
   if (!(await validReportToken(request, env))) return reportJson({code: "unauthorized"}, 401);
+  return readUsageReport(env);
+}
+
+async function readUsageReport(env) {
   try {
     const today = dayBefore(0), cutoff = dayBefore(89);
     const result = await env.DB.batch([
@@ -768,12 +779,104 @@ async function handleUsageReport(request, env) {
   }
 }
 
+// The owner key is deliberately separate: an aggregate-report key must never
+// gain access to newsletter email addresses. No owner route changes user data.
+const OWNER_ORIGINS = new Set(["https://yourpitbox.com", "https://www.yourpitbox.com"]);
+function ownerJson(request, body, status = 200) {
+  const origin = request.headers.get("origin");
+  return new Response(status === 204 ? null : JSON.stringify(body), {status, headers: {
+    "content-type": "application/json", "cache-control": "private, no-store",
+    "x-content-type-options": "nosniff", "x-robots-tag": "noindex, nofollow, noarchive",
+    "referrer-policy": "no-referrer", "vary": "Origin",
+    ...(OWNER_ORIGINS.has(origin) ? {"access-control-allow-origin": origin,
+      "access-control-allow-methods": "GET, OPTIONS", "access-control-allow-headers": "authorization"} : {}),
+    ...(status === 429 ? {"retry-after": "60"} : {}),
+  }});
+}
+
+async function readSubscriberSummary(env) {
+  const since = dayBefore(29);
+  const results = await env.DB.batch([
+    env.DB.prepare("SELECT COUNT(*) AS total, COALESCE(SUM(created_at >= ?), 0) AS new_30d FROM subscribers").bind(since),
+    env.DB.prepare("SELECT COALESCE(source, 'unknown') AS source, COUNT(*) AS total FROM subscribers GROUP BY source ORDER BY total DESC LIMIT 50"),
+    env.DB.prepare("SELECT substr(created_at, 1, 10) AS day, COUNT(*) AS signups FROM subscribers WHERE created_at >= ? GROUP BY day ORDER BY day DESC").bind(since),
+  ]);
+  if (results.some(result => !result.success)) throw new Error("Subscriber summary unavailable");
+  return {metric: "newsletter_subscribers", total: Number(results[0].results[0].total),
+    new_30d: Number(results[0].results[0].new_30d), daily_since: since,
+    sources: results[1].results, daily: results[2].results};
+}
+
+async function handleOwner(request, env, path) {
+  const origin = request.headers.get("origin");
+  if (origin && !OWNER_ORIGINS.has(origin)) return ownerJson(request, {code: "forbidden_origin"}, 403);
+  if (request.method === "OPTIONS") return ownerJson(request, null, 204);
+  if (request.method !== "GET") return ownerJson(request, {code: "method_not_allowed"}, 405);
+  try {
+    if (!env.OWNER_RATE_LIMITER) return ownerJson(request, {code: "unavailable"}, 503);
+    const limited = await env.OWNER_RATE_LIMITER.limit({key: request.headers.get("cf-connecting-ip") || "unknown"});
+    if (!limited.success) return ownerJson(request, {code: "rate_limited"}, 429);
+    if (env.OWNER_DASHBOARD_TOKEN === env.DOWNLOAD_REPORT_TOKEN ||
+        !(await validPrivateToken(request, env.OWNER_DASHBOARD_TOKEN))) {
+      return ownerJson(request, {code: "unauthorized"}, 401);
+    }
+    const params = new URL(request.url).searchParams;
+    if (path === "/owner/overview") {
+      if ([...params].length) return ownerJson(request, {code: "invalid_query"}, 400);
+      const [downloadResponse, usageResponse, subscribers] = await Promise.all([
+        readDownloadReport(env), readUsageReport(env), readSubscriberSummary(env).catch(() => null),
+      ]);
+      return ownerJson(request, {generated_at: new Date().toISOString(),
+        downloads: downloadResponse.ok ? await downloadResponse.json() : null,
+        usage: usageResponse.ok ? await usageResponse.json() : null,
+        subscribers,
+      });
+    }
+    if (path !== "/owner/subscribers") return ownerJson(request, {code: "not_found"}, 404);
+    if ([...params.keys()].some(key => !["limit", "snapshot", "before"].includes(key)) ||
+        [...params.keys()].some(key => params.getAll(key).length !== 1)) {
+      return ownerJson(request, {code: "invalid_query"}, 400);
+    }
+    const integer = (key, fallback) => {
+      if (!params.has(key)) return fallback;
+      const value = params.get(key);
+      return /^\d{1,16}$/.test(value) && Number.isSafeInteger(Number(value)) ? Number(value) : NaN;
+    };
+    const limit = integer("limit", 100), suppliedSnapshot = integer("snapshot", null), before = integer("before", null);
+    if (!Number.isInteger(limit) || limit < 1 || limit > 200 ||
+        (suppliedSnapshot !== null && (!Number.isSafeInteger(suppliedSnapshot) || suppliedSnapshot < 0)) ||
+        (before !== null && (!Number.isSafeInteger(before) || before <= 0 || suppliedSnapshot === null || before > suppliedSnapshot))) {
+      return ownerJson(request, {code: "invalid_query"}, 400);
+    }
+    // Integer row cursors keep private email addresses out of URLs and access logs.
+    // A fixed high-water row prevents new signups shifting pages during Copy all.
+    const snapshot = suppliedSnapshot ?? Number((await env.DB.prepare("SELECT COALESCE(MAX(rowid), 0) AS snapshot FROM subscribers").first()).snapshot);
+    const results = await env.DB.batch([
+      env.DB.prepare("SELECT rowid AS id, email, created_at, source FROM subscribers WHERE rowid <= ? AND (? IS NULL OR rowid < ?) ORDER BY rowid DESC LIMIT ?")
+        .bind(snapshot, before, before, limit + 1),
+      env.DB.prepare("SELECT COUNT(*) AS total FROM subscribers WHERE rowid <= ?").bind(snapshot),
+    ]);
+    if (results.some(result => !result.success)) throw new Error("Subscriber page unavailable");
+    const rows = results[0].results, page = rows.slice(0, limit);
+    return ownerJson(request, {generated_at: new Date().toISOString(), snapshot,
+      total: Number(results[1].results[0].total), next: rows.length > limit ? Number(page.at(-1).id) : null,
+      subscribers: page.map(({email, created_at, source}) => ({email, created_at, source})),
+    });
+  } catch {
+    // Never log addresses, credentials, request headers or database response bodies.
+    console.warn("Owner dashboard unavailable");
+    return ownerJson(request, {code: "unavailable"}, 503);
+  }
+}
+
 export default {
   async scheduled(controller, env, ctx) {
     ctx.waitUntil(purgeUsage(env));
   },
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
+
+    if (url.pathname.startsWith("/owner/")) return handleOwner(request, env, url.pathname);
 
     if (url.pathname === "/usage") {
       if (request.method !== "POST") return usageJson({code: "method_not_allowed"}, 405);

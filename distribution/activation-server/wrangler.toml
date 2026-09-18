@@ -9,6 +9,11 @@ name = "USAGE_RATE_LIMITER"
 namespace_id = "4102"
 simple = { limit = 300, period = 60 }
 
+[[ratelimits]]
+name = "OWNER_RATE_LIMITER"
+namespace_id = "4103"
+simple = { limit = 300, period = 60 }
+
 [triggers]
 crons = ["17 3 * * *"]
 
@@ -31,3 +36,5 @@ bucket_name = "pitwall-downloads"
 # Set it with `wrangler secret put DOWNLOAD_REPORT_TOKEN`, never in this file.
 # It grants no access to activation codes, subscriber emails or other data.
 # The Worker still holds no entitlement-signing key.
+# OWNER_DASHBOARD_TOKEN is a separate, random owner-only read credential. It
+# additionally permits newsletter email reads; never reuse DOWNLOAD_REPORT_TOKEN.
