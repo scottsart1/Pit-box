@@ -2,6 +2,8 @@
 
 Windows/shared version 4.11.0; Android revision 18. Both application artifacts
 were built from `661acf537bc6328c692970e4ea7f0710dff243af`.
+Status: **published and verified** on 18 September 2026 UTC (17 September US
+Eastern), at [yourpitbox.com](https://yourpitbox.com/#download).
 
 ## Driver Dashboard
 
@@ -103,4 +105,32 @@ Live telemetry is available in the installed application.
 Public demo deployment `appgdep_6aaca482d3f48191b2314698b9e8aa84` succeeded on
 18 September 2026 UTC, from source `25baa45f3adf2bee62ba561c8953bbe9dcfea24e`.
 Its access is public. The application website and download publication receipt
-will be recorded after verifying their served contents.
+is recorded below.
+
+- Existing Cloudflare Pages project `pitwall`, production branch `main`:
+  [deployment 8cf6f3c1](https://8cf6f3c1.pitwall-2k7.pages.dev), serving
+  [yourpitbox.com](https://yourpitbox.com/). It includes the release section,
+  application checksums and direct public-demo/offline-ZIP links.
+- Existing `pitwall-activation` Worker version
+  `1977689f-61ff-4b6d-8ec3-c4ac12bc44e0` serves Android revision 18. Existing
+  database bindings, credentials, rate limits and retention trigger were retained;
+  no database migration was required.
+- R2 contains `YourPitBox-4.11.0-android.18.apk`, immutable Windows backup
+  `releases/windows/4.11.0/PitWall-Setup-c98eeaad.exe`, and current Windows
+  object `PitWall-Setup.exe`. Earlier versioned release objects were retained.
+- Anonymous public verification hashed **every byte** of both application
+  downloads, matching the sizes and SHA-256 values above. HEAD returned the
+  correct MIME type, filename and length. Full and short range requests returned
+  206 with correct byte ranges. These checks used ranges to avoid adding test
+  download-start events. `installer-info` reports `needs_code: false`.
+- The custom-domain HTML passed checks for both versions, both checksums and
+  the offline ZIP link. Served CSS and download/review JavaScript matched the
+  built files exactly. HTML is checked for content rather than claiming byte
+  equality after hosting transforms. Browser inspection confirmed the final
+  release section and its public/offline links render correctly.
+
+Local evidence is retained in `driver-dashboard-release` beside the production
+worktree: public download and website verification JSON, signed APKs, installer,
+CI smoke/counting evidence, and physical tablet UI screenshots. The public demo
+source is stored separately from application source; both serve the dashboard
+code built and tested for this release.
