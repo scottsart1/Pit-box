@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="theme-color" content="#070b0f">
+  <title>Driver Dashboard · Your Pit Box</title>
+  <meta name="description" content="Six interactive Driver Dashboard design concepts for Your Pit Box. Synthetic race data for design review.">
+  <link rel="stylesheet" href="dashboard.css">
+</head>
+<body>
+  <header class="app-header review-chrome">
+    <a class="brand" href="./" aria-label="Your Pit Box Driver Dashboard"><span class="brand-symbol" aria-hidden="true"><i></i><i></i><i></i></span>YOUR PIT BOX<span class="brand-version">DESIGN LAB</span></a>
+    <div class="header-meta"><span class="demo-tag">SIMULATED SESSION</span><span>F1 · Silverstone</span><span class="header-weather">21°C AIR <span>·</span> 34°C TRACK</span></div>
+  </header>
+  <nav class="app-nav review-chrome" aria-label="App context">
+    <span>Drive</span><span class="app-nav-active" aria-current="page">Driver Dashboard <small>PROTOTYPE</small></span><span>Strategy</span><span>Connection</span><span>Analysis</span><span>Setup Lab</span>
+  </nav>
+  <main>
+    <section class="design-toolbar review-chrome" aria-label="Prototype controls">
+      <div class="toolbar-title"><div class="eyebrow">DRIVER WORKSPACE / 06 CONCEPTS</div><h1>Eyes up. Everything in reach.</h1></div>
+      <div class="toolbar-actions"><button class="quiet-button" id="notesButton">Design notes</button><button class="outline-button" id="customizeButton"><span aria-hidden="true">☷</span> Customize</button><button class="primary-button" id="raceModeButton"><span aria-hidden="true">⛶</span> Race mode</button></div>
+    </section>
+    <nav id="conceptNav" class="concept-nav review-chrome" aria-label="Dashboard concepts"></nav>
+    <section class="preview-controls review-chrome" aria-label="Demo session controls">
+      <div><span class="eyebrow">PREVIEW SCENARIO</span><select id="scenarioSelect" aria-label="Preview race scenario"><option value="green">Green flag · Racing</option><option value="yellow">Yellow flag · Sector 2</option><option value="double-yellow">Double yellow · Sector 2</option><option value="sc">Safety car deployed</option><option value="vsc">Virtual safety car</option><option value="blue">Blue flag</option><option value="red">Red flag</option><option value="penalty">Drive-through penalty</option><option value="pit">Pit lane · Limiter on</option><option value="finish">Chequered flag</option><option value="stale">Telemetry lost</option></select></div>
+      <div class="preview-right"><button class="quiet-button" id="motionButton" aria-pressed="false">▶ Play demo</button><span class="demo-explainer">Synthetic data · no game connection</span></div>
+    </section>
+    <div class="dashboard-frame"><div class="race-mode-bar"><span>YOUR PIT BOX <b>DEMO</b></span><button class="outline-button" id="exitRaceMode">Exit race mode <kbd>Esc</kbd></button></div><section id="dashboard" class="dashboard" aria-label="Driver Dashboard prototype"></section></div>
+    <footer class="concept-footer review-chrome"><div><span class="concept-index" id="conceptIndex">01 / 06</span><strong id="conceptTitle">Cockpit</strong><span id="conceptDescription">A familiar instrument cluster. The next thing you need is always in the same place.</span></div><span class="footer-hint">Explore the concepts above</span></footer>
+  </main>
+  <dialog id="settingsDialog" class="settings-dialog"><form method="dialog" class="dialog-heading"><div><div class="eyebrow">YOUR DISPLAY</div><h2>Make it yours</h2></div><button class="icon-button" aria-label="Close customization">×</button></form><div class="dialog-body" id="settingsBody"></div><div class="dialog-footer"><button id="resetPreferences" class="outline-button">Reset preferences</button><button id="doneSettings" class="primary-button">Done</button></div></dialog>
+  <dialog id="notesDialog" class="notes-dialog"><form method="dialog" class="dialog-heading"><div><div class="eyebrow">DESIGN EXPLORATION</div><h2>Built for the next glance</h2></div><button class="icon-button" aria-label="Close design notes">×</button></form><div class="dialog-body"><p>Six directions for a new Driver Dashboard tab. All use the same simulated session, so you can compare what each layout makes easiest to read.</p><div id="conceptNotes"></div><h3>A shared racing language</h3><p>Flags stay at the top, with both a color and a written instruction. Gaps explicitly say ahead or behind. Lap deltas use signed numbers and faster/slower labels. Customization happens before entering race mode.</p><h3>Reference points</h3><p><a href="https://store.lsr.gg/pages/lovely-dashboard" target="_blank" rel="noopener noreferrer">Lovely Dashboard</a> — instrument hierarchy, multiple display formats, and focused modules.</p><p><a href="https://racelab.app/" target="_blank" rel="noopener noreferrer">RaceLab</a> — readable relative timing, standalone flag alerts, and configurable layouts.</p><p><a href="https://github.com/SHWotever/SimHub/wiki/Dash-Studio-Overlays" target="_blank" rel="noopener noreferrer">SimHub Dash Studio</a> — independent, repositionable information surfaces.</p><p class="note-disclaimer">This is a UI prototype. Values, flag scenarios, and messages are scripted examples, not live telemetry or race-control instructions. These controls do not change the car or race strategy.</p></div></dialog>
+  <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+  <script type="module" src="dashboard.js"></script>
+</body>
+</html>
