@@ -49,7 +49,7 @@ $('scenarioSelect').addEventListener('change',updateDemo);
 $('motionButton').addEventListener('click',()=>{if(motion)stopMotion();else{motion=setInterval(()=>{tick++;updateDemo()},500);$('motionButton').textContent='Pause demo';$('motionButton').setAttribute('aria-pressed','true')}});
 $('sourceSelect').value=embedded?'live':source;$('sourceSelect').disabled=embedded;$('sourceSelect').querySelector('[value=live]').disabled=!installed&&!embedded;
 $('sourceSelect').addEventListener('change',setSource);
-function moveModule(id,direction,target){const order=preferences.order,from=order.indexOf(id);let to=target?order.indexOf(target):from+direction;if(from<0||to<0||to>=order.length)return;order.splice(to,0,order.splice(from,1)[0]);save();scheduleRender()}
+function moveModule(id,direction,target){const order=preferences.order,from=order.indexOf(id),visible=order.filter(k=>!(k==='tires'&&!preferences.tires)&&!(k==='resources'&&!preferences.resources));const destination=target||visible[visible.indexOf(id)+direction],to=order.indexOf(destination);if(from<0||to<0||to>=order.length)return;order.splice(to,0,order.splice(from,1)[0]);save();scheduleRender();if(!target)requestAnimationFrame(()=>$('dashboard').querySelector(`[data-move="${id}"][data-direction="${direction}"]`)?.focus())}
 $('dashboard').addEventListener('click',e=>{const b=e.target.closest('[data-move]');if(b)moveModule(b.dataset.move,Number(b.dataset.direction))});
 $('dashboard').addEventListener('dragstart',e=>{const h=e.target.closest('[data-drag]');if(!h)return;dragged=h.dataset.drag;e.dataTransfer.setData('text/plain',dragged);e.dataTransfer.effectAllowed='move'});
 $('dashboard').addEventListener('dragover',e=>{if(dragged&&e.target.closest('[data-module]'))e.preventDefault()});
