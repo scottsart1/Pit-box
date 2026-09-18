@@ -11,6 +11,8 @@
 .owner-login { max-width: 650px; padding: 2rem; background: white; border: 1px solid var(--line); border-radius: var(--radius); margin: 2rem auto; }
 .owner-login label { display: block; font-weight: 650; margin-block: 1.5rem .4rem; }
 .owner-login input { min-width: 0; width: 100%; }
+#releaseKey { display: block; width: min(100%, 36rem); margin-block: .5rem 1rem; }
+#releaseRows td { overflow-wrap: anywhere; }
 .owner-title, .owner-section-title { display: flex; justify-content: space-between; align-items: center; gap: 1rem; flex-wrap: wrap; }
 .owner-title p { margin: .4rem 0; }
 .owner-actions { display: flex; gap: .8rem; align-items: center; flex-wrap: wrap; font-size: .9rem; }

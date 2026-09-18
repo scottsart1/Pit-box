@@ -143,6 +143,14 @@ try {
     }
   }
 
+  Step "Prepare release notification schema before the new Worker" {
+    Push-Location distribution\activation-server
+    try {
+      Run "release subscribers schema" { Invoke-Wrangler d1 execute pitwall-licenses --remote --yes --file migrations/0002_subscribers.sql }
+      Run "release announcements schema" { Invoke-Wrangler d1 execute pitwall-licenses --remote --yes --file migrations/0008_release_announcements.sql }
+    } finally { Pop-Location }
+  }
+
   Step "Verify the uploaded bytes match the build" {
     $check = Join-Path $env:TEMP "r2-release-check.exe"
     Run "wrangler r2 object get" {
@@ -216,7 +224,7 @@ try {
     }
     $served = Join-Path $env:TEMP "pitwall-release-served.exe"
     Remove-Item $served -Force -ErrorAction SilentlyContinue
-    Invoke-WebRequest -Uri "$ActivationApi/installer" -OutFile $served -UseBasicParsing
+    Invoke-WebRequest -Uri "$ActivationApi/installer" -Headers @{Range='bytes=0-'} -OutFile $served -UseBasicParsing
     $servedSha = (Get-FileHash $served -Algorithm SHA256).Hash
     Remove-Item $served -Force -ErrorAction SilentlyContinue
     if ($servedSha -ne $sha) {
@@ -241,6 +249,10 @@ try {
   }
 
   Write-Host ""
+  Step "Publish verified update notification and queue configured release emails" {
+    & (Join-Path $PSScriptRoot 'publish_release.ps1') -Platform windows -Version $version -Artifact $installer -Python $python
+  }
+
   Write-Host "Release $version is live." -ForegroundColor Green
   Write-Host "Check https://yourpitbox.com shows the new content, and keep the SHA-256 with your release notes:"
   Write-Host "  $sha"

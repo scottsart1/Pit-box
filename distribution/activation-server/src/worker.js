@@ -531,9 +531,9 @@ async function handleSubscribe(request, env) {
   const source = typeof payload.source === "string" ? payload.source.slice(0, 40) : "website";
   try {
     await env.DB.prepare(
-      "INSERT OR IGNORE INTO subscribers (email, created_at, source) VALUES (?, ?, ?)"
+      "INSERT OR IGNORE INTO subscribers (email, created_at, source) SELECT ?, ?, ? WHERE NOT EXISTS (SELECT 1 FROM release_email_preferences WHERE email = ? AND unsubscribed_at IS NOT NULL)"
     )
-      .bind(email, new Date().toISOString(), source)
+      .bind(email, new Date().toISOString(), source, email)
       .run();
   } catch (e) {
     // The subscribers table comes from migrations/0002_subscribers.sql; until
@@ -821,6 +821,10 @@ async function handleOwner(request, env, path) {
       return ownerJson(request, {code: "unauthorized"}, 401);
     }
     const params = new URL(request.url).searchParams;
+    if (path === "/owner/releases") {
+      if ([...params].length) return ownerJson(request, {code: "invalid_query"}, 400);
+      return ownerJson(request, await releaseOverview(env));
+    }
     if (path === "/owner/overview") {
       if ([...params].length) return ownerJson(request, {code: "invalid_query"}, 400);
       const [downloadResponse, usageResponse, subscribers] = await Promise.all([
@@ -869,12 +873,156 @@ async function handleOwner(request, env, path) {
   }
 }
 
+const RELEASE_VERSION = /^(0|[1-9]\d{0,5})\.(0|[1-9]\d{0,5})\.(0|[1-9]\d{0,5})$/;
+const RELEASE_HOST = "https://pitwall-activation.sarthakvij123450.workers.dev";
+const releaseUrl = platform => `https://yourpitbox.com/#${platform}-release`;
+const mailConfigured = env => env.RELEASE_EMAIL_ENABLED === "true" && typeof env.RESEND_API_KEY === "string" && env.RESEND_API_KEY.length >= 16 && EMAIL_SHAPE.test(env.RELEASE_EMAIL_FROM || "") && typeof env.RELEASE_EMAIL_FOOTER === "string" && env.RELEASE_EMAIL_FOOTER.trim().length >= 10 && env.RELEASE_EMAIL_FOOTER.length <= 1000;
+async function releaseBatch(env, statements) {
+  const results = await env.DB.batch(statements);
+  if (results.some(row => !row.success)) throw new Error("Release storage unavailable");
+  return results;
+}
+async function currentRelease(env, platform) {
+  return env.DB.prepare("SELECT r.* FROM app_releases r JOIN release_channels c ON c.release_id = r.id WHERE c.platform = ?").bind(platform).first();
+}
+function publicRelease(row) {
+  return row ? {version: row.version, published_at: row.published_at, notes: row.notes, sha256: row.sha256, size: row.size, download_url: releaseUrl(row.platform)} : null;
+}
+async function handleReleaseManifest(request, env) {
+  if (request.method !== "GET") return new Response(null, {status: 405, headers: {Allow: "GET"}});
+  const params = new URL(request.url).searchParams, platform = params.get("platform");
+  if ([...params].length !== 1 || !["windows", "android"].includes(platform)) return json({code: "invalid_platform"}, 400);
+  try {
+    return new Response(JSON.stringify({schema_version: 1, platform, release: publicRelease(await currentRelease(env, platform))}), {headers: {"content-type": "application/json", "cache-control": "public, max-age=300", "x-content-type-options": "nosniff"}});
+  } catch { return new Response(JSON.stringify({code: "unavailable"}), {status: 503, headers: {"content-type": "application/json", "cache-control": "no-store"}}); }
+}
+async function releaseOverview(env) {
+  const results = await releaseBatch(env, [
+    env.DB.prepare("SELECT r.id, r.platform, r.version, r.notes, r.published_at, c.release_id = r.id AS current, EXISTS(SELECT 1 FROM release_campaigns m WHERE m.release_id = r.id) AS campaign_created FROM app_releases r LEFT JOIN release_channels c ON c.platform = r.platform ORDER BY r.published_at DESC LIMIT 20"),
+    env.DB.prepare("SELECT release_id, state, COUNT(*) AS count FROM release_deliveries GROUP BY release_id, state ORDER BY release_id DESC LIMIT 140"),
+  ]);
+  return {email_configured: mailConfigured(env), releases: results[0].results, delivery_counts: results[1].results};
+}
+async function enqueueRelease(env, release) {
+  if (!mailConfigured(env)) return "not_configured";
+  const nonce = crypto.randomUUID();
+  const now = new Date().toISOString();
+  await releaseBatch(env, [
+    env.DB.prepare("INSERT OR IGNORE INTO release_email_preferences (email, token) SELECT email, lower(hex(randomblob(32))) FROM subscribers"),
+    env.DB.prepare("INSERT OR IGNORE INTO release_campaigns (release_id, created_at, nonce, sender, footer) SELECT ?, ?, ?, ?, ? WHERE EXISTS(SELECT 1 FROM release_channels WHERE release_id = ?)")
+      .bind(release.id, now, nonce, env.RELEASE_EMAIL_FROM, env.RELEASE_EMAIL_FOOTER, release.id),
+    env.DB.prepare("INSERT OR IGNORE INTO release_deliveries (id, release_id, email) SELECT lower(hex(randomblob(16))), ?, s.email FROM subscribers s JOIN release_email_preferences p ON p.email = s.email WHERE p.unsubscribed_at IS NULL AND (s.source = ? OR s.source IS NULL OR s.source NOT IN ('website-download', 'website-download-android')) AND EXISTS(SELECT 1 FROM release_campaigns WHERE release_id = ? AND nonce = ?)")
+      .bind(release.id, release.platform === "windows" ? "website-download" : "website-download-android", release.id, nonce),
+  ]);
+  return "queued_or_already_announced";
+}
+function releaseAdminJson(request, body, status = 200) {
+  const result = ownerJson(request, body, status);
+  if (OWNER_ORIGINS.has(request.headers.get("origin"))) {
+    result.headers.set("access-control-allow-methods", "POST, OPTIONS");
+    result.headers.set("access-control-allow-headers", "authorization, content-type");
+  }
+  return result;
+}
+async function handleReleaseAdmin(request, env, path) {
+  const reply = (body, status) => releaseAdminJson(request, body, status);
+  const origin = request.headers.get("origin");
+  if (origin && !OWNER_ORIGINS.has(origin)) return reply({code: "forbidden_origin"}, 403);
+  if (request.method === "OPTIONS") return reply(null, 204);
+  if (request.method !== "POST") return reply({code: "method_not_allowed"}, 405);
+  try {
+    if (!env.OWNER_RATE_LIMITER || !(await env.OWNER_RATE_LIMITER.limit({key: "release/" + (request.headers.get("cf-connecting-ip") || "unknown")})).success) return reply({code: "rate_limited"}, 429);
+    if ([env.OWNER_DASHBOARD_TOKEN, env.DOWNLOAD_REPORT_TOKEN].includes(env.RELEASE_PUBLISH_TOKEN) || !(await validPrivateToken(request, env.RELEASE_PUBLISH_TOKEN))) return reply({code: "unauthorized"}, 401);
+    if (new URL(request.url).search || !request.headers.get("content-type")?.startsWith("application/json")) return reply({code: "invalid_request"}, 400);
+    const data = await readUsageBody(request);
+    if (!data || Array.isArray(data)) return reply({code: "invalid_request"}, 400);
+    if (path === "/release-admin/announce") {
+      if (Object.keys(data).some(k => !["platform", "version", "confirm"].includes(k)) || !["windows", "android"].includes(data.platform) || !RELEASE_VERSION.test(data.version) || data.confirm !== "SEND RELEASE EMAIL") return reply({code: "invalid_request"}, 400);
+      const current = await currentRelease(env, data.platform);
+      if (!current || current.version !== data.version) return reply({code: "not_current_release"}, 409);
+      if (!mailConfigured(env)) return reply({code: "email_not_configured"}, 503);
+      return reply({ok: true, email: await enqueueRelease(env, current)});
+    }
+    if (path !== "/release-admin/publish") return reply({code: "not_found"}, 404);
+    if (Object.keys(data).some(k => !["platform", "version", "sha256", "size", "notes", "announce"].includes(k)) || !["windows", "android"].includes(data.platform) || typeof data.version !== "string" || !RELEASE_VERSION.test(data.version) || !/^[a-f0-9]{64}$/.test(data.sha256 || "") || !Number.isSafeInteger(data.size) || data.size < 1 || data.size > 2000000000 || typeof data.notes !== "string" || !data.notes.trim() || data.notes.length > 4000 || typeof data.announce !== "boolean") return reply({code: "invalid_release"}, 400);
+    const artifactKey = data.platform === "windows" ? INSTALLER_KEY : ANDROID_KEY;
+    if (data.platform === "android" && !artifactKey.startsWith(`YourPitBox-${data.version}-android.`)) return reply({code: "artifact_version_mismatch"}, 409);
+    const artifact = await env.DOWNLOADS.head(artifactKey);
+    if (!artifact || artifact.size !== data.size || (artifact.customMetadata?.sha256 && artifact.customMetadata.sha256.toLowerCase() !== data.sha256)) return reply({code: "artifact_not_verified"}, 409);
+    const id = `${data.platform}/${data.version}`, sortKey = data.version.split(".").map(n => n.padStart(6, "0")).join(".");
+    const existing = await env.DB.prepare("SELECT * FROM app_releases WHERE id = ?").bind(id).first();
+    if (existing && ["size", "sha256", "notes"].some(k => existing[k] !== data[k])) return reply({code: "immutable_release"}, 409);
+    const current = await currentRelease(env, data.platform);
+    if (current && current.sort_key > sortKey) return reply({code: "older_release"}, 409);
+    await releaseBatch(env, [
+      env.DB.prepare("INSERT OR IGNORE INTO app_releases (id, platform, version, sort_key, artifact_key, size, sha256, notes, published_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").bind(id, data.platform, data.version, sortKey, artifactKey, data.size, data.sha256, data.notes, new Date().toISOString()),
+      env.DB.prepare("INSERT INTO release_channels (platform, release_id, sort_key) VALUES (?, ?, ?) ON CONFLICT(platform) DO UPDATE SET release_id = excluded.release_id, sort_key = excluded.sort_key WHERE release_channels.sort_key < excluded.sort_key").bind(data.platform, id, sortKey),
+    ]);
+    const selected = await currentRelease(env, data.platform);
+    if (selected?.id !== id) return reply({code: "superseded_release"}, 409);
+    if (["size", "sha256", "notes"].some(k => selected[k] !== data[k])) return reply({code: "immutable_release"}, 409);
+    return reply({ok: true, release: publicRelease(selected), email: data.announce ? await enqueueRelease(env, selected) : "not_requested"});
+  } catch { console.warn("Release operation unavailable"); return reply({code: "unavailable"}, 503); }
+}
+async function handleUnsubscribe(request, env) {
+  const response = (body, status = 200) => new Response(body, {status, headers: {"content-type": "text/html; charset=utf-8", "cache-control": "private, no-store", "referrer-policy": "no-referrer", "x-robots-tag": "noindex, nofollow", "content-security-policy": "default-src 'none'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'"}});
+  if (!["GET", "POST"].includes(request.method)) return response("Method not allowed", 405);
+  const params = new URL(request.url).searchParams, token = params.get("token");
+  if ([...params].length !== 1 || !/^[a-f0-9]{64}$/.test(token || "")) return response("Invalid unsubscribe link", 400);
+  if (request.method === "GET") return response('<!doctype html><meta name="viewport" content="width=device-width"><title>Unsubscribe — Your Pit Box</title><h1>Stop release emails?</h1><p>Confirm below to stop future Your Pit Box release announcements.</p><form method="post"><button type="submit">Unsubscribe</button></form>');
+  try {
+    if (!env.OWNER_RATE_LIMITER || !(await env.OWNER_RATE_LIMITER.limit({key: "unsubscribe/" + (request.headers.get("cf-connecting-ip") || "unknown")})).success) return response("Please try again in a minute", 429);
+    await releaseBatch(env, [
+      env.DB.prepare("UPDATE release_email_preferences SET unsubscribed_at = COALESCE(unsubscribed_at, ?) WHERE token = ?").bind(new Date().toISOString(), token),
+      env.DB.prepare("DELETE FROM subscribers WHERE email IN (SELECT email FROM release_email_preferences WHERE token = ? AND unsubscribed_at IS NOT NULL)").bind(token),
+      env.DB.prepare("UPDATE release_deliveries SET state = 'suppressed' WHERE state IN ('pending', 'retry') AND email IN (SELECT email FROM release_email_preferences WHERE token = ?)").bind(token),
+    ]);
+    return response('<!doctype html><title>Unsubscribed — Your Pit Box</title><h1>You will no longer receive release announcements.</h1><p>A message already being sent may still arrive. Your installed app is unaffected.</p>');
+  } catch { return response("Could not save your request. Please retry.", 503); }
+}
+async function processReleaseMail(env) {
+  if (!mailConfigured(env)) return;
+  try {
+    const now = Date.now(), retryCutoff = now - 23 * 60 * 60 * 1000;
+    // Stop before the provider's 24-hour idempotency window expires. An
+    // uncertain send requires investigation, never an automatic duplicate.
+    await releaseBatch(env, [env.DB.prepare("UPDATE release_deliveries SET state = 'uncertain' WHERE state IN ('retry', 'sending') AND first_attempt_ms < ?").bind(retryCutoff)]);
+    const candidates = await env.DB.prepare("SELECT id FROM release_deliveries WHERE state IN ('pending', 'retry') OR (state = 'sending' AND lease_until_ms < ?) ORDER BY rowid LIMIT 10").bind(now).all();
+    if (!candidates.success) throw new Error("Mail queue unavailable");
+    for (const candidate of candidates.results) {
+      const claimed = await releaseBatch(env, [env.DB.prepare("UPDATE release_deliveries SET state = 'sending', first_attempt_ms = COALESCE(first_attempt_ms, ?), lease_until_ms = ? WHERE id = ? AND (state IN ('pending','retry') OR (state = 'sending' AND lease_until_ms < ?)) RETURNING *").bind(now, now + 600000, candidate.id, now)]);
+      const delivery = claimed[0].results[0]; if (!delivery) continue;
+      const context = await env.DB.prepare("SELECT r.*, p.token, m.sender, m.footer FROM app_releases r JOIN release_channels c ON c.release_id = r.id JOIN release_campaigns m ON m.release_id = r.id JOIN release_email_preferences p ON p.email = ? JOIN subscribers s ON s.email = p.email WHERE r.id = ? AND p.unsubscribed_at IS NULL").bind(delivery.email, delivery.release_id).first();
+      if (!context) { await releaseBatch(env, [env.DB.prepare("UPDATE release_deliveries SET state = 'suppressed' WHERE id = ?").bind(delivery.id)]); continue; }
+      const unsubscribe = `${RELEASE_HOST}/unsubscribe?token=${context.token}`;
+      const payload = delivery.payload_json || JSON.stringify({from: `Your Pit Box <${context.sender}>`, to: [delivery.email], subject: `Your Pit Box ${context.version} for ${context.platform === "windows" ? "Windows" : "Android"} is available`,
+        text: `A new Your Pit Box release is ready.\n\n${context.notes}\n\nDownload and installation details: ${releaseUrl(context.platform)}\n\nYou requested release updates when downloading Your Pit Box.\nUnsubscribe: ${unsubscribe}\n\n${context.footer}`,
+        headers: {"List-Unsubscribe": `<${unsubscribe}>`, "List-Unsubscribe-Post": "List-Unsubscribe=One-Click"}});
+      await releaseBatch(env, [env.DB.prepare("UPDATE release_deliveries SET payload_json = ? WHERE id = ?").bind(payload, delivery.id)]);
+      let state = "retry", providerId = null;
+      try {
+        const result = await fetch("https://api.resend.com/emails", {method: "POST", redirect: "error", signal: AbortSignal.timeout(10000), headers: {Authorization: `Bearer ${env.RESEND_API_KEY}`, "Content-Type": "application/json", "Idempotency-Key": `release/${delivery.id}`}, body: payload});
+        if (result.ok) { const answer = await result.json(); if (typeof answer.id === "string" && answer.id.length <= 100) { state = "accepted"; providerId = answer.id; } }
+        else if (result.status < 500 && ![409, 429].includes(result.status)) state = "failed";
+      } catch { /* keep the exact payload and key for a bounded retry */ }
+      await releaseBatch(env, [env.DB.prepare("UPDATE release_deliveries SET state = ?, provider_id = ?, lease_until_ms = NULL WHERE id = ?").bind(state, providerId, delivery.id)]);
+      // Be gentle with provider throughput; later batches continue on the next cron.
+      await new Promise(resolve => setTimeout(resolve, 600));
+    }
+  } catch { console.warn("Release email processing unavailable"); }
+}
+
 export default {
   async scheduled(controller, env, ctx) {
-    ctx.waitUntil(purgeUsage(env));
+    if (controller.cron !== "*/5 * * * *") ctx.waitUntil(purgeUsage(env));
+    ctx.waitUntil(processReleaseMail(env));
   },
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
+
+    if (url.pathname === "/releases") return handleReleaseManifest(request, env);
+    if (url.pathname.startsWith("/release-admin/")) return handleReleaseAdmin(request, env, url.pathname);
+    if (url.pathname === "/unsubscribe") return handleUnsubscribe(request, env);
 
     if (url.pathname.startsWith("/owner/")) return handleOwner(request, env, url.pathname);
 

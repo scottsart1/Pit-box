@@ -33,6 +33,15 @@ uploaded to R2 and before the site is published.
 
 ## Contract
 
+### Release updates and announcements
+
+See [release notifications](../../docs/release-notifications.md) for the additive
+schema, separate write credential, app checker, verified publication step and
+email activation. `GET /releases?platform=windows|android` is public release
+metadata only. `GET /owner/releases` uses the existing owner read key.
+`POST /release-admin/publish` and `/release-admin/announce` require the independent
+publication key. Email remains disabled until its sender/provider are configured.
+
 ### Private owner dashboard
 
 `https://yourpitbox.com/owner.html` combines download starts, separately labelled
@@ -177,7 +186,8 @@ not been uploaded yet.
   yet. The website treats this as a soft failure and starts the download.
 
 The owner dashboard reads this table through its separately authenticated,
-read-only subscriber endpoint. Nothing sends mail automatically.
+read-only subscriber endpoint. Configured release publication can queue update
+emails as described above; reading or copying subscribers never sends mail.
 
 `GET /installer-info` → `{ "needs_code": bool, "code": "PITW-..." | null }`.
 `needs_code` is true while the `settings` row `installer_needs_code` is `"1"`,

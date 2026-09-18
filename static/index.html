@@ -458,6 +458,14 @@
   <div class="controls" style="flex-wrap:wrap"><button id="usageYes" class="button ghost" type="button">Yes, share basic usage statistics</button><button id="usageNo" class="button ghost" type="button">No thanks</button></div>
   <p id="usagePromptStatus" class="small" role="status"></p>
 </aside>
+<section id="updateSettings" class="card" aria-labelledby="updateHeading">
+  <h2 id="updateHeading" style="font-size:16px">App updates</h2>
+  <label><input id="updateToggle" type="checkbox" disabled> Check for new releases automatically</label>
+  <p class="small muted">Checks after startup and every 6 hours. Sends only Windows or Android, with no installation ID or usage data. Your network address is processed to deliver the request. Nothing is installed automatically.</p>
+  <p id="updateStatus" class="small" role="status">Loading update status…</p>
+  <p id="updateNotes" class="small"></p>
+  <div class="controls" style="flex-wrap:wrap"><button id="updateCheck" class="button ghost" type="button">Check now</button><a id="updateDownload" class="button ghost" target="_blank" rel="noopener noreferrer" hidden>Download update</a><button id="updateDismiss" class="button ghost" type="button" hidden>Dismiss this version</button></div>
+</section>
 <section id="usageSettings" class="card" aria-labelledby="usageSettingsHeading">
   <h2 id="usageSettingsHeading" style="font-size:16px">Privacy &amp; usage reporting</h2>
   <label><input id="usageToggle" type="checkbox" disabled> Share basic usage statistics to improve Your Pit Box</label>
@@ -735,5 +743,6 @@ $('rivalCompare').ontoggle=()=>{lastRivalKey='';loadRivals()};$('objectiveDown')
 <script type="module" src="/static/js/transfers.js?v=4.11.0"></script>
 <script type="module" src="/static/js/strategy.js?v=4.11.0"></script>
 <script src="/static/js/usage.js?v=4.11.0" defer></script>
+<script src="/static/js/updates.js?v=1" defer></script>
 <script src="/static/js/driver-dashboard.js?v=4.11.0" defer></script>
 </body></html>

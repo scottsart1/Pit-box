@@ -41,6 +41,7 @@ from .api.storage import create_storage_router
 from .api.track_models import create_track_models_router
 from .api.transfers import create_transfer_router
 from .api.usage import create_usage_router
+from .api.updates import create_updates_router
 from .audio import AudioService
 from .brain import EngineerBrain
 from .briefing import BriefingEngine
@@ -87,6 +88,7 @@ from .track_model_service import TrackModelService
 from .udp import TRACKS, F1DatagramProtocol, classify_session
 from .voice import NativeVoiceController
 from .usage_reporting import UsageReporting
+from .update_service import UpdateService
 from .web_security import LanAccessMiddleware, is_loopback_host
 
 log = logging.getLogger(__name__)
@@ -98,6 +100,7 @@ database = PitWallDatabase(settings.data_dir / "pitwall.sqlite3")
 # reads SQLite synchronously here instead of through the async wrapper.
 apply_saved_overrides(settings, database.path)
 usage_reporting = UsageReporting(settings.data_dir / "usage-reporting.json")
+update_service = UpdateService(settings.data_dir / "update-preferences.json")
 store.usage_event = usage_reporting.record
 network_profiles = NetworkProfileRepository(database.path)
 trace_store = TraceStore(
@@ -490,6 +493,7 @@ async def lifespan(app: FastAPI):
     settings.data_dir.mkdir(parents=True, exist_ok=True)
     await database.initialize()
     await usage_reporting.start()
+    await update_service.start()
     stale_sessions = await database.catalog.finalize_recording_sessions()
     if stale_sessions:
         log.info(
@@ -669,6 +673,7 @@ async def lifespan(app: FastAPI):
             active_session.id, status="incomplete"
         )
     await usage_reporting.stop()
+    await update_service.stop()
 
 
 # The one version string lives in pitwall/__init__.py. /api/health reports
@@ -704,6 +709,7 @@ app.include_router(create_credentials_router(on_change=_rebind_provider_clients)
 app.include_router(create_network_router(network_service))
 app.include_router(create_transfer_router(peer_transfer, usage_record=usage_reporting.record))
 app.include_router(create_usage_router(usage_reporting))
+app.include_router(create_updates_router(update_service))
 app.include_router(
     create_sessions_router(
         database.catalog,
