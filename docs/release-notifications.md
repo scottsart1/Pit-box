@@ -74,3 +74,30 @@ Flag-only checks: 69 Node tests passed across the Worker, owner dashboard,
 download/analytics pages and update UI. Another 19 Python tests passed for the
 native checker/API, verified publication tool and Windows release ordering.
 Website static checks and build passed. This does not replace packaged-device QA.
+
+## Backend publication receipt — 18 September 2026
+
+- Source: `8e725a1e7dbeded5614a92f5c290e5290af48cd7`.
+- Additive migration `0008_release_manifest.sql` applied successfully. Only the
+  release/channel tables were added; subscriber data was not changed.
+- Worker version `e5720395-431d-4c04-86e4-4522c32eea70` deployed. Its only scheduled
+  job remains the original daily usage-retention cleanup; there is no email job.
+- Final Pages deployment: `https://f859ba14.pitwall-2k7.pages.dev`, production
+  branch main, serving `https://yourpitbox.com`. An initial identical-assets
+  deployment had an incorrect commit-reference label; this final deployment
+  corrects that label to the full source revision above.
+- Published baseline 4.11.0 metadata for both platforms after hashing every byte
+  of their public Range downloads against the existing local release artifacts:
+  Windows 34,709,580 bytes / SHA-256
+  `c98eeaad90056b0eb8b538e6846c43ec05ce0c94e5eba9efaea3589e22302159`;
+  Android 72,775,518 bytes / SHA-256
+  `ab56cd50dac845d3ff99bdea329934f149bf45c16cc08091a353e8fe3c55d1fe`.
+- Read-only live checks using the new app service and simulated installed versions
+  confirmed: 4.10.4 gets an available flag; 4.11.0 gets no flag, on both platforms.
+  These are source-service checks, not claims about already-installed binaries.
+- Public terms include the update-check explanation; the owner page retains its
+  copy-all feature and has no send controls. Served owner JavaScript matches the
+  local file byte-for-byte. Removed email/unsubscribe routes return 404.
+- The existing Windows installer and Android APK were **not** replaced, rebuilt
+  or installed. Their one-time upgrade to a build containing the checker remains
+  pending sufficient laptop storage and packaged-app verification.
