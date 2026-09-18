@@ -171,6 +171,14 @@ def test_the_partner_link_is_gone():
         assert "site-promo" not in page
 
 
+def test_discord_invite_is_in_home_navigation_and_public_footers():
+    invite = '<a href="https://discord.gg/pxUseZ69Z" target="_blank" rel="noopener noreferrer">Join Discord</a>'
+    assert invite in INDEX.split('</nav>', 1)[0]
+    for page in (INDEX, GUIDE, EULA, DIAGNOSTICS):
+        footer = page.split('<footer class="site-footer">', 1)[1].split('</footer>', 1)[0]
+        assert invite in footer
+
+
 def test_the_download_is_free_and_the_coffee_is_optional():
     # 4.9 dropped the price. A leftover "$5" anywhere would be a lie on a page
     # that says "free", and the coffee has to read as a thank-you, not a fee.
