@@ -6,7 +6,7 @@
   const count = value => Number.isSafeInteger(value) && value >= 0;
   const platforms = ["windows", "android"];
   const titles = {app_started: "Opened the app", app_used: "Actively used the app", racing: "Qualifying driving telemetry", engineer: "Engineer replies", voice: "Voice commands", analysis: "Lap comparisons", transfer: "History-transfer starts"};
-  const tableIds = ["downloadPlatformRows", "downloadDailyRows", "historyDailyRows", "emailRows", "signupSourceRows", "usageSignalRows", "retentionRows", "versionRows", "releaseRows"];
+  const tableIds = ["downloadPlatformRows", "downloadDailyRows", "historyDailyRows", "emailRows", "signupSourceRows", "usageSignalRows", "retentionRows", "versionRows"];
   const metricIds = ["metricRecorded", "metricDownloads", "metricRecentDownloads", "metricEmails", "metricActive", "metricRacing", "metricRetention"];
   const requests = new Set();
   let key = "", generation = 0, busy = false, copying = false;
@@ -20,8 +20,6 @@
     for (const id of metricIds) text(id, "—");
     for (const id of ["ownerUpdated", "metricRecordedSources", "metricPlatformSplit", "metricNewEmails", "historyOverview", "historyCoverage", "downloadAvailability", "usageAvailability", "emailStatus"]) text(id, "");
     el("historyDetails").hidden = true;
-    el("releaseKey").value = "";
-    text("releaseStatus", "");
     el("emailCopyText").value = "";
     el("emailCopyFallback").hidden = true;
     el("loadMoreEmails").hidden = true;
@@ -45,16 +43,16 @@
   function expired() {
     return Date.now() - lastInteraction >= 15 * 60000 || (hiddenAt !== null && Date.now() - hiddenAt >= 5 * 60000);
   }
-  async function api(path, current, write = null) {
+  async function api(path, current) {
     if (!key || current !== generation) throw new Error("Locked");
     if (expired()) { lock("Session locked. Enter your key again."); throw new Error("Locked"); }
     const controller = new AbortController();
     requests.add(controller);
     const timer = setTimeout(() => controller.abort(), 20000);
     try {
-      const response = await fetch(BASE + path, {headers: {Authorization: `Bearer ${write ? write.token : key}`, ...(write ? {"Content-Type": "application/json"} : {})}, ...(write ? {method: "POST", body: JSON.stringify(write.body)} : {}), cache: "no-store", credentials: "omit", referrerPolicy: "no-referrer", redirect: "error", signal: controller.signal});
+      const response = await fetch(BASE + path, {headers: {Authorization: `Bearer ${key}`}, cache: "no-store", credentials: "omit", referrerPolicy: "no-referrer", redirect: "error", signal: controller.signal});
       if (current !== generation) throw new Error("Locked");
-      if (response.status === 401) { if (write) throw new Error("Release-management key not accepted. Your dashboard key is read-only."); lock("Access key not accepted. Use your private owner dashboard key."); throw new Error("Unauthorized"); }
+      if (response.status === 401) { lock("Access key not accepted. Use your private owner dashboard key."); throw new Error("Unauthorized"); }
       if (!response.ok) throw new Error(response.status === 429 ? "Request limit reached. Please wait one minute." : "This data is temporarily unavailable. Please retry.");
       const result = await response.json();
       if (current !== generation) throw new Error("Locked");
@@ -209,35 +207,6 @@
     el("loadMoreEmails").hidden = emailNext === null;
     el("copyAllEmails").disabled = data.total === 0;
   }
-  async function loadReleases(current) {
-    const data = await api("/owner/releases", current);
-    if (current !== generation) return;
-    if (typeof data.email_configured !== "boolean") throw new Error("Release status unavailable.");
-    const releases = array(data.releases, 20), counts = array(data.delivery_counts, 140);
-    el("releaseRows").replaceChildren();
-    text("releaseStatus", data.email_configured ? "Email sending is configured. Queued announcements run in the background every five minutes." : "Email sending is not configured; no announcements can be sent yet. In-app release checks work independently.");
-    for (const item of releases) {
-      if (!["windows", "android"].includes(item.platform) || typeof item.version !== "string" || typeof item.notes !== "string" || typeof item.id !== "string") throw new Error("Invalid release report.");
-      const progress = counts.filter(c => c.release_id === item.id).map(c => `${number(counted(c.count))} ${String(c.state)}`).join(" · ") || (item.campaign_created ? "No eligible subscribers at publication" : "Not announced");
-      const tr = row("releaseRows", [`${item.platform} ${item.version}${item.current ? " · current" : ""}`, item.notes, progress]);
-      const cell = document.createElement("td"), button = document.createElement("button");
-      button.type = "button"; button.className = "button ghost"; button.textContent = "Send announcement";
-      button.disabled = !data.email_configured || !item.current || !!item.campaign_created;
-      button.addEventListener("click", async () => {
-        if (busy || copying || !key) return;
-        const token = el("releaseKey").value.trim(); el("releaseKey").value = "";
-        if (!token) { text("releaseStatus", "Enter your separate release-management key to send."); return; }
-        if (!window.confirm(`Send the ${item.platform} ${item.version} release announcement to its eligible subscribers? This sends real email.`)) return;
-        const active = generation; busy = true; button.disabled = true;
-        try {
-          await api("/release-admin/announce", active, {token, body: {platform: item.platform, version: item.version, confirm: "SEND RELEASE EMAIL"}});
-          if (active === generation) { await loadReleases(active); text("releaseStatus", "Announcement queued. Repeating the action cannot add a second campaign for this release."); }
-        } catch (error) { if (active === generation) { text("releaseStatus", error.message); button.disabled = false; } }
-        finally { if (active === generation) busy = false; }
-      });
-      cell.appendChild(button); tr.appendChild(cell);
-    }
-  }
   async function refresh() {
     if (!key || busy || copying) return;
     if (expired()) { lock("Session locked after inactivity. Enter your key again."); return; }
@@ -254,8 +223,6 @@
         el("emailRows").replaceChildren(); el("copyAllEmails").disabled = true; el("loadMoreEmails").hidden = true;
         text("emailStatus", error.message);
       }
-      try { await loadReleases(current); }
-      catch (error) { if (current === generation) { el("releaseRows").replaceChildren(); text("releaseStatus", "Release status unavailable. No message was sent."); } }
     } catch (error) {
       if (current !== generation) return;
       clearData();

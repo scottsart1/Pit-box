@@ -25,12 +25,12 @@ def test_verified_public_bytes_and_site_precede_authenticated_publication():
             assert "authorization" not in request.headers
             return httpx.Response(200, text=f'<section id="windows-release">4.12.0 {SHA}</section>')
         assert request.headers["authorization"] == "Bearer " + TOKEN
-        assert b'"announce":false' in request.content
-        return httpx.Response(200, json={"ok": True, "release": {"sha256": SHA}, "email": "not_requested"})
+        assert b'"announce"' not in request.content
+        return httpx.Response(200, json={"ok": True, "release": {"sha256": SHA}})
 
     with httpx.Client(transport=httpx.MockTransport(handle)) as client:
-        result = publish(client, platform="windows", version="4.12.0", size=len(ARTIFACT), sha256=SHA, notes="Update", token=TOKEN, announce=False)
-    assert result["email"] == "not_requested"
+        result = publish(client, platform="windows", version="4.12.0", size=len(ARTIFACT), sha256=SHA, notes="Update", token=TOKEN)
+    assert "email" not in result
     assert [request.method for request in calls] == ["GET", "GET", "POST"]
 
 
@@ -55,5 +55,5 @@ def test_no_publication_on_stale_or_unverified_artifact(failure):
 
 def test_windows_release_publishes_notifications_last_and_migrates_before_worker():
     script = (Path(__file__).parents[2] / "release_windows.ps1").read_text()
-    assert script.index("migrations/0008_release_announcements.sql") < script.index('Step "Deploy the activation Worker"')
+    assert script.index("migrations/0008_release_manifest.sql") < script.index('Step "Deploy the activation Worker"')
     assert script.index("pages deploy _site") < script.index("'publish_release.ps1'")

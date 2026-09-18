@@ -22,32 +22,11 @@ function harness(fetcher = async url => response(url.includes('/overview') ? ove
   let time = Date.parse(now);
   class Clock extends Date { static now() { return time; } }
   const document = {getElementById: id => elements[id], createElement: element, visibilityState: 'visible', addEventListener: (name, fn) => { docEvents[name] = fn; }};
-  const window = {addEventListener: (name, fn) => { windowEvents[name] = fn; }, confirm: () => false};
-  const context = vm.createContext({document, window, navigator: {clipboard: {writeText: clipboard}}, AbortController, Date: Clock, Intl, setTimeout, clearTimeout, setInterval: fn => timers.push(fn),
+  const context = vm.createContext({document, window: {addEventListener: (name, fn) => { windowEvents[name] = fn; }}, navigator: {clipboard: {writeText: clipboard}}, AbortController, Date: Clock, Intl, setTimeout, clearTimeout, setInterval: fn => timers.push(fn),
     fetch: async (url, options) => { calls.push({url, options}); return fetcher(url, options); }});
   vm.runInContext(source, context);
-  return {elements, calls, document, window, windowEvents, docEvents, timers, advance: ms => { time += ms; }, async login() { elements.ownerKey.value = 'private-owner-fixture-key-not-a-secret'; elements.ownerLogin.listeners.submit({preventDefault() {}}); await settle(); }};
+  return {elements, calls, document, windowEvents, docEvents, timers, advance: ms => { time += ms; }, async login() { elements.ownerKey.value = 'private-owner-fixture-key-not-a-secret'; elements.ownerLogin.listeners.submit({preventDefault() {}}); await settle(); }};
 }
-test('release sending needs a separate key and confirmation; refresh never sends', async () => {
-  const releases = {email_configured: true, releases: [{id: 'windows/4.12.0', platform: 'windows', version: '4.12.0', current: 1, campaign_created: 0, notes: 'Update'}], delivery_counts: []};
-  const h = harness(async (url, options) => {
-    if (url.includes('/release-admin/')) { assert.equal(options.headers.Authorization, 'Bearer release-write-fixture-token'); return response({ok: true}); }
-    return response(url.includes('/overview') ? overview : url.endsWith('/releases') ? releases : emails);
-  });
-  await h.login();
-  const button = h.elements.releaseRows.children[0].children[3].children[0];
-  const posts = () => h.calls.filter(c => c.options.method === 'POST');
-  assert.equal(posts().length, 0);
-  await button.listeners.click(); assert.equal(posts().length, 0);
-  h.elements.releaseKey.value = 'release-write-fixture-token';
-  await button.listeners.click(); assert.equal(posts().length, 0); assert.equal(h.elements.releaseKey.value, '');
-  h.window.confirm = () => true; h.elements.releaseKey.value = 'release-write-fixture-token';
-  await button.listeners.click(); assert.equal(posts().length, 1); assert.equal(h.elements.releaseKey.value, '');
-  assert.equal(JSON.parse(posts()[0].options.body).confirm, 'SEND RELEASE EMAIL');
-  h.elements.releaseKey.value = 'unused-key'; h.elements.ownerLock.listeners.click();
-  assert.equal(h.elements.releaseKey.value, ''); assert.equal(h.elements.releaseRows.children.length, 0);
-});
-
 test('owner login loads true metrics and email rows; key never enters URLs or persisted storage', async () => {
   const h = harness(); await h.login();
   assert.equal(h.elements.ownerKey.value, ''); assert.equal(h.elements.ownerData.hidden, false);

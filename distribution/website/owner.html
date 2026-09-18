@@ -7,7 +7,7 @@
 <meta name="referrer" content="no-referrer">
 <title>Owner dashboard — Your Pit Box</title>
 <link rel="stylesheet" href="styles.css">
-<link rel="stylesheet" href="owner.css?v=20260918-releases">
+<link rel="stylesheet" href="owner.css?v=20260918-history">
 </head>
 <body class="owner-page">
 <header class="owner-header"><div class="wrap"><a class="brand" href="index.html"><span class="brand-mark" aria-hidden="true"></span>Your Pit Box</a><span>Owner dashboard</span><button id="ownerLock" class="button ghost" type="button" hidden>Lock dashboard</button></div></header>
@@ -21,7 +21,7 @@
   <p id="ownerStatus" role="status" aria-live="polite">Locked. No private data is loaded.</p>
   <div id="ownerData" hidden>
     <div class="owner-title"><div><div class="eyebrow">Product overview</div><h1>From downloads to race day.</h1><p id="ownerUpdated">—</p></div><div class="owner-actions"><label><input id="ownerAuto" type="checkbox" checked> Auto-refresh every minute</label><button id="ownerRefresh" class="button ghost" type="button">Refresh now</button></div></div>
-    <nav class="owner-nav" aria-label="Dashboard sections"><a href="#downloadSection">Downloads</a><a href="#emailSection">Emails</a><a href="#usageSection">App use &amp; retention</a><a href="#releaseSection">Releases</a></nav>
+    <nav class="owner-nav" aria-label="Dashboard sections"><a href="#downloadSection">Downloads</a><a href="#emailSection">Emails</a><a href="#usageSection">App use &amp; retention</a></nav>
     <div class="owner-metrics">
       <article><h2>Recorded download activity</h2><p id="metricRecorded">—</p><span id="metricRecordedSources">History + live · different counting methods</span></article>
       <article><h2>Starts · last 30 days</h2><p id="metricRecentDownloads">—</p><span id="metricPlatformSplit">Windows / Android</span></article>
@@ -50,19 +50,10 @@
       <details><summary>App versions in use</summary><div class="table-scroll" tabindex="0"><table><caption>Most recently reported app versions, last 30 days</caption><thead><tr><th>Platform</th><th>Version</th><th>Installations</th></tr></thead><tbody id="versionRows"></tbody></table></div></details>
       <p class="owner-note">Downloads, email signups and usage are separate signals, not a linked customer funnel. One person can have several installations. Usage excludes people who declined sharing and older builds; no historical app use can be reconstructed. Offline reports can arrive up to 7 days late. Transfers count starts, not completed imports.</p>
     </section>
-    <section id="releaseSection" class="owner-section"><h2>Releases &amp; announcements</h2>
-      <p>Verified releases power the in-app update notice. The release process can queue an email automatically; each release is announced at most once to its subscriber snapshot.</p>
-      <p id="releaseStatus" role="status">Release status is loaded after signing in.</p>
-      <label for="releaseKey">Release-management key (needed only to send an announcement)</label>
-      <input id="releaseKey" type="password" autocomplete="off" spellcheck="false" maxlength="256">
-      <p class="owner-note">This is a separate key from your read-only dashboard key. It is cleared after use or when locking. Sending requires a configured email service and verified sender. No message is sent by opening this page.</p>
-      <div class="table-scroll" tabindex="0"><table><caption>Published releases and announcement progress</caption><thead><tr><th>Platform / version</th><th>Release notes</th><th>Email progress</th><th>Action</th></tr></thead><tbody id="releaseRows"></tbody></table></div>
-      <p class="owner-note">Accepted means accepted by the email provider, not delivered or read. Uncertain sends are held for review rather than retried after the duplicate-protection window. Unsubscribed addresses are excluded. Update notices appear only in apps that include the new checker.</p>
-    </section>
     <p class="owner-note">Data collection continues when this page is closed. Auto-refresh runs while this page is visible and unlocked. The dashboard locks after 15 minutes without interaction or 5 minutes hidden. Locking clears loaded data; anything you copied remains in your system clipboard.</p>
   </div>
   <noscript>Enable JavaScript to unlock the private dashboard.</noscript>
 </main>
-<script src="owner.js?v=20260918-releases" defer></script>
+<script src="owner.js?v=20260918-history" defer></script>
 </body>
 </html>

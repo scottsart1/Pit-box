@@ -146,8 +146,7 @@ try {
   Step "Prepare release notification schema before the new Worker" {
     Push-Location distribution\activation-server
     try {
-      Run "release subscribers schema" { Invoke-Wrangler d1 execute pitwall-licenses --remote --yes --file migrations/0002_subscribers.sql }
-      Run "release announcements schema" { Invoke-Wrangler d1 execute pitwall-licenses --remote --yes --file migrations/0008_release_announcements.sql }
+      Run "release metadata schema" { Invoke-Wrangler d1 execute pitwall-licenses --remote --yes --file migrations/0008_release_manifest.sql }
     } finally { Pop-Location }
   }
 
@@ -249,7 +248,7 @@ try {
   }
 
   Write-Host ""
-  Step "Publish verified update notification and queue configured release emails" {
+  Step "Publish verified metadata for the in-app update flag" {
     & (Join-Path $PSScriptRoot 'publish_release.ps1') -Platform windows -Version $version -Artifact $installer -Python $python
   }
 

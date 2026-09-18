@@ -15,7 +15,7 @@ namespace_id = "4103"
 simple = { limit = 300, period = 60 }
 
 [triggers]
-crons = ["17 3 * * *", "*/5 * * * *"]
+crons = ["17 3 * * *"]
 
 # D1 gives us a strongly-consistent, free-tier database. The atomic
 # claim (UPDATE ... WHERE claimed=0) needs that consistency; KV would not be
@@ -38,7 +38,5 @@ bucket_name = "pitwall-downloads"
 # The Worker still holds no entitlement-signing key.
 # OWNER_DASHBOARD_TOKEN is a separate, random owner-only read credential. It
 # additionally permits newsletter email reads; never reuse DOWNLOAD_REPORT_TOKEN.
-# RELEASE_PUBLISH_TOKEN is a third, distinct credential for publication/send actions.
-# Email is fail-closed until RELEASE_EMAIL_ENABLED=true, RESEND_API_KEY,
-# RELEASE_EMAIL_FROM (verified sender address), and RELEASE_EMAIL_FOOTER are set.
-# Never put credentials in this file. No mail is sent merely by deploying code.
+# RELEASE_PUBLISH_TOKEN is separate and publishes verified update metadata only.
+# No email provider, email sender, or email schedule is used.

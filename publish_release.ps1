@@ -4,7 +4,6 @@ param(
   [Parameter(Mandatory=$true)][string]$Version,
   [Parameter(Mandatory=$true)][string]$Artifact,
   [string]$NotesFile,
-  [switch]$NoEmail,
   [string]$Python = '.\.venv\Scripts\python.exe'
 )
 $ErrorActionPreference = 'Stop'
@@ -18,7 +17,6 @@ try {
   }
   $releaseArguments = @('-m', 'distribution.tools.publish_release', '--platform', $Platform, '--version', $Version, '--artifact', $Artifact)
   if ($NotesFile) { $releaseArguments += @('--notes-file', $NotesFile) }
-  if ($NoEmail) { $releaseArguments += '--no-email' }
   & $Python @releaseArguments
   if ($LASTEXITCODE -ne 0) { throw 'Release notification publication failed. Do not claim that notifications are live.' }
 } finally {

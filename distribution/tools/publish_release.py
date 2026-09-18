@@ -26,7 +26,7 @@ def fingerprint(path: Path) -> tuple[int, str]:
 
 
 def publish(client: httpx.Client, *, platform: str, version: str, size: int,
-            sha256: str, notes: str, token: str, announce: bool = True) -> dict:
+            sha256: str, notes: str, token: str) -> dict:
     if (platform not in ROUTES or not VERSION.fullmatch(version)
             or not 1 <= size <= 2_000_000_000 or not re.fullmatch(r"[a-f0-9]{64}", sha256)
             or not notes.strip() or len(notes) > 4000 or not 32 <= len(token) <= 256):
@@ -42,21 +42,21 @@ def publish(client: httpx.Client, *, platform: str, version: str, size: int,
                 raise ValueError("Public artifact is larger than this release")
             digest.update(chunk)
     if total != size or digest.hexdigest() != sha256:
-        raise ValueError("Public artifact checksum does not match; no announcement published")
+        raise ValueError("Public artifact checksum does not match; update metadata not published")
     site = client.get("https://yourpitbox.com/", follow_redirects=False)
     if site.status_code != 200 or sha256 not in site.text or f'id="{platform}-release"' not in site.text or version not in site.text:
         raise ValueError("Production website does not advertise this verified release yet")
     result = client.post(API + "/release-admin/publish", follow_redirects=False,
                          headers={"Authorization": "Bearer " + token},
                          json={"platform": platform, "version": version, "size": size,
-                               "sha256": sha256, "notes": notes, "announce": announce})
+                               "sha256": sha256, "notes": notes})
     if result.status_code != 200:
         raise ValueError(f"Release publication rejected (HTTP {result.status_code}); retry with identical metadata")
     data = result.json()
     if data.get("ok") is not True or data.get("release", {}).get("sha256") != sha256:
         raise ValueError("Release publication response could not be verified")
     return {"platform": platform, "version": version, "sha256": sha256,
-            "size": size, "email": data.get("email")}
+            "size": size}
 
 
 def main() -> int:
@@ -65,21 +65,18 @@ def main() -> int:
     parser.add_argument("--version", required=True)
     parser.add_argument("--artifact", type=Path, required=True)
     parser.add_argument("--notes-file", type=Path)
-    parser.add_argument("--no-email", action="store_true", help="Publish metadata without queuing subscriber emails")
     args = parser.parse_args()
     try:
         size, sha256 = fingerprint(args.artifact)
         notes = args.notes_file.read_text(encoding="utf-8").strip() if args.notes_file else f"Your Pit Box {args.version} is available for {args.platform.title()}. Visit the download page for release and installation details."
         with httpx.Client(timeout=60, trust_env=False, follow_redirects=False) as client:
             data = publish(client, platform=args.platform, version=args.version, size=size, sha256=sha256,
-                           notes=notes, token=os.environ.get("PITBOX_RELEASE_PUBLISH_TOKEN", ""), announce=not args.no_email)
+                           notes=notes, token=os.environ.get("PITBOX_RELEASE_PUBLISH_TOKEN", ""))
         print(json.dumps(data))
-        if data["email"] == "not_configured":
-            print("Version published. Email is DISABLED: configure a verified sender before announcements can be sent.", file=sys.stderr)
         return 0
     except (OSError, ValueError, httpx.HTTPError):
         # Never echo a credential or provider response from an exception.
-        print("Release notification publication failed. Check artifact, website, metadata and private key; no successful announcement is claimed.", file=sys.stderr)
+        print("Update metadata publication failed. Check artifact, website, metadata and private key; no successful publication is claimed.", file=sys.stderr)
         return 1
 
 
