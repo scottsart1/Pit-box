@@ -171,9 +171,17 @@ def test_the_partner_link_is_gone():
         assert "site-promo" not in page
 
 
-def test_discord_invite_is_in_home_navigation_and_public_footers():
+def test_discord_button_is_next_to_download_and_public_footers_keep_the_invite():
     invite = '<a href="https://discord.gg/pxUseZ69Z" target="_blank" rel="noopener noreferrer">Join Discord</a>'
-    assert invite in INDEX.split('</nav>', 1)[0]
+    header = INDEX.split('</header>', 1)[0]
+    actions = header.split('<div class="header-actions">', 1)[1].split('</div>', 1)[0]
+    discord_button = invite.replace('<a href=', '<a class="button discord" href=')
+    assert discord_button in actions
+    assert actions.index('Download free</a>') < actions.index(discord_button)
+    assert 'discord.gg' not in header.split('</nav>', 1)[0]
+    styles = (DIST / 'website' / 'styles.css').read_text(encoding='utf-8')
+    assert '.button.discord { background: #5865f2; border-color: #5865f2; color: #fff; }' in styles
+    assert '.button.discord:focus-visible' in styles
     for page in (INDEX, GUIDE, EULA, DIAGNOSTICS):
         footer = page.split('<footer class="site-footer">', 1)[1].split('</footer>', 1)[0]
         assert invite in footer

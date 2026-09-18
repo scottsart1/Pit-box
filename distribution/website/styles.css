@@ -75,7 +75,7 @@ code { font-family: var(--mono); font-size: .92em; background: var(--bg-sunken);
 
 /* Grouped so the header keeps three flex children and space-between keeps
    the nav centred on every page. */
-.header-actions { display: flex; align-items: center; gap: .7rem; }
+.header-actions { display: flex; align-items: center; gap: .7rem; flex-shrink: 0; flex-wrap: wrap; }
 .site-nav { display: flex; gap: 1.1rem; row-gap: .15rem; align-items: center; flex-wrap: wrap; justify-content: center; }
 .site-nav a { color: var(--ink-2); text-decoration: none; font-size: .93rem; font-weight: 600; white-space: nowrap; }
 .site-nav a:hover { color: var(--accent-ink); }
@@ -98,6 +98,9 @@ code { font-family: var(--mono); font-size: .92em; background: var(--bg-sunken);
 .button.primary:hover { background: var(--accent-ink); }
 .button.ghost { border-color: var(--line); color: var(--ink); background: #fff; }
 .button.ghost:hover { border-color: var(--muted); }
+.button.discord { background: #5865f2; border-color: #5865f2; color: #fff; }
+.button.discord:hover { background: #4752c4; border-color: #4752c4; }
+.button.discord:focus-visible { outline: 3px solid #23272a; outline-offset: 3px; }
 
 /* ---------- hero ---------- */
 
