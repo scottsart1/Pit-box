@@ -44,6 +44,17 @@ are nonfatal. The cached latest result expires after a day. No auto-installation
 
 ## Email activation — deliberately disabled until configured
 
+The owner selected **vale.scott00@gmail.com** as the announcement sender on
+18 September 2026. This is a saved sender choice, not an activated integration.
+The current adapter uses Resend and a verified sending domain; do not configure
+the owner's Gmail address as though that adapter could authenticate gmail.com.
+Using this exact From address requires a Gmail-authorized sending integration
+and separate server-side credentials. The Gmail connection available to the
+assistant is not a reusable credential for the deployed release service.
+Complete the owner's Google authorization before enabling unattended sending;
+never request the owner's normal Gmail password or extract connector tokens.
+Reference: [Gmail server-side authorization](https://developers.google.com/workspace/gmail/api/auth/web-server).
+
 The service does not send without **all** of these Worker secrets:
 
 - `RELEASE_EMAIL_ENABLED=true`
