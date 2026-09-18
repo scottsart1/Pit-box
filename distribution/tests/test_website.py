@@ -641,7 +641,7 @@ def test_android_release_is_a_signed_direct_apk_with_compatibility_limits():
     assert 'href="https://pitwall-activation.sarthakvij123450.workers.dev/android"' in section
     assert "16 KB memory pages are not supported" in section
     assert "not a Google Play listing" in section
-    assert "bdcb25fab226be79beff48352e3e939761a0c59f9c6a63f824cd5cec8ceba89d" in INDEX
+    assert "ab56cd50dac845d3ff99bdea329934f149bf45c16cc08091a353e8fe3c55d1fe" in INDEX
     assert "Keep Play Protect enabled" in GUIDE
     assert "installs separately from the test package" in GUIDE
     assert "Do not uninstall the test app" in GUIDE
@@ -662,13 +662,13 @@ def test_beta_transmission_is_distinct_from_reception_and_history_copy():
 
 
 def test_unsigned_windows_notice_remains_without_removed_installation_wording():
-    assert 'Windows 4.10.4 · unsigned installer' in INDEX
+    assert 'Windows 4.11.0 · unsigned installer' in INDEX
     assert 'The current Windows installer is unsigned.' in GUIDE
     for page in (INDEX, GUIDE):
         assert 'unknown publisher' in page or 'unknown-publisher' in page
         assert 'Do not turn off your firewall, antivirus or Smart App Control' not in page
         assert 'wait for a signed release' not in page
-    assert 'b2e62d08e93144706cf7c23ecd19045ecef62c3857a4b59efb27d8cbe55a36e8' in INDEX
+    assert 'c98eeaad90056b0eb8b538e6846c43ec05ce0c94e5eba9efaea3589e22302159' in INDEX
 
 
 def test_cross_device_copy_is_not_promised_as_automatic_sync():
