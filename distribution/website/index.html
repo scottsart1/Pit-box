@@ -140,8 +140,15 @@
 
 <section id="new" class="soft">
   <div class="wrap">
-    <div class="eyebrow">The current release · 4.11.0</div>
-    <h2>Your racing screen. Your way.</h2>
+    <div class="eyebrow">The current release · 4.12.0</div>
+    <h2>From install to your first radio check.</h2>
+    <div class="release-grid">
+      <article><h3>Quick, skippable setup</h3><p>Add your API key, copy the UDP IP and port to your game, map L3 and try Mark.</p></article>
+      <article><h3>A guided app tour</h3><p>Explore driving, strategy, lap analysis and Setup Lab. Skip anytime or replay from Settings.</p></article>
+      <article><h3>Ready-to-race defaults</h3><p>New installs enable proactive calls, all-car recording and full trace detail. Existing preferences stay unchanged.</p></article>
+      <article><h3>Know when to update</h3><p>See an update flag when a newer release is available. Nothing installs automatically; no automated emails.</p></article>
+    </div>
+    <h3>Your racing screen. Your way.</h3>
     <div class="release-grid">
       <article><h3>Six driver dashboards</h3><p>A new Driver Dashboard tab brings Cockpit, Race Focus, Battle, Endurance, My Layout and Phone views to live telemetry. Keep the numbers you need within a glance.</p></article>
       <article><h3>A fit for every screen</h3><p>Automatic profiles adapt to folding, rotation and resizing. Manual options cover Galaxy Fold, Galaxy Tab, iPad sizes, laptops and monitors. Your preferred layout stays saved.</p></article>
@@ -149,7 +156,7 @@
       <article><h3>Make it yours</h3><p>Choose number size, contrast, speed units and optional cards. Rearrange My Layout, then enter Race mode for a clear racing display.</p></article>
     </div>
     <p><a class="button" href="https://your-pit-box-driver-dashboard.sarthakvij123450.chatgpt.site/">Try Driver Dashboard · public demo</a> <a class="button ghost" href="https://your-pit-box-driver-dashboard.sarthakvij123450.chatgpt.site/downloads/YourPitBox-Driver-Dashboard.zip">Download offline demo (.zip)</a></p>
-    <p class="section-footnote">Windows 4.11.0 and Android 4.11.0 (revision 18). The public dashboard and offline download use labelled sample data; live telemetry is available in the racing app. Existing screenshots and older videos may show earlier versions.</p>
+    <p class="section-footnote">Windows 4.12.0 and Android 4.12.0 (revision 19). The dashboard demos use labelled sample data. Live telemetry and the new walkthrough are in the installed apps.</p>
   </div>
 </section>
 
@@ -343,7 +350,7 @@
     <div class="platform-grid download-grid">
       <article class="platform-card" id="windows-release">
         <div class="platform-label">Windows 10 / 11</div>
-        <h3>Windows 4.11.0 · unsigned installer</h3>
+        <h3>Windows 4.12.0 · unsigned installer</h3>
         <p>Install for your Windows account, then open Your Pit Box from the Start Menu. The engine runs on this PC and opens its dashboard in your browser.</p>
         <p class="download-cta"><button id="downloadButton" class="button primary" type="button">Download for Windows</button></p>
         <p class="field-help"><code>PitWall-Setup.exe</code> · 34.7 MB</p>
@@ -351,7 +358,7 @@
         <div class="guide-warning">
           <p>This direct download is not publisher-signed. Windows may show an unknown-publisher warning, and some security policies may block it. Download only from this site and verify the checksum.</p>
         </div>
-        <details class="checksum"><summary>Verify the Windows download</summary><p>SHA-256: <code>c98eeaad90056b0eb8b538e6846c43ec05ce0c94e5eba9efaea3589e22302159</code></p></details>
+        <details class="checksum"><summary>Verify the Windows download</summary><p>SHA-256: <code>e80b247d8ff15b0da11abf0a0a3ae75501f0863e1c7d51ec261bdd935432f4b0</code></p></details>
         <div id="codePanel" class="code-panel" hidden>
           <p><strong>For a historical installer only.</strong> If the installer was built before Your Pit Box went free, it asks for an activation code. Use the code supplied below. The current release needs no code.</p>
           <div class="code-entry">
@@ -364,21 +371,22 @@
       </article>
       <article class="platform-card" id="android-release">
         <div class="platform-label">Android phone / tablet</div>
-        <h3>Android 4.11.0 · signed APK</h3>
+        <h3>Android 4.12.0 · signed APK</h3>
         <p>Install the native app on the device beside your wheel. Reception, strategy and recordings run there; no laptop or Windows installation is needed.</p>
         <p class="download-cta"><a class="button primary" data-download-platform="android" href="https://pitwall-activation.sarthakvij123450.workers.dev/android">Download Android APK</a></p>
         <p id="androidDownloadStatus" class="download-status" role="status" aria-live="polite"></p>
-        <p class="field-help"><code>4.11.0-android.18.apk</code> · 72.8 MB</p>
+        <p class="field-help"><code>4.12.0-android.19.apk</code> · 72.8 MB</p>
         <div class="guide-warning">
           <p><strong>Android 7+ · 64-bit ARM or x86 · 4 KB memory pages only.</strong> This release does not support 16 KB memory-page devices. Direct APK download, not a Google Play listing.</p>
           <p>Keep Play Protect enabled. Grant installation permission only to the browser or file manager used, then turn it off after installing. Do not bypass a security-policy or incompatible-device block.</p>
         </div>
-        <details class="checksum"><summary>Verify the Android download</summary><p>SHA-256: <code>ab56cd50dac845d3ff99bdea329934f149bf45c16cc08091a353e8fe3c55d1fe</code></p></details>
+        <details class="checksum"><summary>Verify the Android download</summary><p>SHA-256: <code>16e8f1d5bc93ed73a20f35ea5eab0f61e167c927e9ae748def8eda03e243f211</code></p></details>
         <p><strong>Already have the test app?</strong> The production app installs separately and starts with its own library. Keep your test app and history until you have made a backup and checked the transfer.</p>
         <a href="guide.html#android">APK installation &amp; test-app migration guide</a>
       </article>
     </div>
-    <p class="guide-prompt"><strong>Setting up for the first time?</strong> The <a href="guide.html">illustrated setup guide</a> has separate Android and Windows paths. Telemetry works without voice; add a provider key when you want model-backed answers or spoken radio.</p>
+    <p class="guide-prompt"><strong>First time?</strong> Follow the skippable in-app setup, then try the app tour. Both are available in Settings. Prefer a page? Use the <a href="guide.html">illustrated setup guide</a>.</p>
+    <p class="guide-prompt">Upgrading from 4.11.0 or earlier? Install this update manually once to get future update flags.</p>
     <p class="guide-prompt">If a download fails, contact <a href="mailto:vale.scott00@gmail.com">vale.scott00@gmail.com</a>. For earlier Windows installs that used an activation code, <a href="diagnostics.html">activation diagnostics</a> remain available.</p>
   </div>
 </section>

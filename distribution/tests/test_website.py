@@ -657,7 +657,7 @@ def test_android_release_is_a_signed_direct_apk_with_compatibility_limits():
     assert 'href="https://pitwall-activation.sarthakvij123450.workers.dev/android"' in section
     assert "16 KB memory pages are not supported" in section
     assert "not a Google Play listing" in section
-    assert "ab56cd50dac845d3ff99bdea329934f149bf45c16cc08091a353e8fe3c55d1fe" in INDEX
+    assert "16e8f1d5bc93ed73a20f35ea5eab0f61e167c927e9ae748def8eda03e243f211" in INDEX
     assert "Keep Play Protect enabled" in GUIDE
     assert "installs separately from the test package" in GUIDE
     assert "Do not uninstall the test app" in GUIDE
@@ -678,13 +678,24 @@ def test_beta_transmission_is_distinct_from_reception_and_history_copy():
 
 
 def test_unsigned_windows_notice_remains_without_removed_installation_wording():
-    assert 'Windows 4.11.0 · unsigned installer' in INDEX
+    assert 'Windows 4.12.0 · unsigned installer' in INDEX
     assert 'The current Windows installer is unsigned.' in GUIDE
     for page in (INDEX, GUIDE):
         assert 'unknown publisher' in page or 'unknown-publisher' in page
         assert 'Do not turn off your firewall, antivirus or Smart App Control' not in page
         assert 'wait for a signed release' not in page
-    assert 'c98eeaad90056b0eb8b538e6846c43ec05ce0c94e5eba9efaea3589e22302159' in INDEX
+    assert 'e80b247d8ff15b0da11abf0a0a3ae75501f0863e1c7d51ec261bdd935432f4b0' in INDEX
+
+
+def test_current_release_describes_skippable_setup_tour_and_manual_updates():
+    release = INDEX.split('id="new"', 1)[1].split('</section>', 1)[0]
+    for text in ('4.12.0', 'skippable setup', 'UDP IP and port', 'guided app tour',
+                 'Existing preferences stay unchanged', 'Nothing installs automatically'):
+        assert text in release
+    assert 'Install this update manually once' in INDEX
+    assert 'setup step 2 open' in GUIDE
+    assert 'Every step is skippable' in GUIDE
+    assert 'App updates are at the bottom of Settings' in GUIDE
 
 
 def test_cross_device_copy_is_not_promised_as_automatic_sync():

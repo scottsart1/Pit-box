@@ -5,7 +5,7 @@ import test from 'node:test';
 const source = await readFile(new URL('../src/worker.js', import.meta.url), 'utf8');
 const {default: worker} = await import('data:text/javascript;base64,' + Buffer.from(source).toString('base64'));
 const windowsKey = 'PitWall-Setup.exe';
-const androidKey = 'YourPitBox-4.11.0-android.18.apk';
+const androidKey = 'YourPitBox-4.12.0-android.19.apk';
 
 function environment({missing = false} = {}) {
   const calls = [];

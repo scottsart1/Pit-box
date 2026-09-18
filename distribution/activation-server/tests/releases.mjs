@@ -3,6 +3,7 @@ import {readFile} from 'node:fs/promises';
 import {DatabaseSync} from 'node:sqlite';
 import test from 'node:test';
 const source = await readFile(new URL('../src/worker.js', import.meta.url), 'utf8');
+const androidVersion = source.match(/const ANDROID_KEY = "YourPitBox-(\d+\.\d+\.\d+)-/)[1];
 const {default: worker} = await import('data:text/javascript;base64,' + Buffer.from(source).toString('base64'));
 const migrations = await Promise.all(['0002_subscribers.sql', '0008_release_manifest.sql'].map(name => readFile(new URL('../migrations/' + name, import.meta.url), 'utf8')));
 const publisher = 'fixture-release-publisher-key-distinct-123456';
@@ -49,10 +50,18 @@ test('releases are immutable, cannot downgrade, and retries do not create multip
   assert.equal((await publish(f)).status, 200); assert.equal((await publish(f)).status, 200);
   assert.equal((await publish(f, {notes: 'different'})).status, 409);
   assert.equal((await publish(f, {version: '4.9.9'})).status, 409);
-  assert.equal((await publish(f, {platform: 'android', version: '4.12.0'})).status, 409);
+  const mismatchedAndroidVersion = `${Number(androidVersion.split('.')[0]) + 1}.0.0`;
+  assert.equal((await publish(f, {platform: 'android', version: mismatchedAndroidVersion})).status, 409);
   assert.equal(f.db.prepare('SELECT COUNT(*) AS n FROM app_releases').get().n, 1);
   assert.equal((await publish(f, {version: '4.13.0'})).status, 200);
   assert.equal((await (await call(f, '/releases?platform=windows')).json()).release.version, '4.13.0'); f.close();
+});
+
+test('Android metadata accepts the version actually pinned to its download', async () => {
+  const f = setup();
+  assert.equal((await publish(f, {platform: 'android', version: androidVersion})).status, 200);
+  assert.equal((await (await call(f, '/releases?platform=android')).json()).release.version, androidVersion);
+  f.close();
 });
 test('invalid and oversized release input cannot publish or inject arbitrary download destinations', async () => {
   const f = setup();
