@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from pitwall.app import _report_trace_recovery
 from pitwall.trace_store import RecoveryReport
 
@@ -27,3 +29,18 @@ def test_the_dashboard_directory_can_be_pointed_elsewhere(tmp_path, monkeypatch)
     elsewhere.mkdir()
     monkeypatch.setattr(settings, "static_dir", elsewhere)
     assert app_module._static_root_path() == elsewhere
+
+
+@pytest.mark.asyncio
+async def test_health_poll_uses_bounded_assembler_metadata(monkeypatch) -> None:
+    from pitwall import app as app_module
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError("routine health polls must not scan full trace quality")
+
+    monkeypatch.setattr(app_module.session_assembler, "quality_report", forbidden)
+    result = await app_module.health()
+    assert result["ok"] is True
+    assert result["session_assembler"]["group_details_included"] is False
+    assert result["session_assembler"]["groups"] == ()
+    assert "samples_received" in result["session_assembler"]["counters"]

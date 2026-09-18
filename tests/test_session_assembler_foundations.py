@@ -425,6 +425,45 @@ def test_availability_provenance_coverage_and_freshness_remain_explicit() -> Non
     assert metadata["brake"]["coverage"] == 0.0
 
 
+def test_health_summary_keeps_metadata_without_scanning_samples(monkeypatch) -> None:
+    assembler = SessionAssembler()
+    begin(assembler)
+    participant(assembler, 0, "Player")
+    participant(assembler, 1, "Rival")
+    for frame in range(2, 40):
+        for car in (0, 1):
+            assembler.consume(sample_event("session-a", car, 1, frame, retain_all=True))
+    detailed = assembler.quality_report()
+    assert detailed.groups
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError("health must never scan retained field samples")
+    monkeypatch.setattr(assembler, "_field_quality", forbidden)
+    summary = assembler.health_summary()
+    for field_name in ("session", "timeline_epoch", "closed", "open_laps", "current_cars", "counters"):
+        assert getattr(summary, field_name) == getattr(detailed, field_name)
+    assert summary.groups == ()
+    assert summary.counters is not assembler.counters
+    previous = summary.counters.samples_received
+    assembler.consume(sample_event("session-a", 0, 1, 41))
+    assert summary.counters.samples_received == previous
+    assert assembler.counters.samples_received > previous
+    summary.counters.samples_received = -1
+    assert assembler.counters.samples_received > previous
+    with pytest.raises(AssertionError, match="must never scan"):
+        assembler.quality_report()
+
+
+def test_health_summary_tracks_closed_and_empty_states() -> None:
+    assembler = SessionAssembler()
+    assert assembler.health_summary().session is None
+    assert assembler.health_summary().current_cars == 0
+    begin(assembler)
+    assembler.shutdown()
+    assert assembler.health_summary().closed
+    assert assembler.health_summary().open_laps == 0
+
+
 def test_implicit_large_rewind_branches_but_small_reorder_does_not() -> None:
     assembler = SessionAssembler(rewind_tolerance_frames=5)
     begin(assembler)

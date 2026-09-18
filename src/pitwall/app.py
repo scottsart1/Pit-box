@@ -864,7 +864,10 @@ async def health() -> dict[str, object]:
         "udp_listener_state": listener.state.value,
         "capture": capture_service.snapshot().to_dict(),
         "full_field_archive": asdict(full_field_archive.snapshot()),
-        "session_assembler": asdict(session_assembler.quality_report()),
+        "session_assembler": {
+            **asdict(session_assembler.health_summary()),
+            "group_details_included": False,
+        },
         "analysis_jobs": analysis_jobs.snapshot_dict(),
         "trace_store": trace_store.cache_info(),
         "schema_version": database.schema_version,

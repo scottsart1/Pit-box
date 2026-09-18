@@ -1465,6 +1465,26 @@ class SessionAssembler:
             freshness_ms=freshness,
         )
 
+    def health_summary(self) -> AssemblerQualityReport:
+        """Bounded health metadata without rescanning retained trace samples.
+
+        Detailed field quality is intentionally available through quality_report,
+        not recomputed on every health poll while the UDP receiver is running.
+        Copy counters so a returned snapshot cannot drift or mutate the assembler.
+        """
+        return AssemblerQualityReport(
+            session=self.session,
+            timeline_epoch=self._timeline_epoch,
+            closed=self._closed,
+            open_laps=len(self._open),
+            current_cars=sum(
+                self.identity_registry.current(car_index) is not None
+                for car_index in range(24)
+            ),
+            counters=replace(self.counters),
+            groups=(),
+        )
+
     def quality_report(
         self, *, now_monotonic_ns: int | None = None
     ) -> AssemblerQualityReport:
