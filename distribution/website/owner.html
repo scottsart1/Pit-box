@@ -7,7 +7,7 @@
 <meta name="referrer" content="no-referrer">
 <title>Owner dashboard — Your Pit Box</title>
 <link rel="stylesheet" href="styles.css">
-<link rel="stylesheet" href="owner.css?v=20260918">
+<link rel="stylesheet" href="owner.css?v=20260918-history">
 </head>
 <body class="owner-page">
 <header class="owner-header"><div class="wrap"><a class="brand" href="index.html"><span class="brand-mark" aria-hidden="true"></span>Your Pit Box</a><span>Owner dashboard</span><button id="ownerLock" class="button ghost" type="button" hidden>Lock dashboard</button></div></header>
@@ -23,18 +23,19 @@
     <div class="owner-title"><div><div class="eyebrow">Product overview</div><h1>From downloads to race day.</h1><p id="ownerUpdated">—</p></div><div class="owner-actions"><label><input id="ownerAuto" type="checkbox" checked> Auto-refresh every minute</label><button id="ownerRefresh" class="button ghost" type="button">Refresh now</button></div></div>
     <nav class="owner-nav" aria-label="Dashboard sections"><a href="#downloadSection">Downloads</a><a href="#emailSection">Emails</a><a href="#usageSection">App use &amp; retention</a></nav>
     <div class="owner-metrics">
-      <article><h2>Live download starts</h2><p id="metricDownloads">—</p><span>Since live tracking began</span></article>
+      <article><h2>Recorded download activity</h2><p id="metricRecorded">—</p><span id="metricRecordedSources">History + live · different counting methods</span></article>
       <article><h2>Starts · last 30 days</h2><p id="metricRecentDownloads">—</p><span id="metricPlatformSplit">Windows / Android</span></article>
       <article><h2>Email subscribers</h2><p id="metricEmails">—</p><span id="metricNewEmails">Release-news signups</span></article>
       <article><h2>Active installations · 7 days</h2><p id="metricActive">—</p><span>Opted-in app use, not just launches</span></article>
       <article><h2>Driving · 30 days</h2><p id="metricRacing">—</p><span>60 seconds of qualifying telemetry</span></article>
       <article><h2>Day 7 return</h2><p id="metricRetention">—</p><span>Exact-day return; eligible installations</span></article>
     </div>
-    <section id="downloadSection" class="owner-section"><div class="owner-section-title"><h2>Downloads</h2><span>Windows and Android · UTC dates</span></div><p id="downloadAvailability"></p>
-      <div class="table-scroll" tabindex="0"><table><caption>Live download starts by platform</caption><thead><tr><th>Platform</th><th>All live starts</th><th>Last 30 days</th></tr></thead><tbody id="downloadPlatformRows"></tbody></table></div>
-      <details><summary>Daily trend · last 30 days</summary><div class="table-scroll" tabindex="0"><table><caption>Daily download starts</caption><thead><tr><th>Date</th><th>Windows</th><th>Android</th><th>Total</th><th>Trend</th></tr></thead><tbody id="downloadDailyRows"></tbody></table></div></details>
+    <section id="downloadSection" class="owner-section"><div class="owner-section-title"><h2>Downloads, including recovered history</h2><span>Windows and Android · UTC dates</span></div><p><strong id="metricDownloads">—</strong> live starts · <span id="downloadAvailability"></span></p>
+      <div class="table-scroll" tabindex="0"><table><caption>Historical and live activity by platform; combined figures mix counting methods</caption><thead><tr><th>Platform</th><th>Historical reads</th><th>All live starts</th><th>Recorded activity (mixed)</th><th>Live starts · 30 days</th></tr></thead><tbody id="downloadPlatformRows"></tbody></table></div>
       <div class="owner-history"><h3>Recovered history</h3><p id="historyOverview">—</p><p id="historyCoverage" class="owner-note"></p></div>
-      <p class="owner-note">Starts are not website visits, completed downloads, installations or unique people. Repeat requests can count again; partial/Range requests are excluded. Historical file reads use a different measurement and remain separate.</p>
+      <details id="historyDetails" hidden><summary>Historical daily breakdown · full recovered period</summary><div class="table-scroll" tabindex="0"><table><caption>Historical file reads by day; first and last dates may cover only part of the day</caption><thead><tr><th>Date (UTC)</th><th>Windows</th><th>Android</th><th>Total reads</th></tr></thead><tbody id="historyDailyRows"></tbody></table></div></details>
+      <details><summary>Live daily trend · last 30 days</summary><div class="table-scroll" tabindex="0"><table><caption>Live download starts only; earlier activity is in the historical breakdown above</caption><thead><tr><th>Date</th><th>Windows</th><th>Android</th><th>Total</th><th>Trend</th></tr></thead><tbody id="downloadDailyRows"></tbody></table></div></details>
+      <p class="owner-note">Recorded activity combines non-overlapping historical file reads and live download starts—not verified completed downloads or unique people. Historical Cloudflare analytics may be sampled and include retries, partial reads, automated requests and release checks. Live starts exclude partial/Range requests, but repeat requests can count again. The original counters remain separate; no history is inferred outside the recovered period.</p>
     </section>
     <section id="emailSection" class="owner-section"><div class="owner-section-title"><h2>Email subscribers</h2><button id="copyAllEmails" class="button primary" type="button" disabled>Copy all emails</button></div><p>People who requested release news through the website. Copying does not send any email.</p><p id="emailStatus" role="status" aria-live="polite"></p>
       <div class="table-scroll" tabindex="0"><table><caption>Subscriber email addresses, signup dates and sources</caption><thead><tr><th>Email</th><th>Signed up (UTC)</th><th>Source</th></tr></thead><tbody id="emailRows"></tbody></table></div>
@@ -53,6 +54,6 @@
   </div>
   <noscript>Enable JavaScript to unlock the private dashboard.</noscript>
 </main>
-<script src="owner.js?v=20260918" defer></script>
+<script src="owner.js?v=20260918-history" defer></script>
 </body>
 </html>

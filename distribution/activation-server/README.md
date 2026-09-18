@@ -42,6 +42,15 @@ page. The page refreshes every minute while visible/unlocked and locks after
 15 minutes without interaction or 5 minutes hidden. There is no new app tracking,
 website visitor tracking or app release; 4.10.4 and its privacy choice are unchanged.
 
+The owner headline and platform breakdown also include recovered history as
+explicitly mixed-method recorded activity. Original historical reads and live
+starts remain separate. The full historical daily breakdown covers only the
+validated recovered interval (end exclusive), including zero-read days within it.
+Historical totals must reconcile to daily rows and end before the first live
+start; overlapping or malformed history is rejected, never silently added. Missing
+history leaves the combined headline unavailable rather than showing live-only
+activity as a lifetime total. No historical snapshot is hard-coded in public assets.
+
 The read-only `/owner/overview` and `/owner/subscribers` routes require a separate
 random `OWNER_DASHBOARD_TOKEN` (at least 32 bytes of entropy), not the aggregate-only
 `DOWNLOAD_REPORT_TOKEN`. Reusing the same key is rejected. The old report key cannot

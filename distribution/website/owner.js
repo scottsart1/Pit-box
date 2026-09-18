@@ -6,8 +6,8 @@
   const count = value => Number.isSafeInteger(value) && value >= 0;
   const platforms = ["windows", "android"];
   const titles = {app_started: "Opened the app", app_used: "Actively used the app", racing: "Qualifying driving telemetry", engineer: "Engineer replies", voice: "Voice commands", analysis: "Lap comparisons", transfer: "History-transfer starts"};
-  const tableIds = ["downloadPlatformRows", "downloadDailyRows", "emailRows", "signupSourceRows", "usageSignalRows", "retentionRows", "versionRows"];
-  const metricIds = ["metricDownloads", "metricRecentDownloads", "metricEmails", "metricActive", "metricRacing", "metricRetention"];
+  const tableIds = ["downloadPlatformRows", "downloadDailyRows", "historyDailyRows", "emailRows", "signupSourceRows", "usageSignalRows", "retentionRows", "versionRows"];
+  const metricIds = ["metricRecorded", "metricDownloads", "metricRecentDownloads", "metricEmails", "metricActive", "metricRacing", "metricRetention"];
   const requests = new Set();
   let key = "", generation = 0, busy = false, copying = false;
   let lastInteraction = Date.now(), hiddenAt = null, emailSnapshot = null, emailNext = null, emailCount = 0;
@@ -18,7 +18,8 @@
   function clearData() {
     for (const id of tableIds) el(id).replaceChildren();
     for (const id of metricIds) text(id, "—");
-    for (const id of ["ownerUpdated", "metricPlatformSplit", "metricNewEmails", "historyOverview", "historyCoverage", "downloadAvailability", "usageAvailability", "emailStatus"]) text(id, "");
+    for (const id of ["ownerUpdated", "metricRecordedSources", "metricPlatformSplit", "metricNewEmails", "historyOverview", "historyCoverage", "downloadAvailability", "usageAvailability", "emailStatus"]) text(id, "");
+    el("historyDetails").hidden = true;
     el("emailCopyText").value = "";
     el("emailCopyFallback").hidden = true;
     el("loadMoreEmails").hidden = true;
@@ -66,6 +67,27 @@
   }
   function array(value, max = 100) { if (!Array.isArray(value) || value.length > max) throw new Error("Invalid report data."); return value; }
   function counted(value) { if (!count(value)) throw new Error("Invalid report count."); return value; }
+  function validateHistory(history, downloads, generatedAt) {
+    const bad = () => { throw new Error("Historical download data could not be verified."); };
+    const dates = [history.from, history.until, history.recovered_at];
+    if (history.metric !== "historical_file_requests" || history.source !== "Cloudflare R2 analytics" ||
+        !dates.every(value => typeof value === "string" && Number.isFinite(Date.parse(value)))) bad();
+    const from = Date.parse(history.from), until = Date.parse(history.until);
+    if (from >= until || until - from > 366 * 86400000 || until > Date.parse(generatedAt) ||
+        (downloads.first_recorded_at !== null && until > Date.parse(downloads.first_recorded_at))) bad();
+    const firstDay = new Date(from).toISOString().slice(0, 10), lastDay = new Date(until - 1).toISOString().slice(0, 10);
+    const totals = {windows: 0, android: 0, all: 0}, seen = new Set();
+    for (const r of array(history.daily, 730)) {
+      const identity = `${r.day}/${r.platform}`;
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(r.day) || !Number.isFinite(Date.parse(r.day)) ||
+          new Date(r.day).toISOString().slice(0, 10) !== r.day || r.day < firstDay || r.day > lastDay ||
+          !platforms.includes(r.platform) || !count(r.requests) || seen.has(identity)) bad();
+      seen.add(identity); totals[r.platform] += r.requests; totals.all += r.requests;
+    }
+    for (const p of [...platforms, "all"]) {
+      if (!count(totals[p]) || totals[p] !== history.totals?.[p] || !count(totals[p] + downloads.totals[p])) bad();
+    }
+  }
   function validateOverview(data) {
     if (!data || !Number.isFinite(Date.parse(data.generated_at))) throw new Error("Invalid report data.");
     if (data.downloads !== null) {
@@ -73,11 +95,9 @@
       if (d?.metric !== "download_starts" || !d.totals) throw new Error("Invalid download data.");
       for (const p of [...platforms, "all"]) counted(d.totals[p]);
       if (d.totals.all !== d.totals.windows + d.totals.android) throw new Error("Download totals do not reconcile.");
+      if (d.first_recorded_at !== null && !Number.isFinite(Date.parse(d.first_recorded_at))) throw new Error("Invalid download coverage.");
       for (const r of array(d.daily, 60)) if (!platforms.includes(r.platform) || !/^\d{4}-\d{2}-\d{2}$/.test(r.day) || !count(r.starts)) throw new Error("Invalid daily downloads.");
-      if (d.history) {
-        if (d.history.metric !== "historical_file_requests") throw new Error("Invalid historical data.");
-        for (const p of [...platforms, "all"]) counted(d.history.totals?.[p]);
-      }
+      if (d.history) validateHistory(d.history, d, data.generated_at);
     }
     if (data.subscribers !== null) {
       const s = data.subscribers;
@@ -108,18 +128,35 @@
     validateOverview(data);
     for (const id of tableIds.filter(id => id !== "emailRows")) el(id).replaceChildren();
     for (const id of metricIds) text(id, "—");
+    el("historyDetails").hidden = true;
     text("metricPlatformSplit", "Windows / Android"); text("metricNewEmails", "Release-news signups");
     text("ownerUpdated", `Updated ${new Date(data.generated_at).toLocaleString()} · dates below use UTC`);
     const d = data.downloads;
     text("downloadAvailability", d ? (d.first_recorded_at ? `Live tracking since ${d.first_recorded_at.slice(0, 10)}.` : "No live download starts recorded yet.") : "Download data unavailable—not zero.");
     text("historyOverview", d?.history ? `${number(d.history.totals.all)} historical file reads · Windows ${number(d.history.totals.windows)} · Android ${number(d.history.totals.android)}` : "Historical snapshot unavailable—not zero.");
-    text("historyCoverage", d?.history ? `${d.history.from} to ${d.history.until} · Cloudflare R2 analytics. Not added to live starts.` : "");
+    text("historyCoverage", d?.history ? `${d.history.from} to ${d.history.until} (end exclusive) · Recovered ${new Date(d.history.recovered_at).toISOString().slice(0, 10)} from Cloudflare R2 analytics. Outside this period, history is not included.` : "");
+    text("metricRecordedSources", d?.history ? `${number(d.history.totals.all)} historical reads + ${number(d.totals.all)} live starts · different counting methods` : "History unavailable; combined activity cannot be shown.");
     if (d) {
+      if (d.history) {
+        text("metricRecorded", number(d.history.totals.all + d.totals.all));
+        const from = Date.parse(new Date(d.history.from).toISOString().slice(0, 10));
+        const until = Date.parse(new Date(Date.parse(d.history.until) - 1).toISOString().slice(0, 10));
+        const days = new Map();
+        for (const r of d.history.daily) {
+          if (!days.has(r.day)) days.set(r.day, {windows: 0, android: 0});
+          days.get(r.day)[r.platform] = r.requests;
+        }
+        for (let stamp = until; stamp >= from; stamp -= 86400000) {
+          const day = new Date(stamp).toISOString().slice(0, 10), values = days.get(day) || {windows: 0, android: 0};
+          row("historyDailyRows", [day, number(values.windows), number(values.android), number(values.windows + values.android)]);
+        }
+        el("historyDetails").hidden = false;
+      }
       text("metricDownloads", number(d.totals.all));
       text("metricRecentDownloads", number(sum(d.daily, "starts")));
       const recent = Object.fromEntries(platforms.map(p => [p, sum(d.daily.filter(r => r.platform === p), "starts")]));
       text("metricPlatformSplit", `${number(recent.windows)} Windows · ${number(recent.android)} Android`);
-      for (const p of platforms) row("downloadPlatformRows", [p === "windows" ? "Windows" : "Android", number(d.totals[p]), number(recent[p])]);
+      for (const p of platforms) row("downloadPlatformRows", [p === "windows" ? "Windows" : "Android", d.history ? number(d.history.totals[p]) : "—", number(d.totals[p]), d.history ? number(d.totals[p] + d.history.totals[p]) : "—", number(recent[p])]);
       const today = new Date(data.generated_at).toISOString().slice(0, 10), daily = [];
       for (let i = 0; i < 30; i++) {
         const day = new Date(Date.parse(today) - i * 86400000).toISOString().slice(0, 10);

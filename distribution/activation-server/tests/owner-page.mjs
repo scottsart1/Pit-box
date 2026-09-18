@@ -13,6 +13,8 @@ const overview = {generated_at: now, downloads: {metric: 'download_starts', firs
 const email = value => ({email: value, created_at: now, source: 'website-download'});
 const emails = {generated_at: now, total: 3, snapshot: 3, next: null, subscribers: [email('one@example.test'), email('two@example.test'), email('three@example.test')]};
 const response = body => ({ok: true, status: 200, json: async () => structuredClone(body)});
+const history = {metric: 'historical_file_requests', source: 'Cloudflare R2 analytics', from: '2026-09-12T08:00:00Z', until: '2026-09-16T00:00:00Z', recovered_at: now,
+  totals: {windows: 11, android: 3, all: 14}, daily: [{day: '2026-09-12', platform: 'windows', requests: 11}, {day: '2026-09-15', platform: 'android', requests: 3}]};
 function element() { return {value: '', hidden: false, disabled: false, checked: true, textContent: '', children: [], listeners: {}, attributes: {}, addEventListener(name, fn) { this.listeners[name] = fn; }, replaceChildren() { this.children = []; }, appendChild(child) { this.children.push(child); }, setAttribute(k, v) { this.attributes[k] = v; }, focus() {}, select() { this.selected = true; }}; }
 function harness(fetcher = async url => response(url.includes('/overview') ? overview : emails), clipboard = async () => {}) {
   const elements = Object.fromEntries(ids.map(id => [id, element()])), windowEvents = {}, docEvents = {}, timers = [], calls = [];
@@ -82,4 +84,62 @@ test('wrong keys and unavailable reports do not show fabricated zero totals', as
   const missing = harness(async url => response(url.includes('/overview') ? {generated_at: now, downloads: null, usage: null, subscribers: null} : emails)); await missing.login();
   assert.equal(missing.elements.metricDownloads.textContent, '—'); assert.equal(missing.elements.metricActive.textContent, '—');
   assert.match(missing.elements.ownerStatus.textContent, /unavailable/);
+});
+
+test('recovered history populates the overview and complete daily coverage without changing live counts', async () => {
+  const data = structuredClone(overview); data.downloads.history = history;
+  const original = JSON.stringify(data);
+  const h = harness(async url => response(url.includes('/overview') ? data : emails)); await h.login();
+  assert.equal(h.elements.metricRecorded.textContent, '21');
+  assert.equal(h.elements.metricDownloads.textContent, '7');
+  assert.equal(h.elements.metricRecentDownloads.textContent, '7');
+  assert.match(h.elements.metricRecordedSources.textContent, /14 historical reads \+ 7 live starts/);
+  assert.match(h.elements.metricRecordedSources.textContent, /different counting methods/);
+  const cells = element => element.children.map(tr => tr.children.map(td => td.textContent));
+  assert.deepEqual(cells(h.elements.downloadPlatformRows), [['Windows', '11', '5', '16', '5'], ['Android', '3', '2', '5', '2']]);
+  assert.equal(h.elements.historyDetails.hidden, false);
+  assert.deepEqual(cells(h.elements.historyDailyRows), [['2026-09-15', '0', '3', '3'], ['2026-09-14', '0', '0', '0'], ['2026-09-13', '0', '0', '0'], ['2026-09-12', '11', '0', '11']]);
+  assert.match(h.elements.historyCoverage.textContent, /end exclusive/);
+  assert.equal(JSON.stringify(data), original);
+  await h.elements.ownerRefresh.listeners.click();
+  assert.equal(h.elements.historyDailyRows.children.length, 4); // refresh must not append or double count
+  assert.equal(h.elements.metricRecorded.textContent, '21');
+  h.elements.ownerLock.listeners.click();
+  assert.equal(h.elements.metricRecorded.textContent, '—');
+  assert.equal(h.elements.metricRecordedSources.textContent, '');
+  assert.equal(h.elements.historyDailyRows.children.length, 0);
+  assert.equal(h.elements.historyDetails.hidden, true);
+});
+
+test('missing history is not silently zero or a fake lifetime total, and removes stale historical rows', async () => {
+  const data = structuredClone(overview); data.downloads.history = structuredClone(history);
+  const h = harness(async url => response(url.includes('/overview') ? data : emails)); await h.login();
+  data.downloads.history = null;
+  await h.elements.ownerRefresh.listeners.click();
+  assert.equal(h.elements.metricRecorded.textContent, '—');
+  assert.equal(h.elements.metricDownloads.textContent, '7');
+  assert.match(h.elements.metricRecordedSources.textContent, /unavailable/);
+  assert.equal(h.elements.historyDailyRows.children.length, 0);
+  assert.equal(h.elements.historyDetails.hidden, true);
+});
+
+test('inconsistent, duplicated, out-of-window or overlapping history is never added to live totals', async () => {
+  for (const corrupt of [
+    d => { d.history.totals.all++; },
+    d => { d.history.daily.push({...d.history.daily[0]}); },
+    d => { d.history.daily[0].day = '2026-09-11'; },
+    d => { d.history.daily[0].day = '2026-09-16'; }, // exclusive midnight bound
+    d => { d.history.daily[0].day = '2026-02-30'; },
+    d => { d.history.until = '2026-09-17T00:00:00Z'; }, // overlaps first live start
+    d => { d.history.source = 'Unknown'; },
+    d => { d.history.from = '2024-09-12T08:00:00Z'; },
+    d => { d.history.daily = Array(731).fill(d.history.daily[0]); },
+    d => { d.history.totals = {windows: Number.MAX_SAFE_INTEGER, android: 0, all: Number.MAX_SAFE_INTEGER}; d.history.daily = [{day: '2026-09-12', platform: 'windows', requests: Number.MAX_SAFE_INTEGER}]; },
+  ]) {
+    const data = structuredClone(overview); data.downloads.history = structuredClone(history); corrupt(data.downloads);
+    const h = harness(async url => response(url.includes('/overview') ? data : emails)); await h.login();
+    assert.equal(h.elements.ownerData.hidden, true);
+    assert.equal(h.elements.metricRecorded.textContent, '—');
+    assert.equal(h.elements.historyDailyRows.children.length, 0);
+  }
 });
