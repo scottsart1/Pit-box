@@ -52,6 +52,8 @@ jobs:
           NODE_PATH="$RUNNER_TEMP/pitbox-ui/node_modules" node tools/transfer-ui-smoke.cjs
           NODE_PATH="$RUNNER_TEMP/pitbox-ui/node_modules" node tools/drive-trace-ui-smoke.cjs
           NODE_PATH="$RUNNER_TEMP/pitbox-ui/node_modules" node tools/usage-ui-smoke.cjs
+      - name: Driver dashboard data and responsive profile regressions
+        run: node --test tests/driver_dashboard.test.mjs
       - name: Optional usage ingestion and owner report checks (local fixtures only)
         run: node --test distribution/activation-server/tests/*.mjs
 
