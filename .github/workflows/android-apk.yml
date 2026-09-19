@@ -14,6 +14,7 @@ on:
       - tools/transfer-ui-smoke.cjs
       - tools/drive-trace-ui-smoke.cjs
       - tools/onboarding-ui-smoke.cjs
+      - tools/strategy-layout-smoke.cjs
       - distribution/tests/test_android*.py
       - .github/workflows/android-apk.yml
   workflow_dispatch:
@@ -56,6 +57,11 @@ jobs:
           NODE_PATH="$RUNNER_TEMP/pitbox-ui/node_modules" node tools/onboarding-ui-smoke.cjs
       - name: Driver dashboard data and responsive profile regressions
         run: node --test tests/driver_dashboard.test.mjs
+      - name: Strategy scrolling in real Chromium at phone, tablet and desktop sizes
+        run: |
+          npm install --prefix "$RUNNER_TEMP/pitbox-browser" --no-save playwright@1.58.2
+          "$RUNNER_TEMP/pitbox-browser/node_modules/.bin/playwright" install --with-deps chromium
+          NODE_PATH="$RUNNER_TEMP/pitbox-browser/node_modules" node tools/strategy-layout-smoke.cjs
       - name: Optional usage ingestion and owner report checks (local fixtures only)
         run: node --test distribution/activation-server/tests/*.mjs
 

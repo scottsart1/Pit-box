@@ -1069,23 +1069,29 @@ button:disabled,
 
 .plan-row-recommended td { background: color-mix(in srgb, #3f86ff 12%, transparent); }
 
-@media (max-width: 960px) {
+/* Match the shared workspace's single-column breakpoint. Keeping a second
+   Strategy column until 960px created an implicit, clipped tablet column. */
+@media (max-width: 1180px) {
   .strategy-main-col,
   .strategy-side { grid-column: 1 / -1; }
   .whatif-controls { grid-template-columns: 1fr 1fr; }
   .whatif-controls input[id="stratWhatIfText"] { grid-column: 1 / -1; }
 }
 
-/* Strategy rail: the conversation and the decision record stay beside the
-   plans they discuss, instead of a section at the top and its counterpart at
-   the bottom of the page. */
-.strategy-workspace .strategy-side {
-  grid-row: 2 / span 8;
-  align-self: start;
-  position: sticky;
-  top: 12px;
-  max-height: calc(100vh - 24px);
-  overflow: auto;
+/* Row-spanning/sticky rails are desktop-only. In a stacked workspace the
+   radio and decision log follow the plans in normal page scroll order. */
+@media (min-width: 1181px) {
+  .strategy-workspace .strategy-side { grid-row: 2 / span 8; }
+}
+@media (min-width: 1181px) and (min-height: 600px) {
+  .strategy-workspace .strategy-side {
+    align-self: start;
+    position: sticky;
+    top: 12px;
+    /* Leave room for the app header, tabs, footer and both rail margins. */
+    max-height: calc(100dvh - 152px);
+    overflow: auto;
+  }
 }
 .strategy-rail-log { margin-top: 14px; border-top: 1px solid var(--border, #263542); padding-top: 12px; }
 #stratTimeline { cursor: pointer; }
