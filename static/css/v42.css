@@ -554,8 +554,7 @@ button:disabled,
      evidence id in a coaching card, a long lap label - otherwise turned the
      whole page into a left-right scroller. Genuinely wide regions (the field
      matrix, the trace-tab strip) keep their own overflow:auto containers, so
-     clipping here does not take their scrolling away. clip, not hidden, so it
-     does not disturb the sticky comparison header. */
+     clipping here does not take their scrolling away. */
   overflow-y: auto;
   overflow-x: clip;
   background: var(--bg-0);
@@ -746,9 +745,9 @@ button:disabled,
   grid-template-columns: minmax(190px, 1fr) minmax(150px, .45fr) minmax(190px, 1fr) auto;
   align-items: end;
   gap: var(--space-3);
-  position: sticky;
-  top: 0;
-  z-index: 10;
+  /* These selectors can be tall on tablets. Keep them in normal flow so
+     playback controls and input gauges are never covered while scrolling. */
+  position: static;
 }
 
 .comparison-card,
@@ -782,7 +781,8 @@ button:disabled,
   border: 1px solid var(--border);
   border-radius: 9px;
   background: #090e13;
-  touch-action: none;
+  /* Charts support tap-to-seek, not dragging. Preserve page pan and zoom. */
+  touch-action: auto;
 }
 
 .map-canvas { height: min(42vh, 440px); margin-top: 10px; }

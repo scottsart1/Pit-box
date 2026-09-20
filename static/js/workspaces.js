@@ -1430,7 +1430,8 @@ function bindEvents() {
   byId("playbackPrevious")?.addEventListener("click", () => stepDistance(-10));
   byId("playbackNext")?.addEventListener("click", () => stepDistance(10));
   byId("playbackRange")?.addEventListener("input", (event) => setCursor(Number(event.target.value)));
-  byId("comparisonTrace")?.addEventListener("pointerdown", tracePointer);
+  // Click fires for a tap, but not a vertical touch pan across the chart.
+  byId("comparisonTrace")?.addEventListener("click", tracePointer);
   byId("fieldRefresh")?.addEventListener("click", () => loadFieldView(state.fieldView, { force: true }));
   bindRovingTabs("[data-trace]", (tab) => selectTraceLayer(tab.dataset.trace, tab));
   bindRovingTabs("[data-field-view]", (tab) => selectFieldView(tab.dataset.fieldView, tab));

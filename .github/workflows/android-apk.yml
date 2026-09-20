@@ -16,6 +16,7 @@ on:
       - tools/onboarding-ui-smoke.cjs
       - tools/strategy-layout-smoke.cjs
       - tools/analysis-ui-smoke.cjs
+      - tools/analysis-layout-smoke.cjs
       - distribution/tests/test_android*.py
       - .github/workflows/android-apk.yml
   workflow_dispatch:
@@ -64,6 +65,8 @@ jobs:
           npm install --prefix "$RUNNER_TEMP/pitbox-browser" --no-save playwright@1.58.2
           "$RUNNER_TEMP/pitbox-browser/node_modules/.bin/playwright" install --with-deps chromium
           NODE_PATH="$RUNNER_TEMP/pitbox-browser/node_modules" node tools/strategy-layout-smoke.cjs
+      - name: Analysis touch scrolling and unobstructed playback controls
+        run: NODE_PATH="$RUNNER_TEMP/pitbox-browser/node_modules" node tools/analysis-layout-smoke.cjs
       - name: Optional usage ingestion and owner report checks (local fixtures only)
         run: node --test distribution/activation-server/tests/*.mjs
 

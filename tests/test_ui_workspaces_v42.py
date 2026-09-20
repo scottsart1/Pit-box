@@ -210,3 +210,14 @@ def test_lap_lab_has_its_own_session_selector() -> None:
     # driven by the same handler as the other selectors
     assert 'byId("lapLabSessionSelect")?.addEventListener("change"' in WORKSPACES
     assert "selectSession(event.target.value)" in WORKSPACES
+
+
+def test_analysis_charts_allow_page_gestures_and_header_stays_in_flow() -> None:
+    header = CSS.split(".comparison-header {", 1)[1].split("}", 1)[0]
+    assert "position: static" in header
+    assert "position: sticky" not in header
+    assert "z-index:" not in header
+    canvas = CSS.split(".analysis-canvas {", 1)[1].split("}", 1)[0]
+    assert "touch-action: auto" in canvas
+    assert 'byId("comparisonTrace")?.addEventListener("click", tracePointer)' in WORKSPACES
+    assert 'byId("comparisonTrace")?.addEventListener("pointerdown"' not in WORKSPACES
