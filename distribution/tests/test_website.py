@@ -657,7 +657,7 @@ def test_android_release_is_a_signed_direct_apk_with_compatibility_limits():
     assert 'href="https://pitwall-activation.sarthakvij123450.workers.dev/android"' in section
     assert "16 KB memory pages are not supported" in section
     assert "not a Google Play listing" in section
-    assert "5e3f4968311a7ef7739e34e56b175745a63a15c3813fd286bf7756d6606dc9a4" in INDEX
+    assert "4f01a1feb85c232ac50c0057d1577efd4a183d44c24d02027bcbcbfc6dc5fbee" in INDEX
     assert "Keep Play Protect enabled" in GUIDE
     assert "installs separately from the test package" in GUIDE
     assert "Do not uninstall the test app" in GUIDE
@@ -678,13 +678,13 @@ def test_beta_transmission_is_distinct_from_reception_and_history_copy():
 
 
 def test_unsigned_windows_notice_remains_without_removed_installation_wording():
-    assert 'Windows 4.12.2 · unsigned installer' in INDEX
+    assert 'Windows 4.12.3 · unsigned installer' in INDEX
     assert 'The current Windows installer is unsigned.' in GUIDE
     for page in (INDEX, GUIDE):
         assert 'unknown publisher' in page or 'unknown-publisher' in page
         assert 'Do not turn off your firewall, antivirus or Smart App Control' not in page
         assert 'wait for a signed release' not in page
-    assert '3e23b027ced28cc61b88cad34a35e2061b6e09e1f32b5f8482ae349d58f4cc62' in INDEX
+    assert '230d98419bfef5843a384f0e2035bd71f1734e8042ed03eb3d37bec808ae2ace' in INDEX
 
 
 def test_current_release_describes_skippable_setup_tour_and_manual_updates():
@@ -692,7 +692,8 @@ def test_current_release_describes_skippable_setup_tour_and_manual_updates():
     assert release.split('<p class="section-lede">', 1)[1].startswith('Analysis playback fixed')
     assert 'without choosing a reference' in release
     assert 'Missing data stays marked unavailable' in release
-    for text in ('4.12.2', 'skippable setup', 'UDP IP and port', 'guided app tour',
+    assert 'Maps and charts scroll normally; lap selectors no longer cover controls.' in release
+    for text in ('4.12.3', 'skippable setup', 'UDP IP and port', 'guided app tour',
                  'Existing preferences stay unchanged', 'Nothing installs automatically'):
         assert text in release
     assert 'Install this update manually once' in INDEX

@@ -55,7 +55,7 @@ function err(code, message, status, env = null) {
 // means the file can only be fetched with a code that is still in the
 // database, checked on the file request itself rather than only on the form.
 const INSTALLER_KEY = "PitWall-Setup.exe";
-const ANDROID_KEY = "YourPitBox-4.12.2-android.21.apk";
+const ANDROID_KEY = "YourPitBox-4.12.3-android.22.apk";
 
 // Count starts only after R2 supplies a successful response. No per-visitor
 // data is stored. HEAD, prefetch and all Range requests are deliberately
