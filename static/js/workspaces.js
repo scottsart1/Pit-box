@@ -12,6 +12,11 @@ const state = {
   references: [],
   comparison: null,
   comparisonTrace: null,
+  lapTrace: null,
+  sessionRequest: 0,
+  lapRequest: 0,
+  comparisonRequest: 0,
+  referenceRequest: 0,
   mapTraces: { candidate: null, reference: null },
   traceLayer: "speed",
   cursorIndex: 0,
@@ -296,16 +301,16 @@ async function deleteSession(session) {
 }
 
 function resetSelectedSession() {
+  state.sessionRequest += 1;
   state.selectedSessionId = "";
   state.sessionDetail = null;
   state.quality = null;
   state.laps = [];
-  state.candidateLapId = "";
-  state.references = [];
-  state.comparison = null;
-  state.comparisonTrace = null;
+  resetLapSelection();
   state.fieldCache.clear();
+  for (const view of ["classification", "pace", "corners", "positions", "stints"]) renderFieldView(view, null);
   refreshSessionSelectors();
+  populateLapSelectors();
 }
 
 async function openSession(sessionId, destination = "session-review") {
@@ -318,12 +323,19 @@ async function selectSession(sessionId) {
     resetSelectedSession();
     renderSessionReview();
     renderFieldSummary(null);
+    renderFieldClassification(null);
     return;
   }
+  resetSelectedSession();
+  const request = state.sessionRequest;
   state.selectedSessionId = sessionId;
   state.fieldCache.clear();
   refreshSessionSelectors();
   renderSessionRows();
+  renderSessionReview();
+  populateLapSelectors();
+  renderFieldSummary(null);
+  renderFieldClassification(null);
   setNotice("sessionReviewStatus", "Loading recorded session, quality, and laps…");
   setNotice("fieldStatus", "Loading saved field summary…");
   try {
@@ -333,7 +345,7 @@ async function selectSession(sessionId) {
       api(`/sessions/${encodeURIComponent(sessionId)}/laps`),
       api(`/sessions/${encodeURIComponent(sessionId)}/field`).catch((error) => ({ _error: formatError(error) })),
     ]);
-    if (state.selectedSessionId !== sessionId) return;
+    if (state.sessionRequest !== request) return;
     state.sessionDetail = detail.session;
     state.quality = quality;
     state.laps = laps.items || [];
@@ -342,7 +354,9 @@ async function selectSession(sessionId) {
     renderFieldSummary(field);
     renderFieldClassification(field);
     populateLapSelectors();
+    if (state.fieldView !== "classification") loadFieldView(state.fieldView);
   } catch (error) {
+    if (state.sessionRequest !== request) return;
     setNotice("sessionReviewStatus", formatError(error), "error");
     setNotice("fieldStatus", formatError(error), "error");
   }
@@ -448,9 +462,12 @@ async function requestReprocess() {
 }
 
 function populateLapSelectors() {
-  const candidateOptions = state.laps.filter((lap) => lap.id).map((lap) => ({ value: lap.id, label: lapLabel(lap), disabled: !Boolean(lap.valid) }));
-  replaceOptions(byId("candidateLapSelect"), candidateOptions, "Choose a valid recorded lap", state.candidateLapId);
+  // Invalid laps still contain useful recorded driving. Compatibility rules,
+  // not the selector, decide whether they can support a comparison.
+  const candidateOptions = state.laps.filter((lap) => lap.id).map((lap) => ({ value: lap.id, label: `${lapLabel(lap)}${lap.valid ? "" : " · invalid"}` }));
+  replaceOptions(byId("candidateLapSelect"), candidateOptions, "Choose a recorded lap", state.candidateLapId);
   updateCandidateMeta();
+  byId("analyzeLapAlone").disabled = !state.candidateLapId;
 }
 
 function updateCandidateMeta() {
@@ -459,34 +476,94 @@ function updateCandidateMeta() {
 }
 
 async function openLap(lapId) {
+  const loading = selectCandidateLap(lapId);
+  navigate("lap-lab");
+  await loading;
+}
+
+function activeTrace() {
+  if (state.comparisonTrace) return state.comparisonTrace;
+  if (!state.lapTrace) return null;
+  return { axis: state.lapTrace.axis, candidate: { series: state.lapTrace.series } };
+}
+
+function resetLapSelection() {
+  stopPlayback();
+  state.lapRequest += 1;
+  state.comparisonRequest += 1;
+  state.referenceRequest += 1;
+  state.candidateLapId = "";
+  state.references = [];
+  state.lapTrace = null;
+  state.comparison = null;
+  state.comparisonTrace = null;
+  state.mapTraces = { candidate: null, reference: null };
+  state.cursorIndex = 0;
+  byId("soloAnalysisPane").hidden = true;
+  byId("analyzeLapAlone").disabled = true;
+  replaceOptions(byId("referenceLapSelect"), [], "Choose candidate first");
+  byId("referenceLapSelect").disabled = true;
+  updateReferenceMeta();
+  configurePlayback();
+  renderComparison();
+}
+
+async function selectCandidateLap(lapId) {
+  resetLapSelection();
   state.candidateLapId = lapId;
   populateLapSelectors();
   renderReviewLaps();
-  navigate("lap-lab");
-  await loadReferences(lapId);
+  renderReviewFindings();
+  if (!lapId) {
+    setNotice("lapLabStatus", "Choose a recorded lap to see its playback.");
+    return;
+  }
+  const request = state.lapRequest;
+  setNotice("lapLabStatus", "Loading recorded lap playback…");
+  const query = new URLSearchParams({ fields: "speed,brake,throttle,steering,gear,world_x,world_z,line_n", max_points: "2400" });
+  const traceLoading = (async () => {
+    try {
+      const trace = await api(`/laps/${encodeURIComponent(lapId)}/trace?${query}`);
+      if (state.lapRequest !== request) return;
+      state.lapTrace = trace;
+      if (!state.comparisonTrace) {
+        state.mapTraces = { candidate: trace, reference: null };
+        configurePlayback();
+        renderComparison();
+        setNotice("lapLabStatus", trace.axis?.values?.length ? "Lap playback ready. A reference is optional." : "No recorded samples are available for this lap.", trace.axis?.values?.length ? "success" : "");
+      }
+    } catch (error) {
+      if (state.lapRequest !== request || state.comparisonTrace) return;
+      configurePlayback();
+      renderComparison();
+      setNotice("lapLabStatus", formatError(error), "error");
+    }
+  })();
+  await Promise.all([traceLoading, loadReferences(lapId)]);
 }
 
 async function loadReferences(lapId) {
+  const request = ++state.referenceRequest;
+  const selection = state.lapRequest;
   const select = byId("referenceLapSelect");
   select.disabled = true;
   byId("createComparison").disabled = true;
   byId("referenceLapMeta").textContent = "Loading compatible references…";
-  setNotice("lapLabStatus", "Checking stored laps for compatibility and trace coverage…");
   try {
     const payload = await api(`/laps/${encodeURIComponent(lapId)}/references`);
-    if (state.candidateLapId !== lapId) return;
+    if (state.lapRequest !== selection || state.referenceRequest !== request) return;
     state.references = payload.items || [];
     replaceOptions(select, state.references.map((reference) => ({ value: reference.lap_id, label: `${reference.suggested ? "Suggested · " : ""}${reference.driver || "Driver"} · Lap ${reference.lap_number ?? "—"} · ${formatLapTime(reference.lap_time_ms)} · ${reference.compatibility?.class || reference.compatibility?.classification || "compatibility unavailable"}` })), "Choose reference lap");
     select.disabled = !state.references.length;
     const suggested = state.references.find((reference) => reference.suggested) || state.references[0];
     if (suggested) select.value = suggested.lap_id;
     updateReferenceMeta();
-    setNotice("lapLabStatus", state.references.length ? `${state.references.length} compatible or caveated reference candidate${state.references.length === 1 ? "" : "s"} found.` : "No compatible reference lap is available for this candidate.", state.references.length ? "success" : "");
+    if (!state.references.length) byId("referenceLapMeta").textContent = "No compatible reference. This lap can still be played and analyzed alone.";
   } catch (error) {
+    if (state.lapRequest !== selection || state.referenceRequest !== request) return;
     state.references = [];
     replaceOptions(select, [], "No references available");
-    byId("referenceLapMeta").textContent = "Unavailable";
-    setNotice("lapLabStatus", formatError(error), "error");
+    byId("referenceLapMeta").textContent = `References unavailable: ${formatError(error)}`;
   }
 }
 
@@ -496,6 +573,7 @@ async function loadReferences(lapId) {
    one-off session — had nothing to look at. */
 async function analyzeLapAlone() {
   const lapId = state.candidateLapId;
+  const request = state.lapRequest;
   if (!lapId) return;
   const action = byId("analyzeLapAlone");
   const pane = byId("soloAnalysisPane");
@@ -503,14 +581,16 @@ async function analyzeLapAlone() {
   setNotice("lapLabStatus", "Measuring this lap from its own trace…");
   try {
     const payload = await api(`/laps/${encodeURIComponent(lapId)}/analysis`);
+    if (state.lapRequest !== request) return;
     pane.hidden = false;
     byId("soloAnalysisMeta").textContent = `Lap ${payload.lap_number ?? "—"} · ${formatLapTime(payload.lap_time_ms)} · ${payload.tyre_compound || "compound unavailable"}`;
     const summary = byId("soloAnalysisSummary");
+    const measurement = (value, unit) => value == null || !Number.isFinite(Number(value)) ? "Unavailable" : `${value}${unit}`;
     summary.replaceChildren(
-      summaryMetric("Top speed", `${payload.top_speed_kph ?? "—"} kph`, "Fastest point on the lap"),
-      summaryMetric("Slowest point", `${payload.minimum_speed_kph ?? "—"} kph`, "Tightest corner of the lap"),
+      summaryMetric("Top speed", measurement(payload.top_speed_kph, " kph"), "Fastest point on the lap"),
+      summaryMetric("Slowest point", measurement(payload.minimum_speed_kph, " kph"), "Tightest corner of the lap"),
       summaryMetric("Full throttle", payload.full_throttle_pct == null ? "Unavailable" : `${payload.full_throttle_pct}%`, "Share of lap time"),
-      summaryMetric("Braking", payload.braking_pct == null ? "Unavailable" : `${payload.braking_pct}%`, `${payload.braking_events ?? 0} braking events`),
+      summaryMetric("Braking", payload.braking_pct == null ? "Unavailable" : `${payload.braking_pct}%`, payload.braking_events == null ? "Braking events unavailable" : `${payload.braking_events} braking events`),
     );
     const rows = byId("soloAnalysisRows");
     rows.replaceChildren();
@@ -518,12 +598,12 @@ async function analyzeLapAlone() {
       const row = document.createElement("tr");
       for (const value of [
         segment.label,
-        `${segment.start_m} m`,
-        `${segment.end_m} m`,
-        `${segment.time_s}s`,
-        `${segment.entry_speed_kph} kph`,
-        `${segment.minimum_speed_kph} kph`,
-        `${segment.exit_speed_kph} kph`,
+        measurement(segment.start_m, " m"),
+        measurement(segment.end_m, " m"),
+        measurement(segment.time_s, " s"),
+        measurement(segment.entry_speed_kph, " kph"),
+        measurement(segment.minimum_speed_kph, " kph"),
+        measurement(segment.exit_speed_kph, " kph"),
       ]) {
         const cell = document.createElement("td");
         cell.textContent = String(value);
@@ -531,11 +611,13 @@ async function analyzeLapAlone() {
       }
       rows.appendChild(row);
     }
-    setNotice("lapLabStatus", `Single-lap analysis ready · ${(payload.segments || []).length} segments · trace ${payload.trace_source}.`, "success");
+    const partial = Object.values(payload.metric_coverage || {}).some(value => Number(value) < 1);
+    setNotice("lapLabStatus", `Single-lap analysis ready · ${(payload.segments || []).length} segments.${partial ? " Partial recording; missing values are unavailable." : ""}`, "success");
   } catch (error) {
+    if (state.lapRequest !== request) return;
     setNotice("lapLabStatus", formatError(error), "error");
   } finally {
-    action.disabled = !state.candidateLapId;
+    if (state.lapRequest === request) action.disabled = !state.candidateLapId;
   }
 }
 
@@ -554,6 +636,10 @@ function updateReferenceMeta() {
 async function createComparison() {
   const referenceLapId = byId("referenceLapSelect")?.value || "";
   if (!state.candidateLapId || !referenceLapId) return;
+  const candidateLapId = state.candidateLapId;
+  const selection = state.lapRequest;
+  const request = ++state.comparisonRequest;
+  const current = () => state.lapRequest === selection && state.comparisonRequest === request && byId("referenceLapSelect").value === referenceLapId;
   const reference = state.references.find((item) => item.lap_id === referenceLapId);
   const compatibility = reference?.compatibility;
   const classification = compatibility?.class || compatibility?.classification;
@@ -562,20 +648,28 @@ async function createComparison() {
   const action = byId("createComparison");
   action.disabled = true;
   stopPlayback();
+  state.comparison = null;
+  state.comparisonTrace = null;
+  state.mapTraces = { candidate: state.lapTrace, reference: null };
+  state.cursorIndex = 0;
+  configurePlayback();
+  renderComparison();
   setNotice("lapLabStatus", "Aligning laps by distance and calculating deterministic segment evidence…");
   try {
     const comparison = await api("/comparisons", {
       method: "POST",
-      body: JSON.stringify({ candidate_lap_id: state.candidateLapId, reference: { kind: "lap", lap_id: referenceLapId }, allow_caveated_reference: Boolean(allowCaveat) }),
+      body: JSON.stringify({ candidate_lap_id: candidateLapId, reference: { kind: "lap", lap_id: referenceLapId }, allow_caveated_reference: Boolean(allowCaveat) }),
     });
-    state.comparison = comparison;
+    if (!current()) return;
     const traceQuery = new URLSearchParams({ fields: "speed,delta,brake,throttle,steering,gear,line_n", max_points: "2400" });
     const mapQuery = new URLSearchParams({ fields: "world_x,world_z,line_n,speed,brake,throttle,steering,gear", max_points: "2400" });
     const [trace, candidateMap, referenceMap] = await Promise.all([
       api(`/comparisons/${encodeURIComponent(comparison.comparison_id)}/trace?${traceQuery}`),
-      api(`/laps/${encodeURIComponent(comparison.candidate.lap_id)}/trace?${mapQuery}`),
-      api(`/laps/${encodeURIComponent(comparison.reference.lap_id)}/trace?${mapQuery}`),
+      api(`/laps/${encodeURIComponent(comparison.candidate.lap_id)}/trace?${mapQuery}`).catch(() => state.lapTrace),
+      api(`/laps/${encodeURIComponent(comparison.reference.lap_id)}/trace?${mapQuery}`).catch(() => null),
     ]);
+    if (!current()) return;
+    state.comparison = comparison;
     state.comparisonTrace = trace;
     state.mapTraces = { candidate: candidateMap, reference: referenceMap };
     state.cursorIndex = 0;
@@ -584,14 +678,19 @@ async function createComparison() {
     renderReviewFindings();
     setNotice("lapLabStatus", `Comparison ready · ${formatPercent(comparison.coverage_ratio)} aligned coverage · ${comparison.algorithm_bundle}.`, "success");
   } catch (error) {
+    if (!current()) return;
     state.comparison = null;
     state.comparisonTrace = null;
-    state.mapTraces = { candidate: null, reference: null };
+    state.mapTraces = { candidate: state.lapTrace, reference: null };
+    configurePlayback();
     renderComparison();
     setNotice("lapLabStatus", formatError(error), "error");
   } finally {
-    updateReferenceMeta();
-    action.disabled = false;
+    if (current()) {
+      updateReferenceMeta();
+      // Metadata must not replace the comparison's evidence/compatibility badge.
+      renderComparison();
+    }
   }
 }
 
@@ -599,14 +698,18 @@ function renderComparison() {
   const comparison = state.comparison;
   const badge = byId("comparisonCompatibility");
   if (!comparison) {
+    const standalone = Boolean(state.lapTrace);
     byId("comparisonDelta").textContent = "Unavailable";
-    byId("traceCoverage").textContent = "Coverage unavailable";
-    badge.textContent = "Compatibility unavailable";
+    byId("comparisonDelta").className = "";
+    byId("comparisonSign").textContent = standalone ? "Choose a reference for a lap delta." : "Positive means the candidate arrived later.";
+    byId("traceCoverage").textContent = standalone ? `${formatPercent(state.lapTrace.coverage)} recorded coverage` : "Coverage unavailable";
+    byId("traceCoverage").dataset.state = standalone ? (Number(state.lapTrace.coverage) >= 0.9 ? "healthy" : "warning") : "neutral";
+    badge.textContent = standalone ? "Single-lap playback" : "Compatibility unavailable";
     badge.dataset.state = "neutral";
     clear(byId("segmentRail"));
-    byId("segmentRail").append(element("div", "empty", "No comparison loaded."));
+    byId("segmentRail").append(element("div", "empty", standalone ? "Analyze this lap alone for segment measurements." : "No lap loaded."));
     clear(byId("coachingFindings"));
-    byId("coachingFindings").append(element("div", "empty", "No comparison loaded."));
+    byId("coachingFindings").append(element("div", "empty", standalone ? "Compare a compatible reference for coaching findings." : "No lap loaded."));
     drawComparisonTrace();
     drawComparisonMap();
     updateInstruments();
@@ -710,7 +813,7 @@ function renderReviewFindings() {
 }
 
 function configurePlayback() {
-  const axis = state.comparisonTrace?.axis?.values || [];
+  const axis = activeTrace()?.axis?.values || [];
   const range = byId("playbackRange");
   range.max = String(Math.max(0, axis.length - 1));
   range.value = "0";
@@ -734,7 +837,7 @@ function nearestIndex(values, target) {
 }
 
 function setCursor(index) {
-  const axis = state.comparisonTrace?.axis?.values || [];
+  const axis = activeTrace()?.axis?.values || [];
   state.cursorIndex = Math.max(0, Math.min(Number(index) || 0, Math.max(0, axis.length - 1)));
   byId("playbackRange").value = String(state.cursorIndex);
   updateInstruments();
@@ -743,14 +846,16 @@ function setCursor(index) {
 }
 
 function startPlayback() {
-  if (!state.comparisonTrace?.axis?.values?.length) return;
+  if (!activeTrace()?.axis?.values?.length) return;
   if (state.playbackTimer) { stopPlayback(); return; }
   const action = byId("playbackToggle");
+  if (state.cursorIndex >= activeTrace().axis.values.length - 1) setCursor(0);
   action.textContent = "Pause";
   action.setAttribute("aria-pressed", "true");
   state.playbackTimer = window.setInterval(() => {
     const speed = Number(byId("playbackSpeed").value || 1);
-    const axis = state.comparisonTrace.axis.values;
+    const axis = activeTrace()?.axis?.values || [];
+    if (axis.length < 2) { stopPlayback(); return; }
     const step = Math.max(1, Math.round(speed * 2));
     const next = state.cursorIndex + step;
     if (next >= axis.length) { setCursor(axis.length - 1); stopPlayback(); }
@@ -769,14 +874,14 @@ function stopPlayback() {
 }
 
 function seriesValue(side, field, index = state.cursorIndex) {
-  const series = state.comparisonTrace?.[side]?.series?.[field];
+  const series = activeTrace()?.[side]?.series?.[field];
   if (!series || series.availability === "unavailable") return { value: null, availability: "unavailable", unit: series?.unit || "" };
   const value = series.values?.[index];
   return { value: value === null || value === undefined || !Number.isFinite(Number(value)) ? null : Number(value), availability: series.availability || "observed", unit: series.unit || "" };
 }
 
 function updateInstruments() {
-  const axis = state.comparisonTrace?.axis?.values || [];
+  const axis = activeTrace()?.axis?.values || [];
   const distance = axis[state.cursorIndex];
   byId("playbackDistance").textContent = distance == null ? "0 m" : `${Math.round(Number(distance))} m`;
   const speed = seriesValue("candidate", "speed");
@@ -811,6 +916,7 @@ function renderCursorTable(values) {
 function canvasContext(canvas) {
   if (!canvas) return null;
   const context = canvas.getContext("2d");
+  if (!context) return null;
   context.clearRect(0, 0, canvas.width, canvas.height);
   return context;
 }
@@ -837,12 +943,12 @@ function drawComparisonTrace() {
   const canvas = byId("comparisonTrace");
   const context = canvasContext(canvas);
   if (!context) return;
-  const trace = state.comparisonTrace;
+  const trace = activeTrace();
   const axis = trace?.axis?.values || [];
   const candidate = trace?.candidate?.series?.[state.traceLayer];
   const reference = trace?.reference?.series?.[state.traceLayer];
   if (!axis.length || (!candidate || candidate.availability === "unavailable") && (!reference || reference.availability === "unavailable")) {
-    canvasMessage(context, canvas, `${state.traceLayer.replaceAll("_", " ")} unavailable for this comparison.`);
+    canvasMessage(context, canvas, state.traceLayer === "delta" && state.lapTrace && !state.comparison ? "Choose a reference lap to see a delta." : `${state.traceLayer.replaceAll("_", " ")} unavailable for this lap.`);
     return;
   }
   const pad = { left: 62, right: 20, top: 24, bottom: 40 };
@@ -887,15 +993,37 @@ function drawComparisonTrace() {
   context.lineWidth = 2;
   context.beginPath(); context.moveTo(cursorX, pad.top); context.lineTo(cursorX, canvas.height - pad.bottom); context.stroke();
   context.fillStyle = "#4cc2ff"; context.fillText("Candidate", pad.left, 16);
-  context.fillStyle = "#f6c85f"; context.fillText("Reference", pad.left + 90, 16);
+  if (reference) { context.fillStyle = "#f6c85f"; context.fillText("Reference", pad.left + 90, 16); }
   context.fillStyle = "#aeb8c7"; context.fillText(`Distance (m) · ${candidate?.unit || reference?.unit || "unit unavailable"}`, canvas.width / 2 - 80, canvas.height - 10);
 }
 
 function mapPoints(trace) {
+  if (trace?.series?.world_x?.availability === "unavailable" || trace?.series?.world_z?.availability === "unavailable") return [];
   const axis = trace?.axis?.values || [];
   const xs = trace?.series?.world_x?.values || [];
   const zs = trace?.series?.world_z?.values || [];
-  return axis.map((distance, index) => ({ distance: Number(distance), x: xs[index], z: zs[index] })).filter((point) => point.x !== null && point.z !== null && Number.isFinite(Number(point.x)) && Number.isFinite(Number(point.z))).map((point) => ({ ...point, x: Number(point.x), z: Number(point.z) }));
+  // Keep missing samples in their original positions: removing them would
+  // draw a fictitious connecting line and move the cursor across the gap.
+  const coordinate = value => value == null || !Number.isFinite(Number(value)) ? null : Number(value);
+  return axis.map((distance, index) => ({ distance: Number(distance), x: coordinate(xs[index]), z: coordinate(zs[index]) }));
+}
+
+function hasMapPosition(point) {
+  return point && Number.isFinite(point.distance) && point.x != null && point.z != null;
+}
+
+function mapPositionAtDistance(line, distance) {
+  if (!line.length || !Number.isFinite(distance)) return null;
+  const index = nearestIndex(line.map(point => point.distance), distance);
+  const point = line[index];
+  if (point.distance === distance) return hasMapPosition(point) ? point : null;
+  const left = point.distance < distance ? point : line[index - 1];
+  const right = point.distance < distance ? line[index + 1] : point;
+  // Only interpolate between adjacent recorded positions. Never extrapolate
+  // beyond coverage or snap to a surviving endpoint across missing geometry.
+  if (!hasMapPosition(left) || !hasMapPosition(right) || right.distance <= left.distance) return null;
+  const fraction = (distance - left.distance) / (right.distance - left.distance);
+  return { distance, x: left.x + fraction * (right.x - left.x), z: left.z + fraction * (right.z - left.z) };
 }
 
 function drawComparisonMap() {
@@ -904,7 +1032,7 @@ function drawComparisonMap() {
   if (!context) return;
   const candidate = mapPoints(state.mapTraces.candidate);
   const reference = mapPoints(state.mapTraces.reference);
-  const points = [...candidate, ...reference];
+  const points = [...candidate, ...reference].filter(hasMapPosition);
   if (points.length < 2) {
     canvasMessage(context, canvas, "World-position track map unavailable; aligned telemetry remains usable.");
     return;
@@ -921,21 +1049,33 @@ function drawComparisonMap() {
   const drawLine = (line, color, width) => {
     if (!line.length) return;
     context.strokeStyle = color; context.lineWidth = width; context.beginPath();
-    line.forEach((point, index) => { const projected = project(point); if (index) context.lineTo(projected.x, projected.y); else context.moveTo(projected.x, projected.y); });
+    let drawing = false;
+    line.forEach(point => {
+      if (!hasMapPosition(point)) { drawing = false; return; }
+      const projected = project(point);
+      if (drawing) context.lineTo(projected.x, projected.y); else context.moveTo(projected.x, projected.y);
+      drawing = true;
+    });
     context.stroke();
   };
   drawLine(reference, "#f6c85f", 6);
   drawLine(candidate, "#4cc2ff", 3);
-  const distance = Number(state.comparisonTrace?.axis?.values?.[state.cursorIndex] ?? 0);
+  const distance = Number(activeTrace()?.axis?.values?.[state.cursorIndex] ?? 0);
+  const missingPositions = [];
   [{ line: reference, color: "#f6c85f", label: "R" }, { line: candidate, color: "#4cc2ff", label: "C" }].forEach(({ line, color, label }) => {
     if (!line.length) return;
-    const point = line[nearestIndex(line.map((item) => item.distance), distance)];
+    const point = mapPositionAtDistance(line, distance);
+    if (!point) { missingPositions.push(label === "C" ? "Candidate" : "Reference"); return; }
     const projected = project(point);
     context.fillStyle = color; context.beginPath(); context.arc(projected.x, projected.y, 9, 0, Math.PI * 2); context.fill();
     context.fillStyle = "#081018"; context.font = "800 11px Segoe UI"; context.textAlign = "center"; context.fillText(label, projected.x, projected.y + 4); context.textAlign = "left";
   });
   context.fillStyle = "#4cc2ff"; context.font = "14px Segoe UI"; context.fillText("Candidate", 14, 20);
-  context.fillStyle = "#f6c85f"; context.fillText("Reference", 100, 20);
+  if (reference.length) { context.fillStyle = "#f6c85f"; context.fillText("Reference", 100, 20); }
+  if (missingPositions.length) {
+    context.fillStyle = "#aeb8c7";
+    context.fillText(`${missingPositions.join(" / ")} position unavailable here`, 14, canvas.height - 12);
+  }
 }
 
 function selectTraceLayer(layer, trigger = null) {
@@ -953,7 +1093,7 @@ function selectTraceLayer(layer, trigger = null) {
 
 function tracePointer(event) {
   const canvas = byId("comparisonTrace");
-  const axis = state.comparisonTrace?.axis?.values || [];
+  const axis = activeTrace()?.axis?.values || [];
   if (!axis.length) return;
   const rectangle = canvas.getBoundingClientRect();
   const ratio = Math.max(0, Math.min(1, (event.clientX - rectangle.left) / rectangle.width));
@@ -1012,6 +1152,7 @@ async function loadFieldView(view, { force = false } = {}) {
     return null;
   }
   const key = `${state.selectedSessionId}:${view}`;
+  const request = state.sessionRequest;
   if (!force && state.fieldCache.has(key)) {
     renderFieldView(view, state.fieldCache.get(key));
     return state.fieldCache.get(key);
@@ -1021,12 +1162,15 @@ async function loadFieldView(view, { force = false } = {}) {
   setNotice("fieldStatus", `Loading ${view.replaceAll("_", " ")} with data-quality context…`);
   try {
     const payload = await api(`/sessions/${encodeURIComponent(state.selectedSessionId)}/${suffix}`);
+    if (state.sessionRequest !== request) return null;
     state.fieldCache.set(key, payload);
+    if (state.fieldView !== view) return payload;
     renderFieldView(view, payload);
     if (view === "classification") renderFieldSummary(payload);
     else setNotice("fieldStatus", payload.reason || `${view[0].toUpperCase()}${view.slice(1)} loaded. Sample sizes remain visible in the view.`, payload.availability === "unavailable" ? "" : "success");
     return payload;
   } catch (error) {
+    if (state.sessionRequest !== request || state.fieldView !== view) return null;
     setNotice("fieldStatus", formatError(error), "error");
     renderFieldView(view, { _error: formatError(error) });
     return null;
@@ -1173,9 +1317,11 @@ function renderStints(payload) {
 
 async function openDriverBestLap(carId) {
   if (!state.selectedSessionId) return;
+  const request = state.sessionRequest;
   setNotice("fieldStatus", "Loading this driver's saved laps and strengths…");
   try {
     const payload = await api(`/sessions/${encodeURIComponent(state.selectedSessionId)}/field/drivers/${encodeURIComponent(carId)}`);
+    if (state.sessionRequest !== request) return;
     const best = (payload.laps || []).filter((lap) => lap.valid && lap.lap_time_ms).sort((a, b) => Number(a.lap_time_ms) - Number(b.lap_time_ms))[0];
     if (!best) {
       const reason = payload.strengths?.reason || "This driver has no valid recorded lap suitable for Lap Lab.";
@@ -1186,6 +1332,7 @@ async function openDriverBestLap(carId) {
     if (!known) state.laps.push({ ...best, id: best.lap_id, display_name: payload.driver.display_name, session_car_id: payload.driver.car_id, car_index: payload.driver.car_index, coverage_ratio: best.coverage, tyre_compound: best.compound });
     await openLap(best.lap_id);
   } catch (error) {
+    if (state.sessionRequest !== request) return;
     setNotice("fieldStatus", formatError(error), "error");
   }
 }
@@ -1230,7 +1377,6 @@ async function activatePage(page) {
   if (page === "session-review") renderSessionReview();
   if (page === "lap-lab") {
     populateLapSelectors();
-    if (state.candidateLapId && !state.references.length) loadReferences(state.candidateLapId);
     renderComparison();
   }
   if (page === "field") {
@@ -1253,26 +1399,36 @@ function bindEvents() {
   byId("reviewOpenLibrary")?.addEventListener("click", () => navigate("library"));
   byId("analyzeLapAlone")?.addEventListener("click", analyzeLapAlone);
   byId("candidateLapSelect")?.addEventListener("change", (event) => {
-    state.candidateLapId = event.target.value;
-    state.references = [];
+    selectCandidateLap(event.target.value);
+  });
+  byId("referenceLapSelect")?.addEventListener("change", () => {
+    state.comparisonRequest += 1;
+    stopPlayback();
     state.comparison = null;
     state.comparisonTrace = null;
-    state.mapTraces = { candidate: null, reference: null };
-    updateCandidateMeta();
+    state.mapTraces = { candidate: state.lapTrace, reference: null };
+    state.cursorIndex = 0;
+    configurePlayback();
+    updateReferenceMeta();
     renderComparison();
-    renderReviewLaps();
-    // Solo analysis needs only a candidate, so it unlocks with one.
-    const soloAction = byId("analyzeLapAlone");
-    if (soloAction) soloAction.disabled = !state.candidateLapId;
-    byId("soloAnalysisPane").hidden = true;
-    if (state.candidateLapId) loadReferences(state.candidateLapId);
-    else replaceOptions(byId("referenceLapSelect"), [], "Choose candidate first");
+    renderReviewFindings();
   });
-  byId("referenceLapSelect")?.addEventListener("change", updateReferenceMeta);
   byId("createComparison")?.addEventListener("click", createComparison);
   byId("playbackToggle")?.addEventListener("click", startPlayback);
-  byId("playbackPrevious")?.addEventListener("click", () => setCursor(state.cursorIndex - 20));
-  byId("playbackNext")?.addEventListener("click", () => setCursor(state.cursorIndex + 20));
+  const stepDistance = (step) => {
+    const axis = activeTrace()?.axis?.values || [];
+    if (!axis.length) return;
+    const nearest = nearestIndex(axis, Number(axis[state.cursorIndex]) + step);
+    // A downsampled gap can exceed 10 m. Move at least one sample so a
+    // nearest-point tie cannot strand the transport control on that gap.
+    setCursor(step > 0 ? Math.max(state.cursorIndex + 1, nearest) : Math.min(state.cursorIndex - 1, nearest));
+  };
+  byId("playbackPrevious").textContent = "≈ −10 m";
+  byId("playbackPrevious").title = "Back about 10 m, at least one recorded sample";
+  byId("playbackNext").textContent = "≈ +10 m";
+  byId("playbackNext").title = "Forward about 10 m, at least one recorded sample";
+  byId("playbackPrevious")?.addEventListener("click", () => stepDistance(-10));
+  byId("playbackNext")?.addEventListener("click", () => stepDistance(10));
   byId("playbackRange")?.addEventListener("input", (event) => setCursor(Number(event.target.value)));
   byId("comparisonTrace")?.addEventListener("pointerdown", tracePointer);
   byId("fieldRefresh")?.addEventListener("click", () => loadFieldView(state.fieldView, { force: true }));

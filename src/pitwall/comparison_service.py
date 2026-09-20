@@ -524,7 +524,10 @@ class ComparisonService:
                             fields=("world_x", "world_z"),
                             sample_group="motion",
                         )
-                    except KeyError:
+                    except (KeyError, OSError, TraceFormatError, TraceManifestMissing):
+                        # Motion is optional enrichment. A missing/corrupt motion
+                        # chunk must not discard readable controls or speed, and
+                        # must not manufacture positions for the playback map.
                         return trace
                     return self._merge_motion_geometry(trace, motion_slice)
                 except KeyError:
@@ -533,14 +536,14 @@ class ComparisonService:
                     # additive compatibility path without masking corrupt files.
                     trace_slice = self.trace_store.read_range(record.trace_manifest_id)
                 return self._canonical_manifest_trace(record, trace_slice)
-            except (FileNotFoundError, KeyError, TraceFormatError, TraceManifestMissing) as exc:
+            except (OSError, KeyError, TraceFormatError, TraceManifestMissing) as exc:
                 if record.legacy_lap_id is None:
                     # Report this as an unavailable trace rather than letting an
                     # OS error escape as a 500. The lap row is intact and the
                     # session stays listable; only this lap's telemetry is
                     # unreadable, and the caller needs to be told which.
                     raise TraceUnavailableError(
-                        f"telemetry for lap {record.lap_id} cannot be read: {exc}"
+                        f"telemetry for lap {record.id} cannot be read: {exc}"
                     ) from exc
         return self._legacy_trace_sync(record)
 
@@ -1704,17 +1707,41 @@ class ComparisonService:
         # returns is labelled kph and converted here rather than leaving the
         # caller to guess which unit it received.
         speed_kph = speed * 3.6
+
+        def _finite_stat(values: NDArray[np.float64], operation: Any) -> float | None:
+            observed = values[np.isfinite(values)]
+            return round(float(operation(observed)), 1) if observed.size else None
+
+        def _finite_value(value: float) -> float | None:
+            return round(float(value), 1) if np.isfinite(value) else None
+
         # Time is derived from distance and speed rather than assumed: a trace
         # is distance-indexed, and sample spacing is not uniform in time.
         steps = np.diff(distance)
-        mid_speed = np.maximum((speed[:-1] + speed[1:]) / 2.0, 1.0)
-        step_seconds = steps / mid_speed
+        mid_speed = (speed[:-1] + speed[1:]) / 2.0
+        timed = (
+            np.isfinite(steps)
+            & (steps > 0)
+            & np.isfinite(speed[:-1])
+            & np.isfinite(speed[1:])
+            & (speed[:-1] >= 0)
+            & (speed[1:] >= 0)
+            & (mid_speed > 0)
+        )
+        step_seconds = _nan_array(len(steps))
+        step_seconds[timed] = steps[timed] / mid_speed[timed]
+        metric_coverage = {"speed": _coverage(speed)}
 
-        def _fraction(signal: NDArray[np.float64] | None, mask: Any) -> float | None:
+        def _fraction(
+            name: str, signal: NDArray[np.float64] | None, mask: Any
+        ) -> float | None:
             if signal is None or signal.size != distance.size:
+                metric_coverage[name] = 0.0
                 return None
-            weighted = float(np.sum(step_seconds[mask[:-1]]))
-            total = float(np.sum(step_seconds))
+            known = timed & np.isfinite(signal[:-1]) & np.isfinite(signal[1:])
+            metric_coverage[name] = float(np.count_nonzero(known) / len(steps)) if len(steps) else 0.0
+            weighted = float(np.sum(step_seconds[known & mask[:-1]]))
+            total = float(np.sum(step_seconds[known]))
             return round(weighted / total * 100.0, 1) if total > 0 else None
 
         segments = await asyncio.to_thread(
@@ -1736,18 +1763,29 @@ class ComparisonService:
                     "label": segment.label,
                     "start_m": round(float(segment.start_m), 1),
                     "end_m": round(float(segment.end_m), 1),
-                    "time_s": round(float(np.sum(step_seconds[window])), 3),
-                    "minimum_speed_kph": round(float(np.min(speed_kph[inside])), 1),
-                    "entry_speed_kph": round(float(speed_kph[inside][0]), 1),
-                    "exit_speed_kph": round(float(speed_kph[inside][-1]), 1),
-                    "availability": "observed",
+                    # Do not label a sum over only the readable portion as the
+                    # whole segment's elapsed time.
+                    "time_s": (
+                        round(float(np.sum(step_seconds[window])), 3)
+                        if np.any(window) and np.all(timed[window]) else None
+                    ),
+                    "minimum_speed_kph": _finite_stat(speed_kph[inside], np.min),
+                    "entry_speed_kph": _finite_value(speed_kph[inside][0]),
+                    "exit_speed_kph": _finite_value(speed_kph[inside][-1]),
+                    "availability": "observed" if np.any(np.isfinite(speed_kph[inside])) else "unavailable",
+                    "coverage": _coverage(speed_kph[inside]),
                 }
             )
 
-        braking_events = 0
+        braking_events = None
         if brake is not None and brake.size == distance.size:
             engaged = brake > 0.15
-            braking_events = int(np.count_nonzero(engaged[1:] & ~engaged[:-1]))
+            observed_pairs = np.isfinite(brake[1:]) & np.isfinite(brake[:-1])
+            if np.any(observed_pairs):
+                braking_events = int(np.count_nonzero(observed_pairs & engaged[1:] & ~engaged[:-1]))
+
+        full_throttle_pct = _fraction("full_throttle", throttle, (throttle > 0.98) if throttle is not None else None)
+        braking_pct = _fraction("braking", brake, (brake > 0.15) if brake is not None else None)
 
         return {
             "lap_id": record.id,
@@ -1760,18 +1798,20 @@ class ComparisonService:
             "quality_score": round(float(record.quality_score), 3),
             "trace_source": trace.source,
             "distance_covered_m": round(float(distance[-1] - distance[0]), 1),
-            "top_speed_kph": round(float(np.max(speed_kph)), 1),
-            "minimum_speed_kph": round(float(np.min(speed_kph)), 1),
-            "average_speed_kph": round(float(np.mean(speed_kph)), 1),
-            "full_throttle_pct": _fraction(throttle, (throttle > 0.98) if throttle is not None else None),
-            "braking_pct": _fraction(brake, (brake > 0.15) if brake is not None else None),
+            "top_speed_kph": _finite_stat(speed_kph, np.max),
+            "minimum_speed_kph": _finite_stat(speed_kph, np.min),
+            "average_speed_kph": _finite_stat(speed_kph, np.mean),
+            "full_throttle_pct": full_throttle_pct,
+            "braking_pct": braking_pct,
             "braking_events": braking_events,
+            "metric_coverage": metric_coverage,
             "segments": segment_rows,
             "segment_source": segments.segment_source,
             "provenance": dict(trace.provenance),
             "availability_note": (
                 "Measured from this lap alone; no reference lap is involved, so "
-                "there is no delta and no coaching verdict."
+                "there is no delta and no coaching verdict. Missing samples are excluded; "
+                "unavailable metrics and incomplete segment times remain blank."
             ),
         }
 
