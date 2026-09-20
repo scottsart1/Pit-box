@@ -83,7 +83,19 @@ browser gesture/layout checks passed again against its frozen static assets.
 The approved unsigned-installer status is unchanged; no protection was disabled.
 
 Website/publication checks passed: 85 Python and 87 Worker Node tests.
-The final 4.12.3 physical-tablet retest has not yet been performed.
+The signed 4.12.3 revision 22 QA APK was subsequently retested on the physical
+SM-X930 after the user explicitly asked to continue. Data-preserving upgrade,
+Library/Review, standalone map/trace/gauges, Play/Pause, previous/next stepping,
+map/trace swipes, tap-to-seek, unobscured controls, switching sessions and loading
+a second saved lap passed. Field positions loaded and its chart scrolled too.
+The regular package/history was untouched and the laptop stayed locked.
+
+Observed cursor distances were 1, 88, 1,065 and 1,364 m during playback; stepping
+went 1,364 -> 1,373 -> 1,364 m. A trace swipe left the paused cursor at 1,364 m,
+while a deliberate tap moved it to 2,904 m. Play remained usable after scrolling.
+Session switching reset distance to 0 m, cleared gauges and disabled controls.
+However, its old playback-ready notice remained. This nonfunctional status-copy
+bug prompted the small 4.12.4 follow-up; it did not expose stale telemetry.
 
 ## Publication
 

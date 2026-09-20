@@ -506,6 +506,7 @@ function resetLapSelection() {
   updateReferenceMeta();
   configurePlayback();
   renderComparison();
+  setNotice("lapLabStatus", "Choose a recorded lap to see its playback.");
 }
 
 async function selectCandidateLap(lapId) {

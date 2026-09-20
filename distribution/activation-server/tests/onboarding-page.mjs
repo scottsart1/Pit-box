@@ -230,8 +230,8 @@ test('onboarding markup has unique IDs, official key link, accessible password f
   assert.match(html, /id="onboardingKey" type="password" autocomplete="off"/);
   assert.match(html, /https:\/\/platform.openai.com\/api-keys" target="_blank" rel="noopener noreferrer"/);
   assert.match(html, /<dialog id="onboardingDialog"[^>]*aria-labelledby="onboardingTitle"/);
-  assert.match(html, /\/static\/js\/onboarding.js\?v=4\.12\.3/);
-  assert.match(html, /\/static\/css\/onboarding.css\?v=4\.12\.3/);
+  assert.match(html, /\/static\/js\/onboarding.js\?v=4\.12\.4/);
+  assert.match(html, /\/static\/css\/onboarding.css\?v=4\.12\.4/);
 });
 
 test('step 2 shows and copies actual UDP destination and port without leaving the guide', async () => {

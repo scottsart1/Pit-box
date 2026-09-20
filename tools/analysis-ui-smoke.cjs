@@ -233,6 +233,7 @@ test('Session switch immediately clears playback, references, maps, solo pane an
   try {
     await h.api.selectSession('s1'); await h.api.openLap('a'); await h.api.createComparison();
     h.id('analyzeLapAlone').click(); await settle(); h.id('playbackToggle').click();
+    assert.equal(h.id('lapLabStatus').dataset.tone, 'success');
     const next = h.api.selectSession('s2');
     assert.equal(h.id('playbackToggle').disabled, true);
     assert.equal(h.timers.size, 0);
@@ -240,8 +241,54 @@ test('Session switch immediately clears playback, references, maps, solo pane an
     assert.equal(h.id('candidateLapSelect').value, '');
     assert.equal(h.id('soloAnalysisPane').hidden, true);
     assert.equal(h.contexts.get('comparisonMap').calls.some(call => call[0] === 'arc'), false);
+    assert.equal(h.id('lapLabStatus').textContent, 'Choose a recorded lap to see its playback.');
+    assert.equal(h.id('lapLabStatus').dataset.tone, undefined);
     slow.resolve(response({ session: session('s2') })); await next;
+    assert.equal(h.id('lapLabStatus').textContent, 'Choose a recorded lap to see its playback.');
+    assert.equal(h.id('lapLabStatus').dataset.tone, undefined);
   } finally { h.close(); }
+});
+
+test('Clearing the session removes both ready and failed lap notices and disables playback', async () => {
+  for (const failed of [false, true]) {
+    const h = await harness(failed ? { '/api/v1/laps/a/trace': () => response({ detail: 'Trace missing' }, 409) } : {});
+    try {
+      await h.api.selectSession('s1'); await h.api.openLap('a');
+      assert.equal(h.id('lapLabStatus').dataset.tone, failed ? 'error' : 'success');
+      if (!failed) h.id('playbackToggle').click();
+      await h.api.selectSession('');
+      assert.equal(h.id('lapLabStatus').textContent, 'Choose a recorded lap to see its playback.');
+      assert.equal(h.id('lapLabStatus').dataset.tone, undefined);
+      assert.equal(h.id('candidateLapSelect').value, '');
+      assert.equal(h.id('playbackDistance').textContent, '0 m');
+      assert.equal(h.id('gaugeSpeed').textContent, 'Unavailable');
+      for (const id of ['playbackToggle', 'playbackPrevious', 'playbackNext', 'playbackRange', 'createComparison', 'analyzeLapAlone']) {
+        assert.equal(h.id(id).disabled, true, `${id} disabled after clearing session`);
+      }
+      assert.equal(h.timers.size, 0);
+    } finally { h.close(); }
+  }
+});
+
+test('Late trace cannot restore a ready notice after switching or clearing the session', async () => {
+  for (const nextSession of ['s2', '']) {
+    const slowTrace = deferred();
+    const h = await harness({ '/api/v1/laps/a/trace': () => slowTrace.promise });
+    try {
+      await h.api.selectSession('s1');
+      const old = h.api.openLap('a');
+      assert.match(h.id('lapLabStatus').textContent, /Loading recorded lap/);
+      await h.api.selectSession(nextSession);
+      assert.equal(h.id('lapLabStatus').textContent, 'Choose a recorded lap to see its playback.');
+      slowTrace.resolve(response(trace('a', 99))); await old;
+      assert.equal(h.id('lapLabStatus').textContent, 'Choose a recorded lap to see its playback.');
+      assert.equal(h.id('lapLabStatus').dataset.tone, undefined);
+      assert.equal(h.id('candidateLapSelect').value, '');
+      assert.equal(h.id('playbackToggle').disabled, true);
+      assert.equal(h.id('gaugeSpeed').textContent, 'Unavailable');
+      assert.equal(h.contexts.get('comparisonMap').calls.some(call => call[0] === 'arc'), false);
+    } finally { h.close(); }
+  }
 });
 
 test('Out-of-order lap/reference and failed responses cannot overwrite new lap', async () => {
