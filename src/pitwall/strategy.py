@@ -20,7 +20,7 @@ from .race_plan import plan_matches, remaining_plan
 from .setup_model import setup_effects
 from .state import StateStore
 from .tyre_inventory import TyreInventory
-from .tyre_learning import exclusion_reason, finite, wear_deltas
+from .tyre_learning import FUEL_SECONDS_PER_KG, exclusion_reason, finite, wear_deltas
 
 # Green-flag drive-through loss estimates. IDs follow f1-packets 2026 TRACKS.
 PIT_LOSS_SECONDS = {
@@ -90,6 +90,50 @@ TRACK_TYRE_SEVERITY = {
     32: 1.30,
     42: 1.05,
 }
+
+# Expected full safety-car deployments per race, by circuit. Street venues and
+# circuits with close barriers and poor run-off generate more of them.
+#
+# These exist to price the *option value* of tyre state: staying out is worth
+# something precisely because a cheap stop may arrive, and banking a stop early
+# is worth something because one may not. With no hazard at all that value is
+# exactly zero and the model can only ever plan a race in which nothing
+# happens. They are priors, not predictions, and the game's own incident
+# frequency depends on a difficulty setting this table cannot see, so they are
+# deliberately modest and should be replaced by the player's own observed rate
+# once enough sessions are recorded.
+TRACK_SAFETY_CAR_RATE = {
+    0: 0.75,   # Melbourne
+    3: 0.35,   # Bahrain
+    4: 0.20,   # Catalunya
+    5: 0.85,   # Monaco
+    6: 0.70,   # Montreal
+    7: 0.45,   # Silverstone
+    9: 0.30,   # Hungaroring
+    10: 0.50,  # Spa
+    11: 0.40,  # Monza
+    12: 0.85,  # Singapore
+    13: 0.40,  # Suzuka
+    14: 0.35,  # Abu Dhabi
+    15: 0.35,  # Texas / COTA
+    16: 0.55,  # Brazil
+    17: 0.35,  # Austria
+    19: 0.45,  # Mexico
+    20: 0.80,  # Baku
+    26: 0.40,  # Zandvoort
+    27: 0.55,  # Imola
+    29: 0.75,  # Jeddah
+    30: 0.45,  # Miami
+    31: 0.60,  # Las Vegas
+    32: 0.30,  # Losail
+    42: 0.45,  # Madrid; provisional until personal race evidence accumulates
+}
+DEFAULT_SAFETY_CAR_RATE = 0.40
+# Share of the green-flag pit loss still paid when stopping under a full SC.
+_SAFETY_CAR_PIT_FACTOR = 0.46
+# Share of neutralisations that can actually be turned into the planned stop.
+# Past pit entry, a closed lane or a period that ends first all waste one.
+_SAFETY_CAR_CONVERSION = 0.70
 
 # 0.0 is straightforward to pass, 1.0 is exceptionally difficult. These are
 # deliberately broad circuit characteristics, not claims about a particular
@@ -210,6 +254,9 @@ _MIN_USEFUL_PACE_ADVANTAGE_S = 0.10
 _ADVANTAGE_RETENTION = 0.60
 # Used when the field's real spacing cannot be measured.
 _DEFAULT_ADJACENT_GAP_S = 1.8
+# A stop at least this many laps away is priced against the projected grid
+# rather than the live one.
+_PROJECTED_GAP_MIN_LAPS = 2
 
 
 def _typical_adjacent_gap_s(state: dict[str, Any]) -> float:
@@ -339,6 +386,28 @@ TYPICAL_STINT_LAPS = {
 # F1 points for finishing positions 1..10 (2026 system unchanged from 2010+).
 F1_POINTS = {1: 25, 2: 18, 3: 15, 4: 12, 5: 10, 6: 8, 7: 6, 8: 4, 9: 2, 10: 1}
 SPRINT_POINTS = {position: 9 - position for position in range(1, 9)}
+
+
+# A place gained outside the points, expressed in points-equivalent. It keeps
+# the value of a finish strictly decreasing in position, so a race for P15 -
+# where every plan scores zero points - still has a gradient to optimise.
+POSITION_VALUE_POINTS = 0.5
+# Utility differences below this are smaller than the model can resolve, so
+# plans inside one band are treated as equal and decided on track position
+# instead. This is the deadband that keeps a projection wobble of a few
+# hundredths from moving a pit call.
+UTILITY_RESOLUTION = 0.25
+# How much of the utility comes from the chosen tail rather than the mean, when
+# the driver has asked for a conservative or aggressive plan.
+_APPETITE_TAIL_WEIGHT = 0.5
+_APPETITE_TAIL_QUANTILE = 0.25
+
+
+def finish_value(position: int, active: int, mode_profile: str = "race") -> float:
+    """What a finishing position is worth, in points-equivalent."""
+    return points_for_position(position, mode_profile) + POSITION_VALUE_POINTS * max(
+        0, int(active) - int(position)
+    )
 
 
 def points_for_position(position: int, mode_profile: str = "race") -> int:
@@ -527,7 +596,7 @@ class StrategyEngine:
             "age_end_reference": False,
             "assumptions": [
                 "Matched dry-stint age and condition evidence is unavailable; legacy pace fallback is used.",
-                "Future fuel consumption and weather are not normalized by this reference.",
+                "Future weather is not normalized by this reference; fuel burn is priced per projected lap where fuel telemetry supports it.",
             ],
         }
         if not laps:
@@ -561,7 +630,7 @@ class StrategyEngine:
             "assumptions": [
                 "Current dry stint, setup and timeline match the observed laps.",
                 "Existing age and wear priors are referenced once; setup is already in measured pace.",
-                "Future fuel consumption and weather are not normalized by this reference.",
+                "Future weather is not normalized by this reference; fuel burn is priced per projected lap against the load carried on these laps.",
             ],
         })
         return reference
@@ -1319,6 +1388,110 @@ class StrategyEngine:
         return "passed" if distance / track_length >= threshold else "available"
 
     @staticmethod
+    def _fuel_model(state: dict[str, Any]) -> dict[str, Any]:
+        """Fuel mass now, and how fast it is being burned.
+
+        The learner already removes fuel from measured pace at 0.030 s/kg so a
+        lightening car cannot be mistaken for a tyre that stopped degrading
+        (``tyre_learning.FUEL_SECONDS_PER_KG``). Nothing put it back for the
+        laps still to come, so every projected lap carried a car that never
+        got any lighter.
+
+        Over a whole race this cancels between candidates, because they all
+        burn the same fuel over the same laps. It does not cancel in the lap
+        times the dashboard renders and the radio speaks, in a comparison
+        against a rival who has already stopped, or in an undercut, which is
+        worth more early precisely because the car is heavy.
+        """
+        burn = finite(state.get("_strategy_fuel_burn_kg_per_lap"))
+        source = "supplied"
+        if burn is None:
+            rates = [
+                start - end
+                for lap in StrategyEngine._valid_laps(state)[-8:]
+                if (start := finite(lap.get("fuel_start_kg"))) is not None
+                and (end := finite(lap.get("fuel_end_kg"))) is not None
+                and 0 < start - end < 10
+            ]
+            if len(rates) >= 2:
+                burn, source = float(median(rates)), "measured_lap_fuel"
+        fuel = finite(state.get("fuel_kg"))
+        if burn is None:
+            remaining_laps = finite(state.get("fuel_remaining_laps"))
+            if fuel is not None and remaining_laps is not None and remaining_laps > 0:
+                burn, source = fuel / remaining_laps, "fuel_remaining_laps"
+        if burn is None or not 0 < burn < 10 or fuel is None or fuel <= 0:
+            return {
+                "available": False,
+                "burn_kg_per_lap": None,
+                "fuel_kg": fuel,
+                "seconds_per_kg": FUEL_SECONDS_PER_KG,
+                "source": "unavailable",
+                "reason": "No usable fuel load and burn rate; projected laps carry no fuel effect.",
+            }
+        return {
+            "available": True,
+            "burn_kg_per_lap": round(float(burn), 4),
+            "fuel_kg": round(float(fuel), 3),
+            "seconds_per_kg": FUEL_SECONDS_PER_KG,
+            "gain_s_per_lap": round(float(burn) * FUEL_SECONDS_PER_KG, 4),
+            "source": source,
+            "basis": "Projected laps are priced against the fuel load carried on the observed reference laps, so only the change in mass is charged.",
+        }
+
+    @staticmethod
+    def _fuel_deltas_s(
+        fuel_model: dict[str, Any], start_offset: int, laps: int
+    ) -> list[float]:
+        """Per-lap seconds owed to mass burned since the reference laps."""
+        if not fuel_model.get("available") or laps <= 0:
+            return [0.0] * max(0, laps)
+        burn = float(fuel_model["burn_kg_per_lap"])
+        carried = float(fuel_model.get("fuel_kg") or 0.0)
+        return [
+            -FUEL_SECONDS_PER_KG
+            * min(burn * (start_offset + offset + 0.5), carried)
+            for offset in range(laps)
+        ]
+
+    @classmethod
+    def _with_fuel(
+        cls,
+        stint: dict[str, Any],
+        fuel_model: dict[str, Any] | None,
+        start_offset: int,
+        deltas: Sequence[float] | None = None,
+    ) -> dict[str, Any]:
+        """Add the fuel correction to a tyre-only stint projection.
+
+        Fuel is deliberately not modelled inside ``_simulate_stint``. It is
+        additive, depends only on where the stint sits in the race, and touches
+        neither wear nor feasibility - so keeping it out lets thousands of
+        candidate stints share one cached tyre projection regardless of when
+        they run. Folding it into the loop instead doubled the cost of a
+        recompute, which on a 0.35 s tick is the difference between keeping up
+        and not.
+        """
+        if not fuel_model or not fuel_model.get("available"):
+            return stint
+        laps = len(stint.get("lap_times_s") or ())
+        if deltas is None:
+            deltas = cls._fuel_deltas_s(fuel_model, start_offset, laps)
+        if not deltas:
+            return stint
+        total = sum(deltas)
+        result = dict(stint)
+        result["lap_times_s"] = [
+            round(value + delta, 3)
+            for value, delta in zip(stint["lap_times_s"], deltas)
+        ]
+        result["expected_time_s"] = float(stint["expected_time_s"]) + total
+        result["conservative_time_s"] = float(stint["conservative_time_s"]) + total
+        result["fuel_correction_s"] = round(total, 3)
+        result["fuel_model"] = fuel_model
+        return result
+
+    @staticmethod
     def _base_pit_loss(state: dict[str, Any]) -> float:
         # EA's lane timer measures time *in* the lane. Net race-time loss also
         # needs the main-track time between the same reference points, which
@@ -1362,7 +1535,7 @@ class StrategyEngine:
             factor = 0.82
             kind = phase
         elif phase in {"safety_car", "formation"} or safety == "full":
-            factor = 0.46
+            factor = _SAFETY_CAR_PIT_FACTOR
             kind = "safety_car"
         elif phase == "vsc" or safety == "virtual":
             factor = 0.64
@@ -1421,6 +1594,84 @@ class StrategyEngine:
                 else "low"
             ),
             "red_flag_tyre_change": red,
+        }
+
+    @staticmethod
+    def _safety_car_hazard(state: dict[str, Any]) -> dict[str, Any]:
+        """Per-lap chance of a full safety car, from a circuit prior."""
+        track_id = int(state.get("track_id", -1))
+        known = track_id in TRACK_SAFETY_CAR_RATE
+        rate = TRACK_SAFETY_CAR_RATE.get(track_id, DEFAULT_SAFETY_CAR_RATE)
+        total_laps = int(state.get("total_laps", 0) or 0)
+        hazard = rate / total_laps if total_laps > 0 else 0.0
+        return {
+            "expected_deployments_per_race": rate,
+            "per_lap_probability": round(hazard, 5),
+            "circuit_known": known,
+            "source": "circuit_prior" if known else "default_prior",
+            "basis": "A circuit prior for the option value of tyre state, not a prediction of this race.",
+            "limitations": "The game's incident frequency depends on a difficulty setting this prior cannot observe, and field compression under a safety car is not priced.",
+        }
+
+    @staticmethod
+    def _neutralisation_option_value_s(
+        state: dict[str, Any],
+        box_laps: Sequence[int],
+        neutralisation: dict[str, Any],
+        hazard: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Expected saving from a cheap stop arriving before a planned one.
+
+        Every future stop was priced at the full green-flag loss, which is the
+        right *service* cost and the wrong *decision* cost: it says the chance
+        of a safety car is exactly zero, so tyre state carries no option value
+        and running long is never worth anything on its own account.
+
+        Only one cheap stop is credited however many stops remain, because one
+        neutralisation serves one stop. The saving is applied to the ranking
+        quantity, never to the pit loss the dashboard renders, which stays the
+        physical cost of the stop being described.
+        """
+        model = hazard or StrategyEngine._safety_car_hazard(state)
+        per_lap = float(model["per_lap_probability"])
+        current_lap = int(state.get("current_lap", 0))
+        immediate = bool(neutralisation.get("pit_this_lap_available")) and bool(
+            box_laps
+        ) and int(box_laps[0]) == current_lap
+        future = [
+            int(lap) for index, lap in enumerate(box_laps)
+            if not (index == 0 and immediate)
+        ]
+        empty = {
+            "option_value_s": 0.0,
+            "probability": 0.0,
+            "window_laps": 0,
+            "saving_per_stop_s": 0.0,
+            "basis": "No future green-flag stop to discount.",
+        }
+        if per_lap <= 0 or not future:
+            return empty
+        # The option held right now runs until the *next* stop, not the last
+        # one. Measuring to the final stop compounds a flexibility that the
+        # first stop has already spent, and systematically talks the model out
+        # of ever stopping early.
+        window = max(0, min(future) - current_lap)
+        if window <= 0:
+            return empty
+        probability = 1.0 - (1.0 - per_lap) ** window
+        base = float(neutralisation["base_pit_loss_s"])
+        # What a stop taken under a safety car saves against the green loss.
+        saving = base * (1.0 - _SAFETY_CAR_PIT_FACTOR)
+        return {
+            "option_value_s": round(
+                probability * saving * _SAFETY_CAR_CONVERSION, 3
+            ),
+            "probability": round(probability, 4),
+            "window_laps": window,
+            "saving_per_stop_s": round(saving, 3),
+            "conversion": _SAFETY_CAR_CONVERSION,
+            "basis": "Chance of a safety car before the next planned stop, credited once, against the ranking only.",
+            "limitations": "Not every neutralisation can be converted into the stop that was planned: the car may be past pit entry, the lane may be closed, or the period may end first.",
         }
 
     @staticmethod
@@ -1563,21 +1814,66 @@ class StrategyEngine:
         }
 
     @staticmethod
-    def _rejoin_position(state: dict[str, Any], effective_pit_loss_s: float) -> int:
+    def _rejoin_position(
+        state: dict[str, Any],
+        effective_pit_loss_s: float,
+        gaps: Sequence[float] | None = None,
+    ) -> int:
+        """Where a stop rejoins, against the grid as it will be at that stop.
+
+        ``gaps`` are the rivals' gaps at the lap the stop actually happens. The
+        live gaps are only correct for a stop taken now; using them for a stop
+        twelve laps away prices the traffic of the wrong lap, which is most of
+        why one box lap looked much like another.
+        """
         current_position = int(state.get("player_position", 0)) or 1
         if effective_pit_loss_s <= 0:
             return current_position
-        lost_positions = 0
-        for driver in state.get("drivers", []):
-            if str(driver.get("result_label", "")).lower() in {
-                "retired", "did not finish", "disqualified", "not classified"
-            }:
-                continue
-            gap = driver.get("gap_to_player_s")
-            if gap is not None and 0 < float(gap) < effective_pit_loss_s:
-                lost_positions += 1
+        if gaps is None:
+            gaps = [
+                float(driver["gap_to_player_s"])
+                for driver in state.get("drivers", [])
+                if driver.get("gap_to_player_s") is not None
+                and str(driver.get("result_label", "")).lower() not in {
+                    "retired", "did not finish", "disqualified", "not classified"
+                }
+            ]
+        lost_positions = sum(1 for gap in gaps if 0 < float(gap) < effective_pit_loss_s)
         active = int(state.get("active_cars", 0)) or 24
         return min(active, current_position + lost_positions)
+
+    @staticmethod
+    def _projected_gaps_at(
+        rivals: Sequence[dict[str, Any]],
+        player_lap_times_s: Sequence[float],
+        laps_ahead: int,
+    ) -> list[float] | None:
+        """Each rival's gap to the player after ``laps_ahead`` more laps.
+
+        Both cars are advanced along their own projected laps from the same
+        signed-gap origin, so a rival degrading faster falls back and one that
+        has already stopped closes up. Returns ``None`` when the projections
+        cannot cover the window, so the caller keeps the live gaps rather than
+        extrapolating off the end of what was modelled.
+        """
+        # A stop on the current lap rejoins into the field as the timing screen
+        # already shows it. There the live gaps are a measurement and the
+        # projection is only a model of one lap, so the measurement wins and
+        # projection is reserved for stops genuinely further out.
+        if laps_ahead < _PROJECTED_GAP_MIN_LAPS or not rivals:
+            return None
+        player = list(player_lap_times_s or ())[:laps_ahead]
+        if len(player) < laps_ahead:
+            return None
+        player_elapsed = sum(float(value) for value in player)
+        gaps: list[float] = []
+        for rival in rivals:
+            gap = finite(rival.get("current_gap_s"))
+            laps = list(rival.get("lap_times_s") or ())[:laps_ahead]
+            if gap is None or len(laps) < laps_ahead:
+                return None
+            gaps.append(gap + sum(float(value) for value in laps) - player_elapsed)
+        return gaps
 
     @staticmethod
     def _recent_driver_pace_s(driver: dict[str, Any]) -> tuple[float | None, int]:
@@ -1977,11 +2273,67 @@ class StrategyEngine:
         )
 
     @staticmethod
+    def _decision_utility(
+        positions: np.ndarray, active: int, mode: str, risk_appetite: str
+    ) -> dict[str, Any]:
+        """Risk-tilted expected value of a plan's whole outcome distribution.
+
+        The ranking used to sort on the integer central finishing position,
+        which threw away the distribution the Monte Carlo had just produced: a
+        plan projecting P4 with a real chance of P2 scored exactly the same as
+        a locked P4, and because the key was an integer, any continuous input
+        could flip the whole recommendation by a hundredth.
+
+        Appetite is one parameter here rather than three different sort keys.
+        Conservative shifts weight onto the worst quartile of outcomes and
+        aggressive onto the best, so the two are points on a scale instead of
+        separate rankings that cannot be compared.
+        """
+        values = np.array(
+            [finish_value(int(position), active, mode) for position in positions],
+            dtype=float,
+        )
+        mean = float(np.mean(values)) if values.size else 0.0
+        tail = mean
+        if values.size and risk_appetite in {"conservative", "aggressive"}:
+            ordered = np.sort(values)
+            count = max(1, round(values.size * _APPETITE_TAIL_QUANTILE))
+            tail = float(
+                np.mean(ordered[:count] if risk_appetite == "conservative"
+                        else ordered[-count:])
+            )
+        utility = (
+            mean
+            if risk_appetite == "balanced"
+            else (1.0 - _APPETITE_TAIL_WEIGHT) * mean + _APPETITE_TAIL_WEIGHT * tail
+        )
+        return {
+            "decision_utility": round(utility, 4),
+            "expected_value_points": round(mean, 4),
+            "tail_value_points": round(tail, 4),
+            "utility_risk_appetite": risk_appetite,
+            "utility_basis": (
+                "Expected points plus "
+                f"{POSITION_VALUE_POINTS:g} per place gained outside them, over the "
+                "simulated outcome distribution"
+                + (
+                    ""
+                    if risk_appetite == "balanced"
+                    else f", tilted {_APPETITE_TAIL_WEIGHT:.0%} onto the "
+                    f"{'worst' if risk_appetite == 'conservative' else 'best'} "
+                    f"{_APPETITE_TAIL_QUANTILE:.0%} of outcomes"
+                )
+                + "."
+            ),
+        }
+
+    @staticmethod
     def _position_distribution(
         plan: dict[str, Any],
         state: dict[str, Any],
         rival_projections: list[dict[str, Any]],
         outcome_times: np.ndarray,
+        risk_appetite: str = "balanced",
     ) -> dict[str, Any]:
         active, _ = StrategyEngine._projection_field_size(state, rival_projections)
         rejoin = int(plan.get("projected_rejoin_position", 1) or 1)
@@ -2038,6 +2390,7 @@ class StrategyEngine:
         upside = int(np.quantile(positions, 0.10, method="nearest"))
         downside = int(np.quantile(positions, 0.90, method="nearest"))
         return {
+            **StrategyEngine._decision_utility(positions, active, mode, risk_appetite),
             "outcome_distribution": {
                 key: round(value, 4) for key, value in bands.items()
             },
@@ -2474,13 +2827,19 @@ class StrategyEngine:
         state: dict[str, Any],
         effective_pit_loss_s: float,
         stops: int,
+        rivals: Sequence[dict[str, Any]] | None = None,
+        player_lap_times_s: Sequence[float] | None = None,
+        laps_ahead: int = 0,
     ) -> tuple[float, int]:
         current = int(state.get("player_position", 1)) or 1
         if int(stops) <= 0:
             # Staying on track has no pit-lane rejoin and cannot inherit the
             # traffic cost or lost positions of a hypothetical stop.
             return 0.0, current
-        rejoin = StrategyEngine._rejoin_position(state, effective_pit_loss_s)
+        gaps = StrategyEngine._projected_gaps_at(
+            rivals or (), player_lap_times_s or (), laps_ahead
+        )
+        rejoin = StrategyEngine._rejoin_position(state, effective_pit_loss_s, gaps)
         positions_lost = max(0, rejoin - current)
         # The first positions in a train cost more than an isolated position because
         # the fresh-tyre benefit can be trapped behind traffic.
@@ -3105,10 +3464,13 @@ class StrategyEngine:
         # The field model must be attached before the pace reference is built,
         # because that reference prices its own laps through _deg_for.
         field_degradation = self.field_degradation(state)
+        fuel_model = self._fuel_model(state)
+        safety_car_hazard = self._safety_car_hazard(state)
         state = {
             **state,
             "_strategy_reference_wetness": current_wetness,
             "_strategy_field_degradation": field_degradation,
+            "_strategy_fuel_model": fuel_model,
         }
         pace_reference = self._pace_reference(state, historical)
         state["_strategy_pace_reference"] = pace_reference
@@ -3116,6 +3478,13 @@ class StrategyEngine:
             (weather_crossover or {}).get("trajectory") or ()
         )
         expected_weather_penalties = (weather_crossover or {}).get("expected_lap_penalties") or {}
+        # Whether where a stint sits in the race changes the *tyre* result.
+        # Moving weather does; fuel does not, because it is applied afterwards
+        # as an additive correction rather than inside the cached projection.
+        offset_matters = bool(wetness_trajectory)
+        # Caches holding a *fuelled* stint must still separate offsets, because
+        # the correction applied on retrieval depends on where the stint runs.
+        fuelled_offsets_matter = offset_matters or bool(fuel_model.get("available"))
         style_factor, style_evidence = self._driver_wear_factor(state, historical)
         feedback_adjustment = self._driver_feedback_adjustment(
             state, current_compound
@@ -3134,12 +3503,35 @@ class StrategyEngine:
                 )
             )
         )
+        # Built before the candidates, not after them, because each candidate's
+        # rejoin position has to be measured against the field as it will be at
+        # that candidate's box lap rather than as it stands now.
+        rival_projections = self._project_rival_finish_times(
+            state,
+            historical,
+            remaining,
+            base_lap_s,
+            effective_pit_loss,
+            current_wetness,
+        )
         plans: list[dict[str, Any]] = []
         inventory_rejected = 0
 
         def append_plan(plan: dict[str, Any] | None) -> None:
             if plan is not None:
                 plans.append(plan)
+        # The same window of laps is corrected over and over across thousands
+        # of candidate stints, and the arithmetic does not depend on the tyre.
+        fuel_delta_cache: dict[tuple[int, int], list[float]] = {}
+
+        def fuel_deltas(start_offset: int, laps: int) -> list[float]:
+            key = (int(start_offset), int(laps))
+            if key not in fuel_delta_cache:
+                fuel_delta_cache[key] = self._fuel_deltas_s(
+                    fuel_model, int(start_offset), int(laps)
+                )
+            return fuel_delta_cache[key]
+
         simulation_cache: dict[tuple[Any, ...], dict[str, Any]] = {}
         baseline_simulation_cache: dict[tuple[Any, ...], dict[str, Any]] = {}
         feedback_free_state = dict(state)
@@ -3178,8 +3570,11 @@ class StrategyEngine:
                 str(compound), int(laps), int(starting_age), wear_key,
                 round(float(base_lap), 3), round(float(personal_factor), 4), set_key,
                 # Two stints of the same tyre at different points in the race
-                # are no longer the same stint once the weather is moving.
-                int(start_offset) if wetness_trajectory else 0,
+                # are no longer the same stint once the weather is moving - nor
+                # once fuel is priced, because the later one is run on a
+                # lighter car. Sharing a cache entry across offsets would hand
+                # the second stint the first one's fuel load.
+                int(start_offset) if offset_matters else 0,
             )
             if key not in simulation_cache:
                 simulation_cache[key] = self._simulate_stint(
@@ -3187,7 +3582,12 @@ class StrategyEngine:
                     base_lap, history, personal_factor, set_info,
                     wetness_trajectory, start_offset, expected_weather_penalties,
                 )
-            result = dict(simulation_cache[key])
+            cached = simulation_cache[key]
+            result = self._with_fuel(
+                cached, fuel_model, int(start_offset), fuel_deltas(start_offset, laps)
+            )
+            if result is cached:
+                result = dict(cached)
             result["tyre_set_index"] = (set_info or {}).get("index")
             result["starting_wear_pct"] = max(
                 float((set_info or {}).get("wear_pct", 0)),
@@ -3209,13 +3609,22 @@ class StrategyEngine:
                         start_offset,
                         expected_weather_penalties,
                     )
-                result["without_driver_feedback"] = baseline_simulation_cache[key]
+                result["without_driver_feedback"] = self._with_fuel(
+                    baseline_simulation_cache[key],
+                    fuel_model,
+                    int(start_offset),
+                    fuel_deltas(start_offset, laps),
+                )
             return result
 
         allocated_stint_cache: dict[tuple[Any, ...], dict[str, Any]] = {}
 
         def simulate_allocated(compound: str, laps: int, start: int, item: dict[str, Any]) -> dict[str, Any]:
-            key = (compound, laps, start if wetness_trajectory else 0, item.get("index"))
+            key = (
+                compound, laps,
+                start if fuelled_offsets_matter else 0,
+                item.get("index"),
+            )
             if key in allocated_stint_cache:
                 return allocated_stint_cache[key]
             # EA does not report a spare set's age. Its measured wear, pace
@@ -3230,7 +3639,9 @@ class StrategyEngine:
         runnable_cache: dict[tuple[int, int], list[str]] = {}
 
         def runnable_compounds(laps: int, start: int) -> list[str]:
-            key = (laps, start if wetness_trajectory else 0)
+            # Feasibility is a wear question, and fuel changes no wear, so this
+            # one may still share across offsets in the dry.
+            key = (laps, start if offset_matters else 0)
             if key not in runnable_cache:
                 runnable_cache[key] = []
                 for compound in compounds:
@@ -3265,8 +3676,14 @@ class StrategyEngine:
                 return None
             pit_costs = self._pit_stop_costs(state, box_laps, neutralisation)
             total_pit_cost = sum(pit_costs)
+            laps_to_first_stop = len(stints[0].get("lap_times_s") or ()) if stints else 0
             traffic_cost, projected_rejoin = self._traffic_cost(
-                state, pit_costs[0] if pit_costs else 0.0, stops
+                state,
+                pit_costs[0] if pit_costs else 0.0,
+                stops,
+                rival_projections,
+                stints[0].get("lap_times_s") if stints else (),
+                laps_to_first_stop,
             )
             expected = (
                 sum(float(stint["expected_time_s"]) for stint in stints)
@@ -3306,7 +3723,17 @@ class StrategyEngine:
                 + traffic_cost * 1.35
                 + pending_penalty_s
             )
+            # Option value belongs to the decision, not to the stop. It moves
+            # the ranking quantity and leaves projected_time_s physical, which
+            # matters because that time is compared against rival finish times
+            # and rivals share the same chance of a cheap stop.
+            option = self._neutralisation_option_value_s(
+                state, box_laps, neutralisation, safety_car_hazard
+            )
+            option_value_s = float(option["option_value_s"])
             return {
+                "neutralisation_option_value_s": option_value_s,
+                "neutralisation_option": option,
                 "stops_remaining": stops,
                 "pit_stop_costs_s": pit_costs,
                 "pit_stop_phases": [
@@ -3326,6 +3753,12 @@ class StrategyEngine:
                 "pending_finish_penalty_s": pending_penalty_s,
                 "finish_penalty": player_penalty,
                 "risk_adjusted_time_s": round(conservative, 2),
+                # The quantity decisions are made on: the pessimistic time,
+                # less what the chance of a cheap stop is worth. Kept apart
+                # from risk_adjusted_time_s so that stays a time estimate
+                # rather than a score, and used by both the shortlist and the
+                # ranking so the two cannot disagree about what is credible.
+                "decision_time_s": round(conservative - option_value_s, 2),
                 "projected_finish_wear_pct": round(
                     float(stints[-1]["projected_finish_wear_pct"]), 1
                 ),
@@ -3700,14 +4133,6 @@ class StrategyEngine:
         track_id = int(state.get("track_id", -1))
         difficulty_known = track_id in TRACK_OVERTAKING_DIFFICULTY
         overtaking_difficulty = TRACK_OVERTAKING_DIFFICULTY.get(track_id, 0.60)
-        rival_projections = self._project_rival_finish_times(
-            state,
-            historical,
-            remaining,
-            base_lap_s,
-            effective_pit_loss,
-            current_wetness,
-        )
         for plan in plans:
             self._annotate_finish_projection(
                 plan,
@@ -3772,7 +4197,7 @@ class StrategyEngine:
                 ),
                 int(plan.get("projected_finish_position", 99)),
                 -int(plan.get("projected_points", 0)),
-                float(plan["risk_adjusted_time_s"]),
+                float(plan.get("decision_time_s", plan["risk_adjusted_time_s"])),
             ),
         )
         # Run uncertainty analysis only on credible candidates; this keeps live
@@ -3820,6 +4245,15 @@ class StrategyEngine:
         for required in self._best_per_shape(plans):
             if all(required is not item for item in shortlisted):
                 shortlisted.append(required)
+        risk_appetite = str(
+            state.get("strategy_risk_appetite")
+            or state.get("driver_preferences", {}).get(
+                "strategy_risk_appetite", "balanced"
+            )
+            or "balanced"
+        ).lower()
+        if risk_appetite not in {"conservative", "balanced", "aggressive"}:
+            risk_appetite = "balanced"
         for plan in shortlisted:
             plan["monte_carlo"] = self._monte_carlo_profile(
                 plan,
@@ -3830,38 +4264,38 @@ class StrategyEngine:
             outcome_times = plan["monte_carlo"].pop("_outcome_times_s")
             plan.update(
                 self._position_distribution(
-                    plan, state, rival_projections, outcome_times
+                    plan, state, rival_projections, outcome_times, risk_appetite
                 )
             )
             risk_key = "p75_s" if settings.strategy_risk_quantile >= 0.70 else "p50_s"
             plan["risk_adjusted_time_s"] = plan["monte_carlo"][risk_key]
-        risk_appetite = str(
-            state.get("strategy_risk_appetite")
-            or state.get("driver_preferences", {}).get(
-                "strategy_risk_appetite", "balanced"
+            # A separate field, because risk_adjusted_time_s is a pessimistic
+            # estimate of how long the race takes and the option value is an
+            # optimistic adjustment to a decision. Subtracting one from the
+            # other produced a "risk-adjusted" time faster than the projection
+            # it was supposed to be cautious about.
+            plan["decision_time_s"] = round(
+                plan["risk_adjusted_time_s"]
+                - float(plan.get("neutralisation_option_value_s", 0.0)),
+                2,
             )
-            or "balanced"
-        ).lower()
-        if risk_appetite not in {"conservative", "balanced", "aggressive"}:
-            risk_appetite = "balanced"
+
+        def utility_band(plan: dict[str, Any]) -> int:
+            return math.floor(
+                float(plan.get("decision_utility", -1e9)) / UTILITY_RESOLUTION
+            )
 
         def ranking_key(plan: dict[str, Any]) -> tuple[Any, ...]:
-            if risk_appetite == "conservative":
-                appetite_position = int(
-                    plan.get("downside_p90_position", plan.get("projected_finish_position", 99))
-                )
-                appetite_points = points_for_position(appetite_position, mode)
-            elif risk_appetite == "aggressive":
-                appetite_position = int(
-                    plan.get("upside_p10_position", plan.get("projected_finish_position", 99))
-                )
-                appetite_points = points_for_position(appetite_position, mode)
-            else:
-                appetite_position = int(plan.get("projected_finish_position", 99))
-                appetite_points = float(plan.get("points_expected", 0.0))
-            # Classification remains primary for every appetite: an optimistic
-            # tail cannot make a projected P18 beat a projected P10. Appetite
-            # selects the gamble only among plans with the same central finish.
+            # The whole outcome distribution, valued and risk-tilted, instead
+            # of the integer central finish. Classification still dominates,
+            # because the value of a finish is strictly decreasing in position:
+            # an optimistic tail cannot make a projected P18 beat a projected
+            # P10, it can only separate two plans that finish alike.
+            #
+            # The band is the deadband. Plans whose utility differs by less
+            # than the model can resolve are declared equal here and decided on
+            # track position below, which is what the raw-time tiebreak used to
+            # get wrong.
             # Among plans the model itself scores as the same finishing
             # position and points, prefer the LATER first stop; staying out
             # counts as the latest of all. Raw simulated time used to break
@@ -3885,11 +4319,12 @@ class StrategyEngine:
                         plan.get("projected_finish_position", 99),
                     )
                 ),
-                int(plan.get("projected_finish_position", 99)),
-                appetite_position,
-                -float(appetite_points),
+                -utility_band(plan),
                 -first_stop,
-                float(plan.get("risk_adjusted_time_s", 1e9)),
+                -float(plan.get("decision_utility", 0.0)),
+                float(
+                    plan.get("decision_time_s", plan.get("risk_adjusted_time_s", 1e9))
+                ),
                 int(plan.get("stops_remaining", 9)),
             )
         # Remembered for _stabilize_radio_plan, which needs to find the plan
@@ -4286,6 +4721,8 @@ class StrategyEngine:
             "model_summary": model_summary,
             "personal_wear_model": style_evidence,
             "field_degradation_model": field_degradation,
+            "fuel_model": fuel_model,
+            "safety_car_hazard": safety_car_hazard,
             "assumptions": [
                 "Plans are ranked by projected finishing position first; elapsed time only breaks classification ties.",
                 f"Risk appetite is {risk_appetite}; it selects the distribution used between plans with the same central finish.",
@@ -4301,6 +4738,7 @@ class StrategyEngine:
                 ),
                 "A dry Race plan must finish with at least two different dry visual compounds unless inters or wets are used.",
                 "SC/VSC loss is an estimate; pit-entry position, traffic and field compression are recalculated from live state.",
+                f"A safety car is priced at {safety_car_hazard['per_lap_probability']:.3f} per lap from a circuit prior; it discounts the ranking of plans that still have a stop to make, never the pit loss shown for that stop.",
             ],
         }
 

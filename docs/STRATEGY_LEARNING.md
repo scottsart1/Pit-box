@@ -98,6 +98,45 @@ are deliberately not learned from observed stops: a rival's stop lap is a
 decision, not a tyre limit, and learning from it would mix strategy into
 physics.
 
+## Fuel, carried forward
+
+Fuel was corrected out of measured pace at 0.030 s/kg so a lightening car could
+not be mistaken for a tyre that stopped degrading, and then never added back
+for the laps still to come. Every projected lap carried a car that never got
+any lighter.
+
+Burn is measured from the player's own recorded laps, or from the reported fuel
+range when those are unavailable, and each projected lap is priced against the
+load carried on the reference laps, capped at the fuel actually on board.
+
+This does not change which plan wins. Every candidate covers the same remaining
+laps and therefore the same total correction, so it cancels in the comparison.
+What it changes is the lap times shown and spoken — roughly two seconds across
+a thirty-lap stint — and comparisons against a car at a different fuel load.
+Degradation does not yet depend on fuel mass.
+
+The correction is applied outside the stint model rather than inside it,
+because it is additive and depends only on where a stint sits in the race.
+That lets thousands of candidate stints share one cached tyre projection.
+
+## Neutralisation as a chance, not a certainty
+
+Every future stop used to be priced at the full green-flag loss, which says the
+chance of a safety car is exactly zero and leaves tyre state with no option
+value at all. A per-circuit expected-deployment prior now becomes a per-lap
+hazard, and the chance of a cheap stop arriving before the next planned one is
+credited once, discounted for the neutralisations that cannot be converted into
+the stop that was wanted.
+
+The saving never touches the pit loss the dashboard shows or the projected time
+compared against rivals: the first is the physical cost of a stop and the
+second would bias the position projection, since rivals share the same chance.
+It lands on a separate decision quantity used for shortlisting and ranking.
+
+These rates are priors. The game's incident frequency depends on a difficulty
+setting they cannot observe, and they should be replaced by the player's own
+observed rate once enough sessions are recorded.
+
 ## What the desktop shows
 
 Confidence is based on the least-supported non-empty stint in the recommended

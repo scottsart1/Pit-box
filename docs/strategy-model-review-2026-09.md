@@ -599,7 +599,7 @@ already contains its own conditions.
 | Tyre wear per corner | modelled, and used as a second pace channel | yes | refactor |
 | Degradation cliff | implicit in wear thresholds | yes | 3 |
 | Tyre temperature | **captured, never read** | yes (`state.py:28-29`) | 3 |
-| **Fuel mass on lap time** | **learning only, never forward** | yes | **2** |
+| Fuel mass on lap time | forward (4.13); cancels across plans by construction | yes | done |
 | Fuel mass on degradation | absent | yes | 2 |
 | Fuel saving / lift-and-coast | a config constant, outside the model | yes | 4 |
 | Push level as a decision | absent | yes | 4 |
@@ -610,10 +610,10 @@ already contains its own conditions.
 | Pit loss | circuit table | partially learnable | keep |
 | Pit loss variance | fixed 1.5 % / 4 % | yes | 5 |
 | SC/VSC now | priced | yes | keep |
-| **SC/VSC probability** | **absent** | prior + history | **2** |
+| SC/VSC probability | circuit prior (4.13); option value on the ranking only | prior + history | partial |
 | Rival pace | matched-stint median | yes | keep |
-| Rival stop schedule | constant from a wear table | yes | 1 |
-| Gaps / traffic at rejoin | flat one-off penalty, on today's grid | yes | 3 |
+| Rival stop schedule | constant from a wear table | yes | 2 |
+| Gaps / traffic at rejoin | projected grid at the box lap (4.13) | yes | done |
 | Dirty air while following | absent | yes | 3 |
 | DRS | absent | yes | 4 |
 | Overtake probability | time budget / circuit constant | yes | 3 |
@@ -621,8 +621,8 @@ already contains its own conditions.
 | Tyre inventory & rules | hard constraints, correct | yes | keep |
 | Penalties | priced once | yes | keep |
 | Damage | absent from strategy | yes | 5 |
-| Risk appetite | three sort keys | n/a | 2 |
-| Objective | lexicographic position | n/a | **2** |
+| Risk appetite | one tail-weight parameter (4.13) | n/a | done |
+| Objective | risk-tilted expected utility (4.13) | n/a | done |
 | Calibration | `"calibrated": false` | needs a harness | **2** |
 
 ---
@@ -648,28 +648,63 @@ ran on `DEFAULT_DEG * TRACK_TYRE_SEVERITY`. Rival stop-lap estimates are *not*
 derived from it: a rival's stop lap is a decision, not a tyre limit, and
 learning tyre life from observed stop laps would fold strategy into physics.
 
-**Stage 2 — Expected-utility objective.** Replace the lexicographic key with a
-scalar utility over the existing position distribution; make risk appetite one
-parameter. Then reassess how much of the plan-hold machinery is still needed —
-some of it should become deletable, which is the clearest signal that the fix
-was structural. Promoted above fuel because it changes which plan is chosen,
-which the fuel term mostly does not.
+**Stage 2 — Expected-utility objective. _Implemented._** The two integer
+position keys and the two appetite keys are replaced by one risk-tilted
+expected utility over the outcome distribution the Monte Carlo already
+produced. `finish_value` is points plus half a point per place gained outside
+them, so it is strictly decreasing in position: classification still dominates
+— an optimistic tail cannot make a projected P18 beat a projected P10 — but
+two plans that finish alike are now separated by their distributions instead
+of falling through to a raw time. Appetite is one parameter, a weight on the
+worst or best quartile, so conservative and aggressive are points on a scale
+rather than different rankings.
 
-**Stage 3 — Future-state rejoin and per-rival encounters.** Advance the field
-to each candidate box lap before counting the rejoin position (§3.6), then
-replace the recovery budget with per-rival pass probabilities and a dirty-air
-lap-time cost.
+The `-first_stop` preference is kept, behind a deadband: utilities within
+`UTILITY_RESOLUTION` are declared equal and decided on track position. That is
+the same judgement the old comment recorded — differences below what the model
+can cash in should not move a pit call — but stated as a resolution rather
+than as an accident of integer equality. The plan-hold machinery is untouched
+so far; whether it can be reduced is a question for real races.
 
-**Stage 4 — Explicit fuel term, forward.** Demoted deliberately. Over a whole
-race the fuel term is common to every candidate and cancels in the comparison,
-so it barely moves the optimal box lap. It is still worth doing, because it
-fixes every lap time the app displays and speaks, makes rival comparisons
-sound across differing fuel loads, and lets degradation depend on fuel mass —
-which is why the undercut is strong at the first stop and weak at the last.
+**Stage 3 — Future-state rejoin. _Implemented._** `_rejoin_position` now takes
+the gaps at the lap the stop actually happens, advanced along both cars'
+projected laps from the same signed-gap origin. Rival projections moved ahead
+of candidate generation to supply them. A stop on the current lap deliberately
+keeps the live gaps: there the timing screen is a measurement and the
+projection is only a model. Per-rival pass probabilities and a dirty-air
+lap-time cost are still open.
 
-**Stage 5 — Safety-car hazard and scenario evaluation.** Per-circuit prior,
-per-lap hazard, decisions as expectations. Depends on Stage 2, because
-scenarios only compose if the objective is a scalar.
+**Stage 4 — Explicit fuel term, forward. _Implemented._** Burn is measured
+from the player's own laps, or from the reported fuel range, and each
+projected lap is priced against the load carried on the reference laps.
+
+Its cancellation is now confirmed rather than argued: every candidate covers
+the same remaining laps, so the total correction is identical across plans and
+the ranking cannot move. The benefit is entirely in the lap times the
+dashboard renders and the radio speaks — about 2 s across a 30-lap stint that
+the projection previously never lost — and in comparisons against cars at a
+different fuel load. Degradation does not yet depend on fuel mass, which is
+the part that would make the undercut stronger early.
+
+Fuel is applied outside `_simulate_stint`, as an additive correction keyed on
+where the stint runs. Folding it into the loop made every candidate stint
+offset-specific and doubled the cost of a recompute.
+
+**Stage 5 — Safety-car hazard. _Implemented, partially._** A per-circuit
+expected-deployment prior becomes a per-lap hazard, and the chance of a cheap
+stop arriving before the next planned one is credited once, at a conversion
+factor for the neutralisations that cannot be turned into the stop you wanted.
+
+Two deliberate limits. The saving never touches `pit_stop_costs_s` or
+`projected_time_s`: those are the physical cost of a stop and a time compared
+against rivals, and discounting either would make the dashboard wrong or bias
+the position projection. It lands on a separate `decision_time_s`, used by the
+shortlist and the ranking. Nor does it change *which lap* a plan stops on if a
+safety car appears — the fuller version replans, and prices field compression,
+which this does not.
+
+Scenario evaluation — sampling neutralisations, weather and rival behaviour
+into coherent races — remains open.
 
 **Stage 6 — Unify degradation and wear into one curve**, with temperature as an
 argument. Largest refactor; best done once the objective is stable, so the
