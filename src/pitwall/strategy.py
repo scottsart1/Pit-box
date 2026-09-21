@@ -13,7 +13,7 @@ from typing import Any
 
 import numpy as np
 
-from . import rain
+from . import field_learning, rain
 from .config import settings
 from .database import PitWallDatabase
 from .race_plan import plan_matches, remaining_plan
@@ -190,6 +190,18 @@ def infer_unrun_compounds(historical: dict[str, Any]) -> dict[str, Any]:
     return result
 
 
+# Spread attached to each degradation source when several are combined. A table
+# constant is a guess and gets a wide one; a personal slope measured across
+# several stints gets a tight one derived from its own observed spread. These
+# are prior widths for weighting evidence against evidence, and none of them is
+# a calibrated confidence interval.
+_PRIOR_DEG_SIGMA_FRACTION = 0.45
+_PRIOR_DEG_SIGMA_FLOOR = 0.04
+_INFERRED_DEG_SIGMA_FRACTION = 0.35
+_INFERRED_DEG_SIGMA_FLOOR = 0.03
+_PERSONAL_DEG_SIGMA_FLOOR = 0.012
+_PERSONAL_DEG_SPREAD_FALLBACK = 0.05
+
 # Below this the car is not meaningfully quicker than what it must pass, so a
 # stop that drops it into traffic recovers nothing.
 _MIN_USEFUL_PACE_ADVANTAGE_S = 0.10
@@ -355,6 +367,11 @@ def _surface_word(wetness: float) -> str:
 class StrategyEngine:
     """Deterministic, explainable tyre, stop and neutralisation strategy model."""
 
+    # Declared on the class, not only in __init__, because callers construct
+    # planning-only engines with __new__ to avoid needing a store or database.
+    _field_degradation_key: tuple[Any, ...] | None = None
+    _field_degradation: dict[str, Any] | None = None
+
     def __init__(self, store: StateStore, database: PitWallDatabase) -> None:
         self.store = store
         self.database = database
@@ -377,6 +394,12 @@ class StrategyEngine:
         self._compute_gate = asyncio.Lock()
         self._recompute_task: asyncio.Task[dict[str, Any]] | None = None
         self._closing = False
+        # Field degradation reads every car's whole session history, and the
+        # answer cannot change until somebody completes a lap. recompute() runs
+        # on the 0.35 s proactive tick, so it is cached against the lap rather
+        # than refitted several times a second.
+        self._field_degradation_key: tuple[Any, ...] | None = None
+        self._field_degradation: dict[str, Any] | None = None
 
     @staticmethod
     def _valid_laps(state: dict[str, Any]) -> list[dict[str, Any]]:
@@ -1186,15 +1209,83 @@ class StrategyEngine:
         live = (state.get("analysis", {}).get("deg_model", {}) or {}).get("compounds", {}).get(compound, {})
         prior = historical.get("compounds", {}).get(compound, {})
         severity = TRACK_TYRE_SEVERITY.get(int(state.get("track_id", -1)), 1.0)
-        value, source, samples = DEFAULT_DEG.get(compound, 0.08) * severity, "track_default", 0
+        default = DEFAULT_DEG.get(compound, 0.08) * severity
+        value, source, samples = default, "track_default", 0
+        # What the rest of the field has shown about this compound today. It is
+        # absent until tyre ages diverge across the field, because until then a
+        # car's tyre age is exactly its pace level plus the lap counter and
+        # nothing about tyres is identified. See field_learning.
+        field = field_learning.field_evidence(
+            state.get("_strategy_field_degradation"), compound
+        )
         measured = finite(prior.get("slope_s_per_lap"))
         inferred = finite(prior.get("inferred_deg_s_per_lap"))
         prior_samples = int(prior.get("sample_size", 0))
+
+        def combine(
+            own: field_learning.Evidence, label: str
+        ) -> tuple[float, str, int]:
+            """Weigh one source against the field by precision, not priority.
+
+            With no field evidence this returns the source unchanged, so a
+            session that has taught the model nothing behaves exactly as it did
+            before the field was ever consulted.
+            """
+            if field is None:
+                return own.value, label, own.sample_size
+            blended = field_learning.blend([own, field])
+            if blended is None:
+                return own.value, label, own.sample_size
+            return (
+                float(blended["value"]),
+                f"{label}+field_learned",
+                max(own.sample_size, field.sample_size),
+            )
+
         if measured is not None and -0.1 <= measured <= 1.5 and prior_samples >= 3:
-            value, source, samples = max(0.0, measured), "personal_track_history", prior_samples
+            spread = finite(prior.get("slope_spread_s_per_lap"))
+            if spread is None or spread <= 0:
+                spread = _PERSONAL_DEG_SPREAD_FALLBACK
+            value, source, samples = combine(
+                field_learning.Evidence(
+                    value=max(0.0, measured),
+                    sigma=max(
+                        _PERSONAL_DEG_SIGMA_FLOOR, spread / math.sqrt(prior_samples)
+                    ),
+                    source="personal_track_history",
+                    sample_size=prior_samples,
+                ),
+                "personal_track_history",
+            )
         elif inferred is not None and -0.1 <= inferred <= 1.5:
-            value = max(0.0, inferred)
-            source = f"inferred_from_{'_'.join(prior.get('inferred_from', []) or ['observed'])}".lower()
+            # A compound nobody has run is extrapolated through a hand-written
+            # hardness step. A measured field contrast is better evidence than
+            # that multiplier, and precision weighting says so without the
+            # cascade having to rank them.
+            value, source, samples = combine(
+                field_learning.Evidence(
+                    value=max(0.0, inferred),
+                    sigma=max(
+                        _INFERRED_DEG_SIGMA_FLOOR,
+                        abs(inferred) * _INFERRED_DEG_SIGMA_FRACTION,
+                    ),
+                    source="inferred_step_ratio",
+                    sample_size=0,
+                ),
+                f"inferred_from_{'_'.join(prior.get('inferred_from', []) or ['observed'])}".lower(),
+            )
+        else:
+            value, source, samples = combine(
+                field_learning.Evidence(
+                    value=default,
+                    sigma=max(
+                        _PRIOR_DEG_SIGMA_FLOOR, default * _PRIOR_DEG_SIGMA_FRACTION
+                    ),
+                    source="track_default",
+                    sample_size=0,
+                ),
+                "track_default",
+            )
         observed, live_samples = finite(live.get("slope_s_per_lap")), int(live.get("sample_size", 0))
         if observed is not None and -0.1 <= observed <= 1.5 and live_samples >= 3:
             weight = min(1.0, live_samples / 8.0)
@@ -1202,6 +1293,21 @@ class StrategyEngine:
             source = "live_fuel_corrected_fit" if weight == 1 else "blended_live_pace+" + source
             samples = live_samples
         return apply_feedback(value, source, samples)
+
+    def field_degradation(self, state: dict[str, Any]) -> dict[str, Any]:
+        """This session's field degradation, refitted once per completed lap."""
+        signature = (
+            int(state.get("session_uid", 0) or 0),
+            int(state.get("restart_epoch", 0) or 0),
+            int(state.get("timeline_epoch", 0) or 0),
+            int(state.get("current_lap", 0) or 0),
+            len(state.get("drivers") or ()),
+            len(state.get("completed_laps") or ()),
+        )
+        if self._field_degradation_key != signature or self._field_degradation is None:
+            self._field_degradation = field_learning.field_degradation(state)
+            self._field_degradation_key = signature
+        return self._field_degradation
 
     @staticmethod
     def _pit_entry_status(state: dict[str, Any]) -> str:
@@ -2996,7 +3102,14 @@ class StrategyEngine:
         )
         # This is a per-compute cache, not live/persisted telemetry. Thousands
         # of candidate stints share one reference without mutating the caller.
-        state = {**state, "_strategy_reference_wetness": current_wetness}
+        # The field model must be attached before the pace reference is built,
+        # because that reference prices its own laps through _deg_for.
+        field_degradation = self.field_degradation(state)
+        state = {
+            **state,
+            "_strategy_reference_wetness": current_wetness,
+            "_strategy_field_degradation": field_degradation,
+        }
         pace_reference = self._pace_reference(state, historical)
         state["_strategy_pace_reference"] = pace_reference
         wetness_trajectory = list(
@@ -4172,11 +4285,20 @@ class StrategyEngine:
             "defence": defence,
             "model_summary": model_summary,
             "personal_wear_model": style_evidence,
+            "field_degradation_model": field_degradation,
             "assumptions": [
                 "Plans are ranked by projected finishing position first; elapsed time only breaks classification ties.",
                 f"Risk appetite is {risk_appetite}; it selects the distribution used between plans with the same central finish.",
                 f"Overtaking difficulty is {overtaking_difficulty:.2f}; unknown circuits use 0.60 with lower confidence.",
                 "Clean live wear and fuel-corrected stint pace blend with personal history as samples accumulate; untested tyres keep low confidence.",
+                (
+                    "Degradation for "
+                    + ", ".join(field_degradation.get("identified_compounds", []))
+                    + f" is learned from {field_degradation.get('contributing_cars', 0)}"
+                    " cars' clean-air laps and weighted against personal evidence by precision."
+                    if field_degradation.get("identified_compounds")
+                    else "The field has not run differing tyre ages on shared laps yet, so rival degradation remains a circuit prior."
+                ),
                 "A dry Race plan must finish with at least two different dry visual compounds unless inters or wets are used.",
                 "SC/VSC loss is an estimate; pit-entry position, traffic and field compression are recalculated from live state.",
             ],
@@ -4349,8 +4471,10 @@ class StrategyEngine:
         """Apply the shared stint model to an explicitly assumed rival response.
 
         Rival fuel/set inventory are not observed here. Their own matched lap
-        reference and a separate degradation prior avoid borrowing the player's
-        learned slope or charging observed tyre age a second time.
+        reference, plus degradation learned from the field rather than the
+        player, avoid borrowing the player's learned slope or charging observed
+        tyre age a second time. Where the field has taught the model nothing
+        yet, this falls back to the same circuit prior it always used.
         """
         compound = str(target.get("tyre_compound", "UNKNOWN")).upper()
         if compound not in DRY_COMPOUNDS:
@@ -4362,6 +4486,7 @@ class StrategyEngine:
             "current_lap": state.get("current_lap", 0),
             "tyre": {"compound": compound, "age_laps": age},
             "driver_tyre_feedback": {}, "analysis": {}, "car_setup": {},
+            "_strategy_field_degradation": self.field_degradation(state),
         }
         deg, _, _ = self._deg_for(clean, compound, {})
         reference = self._rival_pace_reference(target, deg)

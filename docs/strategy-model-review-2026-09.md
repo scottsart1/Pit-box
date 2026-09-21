@@ -255,6 +255,17 @@ The limitations are structural rather than parametric:
 - `0.60` (`_ADVANTAGE_RETENTION`) and `1.0 + 6.0 * difficulty` are unfitted
   constants applied to every circuit, car and situation.
 
+**The rejoin position is computed from the field as it stands now, not as it
+will stand at the proposed stop.** `_rejoin_position` (`strategy.py:1460`)
+counts cars whose *present* `gap_to_player_s` falls inside the pit loss. For a
+stop proposed twelve laps out, that is the wrong grid: it prices the traffic
+you would rejoin into today. Because this is the main term distinguishing one
+box lap from another, the model is close to indifferent between lap 14 and lap
+16 for exactly the reason a driver would care about them — which cars are
+there. Advancing each rival's projected lap times to the candidate box lap
+before counting is a contained fix, and the projections needed for it are
+already computed in `_project_rival_finish_times`.
+
 ### 3.7 Neutralisation is priced only where it has already happened
 
 `_neutralisation` (`strategy.py:1247`) discounts the pit loss for the *current*
@@ -377,13 +388,40 @@ Three properties follow that the current cascade cannot produce:
 **Estimating the field level from game telemetry.** Rival fuel mass is not
 broadcast, which is the stated reason the current code refuses to fit rival
 slopes (`strategy.py:1586-1588`). That reasoning is right for a single rival
-and wrong for the field: fuel burn is approximately common to every car in the
-race, so in a pooled fit across cars at different tyre ages on the same lap,
-the fuel term is the *common* component and tyre age is the *varying* one.
-They are separable in the cross-section even though they are collinear within
-one car's stint. This is the same trick `rain.py` already uses — it recovers
-wetness from the field by comparing cars on different compounds at the same
-moment (`field_pace_observations`, `compound_split`).
+and wrong for the field, but the correct argument is narrower than the one
+this document first made, and the difference matters enough to state.
+
+The first version of this section claimed that pooling across cars separates
+fuel from tyre age because fuel is the common component and age the varying
+one. That is not sufficient. Write the model with a car effect and a fully
+flexible per-lap effect:
+
+```
+lap_time[car, lap] = alpha[car] + gamma[lap] + beta * age[car, lap] + e
+```
+
+`gamma` absorbs every effect the field shares on a lap — fuel load, track
+evolution, air and track temperature, a safety car, a shower — so no rival
+fuel telemetry is needed for any of them. But if a car runs a compound exactly
+once, its tyre age is `lap - start + 1`, which is *precisely* a car effect plus
+a lap effect. The fixed effects annihilate it and `beta` is not identified, no
+matter how many cars or laps are supplied.
+
+What breaks that additivity is the pit stop. Age resets to zero while the lap
+counter carries on, so a field whose cars have stopped on different laps
+carries a sawtooth in tyre age that no car-plus-lap decomposition can
+reproduce. **That sawtooth is the entire identifying signal**, and it implies
+the honest operating rule: before the first round of stops the field can teach
+the model nothing about absolute degradation, and the model should say so
+rather than return a number.
+
+The same fit, run across all dry compounds at once with age-by-compound
+interactions, also yields the compound *contrasts* — which is what replaces the
+hand-written `_DEFAULT_DEG_STEP_RATIO = 1.35` with a measurement.
+
+This is the same family of trick `rain.py` already uses — it recovers wetness
+from the field by comparing cars on different compounds at the same moment
+(`field_pace_observations`, `compound_split`).
 
 Requirements for the field fit to be trustworthy:
 
@@ -440,8 +478,17 @@ last, and it is currently inexpressible.
 
 Promote driving style from an observation to a decision. Define a push level
 `p` mapping to a trade curve `(delta_lap_time, delta_deg, delta_wear,
-delta_fuel)`. The driver's own frontier is estimable from data already stored:
-lap time against wear increment, within a stint, at matched tyre age.
+delta_fuel)`. The driver's own frontier is *suggested* by data already stored — lap time
+against wear increment, within a stint, at matched tyre age — but that
+relationship is observational, and the distinction is not pedantic. Laps that
+were slower may have been slower because of a cooler track, traffic, or a
+mistake, and their lower wear may have the same cause. Fitting the curve to
+such laps estimates "slower laps had less wear", which is not the quantity the
+advice depends on: the causal effect of *choosing* to go slower. The
+trustworthy version needs matched runs — a deliberate management stint against
+a deliberate push stint in comparable conditions — which practice sessions can
+supply and a race cannot. Until then the trade curve should be offered as an
+assumption with a stated width, not as a measurement.
 
 The strategy search then optimises over `(box_laps, compounds, push_profile)`
 instead of `(box_laps, compounds)`, and the model gains an entire class of
@@ -546,8 +593,9 @@ already contains its own conditions.
 | Input | Today | Data available? | Priority |
 | --- | --- | --- | --- |
 | Own tyre degradation | Fuel-corrected slope, well done | yes | keep |
-| **Field / rival degradation** | **Hardcoded constant** | **yes** | **1** |
-| Driver deg offset vs field | absent | yes | 1 |
+| **Field / rival degradation** | **learned (4.13)** | yes | done |
+| Compound contrasts | learned (4.13); was a 1.35 multiplier | yes | done |
+| Driver deg offset vs field | absent | yes | 2 |
 | Tyre wear per corner | modelled, and used as a second pace channel | yes | refactor |
 | Degradation cliff | implicit in wear thresholds | yes | 3 |
 | Tyre temperature | **captured, never read** | yes (`state.py:28-29`) | 3 |
@@ -565,7 +613,7 @@ already contains its own conditions.
 | **SC/VSC probability** | **absent** | prior + history | **2** |
 | Rival pace | matched-stint median | yes | keep |
 | Rival stop schedule | constant from a wear table | yes | 1 |
-| Gaps / traffic at rejoin | flat one-off penalty | yes | 3 |
+| Gaps / traffic at rejoin | flat one-off penalty, on today's grid | yes | 3 |
 | Dirty air while following | absent | yes | 3 |
 | DRS | absent | yes | 4 |
 | Overtake probability | time budget / circuit constant | yes | 3 |
@@ -584,37 +632,54 @@ already contains its own conditions.
 Ordered so that each stage is independently shippable and each one makes the
 next cheaper.
 
-**Stage 1 — Field-learned degradation.** A `field_learning` module beside
-`tyre_learning`, fitting pooled per-compound slopes from rival lap history with
-per-car intercepts and clean-air filtering. Feed it into `_deg_for` as a middle
-evidence level and into `_project_rival_finish_times` in place of the table
-constant. Largest single improvement; the data is already in `state`; nothing
-else has to change to benefit. Rival stop-lap estimates come with it, since
-pooled deg plus observed wear predicts a stop window rather than a constant.
+**Stage 0 — Evidence record and retrospective prediction logging.** Store each
+prediction before its outcome is known, with the model version and the evidence
+that produced it. This moved to the front on reflection: without stored
+pre-outcome predictions there is no way to tell whether any later stage helped,
+so every stage below is otherwise unfalsifiable.
 
-**Stage 2 — Explicit fuel term, forward.** Small, mechanical, unblocks the
-undercut and fixes every lap time the app displays or speaks.
+**Stage 1 — Field-learned degradation. _Implemented._** `field_learning.py`
+beside `tyre_learning.py`: a two-way fixed-effects fit over the field's
+session-history laps, with clean-air filtering, neutralised-lap exclusion,
+car-clustered standard errors and an explicit identification diagnostic. It
+feeds `_deg_for` as an evidence level combined by precision, and reaches
+`_project_rival_finish_times` and the undercut/overcut tools, which previously
+ran on `DEFAULT_DEG * TRACK_TYRE_SEVERITY`. Rival stop-lap estimates are *not*
+derived from it: a rival's stop lap is a decision, not a tyre limit, and
+learning tyre life from observed stop laps would fold strategy into physics.
 
-**Stage 3 — Expected-utility objective.** Replace the lexicographic key with a
+**Stage 2 — Expected-utility objective.** Replace the lexicographic key with a
 scalar utility over the existing position distribution; make risk appetite one
 parameter. Then reassess how much of the plan-hold machinery is still needed —
 some of it should become deletable, which is the clearest signal that the fix
-was structural.
+was structural. Promoted above fuel because it changes which plan is chosen,
+which the fuel term mostly does not.
 
-**Stage 4 — Safety-car hazard and scenario evaluation.** Per-circuit prior,
-per-lap hazard, decisions as expectations. Depends on Stage 3, because
+**Stage 3 — Future-state rejoin and per-rival encounters.** Advance the field
+to each candidate box lap before counting the rejoin position (§3.6), then
+replace the recovery budget with per-rival pass probabilities and a dirty-air
+lap-time cost.
+
+**Stage 4 — Explicit fuel term, forward.** Demoted deliberately. Over a whole
+race the fuel term is common to every candidate and cancels in the comparison,
+so it barely moves the optimal box lap. It is still worth doing, because it
+fixes every lap time the app displays and speaks, makes rival comparisons
+sound across differing fuel loads, and lets degradation depend on fuel mass —
+which is why the undercut is strong at the first stop and weak at the last.
+
+**Stage 5 — Safety-car hazard and scenario evaluation.** Per-circuit prior,
+per-lap hazard, decisions as expectations. Depends on Stage 2, because
 scenarios only compose if the objective is a scalar.
 
-**Stage 5 — Unify degradation and wear into one curve**, with temperature as an
+**Stage 6 — Unify degradation and wear into one curve**, with temperature as an
 argument. Largest refactor; best done once the objective is stable, so the
 change can be measured.
 
-**Stage 6 — Push level as a control**, and per-rival overtake probability with
-dirty air.
+**Stage 7 — Push level as a control**, subject to the causal caveat in §4.5.
 
-**Stage 7 — Calibration harness, running throughout.** Nothing above is
-believable without it, and the model currently ships
-`"calibrated": false` in its own output. The harness needs:
+**Calibration harness, running throughout.** Nothing above is believable
+without it, and the model still ships `"calibrated": false` in its own output.
+The harness needs:
 
 - Predicted vs actual lap time, per stint, as a function of tyre age
   (MAE by age bucket — this is what detects a wrong cliff).

@@ -46,6 +46,58 @@ learning during live recomputation, preventing the same laps from being counted
 twice. The pre-race planner includes completed practice runs even before the
 game advances to a new session.
 
+## Degradation learned from the field
+
+Personal evidence is not the only evidence in a race. Every other car is
+running the same compounds on the same surface in the same conditions, and
+`field_learning.py` estimates a per-compound degradation slope from their
+session-history laps.
+
+The fit is a two-way fixed-effects regression over all dry compounds at once:
+a car effect absorbs each driver's intrinsic pace, and a lap effect absorbs
+everything the field shares on a given lap — fuel load, track evolution, air
+and track temperature, a safety car, a shower. No rival fuel telemetry is
+needed, because fuel mass is common to the field at a given lap and the lap
+effect takes it.
+
+**Degradation is identified by tyre age resetting at pit stops.** Inside one
+stint, tyre age advances exactly one lap at a time, so for a car that runs a
+compound once, its age is precisely a car effect plus a lap effect and the
+fixed effects annihilate it. The stop is what breaks that: age returns to zero
+while the lap counter continues, and a field that has stopped on different laps
+carries a sawtooth no car-plus-lap decomposition can reproduce. Before the
+first round of stops nothing is identified however many cars and laps exist,
+and the model reports `age_not_separable_from_lap` rather than a number.
+`retained_age_variance` is the fraction of the age regressor surviving both
+sets of fixed effects, and it is the published measure of how much the field
+has actually supplied.
+
+Excluded before fitting: out-laps and in-laps, laps the player recorded as
+neutralised, invalid laps, restricted and retired cars, wet compounds, laps
+with no identifiable stint, and laps run within 2.5 s of the car ahead, which
+measure aerodynamic wake rather than tyre life. Gaps are reconstructed from
+cumulative elapsed time; a car being lapped is close to traffic this
+reconstruction cannot see, and those laps remain a known confounder.
+
+The player's own car is excluded from the field. Its laps are already the
+personal estimate, and combining two sources that share observations would
+report a confidence neither earned. Standard errors are clustered by car,
+because ten laps from one driver are one driver's evidence.
+
+Estimates are combined by precision rather than by a first-match cascade, so
+sparse personal evidence is nudged by the field instead of either overriding it
+or being ignored until a lap counter crosses a threshold. A field estimate is
+never offered as tighter than `SIGMA_FLOOR`, which is the standing admission
+that the confounders above are not in its standard error. Where the field has
+identified nothing, every estimate is exactly what it was before this existed.
+
+The same fit yields compound *contrasts*, which replace the hand-written
+`_DEFAULT_DEG_STEP_RATIO` extrapolation for compounds nobody has run with a
+measurement. Rival stop laps are still estimated from typical stint length and
+are deliberately not learned from observed stops: a rival's stop lap is a
+decision, not a tyre limit, and learning from it would mix strategy into
+physics.
+
 ## What the desktop shows
 
 Confidence is based on the least-supported non-empty stint in the recommended
@@ -72,6 +124,12 @@ damage, changing track grip and driving consistency can still affect pace.
 The fixed fuel coefficient and long-stint wear growth remain modelling priors,
 not individually calibrated physical measurements. Confidence is an evidence
 grade, not a statistically calibrated chance that a strategy will win.
+
+Field degradation is verified against synthetic fields whose true slope is
+stated, including fields carrying a shared fuel burn, an improving track, a
+safety car and a 4.5 s spread of car pace. Those checks establish that the
+estimator recovers what it is given and refuses what it cannot identify; they
+do not establish accuracy against the game.
 
 The next validation priority is held-out real race and practice captures: compare
 predicted versus actual stint wear, lap pace and stop outcomes, split by circuit,
