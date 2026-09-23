@@ -678,13 +678,13 @@ def test_beta_transmission_is_distinct_from_reception_and_history_copy():
 
 
 def test_unsigned_windows_notice_remains_without_removed_installation_wording():
-    assert 'Windows 4.13.0 · unsigned installer' in INDEX
+    assert 'Windows 4.13.1 · unsigned installer' in INDEX
     assert 'The current Windows installer is unsigned.' in GUIDE
     for page in (INDEX, GUIDE):
         assert 'unknown publisher' in page or 'unknown-publisher' in page
         assert 'Do not turn off your firewall, antivirus or Smart App Control' not in page
         assert 'wait for a signed release' not in page
-    assert '84b1fcc4d76c2d3ce9a84df5532a4d61195de85804b2398f0ce0362739b4573a' in INDEX
+    assert '23fcb3459484676518c643a555d17cd12abaf8d789da998d701a4fc82b726f8b' in INDEX
 
 
 def test_current_release_describes_skippable_setup_tour_and_manual_updates():
@@ -693,8 +693,8 @@ def test_current_release_describes_skippable_setup_tour_and_manual_updates():
     assert 'including rivals on another compound' in release
     assert 'The lap delta comes from official lap times' in release
     assert 'says when patchy telemetry limits it' in release
-    assert 'Windows 4.13.0 and Android 4.12.4 (revision 23).' in release
-    for text in ('4.13.0', 'skippable setup', 'UDP IP and port', 'guided app tour',
+    assert 'Windows 4.13.1 and Android 4.12.4 (revision 23).' in release
+    for text in ('4.13.1', 'skippable setup', 'UDP IP and port', 'guided app tour',
                  'Existing preferences stay unchanged', 'Nothing installs automatically'):
         assert text in release
     assert 'Install this update manually once' in INDEX
