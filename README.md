@@ -104,6 +104,27 @@ dashboard. Bind the web host to `0.0.0.0`, set a long
 `PITWALL_WEB_ACCESS_TOKEN`, and keep it on a trusted LAN. Your Pit Box never opens a
 router or firewall to the public internet automatically.
 
+## What changed in 4.13.1
+
+### Rivals and you are judged by the same flag rule
+
+Whether a lap ran under a flag decides how Lap Lab treats a comparison. A
+rival's lap counted as flagged whenever a yellow was out anywhere on the
+track, even for a moment, while your own laps never did, so a lap you backed
+off for a yellow was compared with a rival's clean lap as like for like.
+Every car's lap is now judged the same way: a safety car, virtual safety car,
+formation lap or red flag, or a yellow or red shown to that car. Your saved
+laps are corrected the first time this version starts; rival laps recorded
+before it keep their earlier marking.
+
+### A clearer Analysis page
+
+The Library and Field show a quality figure for every session instead of
+"Unavailable", and sessions are named by circuit rather than by track number.
+Choosing another reference in Lap Lab clears the previous comparison's status
+instead of leaving "Comparison ready" above an empty result. Comparisons are
+calculated without holding up the live telemetry connection.
+
 ## What changed in 4.13.0
 
 ### Comparing laps against rivals works, and keeps working
