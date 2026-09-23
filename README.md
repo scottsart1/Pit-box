@@ -1,8 +1,8 @@
-# Your Pit Box 4.11.0 — AI race engineer and driver dashboard
+# Your Pit Box 4.13.2 — AI race engineer and driver dashboard
 
 [Download Windows or Android](https://yourpitbox.com/#download),
 [try the Driver Dashboard](https://your-pit-box-driver-dashboard.sarthakvij123450.chatgpt.site/),
-or read the [release verification](docs/release-qa-4.11.0.md).
+or read the [release verification](docs/release-qa-4.13.2.md).
 
 Your Pit Box receives **F1 26** telemetry (UDP format **2026**) from a PS5, runs deterministic
 strategy/corner/setup analysis locally, keeps persistent SQLite history, answers spoken questions,
@@ -103,6 +103,16 @@ Only enable `PITWALL_WEB_LAN_ACCESS=true` when a phone/tablet needs the
 dashboard. Bind the web host to `0.0.0.0`, set a long
 `PITWALL_WEB_ACCESS_TOKEN`, and keep it on a trusted LAN. Your Pit Box never opens a
 router or firewall to the public internet automatically.
+
+## What changed in 4.13.2
+
+- A rival's yellow or red flag now carries across the start line until the
+  next status packet clears it, matching the player's lap flag rule. This
+  also covers a flag received before the first lap-data packet. Later clean
+  laps and other cars remain unflagged.
+- Includes the 4.13.1 lap-comparison, history-quality and responsiveness fixes.
+- Android revision 26 uses the existing release signing identity so it can
+  upgrade the published 4.12.4 revision 23 package.
 
 ## What changed in 4.13.1
 

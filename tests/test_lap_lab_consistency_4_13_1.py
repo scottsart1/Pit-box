@@ -143,6 +143,48 @@ async def test_a_neutralisation_flags_every_cars_lap(
     assert flags == {0: True, 1: True, 2: True}
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("flag", [YELLOW, RED])
+@pytest.mark.parametrize("first_lap", [0, 1])
+async def test_a_cars_active_flag_is_carried_into_the_next_lap(
+    flag: int, first_lap: int
+) -> None:
+    """Status packets can straddle the start line or precede the first lap.
+
+    A flag remains active until the next status packet clears it, so the new
+    lap must remember it even when no further yellow/red packet arrives.
+    """
+    protocol = F1DatagramProtocol(StateStore())
+    events: list[object] = []
+    protocol._archive_event = events.append  # type: ignore[method-assign]
+    for packet in (
+        _participants(3),
+        _session((0, 0, 0, 0)),
+        _lap_data(first_lap, 3),
+        _car_status((0, flag, 0)),
+        _lap_data(first_lap + 1, 3),
+        _car_status((0, 0, 0)),
+        _lap_data(first_lap + 2, 3),
+        _lap_data(first_lap + 3, 3),
+    ):
+        protocol._normalise_for_archive(packet, None)
+
+    rival_laps = {
+        event.completed_lap_number: bool(event.context["flag_context"])
+        for event in events
+        if isinstance(event, LapEvent) and event.car_index == 1
+    }
+    assert rival_laps[first_lap + 1] is True
+    assert rival_laps[first_lap + 2] is False
+    if first_lap:
+        assert rival_laps[first_lap] is True
+    assert all(
+        not event.context["flag_context"]
+        for event in events
+        if isinstance(event, LapEvent) and event.car_index != 1
+    )
+
+
 def _player_lap(lap_number: int, *, valid: bool = True) -> dict[str, object]:
     return {
         "session_uid": 7_777,

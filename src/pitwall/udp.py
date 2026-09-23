@@ -371,6 +371,7 @@ class F1DatagramProtocol(asyncio.DatagramProtocol):
         self._assembler_invalid = [False] * 24
         self._assembler_pit_context = [False] * 24
         self._assembler_flag_context = [False] * 24
+        self._assembler_car_flag_active = [False] * 24
         self._assembler_fuel_start: list[float | None] = [None] * 24
         self._assembler_fuel_end: list[float | None] = [None] * 24
         self._assembler_global_flag_context = False
@@ -395,6 +396,7 @@ class F1DatagramProtocol(asyncio.DatagramProtocol):
         self._assembler_invalid = [False] * 24
         self._assembler_pit_context = [False] * 24
         self._assembler_flag_context = [False] * 24
+        self._assembler_car_flag_active = [False] * 24
         self._assembler_fuel_start = [None] * 24
         self._assembler_fuel_end = [None] * 24
         self._assembler_global_flag_context = False
@@ -793,6 +795,7 @@ class F1DatagramProtocol(asyncio.DatagramProtocol):
                 self._assembler_flag_context[index] = (
                     self._assembler_flag_context[index]
                     or self._assembler_global_flag_context
+                    or self._assembler_car_flag_active[index]
                 )
                 self._archive_event(
                     SampleEvent(
@@ -946,6 +949,14 @@ class F1DatagramProtocol(asyncio.DatagramProtocol):
             entries = list(packet.car_status_data)
             count = self._assembler_active_cars or min(24, len(entries))
             for index, status in enumerate(entries[:count]):
+                # Keep the latest flag separately from the lap's accumulated
+                # context. A yellow/red can persist across the start line and
+                # then clear before another flagged status packet arrives.
+                # The player's live state carries that flag into its new lap;
+                # every rival must do the same, including the first lap when
+                # status arrives before lap data.
+                car_flag_active = int(getattr(status, "vehicle_fia_flags", 0)) in {3, 4}
+                self._assembler_car_flag_active[index] = car_flag_active
                 lap_number = self._archive_lap_number(index)
                 if lap_number <= 0:
                     continue
@@ -955,7 +966,7 @@ class F1DatagramProtocol(asyncio.DatagramProtocol):
                 # live state. In a recorded race the game reported it for
                 # every rival, and most cars showed no flag while a yellow was
                 # out elsewhere on the track.
-                if int(getattr(status, "vehicle_fia_flags", 0)) in {3, 4}:
+                if car_flag_active:
                     self._assembler_flag_context[index] = True
                 compound = VISUAL_COMPOUNDS.get(
                     int(getattr(status, "visual_tyre_compound", -1)), "UNKNOWN"
