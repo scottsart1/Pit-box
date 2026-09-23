@@ -414,11 +414,34 @@ V4_9_7_RAW_SESSION_TYPE = Migration(
 )
 
 
+V4_13_LIBRARY_INDEXES = Migration(
+    version=4903,
+    app_version="4.13.0",
+    statements=(
+        # The Library list and the storage status both total each session's
+        # trace bytes through trace_manifests.session_id, which had no index:
+        # every session scanned every manifest. On a real history of 164
+        # sessions and 14,577 manifests the Library took 5.8 s to list and
+        # storage status 5.1 s, on every visit, and several times that on a
+        # tablet. With these the same queries take 0.13 s and 0.23 s.
+        "CREATE INDEX IF NOT EXISTS idx_trace_manifests_session ON trace_manifests(session_id)",
+        "CREATE INDEX IF NOT EXISTS idx_raw_captures_session ON raw_captures(session_id)",
+        # Lets the newest-first page stop after the rows it returns instead
+        # of totalling every session before sorting.
+        (
+            "CREATE INDEX IF NOT EXISTS idx_recorded_sessions_started "
+            "ON recorded_sessions(started_at DESC, id DESC)"
+        ),
+    ),
+)
+
+
 MIGRATIONS: tuple[Migration, ...] = (
     V4_2_CATALOG,
     V4_2_COMPARISON_RESULTS,
     V4_2_ARCHIVE_PROVENANCE,
     V4_9_2_TYRE_LEARNING,
     V4_9_7_RAW_SESSION_TYPE,
+    V4_13_LIBRARY_INDEXES,
 )
 LATEST_SCHEMA_VERSION = MIGRATIONS[-1].version

@@ -13,6 +13,7 @@ import android.os.Looper;
 import android.view.Gravity;
 import android.view.View;
 import android.view.WindowManager;
+import android.webkit.WebChromeClient;
 import android.webkit.WebSettings;
 import android.webkit.WebResourceRequest;
 import android.webkit.WebView;
@@ -76,6 +77,12 @@ public class MainActivity extends Activity {
         settings.setMediaPlaybackRequiresUserGesture(false);
         settings.setUseWideViewPort(true);
         settings.setLoadWithOverviewMode(true);
+        // Without a chrome client a WebView shows no JavaScript dialogs at
+        // all: alert() is dropped and confirm() answers false at once. Every
+        // confirmation in the dashboard - deleting a session, removing an API
+        // key, unpairing a device - cancelled itself on the tablet before the
+        // driver saw it. The default client shows the platform dialogs.
+        web.setWebChromeClient(new WebChromeClient());
         web.setWebViewClient(new WebViewClient() {
             @Override
             public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {

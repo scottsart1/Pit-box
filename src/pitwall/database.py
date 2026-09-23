@@ -18,6 +18,12 @@ from .migrations import LATEST_SCHEMA_VERSION, MIGRATIONS
 
 log = logging.getLogger(__name__)
 
+# Startup maintenance rewrites the database file only when at least this much
+# of it is free pages - an absolute floor and a share of the file - so a
+# launch does not lock a large history to reclaim a few megabytes.
+VACUUM_MIN_RECLAIM_BYTES = 16 * 1024 * 1024
+VACUUM_MIN_RECLAIM_FRACTION = 0.05
+
 _SQLITE_INT64_MIN = -(1 << 63)
 _SQLITE_INT64_MAX = (1 << 63) - 1
 _UINT64_MODULUS = 1 << 64
@@ -576,10 +582,30 @@ class PitWallDatabase:
             report = await asyncio.to_thread(
                 self._maintain_sync, int(keep_trace_sessions), False
             )
+        report["vacuumed"] = False
         if vacuum:
-            await asyncio.to_thread(self._vacuum_sync)
+            # VACUUM rewrites the whole file and holds the write lock while it
+            # does. It ran on every launch: a real 228 MB history was rewritten
+            # 54 times, usually to reclaim under 5 MB, while comparisons and
+            # the startup bookkeeping that needed a write waited or timed out.
+            # Rewrite only when the free pages are worth it.
+            reclaimable = await asyncio.to_thread(self._reclaimable_bytes_sync)
+            report["reclaimable_bytes"] = reclaimable
+            threshold = max(
+                VACUUM_MIN_RECLAIM_BYTES,
+                VACUUM_MIN_RECLAIM_FRACTION * int(report["size_before_bytes"]),
+            )
+            if reclaimable >= threshold:
+                await asyncio.to_thread(self._vacuum_sync)
+                report["vacuumed"] = True
         report["size_after_bytes"] = await asyncio.to_thread(self._database_size_sync)
         return report
+
+    def _reclaimable_bytes_sync(self) -> int:
+        with self._connect() as db:
+            return int(db.execute("PRAGMA freelist_count").fetchone()[0]) * int(
+                db.execute("PRAGMA page_size").fetchone()[0]
+            )
 
     def _vacuum_sync(self) -> None:
         connection = sqlite3.connect(self.path, timeout=120, isolation_level=None)

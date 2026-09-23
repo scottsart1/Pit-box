@@ -80,6 +80,18 @@ class UnsupportedReferenceError(ComparisonServiceError):
     code = "unsupported_reference"
 
 
+class TracesNotComparableError(ComparisonServiceError):
+    """Both traces are readable but describe no common stretch of track.
+
+    A lap cut short by a flashback, a pit-lane lap, or a trace that recorded
+    only part of the lap can leave two traces with no shared distance range.
+    That is a fact about the laps, not a fault in the service, and it must
+    reach the driver as a sentence rather than as a 500.
+    """
+
+    code = "traces_not_comparable"
+
+
 @dataclass(frozen=True, slots=True)
 class LapRecord:
     id: str
@@ -273,25 +285,48 @@ class ComparisonService:
             with connection:
                 yield connection
 
+    _LAP_RECORD_SELECT = """
+        SELECT l.*, c.session_id, c.car_index, c.team_id,
+               c.display_name, c.is_player,
+               s.track_id, s.track_layout_signature, s.session_type,
+               s.packet_format, s.started_at,
+               tm.checksum AS trace_checksum
+        FROM recorded_laps l
+        JOIN session_cars c ON c.id=l.session_car_id
+        JOIN recorded_sessions s ON s.id=c.session_id
+        LEFT JOIN trace_manifests tm ON tm.id=l.trace_manifest_id
+    """
+
     def _load_lap_record_sync(self, lap_key: str) -> LapRecord:
         with self._connect() as db:
             row = db.execute(
-                """
-                SELECT l.*, c.session_id, c.car_index, c.team_id,
-                       c.display_name, c.is_player,
-                       s.track_id, s.track_layout_signature, s.session_type,
-                       s.packet_format, s.started_at,
-                       tm.checksum AS trace_checksum
-                FROM recorded_laps l
-                JOIN session_cars c ON c.id=l.session_car_id
-                JOIN recorded_sessions s ON s.id=c.session_id
-                LEFT JOIN trace_manifests tm ON tm.id=l.trace_manifest_id
-                WHERE l.id=?
-                """,
+                self._LAP_RECORD_SELECT + " WHERE l.id=?",
                 (lap_key,),
             ).fetchone()
         if row is None:
             raise LapNotFoundError(f"Lap {lap_key!r} does not exist")
+        return self._lap_record_from_row(row)
+
+    def _load_lap_records_sync(self, lap_keys: list[str]) -> list[LapRecord]:
+        """Several lap records in one query, in the order they were asked for.
+
+        The reference list read its 200 candidates one connection and one
+        query at a time, which took 1.4 s per lap chosen in Lap Lab on a
+        desktop and several times that on a tablet.
+        """
+        if not lap_keys:
+            return []
+        with self._connect() as db:
+            rows = db.execute(
+                self._LAP_RECORD_SELECT
+                + f" WHERE l.id IN ({','.join('?' for _ in lap_keys)})",
+                lap_keys,
+            ).fetchall()
+        by_id = {str(row["id"]): self._lap_record_from_row(row) for row in rows}
+        return [by_id[key] for key in lap_keys if key in by_id]
+
+    @staticmethod
+    def _lap_record_from_row(row: sqlite3.Row) -> LapRecord:
         return LapRecord(
             id=str(row["id"]),
             session_id=str(row["session_id"]),
@@ -571,21 +606,47 @@ class ComparisonService:
         )
 
     def _reference_rows_sync(self, candidate: LapRecord) -> list[LapRecord]:
+        """Laps at this track that can actually serve as a reference.
+
+        A lap is offered only if its telemetry can be read: a trace manifest
+        whose file is present, or a legacy trace that still has samples.
+        Database maintenance empties old legacy traces to reclaim space, and a
+        real history had 435 of 446 legacy-only laps emptied that way; every
+        one was still listed, and choosing one failed as soon as it was
+        compared.
+        """
         with self._connect() as db:
             rows = db.execute(
                 """
-                SELECT l.id
+                SELECT l.id, l.trace_manifest_id,
+                       CASE WHEN lg.id IS NOT NULL
+                             AND COALESCE(lg.trace_json, '') NOT IN ('', '[]')
+                            THEN 1 ELSE 0 END AS legacy_readable
                 FROM recorded_laps l
                 JOIN session_cars c ON c.id=l.session_car_id
                 JOIN recorded_sessions s ON s.id=c.session_id
+                LEFT JOIN laps lg ON lg.id=l.legacy_lap_id
                 WHERE s.track_id IS ? AND l.id<>?
-                  AND (l.trace_manifest_id IS NOT NULL OR l.legacy_lap_id IS NOT NULL)
+                  AND (
+                      l.trace_manifest_id IS NOT NULL
+                      OR (lg.id IS NOT NULL
+                          AND COALESCE(lg.trace_json, '') NOT IN ('', '[]'))
+                  )
                 ORDER BY l.valid DESC, l.lap_time_ms ASC, l.created_at DESC
                 LIMIT 200
                 """,
                 (candidate.track_id, candidate.id),
             ).fetchall()
-        return [self._load_lap_record_sync(str(row["id"])) for row in rows]
+        readable = [
+            str(row["id"])
+            for row in rows
+            if (
+                row["trace_manifest_id"]
+                and self.trace_store.has_manifest(str(row["trace_manifest_id"]))
+            )
+            or bool(row["legacy_readable"])
+        ]
+        return self._load_lap_records_sync(readable)
 
     async def list_references(self, candidate_lap_id: str) -> dict[str, Any]:
         candidate = await self.lap_record(candidate_lap_id)
@@ -1165,11 +1226,21 @@ class ComparisonService:
         )
         candidate_clean = self._clean(candidate_trace)
         reference_clean = self._clean(reference_trace)
-        aligned = align_distance_traces(
-            candidate_clean,
-            reference_clean,
-            spacing_m=0.5,
-        )
+        try:
+            aligned = align_distance_traces(
+                candidate_clean,
+                reference_clean,
+                spacing_m=0.5,
+            )
+        except ValueError as exc:
+            # Alignment rejects two traces with no distance range in common.
+            # Left as a bare ValueError it surfaced as a 500, and a session
+            # reprocess job died on the first such pair.
+            raise TracesNotComparableError(
+                f"Lap {candidate.lap_number} and the reference cannot be "
+                f"compared: {exc}. One of the two traces covers too little of "
+                "the lap for a distance-aligned comparison."
+            ) from exc
         selection = await asyncio.to_thread(
             self._segment_selection_sync,
             candidate,
@@ -1230,6 +1301,18 @@ class ComparisonService:
                 all_findings.extend(coaching.findings)
         ranked = rank_findings(all_findings, limit=3)
         findings = [self._finding_dict(item.finding, item.rank) for item in ranked]
+        for finding in findings:
+            # A finding's own id names a segment, a type, and an index. Segment
+            # ids belong to the track, so every comparison at a circuit draws
+            # from the same small set, while ``findings.id`` is unique across
+            # every comparison ever stored. The second comparison to find the
+            # same thing in the same corner failed with a UNIQUE constraint
+            # and a 500: in a real session, laps compared against rivals
+            # worked and then failed moments later, and six of eleven session
+            # reprocess jobs died the same way. Scoped to its comparison, the
+            # id is unique, and re-running one comparison still replaces its
+            # own findings rather than adding to them.
+            finding["finding_id"] = f"{result.comparison_id}_{finding['finding_id']}"
         await self._persist(
             result,
             candidate,

@@ -805,6 +805,14 @@ class TraceStore:
                 removed.append(manifest_path.relative_to(self.root).as_posix())
         return removed
 
+    def has_manifest(self, manifest_id: str) -> bool:
+        """Whether a catalogued manifest's file is on disk to be read."""
+        try:
+            path = self._resolve_relative(self._manifest_relative_path(manifest_id))
+        except (ValueError, TraceStoreError):
+            return False
+        return path.is_file()
+
     def load_manifest(self, manifest_id: str) -> TraceManifest:
         path = self._resolve_relative(self._manifest_relative_path(manifest_id))
         try:

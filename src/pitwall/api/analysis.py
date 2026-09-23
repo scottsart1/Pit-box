@@ -13,6 +13,7 @@ from ..comparison_service import (
     ComparisonServiceError,
     LapNotFoundError,
     ReferenceCompatibilityError,
+    TracesNotComparableError,
     TraceUnavailableError,
     UnsupportedReferenceError,
 )
@@ -96,7 +97,14 @@ def _raise_service_error(exc: ComparisonServiceError) -> None:
         code = status.HTTP_404_NOT_FOUND
     elif isinstance(exc, TraceUnavailableError):
         code = status.HTTP_409_CONFLICT
-    elif isinstance(exc, (ReferenceCompatibilityError, UnsupportedReferenceError)):
+    elif isinstance(
+        exc,
+        (
+            ReferenceCompatibilityError,
+            UnsupportedReferenceError,
+            TracesNotComparableError,
+        ),
+    ):
         code = status.HTTP_422_UNPROCESSABLE_CONTENT
     else:
         code = status.HTTP_404_NOT_FOUND if "does not exist" in str(exc) else 409

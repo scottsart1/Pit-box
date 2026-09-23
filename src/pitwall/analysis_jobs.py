@@ -58,6 +58,7 @@ class AnalysisJobService:
         self.worker_count = max(1, int(worker_count))
         self.queue: asyncio.Queue[str] = asyncio.Queue(maxsize=max(1, int(queue_size)))
         self._tasks: list[asyncio.Task[None]] = []
+        self._resume_task: asyncio.Task[None] | None = None
         self._queued_ids: set[str] = set()
         self._fill_lock = asyncio.Lock()
         self._submitted = 0
@@ -85,12 +86,31 @@ class AnalysisJobService:
     async def start(self) -> None:
         if self.running:
             return
-        await asyncio.to_thread(self._resume_interrupted)
+        try:
+            await asyncio.to_thread(self._resume_interrupted)
+        except sqlite3.OperationalError:
+            # Startup maintenance can hold the database for longer than the
+            # busy timeout while it reclaims space. Failing here aborted the
+            # whole application's startup; the resume is bookkeeping for jobs
+            # a previous run left half done, and it can wait for the lock.
+            self._resume_task = asyncio.create_task(
+                self._resume_when_free(), name="pitwall-analysis-job-resume"
+            )
         self._tasks = [
             asyncio.create_task(self._worker(), name=f"pitwall-analysis-job-{index}")
             for index in range(self.worker_count)
         ]
         await self._fill_from_database()
+
+    async def _resume_when_free(self, *, attempts: int = 40, delay_s: float = 15.0) -> None:
+        for _ in range(max(1, attempts)):
+            await asyncio.sleep(delay_s)
+            try:
+                await asyncio.to_thread(self._resume_interrupted)
+            except sqlite3.OperationalError:
+                continue
+            await self._fill_from_database()
+            return
 
     def _resume_interrupted(self) -> None:
         with self._connect() as db:
@@ -136,7 +156,13 @@ class AnalysisJobService:
             capacity = self.queue.maxsize - self.queue.qsize()
             if capacity <= 0:
                 return
-            rows = await asyncio.to_thread(self._queued_jobs, capacity * 2)
+            try:
+                rows = await asyncio.to_thread(self._queued_jobs, capacity * 2)
+            except sqlite3.OperationalError:
+                # A busy database is transient. This runs in each worker's
+                # cleanup, so raising here ended the worker for good; the next
+                # finished job or deferred resume fills the queue instead.
+                return
             for job_id in rows:
                 if job_id in self._queued_ids:
                     continue
@@ -249,6 +275,10 @@ class AnalysisJobService:
                 )
             except ComparisonServiceError as exc:
                 skipped.append({"lap_id": str(candidate["id"]), "code": exc.code})
+            except sqlite3.OperationalError:
+                # One pair that could not be written while the database was
+                # busy is one skipped pair, not a failed session.
+                skipped.append({"lap_id": str(candidate["id"]), "code": "database_busy"})
             else:
                 completed += 1
             await asyncio.to_thread(
@@ -305,6 +335,10 @@ class AnalysisJobService:
             await asyncio.sleep(0.01)
 
     async def stop(self, *, drain_timeout_s: float = 10.0) -> None:
+        if self._resume_task is not None:
+            self._resume_task.cancel()
+            await asyncio.gather(self._resume_task, return_exceptions=True)
+            self._resume_task = None
         if not self._tasks:
             return
         try:

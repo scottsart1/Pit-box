@@ -644,8 +644,14 @@ async function createComparison() {
   const reference = state.references.find((item) => item.lap_id === referenceLapId);
   const compatibility = reference?.compatibility;
   const classification = compatibility?.class || compatibility?.classification;
-  const allowCaveat = classification && classification !== "strict";
-  if (allowCaveat && !window.confirm(`This reference is “${classification.replaceAll("_", " ")}”. Pit Wall will preserve the caveats and may disable prescriptive coaching. Continue?`)) return;
+  // A rival on another compound or fuel load is still a rival worth
+  // comparing against, and choosing one is the driver's decision: the
+  // compatibility badge already names every caveat before the click. This
+  // used to stop on window.confirm(), which the Android app's WebView never
+  // shows - it returns false - so on the tablet every caveated comparison
+  // silently did nothing. The caveats are repeated with the result instead.
+  const allowCaveat = Boolean(classification && classification !== "strict");
+  const caveatNote = allowCaveat ? ` Caveated reference (${classification.replaceAll("_", " ")}${compatibility?.caveats?.length ? `: ${compatibility.caveats.join(" · ")}` : ""}); coaching is limited to what those caveats allow.` : "";
   const action = byId("createComparison");
   action.disabled = true;
   stopPlayback();
@@ -659,7 +665,7 @@ async function createComparison() {
   try {
     const comparison = await api("/comparisons", {
       method: "POST",
-      body: JSON.stringify({ candidate_lap_id: candidateLapId, reference: { kind: "lap", lap_id: referenceLapId }, allow_caveated_reference: Boolean(allowCaveat) }),
+      body: JSON.stringify({ candidate_lap_id: candidateLapId, reference: { kind: "lap", lap_id: referenceLapId }, allow_caveated_reference: allowCaveat }),
     });
     if (!current()) return;
     const traceQuery = new URLSearchParams({ fields: "speed,delta,brake,throttle,steering,gear,line_n", max_points: "2400" });
@@ -677,7 +683,7 @@ async function createComparison() {
     configurePlayback();
     renderComparison();
     renderReviewFindings();
-    setNotice("lapLabStatus", `Comparison ready · ${formatPercent(comparison.coverage_ratio)} aligned coverage · ${comparison.algorithm_bundle}.`, "success");
+    setNotice("lapLabStatus", `Comparison ready · ${formatPercent(comparison.coverage_ratio)} aligned coverage · ${comparison.algorithm_bundle}.${caveatNote}`, "success");
   } catch (error) {
     if (!current()) return;
     state.comparison = null;

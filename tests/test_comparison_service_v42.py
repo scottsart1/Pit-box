@@ -354,3 +354,141 @@ async def test_unmeasurable_segment_loss_is_none_not_zero(tmp_path: Path) -> Non
     )
     stored = [finding.get("measured_loss_s") for finding in reopened["findings"]]
     assert stored == losses
+
+
+async def _three_laps(tmp_path: Path) -> tuple[ComparisonService, str, str, str, PitWallDatabase, TraceStore]:
+    database = PitWallDatabase(tmp_path / "pitwall.sqlite3")
+    await database.initialize()
+    trace_store = TraceStore(tmp_path / "traces")
+    archive = TraceArchiveService(database, trace_store)
+    reference_id = await _record(database, archive, _lap(1, slower=False))
+    first_id = await _record(database, archive, _lap(2, slower=True))
+    second_id = await _record(database, archive, _lap(3, slower=True))
+    return ComparisonService(database.path, trace_store), reference_id, first_id, second_id, database, trace_store
+
+
+@pytest.mark.asyncio
+async def test_a_second_comparison_at_the_same_corner_is_stored_too(tmp_path: Path) -> None:
+    """From a real session: laps compared against rivals worked, then failed.
+
+    Finding ids named a segment, a type and an index, and segment ids belong
+    to the track, while ``findings.id`` is unique across every comparison.
+    The second comparison to find the same thing in the same corner failed
+    with ``UNIQUE constraint failed: findings.id`` - a 500 in Lap Lab, and the
+    death of six of eleven session reprocess jobs in the same history.
+    """
+    service, reference_id, first_id, second_id, _database, _ = await _three_laps(tmp_path)
+    first = await service.create_comparison(
+        first_id, reference_kind="lap", reference_lap_id=reference_id
+    )
+    second = await service.create_comparison(
+        second_id, reference_kind="lap", reference_lap_id=reference_id
+    )
+    assert first["findings"] and second["findings"]
+    first_ids = {item["finding_id"] for item in first["findings"]}
+    second_ids = {item["finding_id"] for item in second["findings"]}
+    assert not first_ids & second_ids
+    assert all(item.startswith(first["comparison_id"]) for item in first_ids)
+    # Both comparisons keep their own findings once stored.
+    for result in (first, second):
+        reopened = await service.get_comparison(result["comparison_id"])
+        assert {item["finding_id"] for item in reopened["findings"]} == {
+            item["finding_id"] for item in result["findings"]
+        }
+
+
+@pytest.mark.asyncio
+async def test_repeating_a_comparison_replaces_its_findings(tmp_path: Path) -> None:
+    service, reference_id, first_id, _, database, _ = await _three_laps(tmp_path)
+    for _ in range(3):
+        result = await service.create_comparison(
+            first_id, reference_kind="lap", reference_lap_id=reference_id
+        )
+    with sqlite3.connect(database.path) as db:
+        stored = db.execute(
+            "SELECT COUNT(*) FROM findings WHERE comparison_id=?",
+            (result["comparison_id"],),
+        ).fetchone()[0]
+    assert stored == len(result["findings"])
+
+
+@pytest.mark.asyncio
+async def test_only_laps_whose_telemetry_can_be_read_are_offered(tmp_path: Path) -> None:
+    """Maintenance empties old legacy traces; the laps were still offered.
+
+    A real history had 435 of 446 legacy-only laps emptied that way, every
+    one of them listed as a reference and failing the moment it was chosen.
+    """
+    service, reference_id, first_id, second_id, database, trace_store = await _three_laps(tmp_path)
+    with sqlite3.connect(database.path) as db:
+        rows = dict(
+            db.execute(
+                "SELECT id, legacy_lap_id FROM recorded_laps WHERE id IN (?, ?)",
+                (first_id, second_id),
+            ).fetchall()
+        )
+        manifests = dict(
+            db.execute(
+                "SELECT id, trace_manifest_id FROM recorded_laps WHERE id IN (?, ?)",
+                (first_id, second_id),
+            ).fetchall()
+        )
+        # A legacy-only lap whose trace maintenance has emptied.
+        db.execute("UPDATE recorded_laps SET trace_manifest_id=NULL WHERE id=?", (first_id,))
+        db.execute("UPDATE laps SET trace_json='[]' WHERE id=?", (rows[first_id],))
+    # A catalogued manifest whose file has gone, with no legacy fallback.
+    (trace_store.root / "manifests" / f"{manifests[second_id]}.json").unlink()
+    with sqlite3.connect(database.path) as db:
+        db.execute("UPDATE laps SET trace_json='[]' WHERE id=?", (rows[second_id],))
+
+    offered = {item["lap_id"] for item in (await service.list_references(reference_id))["items"]}
+    assert first_id not in offered
+    assert second_id not in offered
+
+
+@pytest.mark.asyncio
+async def test_a_legacy_trace_still_serves_when_the_manifest_is_gone(tmp_path: Path) -> None:
+    service, reference_id, first_id, _, database, trace_store = await _three_laps(tmp_path)
+    with sqlite3.connect(database.path) as db:
+        manifest = db.execute(
+            "SELECT trace_manifest_id FROM recorded_laps WHERE id=?", (first_id,)
+        ).fetchone()[0]
+    (trace_store.root / "manifests" / f"{manifest}.json").unlink()
+    offered = {item["lap_id"] for item in (await service.list_references(reference_id))["items"]}
+    assert first_id in offered
+    comparison = await service.create_comparison(
+        reference_id, reference_kind="lap", reference_lap_id=first_id
+    )
+    assert comparison["comparison_id"]
+
+
+@pytest.mark.asyncio
+async def test_laps_with_no_common_stretch_are_refused_not_crashed(tmp_path: Path) -> None:
+    """A real reprocess job died on "traces do not share a distance range".
+
+    The alignment's ValueError escaped as a 500 in Lap Lab and ended the job;
+    it is a fact about the two laps and must reach the driver as one.
+    """
+    from pitwall.comparison_service import TracesNotComparableError
+
+    database = PitWallDatabase(tmp_path / "pitwall.sqlite3")
+    await database.initialize()
+    trace_store = TraceStore(tmp_path / "traces")
+    archive = TraceArchiveService(database, trace_store)
+    early = _lap(1, slower=False)
+    early["trace"] = [point for point in early["trace"] if point["d"] <= 200]
+    late = _lap(2, slower=True)
+    late["trace"] = [point for point in late["trace"] if point["d"] >= 300]
+    early_id = await _record(database, archive, early)
+    late_id = await _record(database, archive, late)
+    with sqlite3.connect(database.path) as db:
+        # Coverage metadata can claim a whole lap while the trace does not.
+        db.execute("UPDATE recorded_laps SET coverage_ratio=1.0")
+    service = ComparisonService(database.path, trace_store)
+    with pytest.raises(TracesNotComparableError, match="cannot be compared"):
+        await service.create_comparison(
+            late_id,
+            reference_kind="lap",
+            reference_lap_id=early_id,
+            allow_caveated_reference=True,
+        )

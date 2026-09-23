@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import sqlite3
 from pathlib import Path
@@ -110,3 +111,102 @@ async def test_durable_reprocess_job_builds_comparisons_and_completes(
     assert track_models.sessions == [str(session["id"])]
     assert audit["track_model_status"] == "published"
     assert jobs.snapshot().failed == 0
+
+
+async def _service(tmp_path: Path) -> tuple[AnalysisJobService, PitWallDatabase, str]:
+    database = PitWallDatabase(tmp_path / "pitwall.sqlite3")
+    await database.initialize()
+    trace_store = TraceStore(tmp_path / "traces")
+    trace_archive = TraceArchiveService(database, trace_store)
+    for lap in (_lap(1, 4_000), _lap(2, 4_100)):
+        await database.upsert_session(lap)
+        recorded_id = await database.save_lap(lap, [])
+        await trace_archive.archive_player_lap(lap, recorded_lap_id=recorded_id)
+    session = (await database.catalog.list_sessions())["items"][0]
+    jobs = AnalysisJobService(
+        database.path,
+        ComparisonService(database.path, trace_store),
+        worker_count=1,
+        queue_size=4,
+    )
+    return jobs, database, str(session["id"])
+
+
+@pytest.mark.asyncio
+async def test_a_busy_database_at_startup_does_not_stop_the_app(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Startup maintenance held the lock past the timeout and the app exited.
+
+    The resume of half-finished jobs raised "database is locked" inside the
+    application's startup, which aborted it. It is bookkeeping, and waits.
+    """
+    jobs, _database, _session = await _service(tmp_path)
+    attempts: list[int] = []
+    original = jobs._resume_interrupted
+
+    def busy_once() -> None:
+        attempts.append(1)
+        if len(attempts) == 1:
+            raise sqlite3.OperationalError("database is locked")
+        original()
+
+    monkeypatch.setattr(jobs, "_resume_interrupted", busy_once)
+    deferred = AnalysisJobService._resume_when_free
+    monkeypatch.setattr(
+        AnalysisJobService,
+        "_resume_when_free",
+        lambda self: deferred(self, attempts=5, delay_s=0.01),
+    )
+    await jobs.start()
+    assert jobs.running
+    for _ in range(100):
+        if len(attempts) >= 2:
+            break
+        await asyncio.sleep(0.01)
+    assert len(attempts) == 2
+    await jobs.stop()
+
+
+@pytest.mark.asyncio
+async def test_a_busy_database_does_not_end_a_worker(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    jobs, _database, _session = await _service(tmp_path)
+    await jobs.start()
+
+    def busy(limit: int) -> list[str]:
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(jobs, "_queued_jobs", busy)
+    await jobs._fill_from_database()
+    assert jobs.running
+    await jobs.stop()
+
+
+@pytest.mark.asyncio
+async def test_one_pair_that_cannot_be_written_is_skipped_not_fatal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    jobs, database, session_id = await _service(tmp_path)
+    requested = await database.catalog.request_reprocess(session_id)
+
+    async def busy(*args: object, **kwargs: object) -> dict[str, object]:
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(jobs.comparisons, "create_comparison", busy)
+    await jobs.start()
+    await jobs.wait_idle()
+    await jobs.stop()
+    with sqlite3.connect(database.path) as db:
+        state = db.execute(
+            "SELECT state FROM analysis_jobs WHERE id=?", (requested["job"]["id"],)
+        ).fetchone()[0]
+        audit = json.loads(
+            db.execute(
+                "SELECT detail_json FROM audit_events WHERE subject_id=?",
+                (requested["job"]["id"],),
+            ).fetchone()[0]
+        )
+    assert state == "complete"
+    assert [item["code"] for item in audit["skipped"]] == ["database_busy"]
