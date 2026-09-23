@@ -1380,9 +1380,10 @@ class ComparisonService:
 
         The trace delta runs from the first to the last distance at which both
         laps have timing. On sparse telemetry that can be a few metres, and a
-        rival 0.8 s quicker was shown as 0.001 s. The game's own lap times are
-        exact at any telemetry density, so they give the headline whenever both
-        exist; the trace delta stands in only when it covers the lap.
+        lap 0.8 s quicker than a rival's was shown as 0.001 s quicker. The
+        game's own lap times are exact at any telemetry density, so they give
+        the headline whenever both exist; the trace delta stands in only when
+        it covers the lap.
         """
 
         official = (

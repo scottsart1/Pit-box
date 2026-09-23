@@ -528,8 +528,9 @@ async def _patchy_pair(tmp_path: Path) -> tuple[ComparisonService, str, str]:
 
 @pytest.mark.asyncio
 async def test_patchy_telemetry_is_headlined_by_the_official_lap_times(tmp_path: Path) -> None:
-    """A rival 0.8 s quicker was shown as 0.001 s: the trace delta spanned a
-    few metres. The game's lap times are exact at any telemetry density."""
+    """A lap 0.8 s quicker than a rival's was shown as 0.001 s quicker: the
+    trace delta spanned a few metres. The game's lap times are exact at any
+    telemetry density."""
     service, reference_id, candidate_id = await _patchy_pair(tmp_path)
     result = await service.create_comparison(
         candidate_id, reference_kind="lap", reference_lap_id=reference_id
