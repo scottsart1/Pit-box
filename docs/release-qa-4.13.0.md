@@ -53,6 +53,29 @@ fixed in the same pass.
 The GitHub Windows and Android workflows were not run for this release; the
 suites above ran locally instead.
 
+## Physical tablet check
+
+Galaxy Tab SM-X930, Android 16, over wireless debugging. The regular
+`com.yourpitbox.app` and its history were not touched.
+
+- A real race capture (13 September, Miami) was replayed over Wi-Fi into the
+  separate QA app, still 4.12.4. Comparing the player's lap 8 with a rival's
+  lap 8 returned a 500, and the app's log showed `sqlite3.IntegrityError:
+  UNIQUE constraint failed: findings.id` - the fault fixed here. Its other
+  comparisons reported trace deltas of up to 8.3 s at 5-7 percent overlap,
+  each with three coaching findings.
+- The same capture replayed into a 4.13.0 server: eight comparisons, each
+  run twice, all succeeded, with lap-time deltas and no coaching drawn from
+  the 0-1 percent overlap.
+- The tablet's Chrome, reaching that server through `adb reverse`, compared
+  the player's lap with three strict and two context-only rivals, twice
+  each. All ten completed without a dialog and showed the official lap-time
+  delta with the amber coverage note; History listed laps as soon as All was
+  chosen. There were no console, page or HTTP errors.
+
+This exercises the 4.13.0 dashboard on the tablet's screen, not the Android
+app, which runs 4.12.4 until a signed APK is published.
+
 ## Publication
 
 | Artifact | Bytes | SHA-256 |
@@ -78,4 +101,5 @@ The installer is unsigned, as for every 4.12 release, and the site says so.
 - **Update flags.** The release-management credential was not available, so
   `publish_release.ps1` was not run. Existing installs will not show an update
   flag for 4.13.0 until it is; downloads from the site already get 4.13.0.
-- **Physical tablet test.** No Android device was connected over debugging.
+- **The Android app on hardware.** The app shell's dialog fix has been
+  verified in source only; it reaches the tablet with the signed APK.
