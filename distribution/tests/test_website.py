@@ -657,7 +657,7 @@ def test_android_release_is_a_signed_direct_apk_with_compatibility_limits():
     assert 'href="https://pitwall-activation.sarthakvij123450.workers.dev/android"' in section
     assert "16 KB memory pages are not supported" in section
     assert "not a Google Play listing" in section
-    assert "98d10da68d45e5b3cdf7385f5e6d87c97176f03c7deb2e5944f948a9c57e1d1f" in INDEX
+    assert "82e4e66bdec32f4934181d84ff759a801cd9f6e50f51177224e9ee22605dd802" in INDEX
     assert "Keep Play Protect enabled" in GUIDE
     assert "installs separately from the test package" in GUIDE
     assert "Do not uninstall the test app" in GUIDE
@@ -678,23 +678,26 @@ def test_beta_transmission_is_distinct_from_reception_and_history_copy():
 
 
 def test_unsigned_windows_notice_remains_without_removed_installation_wording():
-    assert 'Windows 4.13.1 · unsigned installer' in INDEX
+    assert 'Windows 4.13.2 · unsigned installer' in INDEX
     assert 'The current Windows installer is unsigned.' in GUIDE
     for page in (INDEX, GUIDE):
         assert 'unknown publisher' in page or 'unknown-publisher' in page
         assert 'Do not turn off your firewall, antivirus or Smart App Control' not in page
         assert 'wait for a signed release' not in page
-    assert '23fcb3459484676518c643a555d17cd12abaf8d789da998d701a4fc82b726f8b' in INDEX
+    assert 'e95f8407777ba74e23a9ed3eff7cc95750310ec1d3ab9cf6301b0a0c8ad1121c' in INDEX
 
 
 def test_current_release_describes_skippable_setup_tour_and_manual_updates():
     release = INDEX.split('id="new"', 1)[1].split('</section>', 1)[0]
-    assert release.split('<p class="section-lede">', 1)[1].startswith('Lap comparisons fixed')
+    assert release.split('<p class="section-lede">', 1)[1].startswith('Fairer lap comparisons')
+    assert 'follow the same flag rule' in release
+    assert 'flag stays active across the start line' in release
+    assert 'Comparisons warn when a lap includes flags or neutralisation' in release
     assert 'including rivals on another compound' in release
     assert 'The lap delta comes from official lap times' in release
     assert 'says when patchy telemetry limits it' in release
-    assert 'Windows 4.13.1 and Android 4.12.4 (revision 23).' in release
-    for text in ('4.13.1', 'skippable setup', 'UDP IP and port', 'guided app tour',
+    assert 'Windows 4.13.2 and Android 4.13.2 (revision 26).' in release
+    for text in ('4.13.2', 'skippable setup', 'UDP IP and port', 'guided app tour',
                  'Existing preferences stay unchanged', 'Nothing installs automatically'):
         assert text in release
     assert 'Install this update manually once' in INDEX
