@@ -104,6 +104,39 @@ dashboard. Bind the web host to `0.0.0.0`, set a long
 `PITWALL_WEB_ACCESS_TOKEN`, and keep it on a trusted LAN. Your Pit Box never opens a
 router or firewall to the public internet automatically.
 
+## What changed in 4.13.0
+
+### Comparing laps against rivals works, and keeps working
+
+A comparison in Lap Lab could succeed once and fail moments later: the second
+comparison to find the same thing in the same corner collided with the first
+one's stored findings and ended in a server error. Findings now belong to their
+comparison. On the Android app a comparison against any rival on a different
+compound or fuel load silently did nothing, because the app never showed the
+confirmation it waited for; the caveats are now stated with the result, and
+the app shows the dashboard's confirmations, such as deleting a session. The
+reference list only offers laps whose telemetry can still be read, two laps
+with no stretch of track in common are refused with a reason rather than an
+error, and a busy database at startup no longer stops the app.
+
+### Comparisons say how much of the lap they are built on
+
+When telemetry arrives with gaps, typically over Wi-Fi, two laps may line up
+on only a small part of the track. The lap delta is now always the difference
+in the game's official lap times, and a comparison built on less than 90
+percent of the lap says so, with how much lined up and why. Coaching is only
+drawn from segments both laps measured over at least half their length. For
+the most complete traces, follow the recommended game settings on CONNECTION:
+UDP Broadcast off, this device's address, and a 60 Hz send rate.
+
+### A quicker Analysis page
+
+The Library and storage status list sessions in a fraction of a second on a
+large history instead of five or more, the reference list for a lap loads in
+one query, revisiting Field positions no longer re-reads every trace, and
+History reloads as soon as its scope changes. Startup only compacts the
+database when that frees a meaningful amount of space.
+
 ## What changed in 4.10.0 (candidate)
 
 The strategy planner now assigns distinct physical tyre sets, evaluates urgent
