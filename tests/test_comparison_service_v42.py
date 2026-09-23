@@ -91,6 +91,9 @@ async def test_comparison_is_distance_aligned_persisted_and_reopenable(tmp_path:
     )
     assert result["compatibility"]["class"] == "strict"
     assert result["lap_delta_s"] == pytest.approx(0.18, abs=0.01)
+    assert result["lap_delta_source"] == "lap_times"
+    assert result["trace_delta_s"] == pytest.approx(0.18, abs=0.01)
+    assert result["coverage_warning"] is None
     assert len(result["segments"]) == 10
     assert sum(item["delta_s"] or 0.0 for item in result["segments"]) == pytest.approx(
         result["lap_delta_s"], abs=0.003
@@ -492,3 +495,93 @@ async def test_laps_with_no_common_stretch_are_refused_not_crashed(tmp_path: Pat
             reference_lap_id=early_id,
             allow_caveated_reference=True,
         )
+
+
+def _received_every(lap: dict[str, object], spacing_m: int, offset_m: int) -> dict[str, object]:
+    """The same lap as it arrives through heavy packet loss: one sample per ``spacing_m``."""
+    thinned = dict(lap)
+    thinned["trace"] = [
+        point for point in lap["trace"] if int(point["d"]) % spacing_m == offset_m
+    ]
+    return thinned
+
+
+async def _patchy_pair(tmp_path: Path) -> tuple[ComparisonService, str, str]:
+    """Two laps whose surviving samples never fall in the same place.
+
+    From a real race received over Wi-Fi: four in five telemetry ticks were
+    lost, and a rival's lap and the driver's lap overlapped on 0-1 percent of
+    the distance while both lap times were exact.
+    """
+    database = PitWallDatabase(tmp_path / "pitwall.sqlite3")
+    await database.initialize()
+    trace_store = TraceStore(tmp_path / "traces")
+    archive = TraceArchiveService(database, trace_store)
+    reference_id = await _record(
+        database, archive, _received_every(_lap(1, slower=False), 30, 15)
+    )
+    candidate_id = await _record(
+        database, archive, _received_every(_lap(2, slower=True), 30, 0)
+    )
+    return ComparisonService(database.path, trace_store), reference_id, candidate_id
+
+
+@pytest.mark.asyncio
+async def test_patchy_telemetry_is_headlined_by_the_official_lap_times(tmp_path: Path) -> None:
+    """A rival 0.8 s quicker was shown as 0.001 s: the trace delta spanned a
+    few metres. The game's lap times are exact at any telemetry density."""
+    service, reference_id, candidate_id = await _patchy_pair(tmp_path)
+    result = await service.create_comparison(
+        candidate_id, reference_kind="lap", reference_lap_id=reference_id
+    )
+    assert result["coverage_ratio"] < 0.01
+    assert result["lap_delta_s"] == pytest.approx(0.18)
+    assert result["lap_delta_source"] == "lap_times"
+    assert "less than 1% of the lap" in result["coverage_warning"]
+    assert "official lap times" in result["coverage_warning"]
+
+    reopened = await service.get_comparison(result["comparison_id"])
+    assert reopened["lap_delta_s"] == pytest.approx(0.18)
+    assert reopened["lap_delta_source"] == "lap_times"
+    assert reopened["coverage_warning"] == result["coverage_warning"]
+
+
+@pytest.mark.asyncio
+async def test_coaching_is_not_drawn_from_segments_neither_lap_measured(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Isolated samples a corner apart still "detect" brake and throttle
+    events. Unguarded, they became advice at zero confidence with no
+    measured loss behind it."""
+    from pitwall import comparison_service
+
+    service, reference_id, candidate_id = await _patchy_pair(tmp_path)
+    monkeypatch.setattr(comparison_service, "COACHING_MIN_SEGMENT_COVERAGE", 0.0)
+    unguarded = await service.create_comparison(
+        candidate_id, reference_kind="lap", reference_lap_id=reference_id
+    )
+    assert unguarded["findings"]
+    assert all(item["measured_loss_s"] is None for item in unguarded["findings"])
+    monkeypatch.undo()
+
+    # Findings stored before the floor existed are withheld on reopening too.
+    reopened = await service.get_comparison(unguarded["comparison_id"])
+    assert reopened["findings"] == []
+    guarded = await service.create_comparison(
+        candidate_id, reference_kind="lap", reference_lap_id=reference_id
+    )
+    assert guarded["findings"] == []
+
+
+def test_without_both_lap_times_only_a_whole_lap_trace_gives_the_delta() -> None:
+    from types import SimpleNamespace
+
+    unknown = SimpleNamespace(lap_time_ms=None)
+    known = SimpleNamespace(lap_time_ms=90_000)
+    whole = ComparisonService._lap_delta(unknown, known, 0.25, 0.95)
+    assert (whole["lap_delta_s"], whole["lap_delta_source"]) == (0.25, "telemetry")
+    assert whole["coverage_warning"] is None
+    partial = ComparisonService._lap_delta(unknown, known, 0.25, 0.40)
+    assert (partial["lap_delta_s"], partial["lap_delta_source"]) == (None, None)
+    assert partial["trace_delta_s"] == 0.25
+    assert "no whole-lap delta" in partial["coverage_warning"]

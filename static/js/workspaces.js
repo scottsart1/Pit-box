@@ -683,7 +683,11 @@ async function createComparison() {
     configurePlayback();
     renderComparison();
     renderReviewFindings();
-    setNotice("lapLabStatus", `Comparison ready · ${formatPercent(comparison.coverage_ratio)} aligned coverage · ${comparison.algorithm_bundle}.${caveatNote}`, "success");
+    // The warning states how much of the lap lined up; a second figure beside
+    // it rounds differently ("1%" against "less than 1%").
+    const coverage = comparison.coverage_warning ? "" : ` · ${formatPercent(comparison.coverage_ratio)} aligned coverage`;
+    const coverageNote = comparison.coverage_warning ? ` ${comparison.coverage_warning}` : "";
+    setNotice("lapLabStatus", `Comparison ready${coverage} · ${comparison.algorithm_bundle}.${caveatNote}${coverageNote}`, comparison.coverage_warning ? "warning" : "success");
   } catch (error) {
     if (!current()) return;
     state.comparison = null;
@@ -724,7 +728,9 @@ function renderComparison() {
   }
   byId("comparisonDelta").textContent = formatSeconds(comparison.lap_delta_s, true);
   byId("comparisonDelta").className = Number(comparison.lap_delta_s) > 0 ? "error" : Number(comparison.lap_delta_s) < 0 ? "good" : "";
-  byId("comparisonSign").textContent = comparison.sign_convention || "Positive means the candidate arrived later.";
+  const deltaSource = comparison.lap_delta_source === "lap_times" ? "Official lap times" : comparison.lap_delta_source === "telemetry" ? "From telemetry" : "";
+  const signConvention = comparison.sign_convention || "Positive means the candidate arrived later.";
+  byId("comparisonSign").textContent = deltaSource ? `${deltaSource} · ${signConvention}` : signConvention;
   const compatibility = comparison.compatibility || {};
   const classification = compatibility.class || compatibility.classification || "unavailable";
   badge.textContent = `${classification.replaceAll("_", " ")} · ${compatibility.allows_coaching === false ? "visual comparison only" : "coaching permitted"}`;
@@ -773,7 +779,8 @@ function renderCoachingFindings() {
   clear(container);
   const findings = state.comparison?.findings || [];
   if (!findings.length) {
-    container.append(element("div", "empty", "No prescriptive finding passed the current evidence threshold. The aligned traces remain available for inspection."));
+    const sparse = Boolean(state.comparison?.coverage_warning);
+    container.append(element("div", "empty", sparse ? "No coaching: no segment was measured in both laps over at least half its length. The recorded stretches remain available for inspection." : "No prescriptive finding passed the current evidence threshold. The aligned traces remain available for inspection."));
     return;
   }
   findings.forEach((finding) => {
@@ -782,7 +789,10 @@ function renderCoachingFindings() {
     card.dataset.findingId = finding.finding_id;
     card.dataset.positive = String(Boolean(finding.positive));
     const title = element("h3", "", `${finding.segment_label || "Segment"} · ${(finding.type || "finding").replaceAll("_", " ")}`);
-    const metadata = element("div", "field-help", `${Math.round(Number(finding.confidence || 0) * 100)}% confidence · ${finding.repeatability == null ? "repeatability unavailable" : `${Math.round(Number(finding.repeatability) * 100)}% repeatability`} · rank ${finding.rank ?? "—"}`);
+    // One lap pair cannot show whether a habit repeats; the service records
+    // that as zero, which read as "0% repeatability", a verdict never made.
+    const repeatability = finding.repeatability == null || Number(finding.repeatability) === 0 ? "repeatability not measured (one lap pair)" : `${Math.round(Number(finding.repeatability) * 100)}% repeatability`;
+    const metadata = element("div", "field-help", `${Math.round(Number(finding.confidence || 0) * 100)}% confidence · ${repeatability} · rank ${finding.rank ?? "—"}`);
     const measured = element("p", "", finding.measured_loss_s == null ? "Measured local time loss unavailable." : `Measured: ${formatSeconds(finding.measured_loss_s)} through this segment.`);
     const action = element("p", "", `Try: ${finding.action || "No prescriptive action available."}`);
     card.append(title, metadata, measured, action);

@@ -127,3 +127,24 @@ async def test_startup_maintenance_still_reclaims_a_large_free_list(
     report = await database.maintain(keep_trace_sessions=12, vacuum=True)
     assert report["vacuumed"] is True
     assert report["size_after_bytes"] < report["size_before_bytes"]
+
+
+def test_a_patchy_comparison_is_reported_as_a_warning_not_a_success() -> None:
+    """Comparisons overlapping on 1 percent of the lap said "Comparison ready"
+    in green, above a delta that described a few metres of track."""
+    source = _create_comparison_source()
+    assert 'comparison.coverage_warning ? "warning" : "success"' in source
+    css = (ROOT / "static" / "css" / "v42.css").read_text(encoding="utf-8")
+    assert '.inline-notice[data-tone="warning"]' in css
+    render = WORKSPACES[WORKSPACES.index("function renderComparison()"):]
+    assert 'comparison.lap_delta_source === "lap_times"' in render
+
+
+def test_choosing_a_history_scope_reloads_the_list() -> None:
+    """History ignored its scope picker until Refresh was pressed: choosing
+    All still said "No stored laps" over a history of thousands."""
+    index = (ROOT / "static" / "index.html").read_text(encoding="utf-8")
+    assert "$('historyScope').onchange=loadHistory;" in index
+    css = (ROOT / "static" / "css" / "v42.css").read_text(encoding="utf-8")
+    # At tablet width the picker shrank to its arrow beside four buttons.
+    assert "#historyScope { flex: 0 0 auto; min-width: 7.5rem; }" in css

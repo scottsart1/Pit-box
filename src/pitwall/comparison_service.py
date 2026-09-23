@@ -54,6 +54,18 @@ from .trace_store import TraceFormatError, TraceManifestMissing, TraceStore
 
 ALGORITHM_BUNDLE = "analysis_4.2.0"
 
+# Share of the aligned distance on which both laps have timing, at or above
+# which the telemetry stands for the whole lap. Below it the trace delta covers
+# only the stretches both laps recorded, and a comparison must say so.
+FULL_LAP_TRACE_COVERAGE = 0.9
+
+# Share of a segment that both laps must have measured before a coaching
+# finding may be drawn from it. In a real race received over Wi-Fi, four in
+# five telemetry ticks never arrived; segments measured on 0-8 percent of their
+# length produced "minimum speed too low" and "throttle too late" advice at
+# zero confidence with no measured loss behind it.
+COACHING_MIN_SEGMENT_COVERAGE = 0.5
+
 
 class ComparisonServiceError(RuntimeError):
     code = "comparison_error"
@@ -1282,7 +1294,10 @@ class ComparisonService:
             loss_measured = segment_result.delta_s is not None
             loss = float(segment_result.delta_s) if loss_measured else 0.0
             evidence_rows.append((segment, facts, loss, segment_result.coverage))
-            if compatibility.allows_coaching:
+            if (
+                compatibility.allows_coaching
+                and segment_result.coverage >= COACHING_MIN_SEGMENT_COVERAGE
+            ):
                 coaching = build_coaching_evidence(
                     SegmentEvidence(
                         segment.id,
@@ -1330,7 +1345,9 @@ class ComparisonService:
             "algorithm_bundle": result.algorithm_bundle,
             "coverage_ratio": result.coverage_ratio,
             "quality_score": result.quality_score,
-            "lap_delta_s": result.lap_delta_s,
+            **self._lap_delta(
+                candidate, reference, result.lap_delta_s, result.coverage_ratio
+            ),
             "sign_convention": "positive means candidate arrived later",
             "reconciled": result.reconciled,
             "reconciliation_error_s": result.reconciliation_error_s,
@@ -1350,6 +1367,56 @@ class ComparisonService:
             ],
             "findings": findings,
             "created_at": _utc_now(),
+        }
+
+    @staticmethod
+    def _lap_delta(
+        candidate: LapRecord,
+        reference: LapRecord,
+        trace_delta_s: float | None,
+        coverage: float,
+    ) -> dict[str, Any]:
+        """The lap delta to show, where it comes from, and what limits it.
+
+        The trace delta runs from the first to the last distance at which both
+        laps have timing. On sparse telemetry that can be a few metres, and a
+        rival 0.8 s quicker was shown as 0.001 s. The game's own lap times are
+        exact at any telemetry density, so they give the headline whenever both
+        exist; the trace delta stands in only when it covers the lap.
+        """
+
+        official = (
+            (candidate.lap_time_ms - reference.lap_time_ms) / 1000.0
+            if candidate.lap_time_ms and reference.lap_time_ms
+            else None
+        )
+        if official is not None:
+            lap_delta, source = official, "lap_times"
+        elif trace_delta_s is not None and coverage >= FULL_LAP_TRACE_COVERAGE:
+            lap_delta, source = trace_delta_s, "telemetry"
+        else:
+            lap_delta, source = None, None
+        warning = None
+        if coverage < FULL_LAP_TRACE_COVERAGE:
+            share = "less than 1%" if coverage < 0.005 else f"only {coverage:.0%}"
+            delta_note = (
+                "The lap delta is the difference in official lap times."
+                if source == "lap_times"
+                else "Without both lap times, no whole-lap delta can be given."
+            )
+            warning = (
+                f"The two laps' telemetry overlaps on {share} of the lap: "
+                "packets from the game were lost before they reached Your Pit "
+                "Box, most often over Wi-Fi (CONNECTION lists the recommended "
+                f"game settings). {delta_note} Stretches without data are left "
+                "blank, and coaching covers only segments measured over at "
+                "least half their length."
+            )
+        return {
+            "lap_delta_s": lap_delta,
+            "lap_delta_source": source,
+            "trace_delta_s": trace_delta_s,
+            "coverage_warning": warning,
         }
 
     @staticmethod
@@ -1583,14 +1650,22 @@ class ComparisonService:
             analysis_model = self._stored_analysis_model(db, row)
         candidate = self._load_lap_record_sync(str(row["candidate_lap_id"]))
         reference = self._load_lap_record_sync(str(row["reference_key"]))
+        segment_coverage = {
+            str(item["segment_key"]): float(item["coverage_ratio"]) for item in segments
+        }
         findings = []
         for finding in finding_rows:
             facts = json.loads(str(finding["facts_json"]))
+            coverage = segment_coverage.get(str(facts.get("segment_id")))
+            if coverage is not None and coverage < COACHING_MIN_SEGMENT_COVERAGE:
+                # Stored before coaching required a measured segment; it is
+                # withheld on reopening exactly as it would be if run today.
+                continue
             findings.append(
                 {
                     "finding_id": str(finding["id"]),
                     "type": str(finding["finding_type"]),
-                    "rank": int(finding["rank"]),
+                    "rank": len(findings) + 1,
                     "segment_id": facts.get("segment_id"),
                     "segment_label": facts.get("segment_label"),
                     "phase": facts.get("phase"),
@@ -1632,10 +1707,15 @@ class ComparisonService:
             "algorithm_bundle": str(row["algorithm_bundle"]),
             "coverage_ratio": float(row["coverage_ratio"]),
             "quality_score": float(row["quality_score"]),
-            "lap_delta_s": (
-                None
-                if row["lap_delta_ms"] is None
-                else int(row["lap_delta_ms"]) / 1000.0
+            **self._lap_delta(
+                candidate,
+                reference,
+                (
+                    None
+                    if row["lap_delta_ms"] is None
+                    else int(row["lap_delta_ms"]) / 1000.0
+                ),
+                float(row["coverage_ratio"]),
             ),
             "sign_convention": "positive means candidate arrived later",
             "analysis_model": analysis_model,

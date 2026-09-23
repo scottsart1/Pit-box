@@ -23,7 +23,7 @@ from pitwall.trace_store import TraceStore
 @pytest.mark.asyncio
 @pytest.mark.parametrize("retain_samples", [True, False])
 async def test_opponent_batch_is_archived_and_player_batch_is_left_to_legacy_path(
-    tmp_path: Path, retain_samples: bool,
+    tmp_path: Path, retain_samples: bool, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     database = PitWallDatabase(tmp_path / "pitwall.sqlite3")
     await database.initialize()
@@ -118,6 +118,17 @@ async def test_opponent_batch_is_archived_and_player_batch_is_left_to_legacy_pat
             "context_mask": 0,
         }
     ]
+
+    # Revisiting Positions reads no trace again: a 30-lap race re-read 526
+    # files, 2-10 s, on every visit. A manifest id names its content.
+    field = FieldAnalysisService(database.path, trace_store=trace_store)
+    first = await field.positions(session.id)
+
+    def reread(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("a lap-end position already known was read again")
+
+    monkeypatch.setattr(trace_store, "read_range", reread)
+    assert await field.positions(session.id) == first
 
 
 @pytest.mark.asyncio

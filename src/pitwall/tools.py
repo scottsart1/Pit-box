@@ -2163,6 +2163,9 @@ class TelemetryTools:
             "coverage_ratio": result.get("coverage_ratio"),
             "quality_score": result.get("quality_score"),
             "lap_delta_s": result.get("lap_delta_s"),
+            "lap_delta_source": result.get("lap_delta_source"),
+            "trace_delta_s": result.get("trace_delta_s"),
+            "coverage_warning": result.get("coverage_warning"),
             "sign_convention": result.get("sign_convention"),
             "segments": [
                 {

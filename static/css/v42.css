@@ -238,6 +238,14 @@ button:disabled,
 
 .inline-notice[data-tone="error"] { border-left-color: var(--loss); color: #ffd3d3; }
 .inline-notice[data-tone="success"] { border-left-color: var(--gain); color: #c9f8db; }
+.inline-notice[data-tone="warning"] { border-left-color: var(--warn); color: #ffe7b0; }
+
+/* History's heading, scope picker and four actions shared one row. At tablet
+   width the picker, which may shrink to nothing, collapsed to its arrow and
+   the chosen scope could not be read. */
+#review .row,
+#review .controls { flex-wrap: wrap; }
+#historyScope { flex: 0 0 auto; min-width: 7.5rem; }
 .inline-notice:empty { display: none; }
 
 .destination-grid {

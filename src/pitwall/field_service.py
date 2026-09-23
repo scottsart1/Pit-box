@@ -58,6 +58,9 @@ class ContextMask(IntFlag):
 
 
 CONTEXT_MASK_VERSION = 1
+
+# Enough lap-end positions for several full races; the memory is trivial.
+_STORED_POSITION_LIMIT = 20_000
 CONTEXT_MASK_LABELS: dict[ContextMask, str] = {
     ContextMask.INVALID_LAP: "invalid_lap",
     ContextMask.PIT_CONTEXT: "pit_context",
@@ -153,6 +156,11 @@ class FieldAnalysisService:
         self.min_cars_per_segment = int(min_cars_per_segment)
         self.max_lap_rows = int(max_lap_rows)
         self.max_comparison_rows = int(max_comparison_rows)
+        # Lap-end positions read from trace files, by manifest id. A manifest
+        # id names its content, so an entry never goes stale; without it the
+        # Positions view re-read one trace per lap - 526 files, 2-10 s, for
+        # a 30-lap race - on every visit.
+        self._stored_positions: dict[str, int | None] = {}
 
     @contextmanager
     def _connect(self) -> Iterator[sqlite3.Connection]:
@@ -766,6 +774,8 @@ class FieldAnalysisService:
     def _stored_position(self, lap: _StoredLap) -> int | None:
         if self.trace_store is None or not lap.trace_manifest_id:
             return None
+        if lap.trace_manifest_id in self._stored_positions:
+            return self._stored_positions[lap.trace_manifest_id]
         try:
             trace = self.trace_store.read_range(
                 lap.trace_manifest_id,
@@ -780,13 +790,18 @@ class FieldAnalysisService:
             TraceFormatError,
             TraceStoreError,
         ):
+            # Not remembered: a reprocess can restore the file.
             return None
         values = np.asarray(series.values, dtype=np.float64)
         available = np.asarray(series.available, dtype=bool)
         usable = np.flatnonzero(
             available & np.isfinite(values) & (values >= 1) & (values <= 24)
         )
-        return round(float(values[usable[-1]])) if usable.size else None
+        position = round(float(values[usable[-1]])) if usable.size else None
+        if len(self._stored_positions) >= _STORED_POSITION_LIMIT:
+            self._stored_positions.clear()
+        self._stored_positions[lap.trace_manifest_id] = position
+        return position
 
     def _positions_sync(self, session_id: str) -> dict[str, Any]:
         with self._connect() as db:

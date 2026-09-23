@@ -60,6 +60,9 @@ class ComparisonResponse(ApiResponse):
     coverage_ratio: float
     quality_score: float
     lap_delta_s: float | None
+    lap_delta_source: Literal["lap_times", "telemetry"] | None = None
+    trace_delta_s: float | None = None
+    coverage_warning: str | None = None
     sign_convention: str
     segments: list[dict[str, Any]]
     findings: list[dict[str, Any]]
