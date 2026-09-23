@@ -200,6 +200,15 @@ class _SegmentSelection:
         }
 
 
+@dataclass(frozen=True, slots=True)
+class _ComputedComparison:
+    result: Any
+    selection: _SegmentSelection
+    segment_by_id: dict[str, Segment]
+    evidence_rows: list[tuple[Segment, dict[str, MetricFact], float, float]]
+    findings: list[dict[str, Any]]
+
+
 def _utc_now() -> str:
     return datetime.now(UTC).isoformat()
 
@@ -1236,6 +1245,75 @@ class ComparisonService:
             asyncio.to_thread(self._load_trace_sync, candidate),
             asyncio.to_thread(self._load_trace_sync, reference),
         )
+        # Alignment, segment timing and coaching are numpy work over two whole
+        # laps: 40-60 ms for a pair of densely recorded real laps on a desktop,
+        # and longer on a tablet's slower processor. Run on the event loop, that
+        # time was taken from everything else the server does, including the
+        # UDP receiver reading a live session and the board's updates. It runs
+        # on a worker thread, as the trace and database reads already did.
+        computed = await asyncio.to_thread(
+            self._compute_comparison_sync,
+            candidate,
+            reference,
+            reference_kind,
+            compatibility,
+            candidate_trace,
+            reference_trace,
+        )
+        result = computed.result
+        selection = computed.selection
+        segment_by_id = computed.segment_by_id
+        findings = computed.findings
+        await self._persist(
+            result,
+            candidate,
+            reference,
+            computed.evidence_rows,
+            findings,
+            selection,
+        )
+        return {
+            "schema_version": 1,
+            "comparison_id": result.comparison_id,
+            "candidate": self._lap_card(candidate),
+            "reference": {"kind": reference_kind, **self._lap_card(reference)},
+            "compatibility": self._compatibility_dict(compatibility),
+            "algorithm_bundle": result.algorithm_bundle,
+            "coverage_ratio": result.coverage_ratio,
+            "quality_score": result.quality_score,
+            **self._lap_delta(
+                candidate, reference, result.lap_delta_s, result.coverage_ratio
+            ),
+            "sign_convention": "positive means candidate arrived later",
+            "reconciled": result.reconciled,
+            "reconciliation_error_s": result.reconciliation_error_s,
+            "analysis_model": selection.projection(),
+            "segments": [
+                {
+                    "segment_id": item.segment_id,
+                    "label": segment_by_id[item.segment_id].label,
+                    "ordinal": segment_by_id[item.segment_id].ordinal,
+                    "start_m": item.start_m,
+                    "end_m": item.end_m,
+                    "delta_s": item.delta_s,
+                    "coverage": item.coverage,
+                    "model_source": segment_by_id[item.segment_id].source,
+                }
+                for item in result.segment_results
+            ],
+            "findings": findings,
+            "created_at": _utc_now(),
+        }
+
+    def _compute_comparison_sync(
+        self,
+        candidate: LapRecord,
+        reference: LapRecord,
+        reference_kind: str,
+        compatibility: CompatibilityReport,
+        candidate_trace: LapTrace,
+        reference_trace: LapTrace,
+    ) -> _ComputedComparison:
         candidate_clean = self._clean(candidate_trace)
         reference_clean = self._clean(reference_trace)
         try:
@@ -1253,8 +1331,7 @@ class ComparisonService:
                 f"compared: {exc}. One of the two traces covers too little of "
                 "the lap for a distance-aligned comparison."
             ) from exc
-        selection = await asyncio.to_thread(
-            self._segment_selection_sync,
+        selection = self._segment_selection_sync(
             candidate,
             float(aligned.distance_m[0]),
             float(aligned.distance_m[-1]),
@@ -1328,46 +1405,13 @@ class ComparisonService:
             # id is unique, and re-running one comparison still replaces its
             # own findings rather than adding to them.
             finding["finding_id"] = f"{result.comparison_id}_{finding['finding_id']}"
-        await self._persist(
-            result,
-            candidate,
-            reference,
-            evidence_rows,
-            findings,
-            selection,
+        return _ComputedComparison(
+            result=result,
+            selection=selection,
+            segment_by_id=segment_by_id,
+            evidence_rows=evidence_rows,
+            findings=findings,
         )
-        return {
-            "schema_version": 1,
-            "comparison_id": result.comparison_id,
-            "candidate": self._lap_card(candidate),
-            "reference": {"kind": reference_kind, **self._lap_card(reference)},
-            "compatibility": self._compatibility_dict(compatibility),
-            "algorithm_bundle": result.algorithm_bundle,
-            "coverage_ratio": result.coverage_ratio,
-            "quality_score": result.quality_score,
-            **self._lap_delta(
-                candidate, reference, result.lap_delta_s, result.coverage_ratio
-            ),
-            "sign_convention": "positive means candidate arrived later",
-            "reconciled": result.reconciled,
-            "reconciliation_error_s": result.reconciliation_error_s,
-            "analysis_model": selection.projection(),
-            "segments": [
-                {
-                    "segment_id": item.segment_id,
-                    "label": segment_by_id[item.segment_id].label,
-                    "ordinal": segment_by_id[item.segment_id].ordinal,
-                    "start_m": item.start_m,
-                    "end_m": item.end_m,
-                    "delta_s": item.delta_s,
-                    "coverage": item.coverage,
-                    "model_source": segment_by_id[item.segment_id].source,
-                }
-                for item in result.segment_results
-            ],
-            "findings": findings,
-            "created_at": _utc_now(),
-        }
 
     @staticmethod
     def _lap_delta(
@@ -1838,7 +1882,8 @@ class ComparisonService:
         max_points: int = 1600,
     ) -> dict[str, Any]:
         _record, trace = await self.lap_trace(lap_id)
-        return self._trace_projection(
+        return await asyncio.to_thread(
+            self._trace_projection,
             lap_id,
             trace,
             fields=fields,
@@ -1858,6 +1903,9 @@ class ComparisonService:
         would have looked like.
         """
         record, trace = await self.lap_trace(lap_id)
+        return await asyncio.to_thread(self._lap_analysis_sync, record, trace)
+
+    def _lap_analysis_sync(self, record: LapRecord, trace: LapTrace) -> dict[str, Any]:
         distance = trace.distance_m
         if distance.size < 2:
             raise TraceUnavailableError("Lap trace is too short to analyze")
@@ -1908,8 +1956,7 @@ class ComparisonService:
             total = float(np.sum(step_seconds[known]))
             return round(weighted / total * 100.0, 1) if total > 0 else None
 
-        segments = await asyncio.to_thread(
-            self._segment_selection_sync,
+        segments = self._segment_selection_sync(
             record,
             float(distance[0]),
             float(distance[-1]),
@@ -1994,8 +2041,35 @@ class ComparisonService:
         candidate, reference = await asyncio.gather(
             self.lap_trace(candidate_id), self.lap_trace(reference_id)
         )
-        candidate_clean = self._clean(candidate[1])
-        reference_clean = self._clean(reference[1])
+        # Re-aligning two whole laps is the same numpy work as creating the
+        # comparison, so it stays off the event loop too.
+        return await asyncio.to_thread(
+            self._comparison_trace_sync,
+            comparison_id,
+            candidate_id,
+            reference_id,
+            candidate[1],
+            reference[1],
+            fields,
+            start_m,
+            end_m,
+            max_points,
+        )
+
+    def _comparison_trace_sync(
+        self,
+        comparison_id: str,
+        candidate_id: str,
+        reference_id: str,
+        candidate_trace: LapTrace,
+        reference_trace: LapTrace,
+        fields: list[str],
+        start_m: float | None,
+        end_m: float | None,
+        max_points: int,
+    ) -> dict[str, Any]:
+        candidate_clean = self._clean(candidate_trace)
+        reference_clean = self._clean(reference_trace)
         aligned = align_distance_traces(candidate_clean, reference_clean, spacing_m=0.5)
         delta = (
             aligned.candidate.signals["time_s"] - aligned.candidate.signals["time_s"][0]

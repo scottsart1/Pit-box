@@ -459,6 +459,19 @@ class FieldAnalysisService:
             session = self._session_row(db, session_id)
             cars = self._car_rows(db, session_id)
             rows, truncated = self._lap_rows(db, session_id)
+            # No writer sets a session-level score; like the Library and
+            # Session Review, fall back to the mean of the session's laps
+            # rather than showing "Unavailable" for every session.
+            quality_score = session["quality_score"]
+            if quality_score is None:
+                quality_score = db.execute(
+                    """
+                    SELECT AVG(l.quality_score) FROM recorded_laps l
+                    JOIN session_cars c ON c.id=l.session_car_id
+                    WHERE c.session_id=?
+                    """,
+                    (session_id,),
+                ).fetchone()[0]
         laps = [self._lap(row) for row in rows]
         classification = self._classification_rows(cars[:96], laps)
         warnings: list[str] = []
@@ -479,7 +492,9 @@ class FieldAnalysisService:
                 "status": session["status"],
                 "started_at": session["started_at"],
                 "ended_at": session["ended_at"],
-                "quality_score": session["quality_score"],
+                "quality_score": (
+                    float(quality_score) if quality_score is not None else None
+                ),
             },
             "classification_availability": "unavailable",
             "classification_reason": (

@@ -1104,6 +1104,15 @@ class StateStore:
                     "pit_status": pit_status,
                     "pit_lane_time_ms": pit_lane_time_ms,
                     "learning_exclusions": list(start.get("learning_exclusions", [])),
+                    # The catalogue's flag context, which decides whether Lap
+                    # Lab treats a comparison as like for like. The player's
+                    # laps never carried it, so a lap slowed for a yellow was
+                    # compared as a clean one. It is the neutralisation the
+                    # learning exclusions already record: a safety car, VSC,
+                    # red flag, or a yellow or red shown to this car - the same
+                    # test the field's laps get in the archive.
+                    "flag_context": "neutralised_lap"
+                    in start.get("learning_exclusions", []),
                     "setup": copy.deepcopy(state.car_setup),
                     "trace": copy.deepcopy(state.traces),
                     "created_at": time.time(),

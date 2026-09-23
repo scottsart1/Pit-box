@@ -586,3 +586,59 @@ def test_without_both_lap_times_only_a_whole_lap_trace_gives_the_delta() -> None
     assert (partial["lap_delta_s"], partial["lap_delta_source"]) == (None, None)
     assert partial["trace_delta_s"] == 0.25
     assert "no whole-lap delta" in partial["coverage_warning"]
+
+
+@pytest.mark.asyncio
+async def test_comparison_work_leaves_the_event_loop_free(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Aligning two densely recorded real laps held the event loop for 40-60 ms
+    per comparison on a desktop, and more on the tablet. The same loop reads
+    the live UDP stream. However long the alignment takes, the loop must keep
+    turning while it runs."""
+    import asyncio
+    import time
+
+    from pitwall import comparison_service as module
+
+    service, reference_id, candidate_id, _, _database, _ = await _three_laps(tmp_path)
+    align = module.align_distance_traces
+
+    def slow_alignment(*args: object, **kwargs: object) -> object:
+        time.sleep(0.4)
+        return align(*args, **kwargs)
+
+    monkeypatch.setattr(module, "align_distance_traces", slow_alignment)
+
+    async def longest_pause(work: object) -> tuple[object, float]:
+        pauses: list[float] = []
+        finished = asyncio.Event()
+
+        async def heartbeat() -> None:
+            last = time.perf_counter()
+            while not finished.is_set():
+                await asyncio.sleep(0)
+                now = time.perf_counter()
+                pauses.append(now - last)
+                last = now
+
+        beat = asyncio.create_task(heartbeat())
+        try:
+            result = await work  # type: ignore[misc]
+        finally:
+            finished.set()
+            await beat
+        return result, max(pauses)
+
+    comparison, pause = await longest_pause(
+        service.create_comparison(
+            candidate_id, reference_kind="lap", reference_lap_id=reference_id
+        )
+    )
+    assert pause < 0.2
+    _trace, pause = await longest_pause(
+        service.get_comparison_trace(
+            comparison["comparison_id"], fields=["speed", "delta"]
+        )
+    )
+    assert pause < 0.2

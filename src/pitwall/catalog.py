@@ -13,8 +13,24 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from f1.packets import TRACKS as GAME_TRACKS
+
 from .capture import CaptureScanReport
 from .trace_store import TraceManifest
+
+
+def track_name(track_id: Any) -> str | None:
+    """The circuit's name as the game's own track table gives it.
+
+    The catalogue stores only the id, so the Library and Lap Lab named
+    sessions "Race · Track 13" rather than Suzuka. None for an id the table
+    does not know, including the -1 the game sends before a session loads.
+    """
+    try:
+        name = GAME_TRACKS.get(int(track_id))
+    except (TypeError, ValueError):
+        return None
+    return str(name) if name else None
 
 
 def opaque_id(prefix: str, *parts: object) -> str:
@@ -253,6 +269,15 @@ class SessionCatalog:
     ) -> bool:
         _, car_key = self._ensure_legacy_session(db, row)
         key = lap_id(car_key, int(row["lap_num"]), 0)
+        # Flag context is a neutralisation or a yellow shown to the car, which
+        # the legacy row records among its learning exclusions. It used to be
+        # set for every invalid lap instead - a track-limits lap is not a
+        # yellow - and missed the neutralised laps that were valid.
+        try:
+            exclusions = json.loads(row["learning_exclusions_json"] or "[]")
+        except (IndexError, TypeError, json.JSONDecodeError):
+            exclusions = []
+        flag_context = isinstance(exclusions, list) and "neutralised_lap" in exclusions
         db.execute(
             """
             INSERT OR IGNORE INTO recorded_laps(
@@ -276,7 +301,7 @@ class SessionCatalog:
                 row["fuel_end_kg"],
                 str(row["weather"] or "Unknown"),
                 int(row["pit_status"] or 0),
-                1 if int(row["valid"] or 0) == 0 else 0,
+                1 if flag_context else 0,
                 1.0 if str(row["trace_json"] or "[]") not in {"", "[]"} else 0.0,
                 0.8 if int(row["valid"] or 0) else 0.4,
                 _iso_from_unix(row["created_at"]) or _utc_now(),
@@ -634,6 +659,9 @@ class SessionCatalog:
                        (SELECT COUNT(*) FROM recorded_laps l
                         JOIN session_cars c ON c.id=l.session_car_id
                         WHERE c.session_id=s.id) AS lap_count,
+                       (SELECT AVG(l.quality_score) FROM recorded_laps l
+                        JOIN session_cars c ON c.id=l.session_car_id
+                        WHERE c.session_id=s.id) AS mean_lap_quality,
                        COALESCE((SELECT SUM(tc.byte_count)
                                  FROM trace_manifests tm
                                  JOIN trace_chunks tc ON tc.manifest_id=tm.id
@@ -660,6 +688,14 @@ class SessionCatalog:
             item["size_bytes"] = int(item.pop("trace_bytes")) + int(
                 item.pop("capture_bytes")
             )
+            # Nothing writes a session-level score, so the Library showed
+            # "Unavailable" for every one of 164 real sessions while Session
+            # Review, through get_quality, showed the mean of the laps. Both
+            # now say the same thing.
+            mean_lap_quality = item.pop("mean_lap_quality")
+            if item["quality_score"] is None and mean_lap_quality is not None:
+                item["quality_score"] = float(mean_lap_quality)
+            item["track_name"] = track_name(item["track_id"])
             item["starred"] = bool(item["starred"])
             items.append(item)
         next_cursor = (
@@ -680,6 +716,7 @@ class SessionCatalog:
                 return None
             result = dict(row)
             result["starred"] = bool(result["starred"])
+            result["track_name"] = track_name(result["track_id"])
             try:
                 result["tags"] = json.loads(result.pop("tags_json"))
             except (TypeError, json.JSONDecodeError):

@@ -669,10 +669,19 @@ class F1DatagramProtocol(asyncio.DatagramProtocol):
             marshal_zones = list(getattr(packet, "marshal_zones", []))[
                 : int(getattr(packet, "num_marshal_zones", 0))
             ]
+            # Only a neutralisation reaches every car at once: a safety car, a
+            # VSC, a formation lap, or a red flag, which the game shows in
+            # every zone. A yellow is local. Any flagged zone used to count,
+            # anywhere on the lap, and so did the green shown for a few
+            # seconds after a yellow clears. In a real history that set aside
+            # a fifth of the field's laps as flag context, while 3% of the
+            # player's laps had seen a neutralisation or a yellow of their
+            # own. A yellow now counts for the cars shown it: CarStatus
+            # carries each car's own flag (see PacketCarStatusData below).
             global_flag_context = bool(
                 safety_car_status
                 or any(
-                    int(getattr(zone, "zone_flag", 0)) != 0 for zone in marshal_zones
+                    int(getattr(zone, "zone_flag", 0)) == 4 for zone in marshal_zones
                 )
             )
             self._archive_event(
@@ -941,6 +950,13 @@ class F1DatagramProtocol(asyncio.DatagramProtocol):
                 if lap_number <= 0:
                     continue
                 unavailable = index in self._assembler_restricted
+                # A yellow (3) or red (4) shown to this car makes its lap flag
+                # context, the same test the player's own laps get from the
+                # live state. In a recorded race the game reported it for
+                # every rival, and most cars showed no flag while a yellow was
+                # out elsewhere on the track.
+                if int(getattr(status, "vehicle_fia_flags", 0)) in {3, 4}:
+                    self._assembler_flag_context[index] = True
                 compound = VISUAL_COMPOUNDS.get(
                     int(getattr(status, "visual_tyre_compound", -1)), "UNKNOWN"
                 )

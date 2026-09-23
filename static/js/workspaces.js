@@ -119,7 +119,7 @@ function formatDate(value) {
 }
 
 function sessionLabel(session) {
-  return session.display_name || `${session.session_type || "Session"} · Track ${session.track_id ?? "unavailable"}`;
+  return session.display_name || `${session.session_type || "Session"} · ${session.track_name || `Track ${session.track_id ?? "unavailable"}`}`;
 }
 
 function lapLabel(lap) {
@@ -1429,6 +1429,10 @@ function bindEvents() {
     updateReferenceMeta();
     renderComparison();
     renderReviewFindings();
+    // The previous comparison is gone, so its "Comparison ready" - or the
+    // "Aligning laps" of one still in flight, whose answer is now discarded -
+    // must not stay on screen above a blank delta.
+    setNotice("lapLabStatus", state.candidateLapId ? "Reference changed. Compare laps to measure against it." : "Choose a recorded lap to see its playback.");
   });
   byId("createComparison")?.addEventListener("click", createComparison);
   byId("playbackToggle")?.addEventListener("click", startPlayback);

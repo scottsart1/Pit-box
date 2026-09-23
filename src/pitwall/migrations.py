@@ -436,6 +436,35 @@ V4_13_LIBRARY_INDEXES = Migration(
 )
 
 
+V4_13_1_PLAYER_FLAG_CONTEXT = Migration(
+    version=4904,
+    app_version="4.13.1",
+    statements=(
+        # Lap Lab rates a comparison by, among other things, whether either
+        # lap ran under flag context. The player's live laps were catalogued
+        # without it, and laps imported from the legacy table were marked for
+        # being invalid instead. The legacy row has always recorded the real
+        # answer among its learning exclusions: a safety car, VSC, red flag,
+        # or a yellow or red shown to the player. On a real history of 1,148
+        # such laps, 35 neutralised laps read as clean and 13 invalid laps as
+        # flagged.
+        """
+        UPDATE recorded_laps
+        SET flag_context = CASE
+                WHEN instr(
+                    (SELECT l.learning_exclusions_json FROM laps l
+                     WHERE l.id = recorded_laps.legacy_lap_id),
+                    '"neutralised_lap"'
+                ) > 0 THEN 1
+                ELSE 0
+            END
+        WHERE legacy_lap_id IS NOT NULL
+          AND session_car_id IN (SELECT id FROM session_cars WHERE is_player = 1)
+        """,
+    ),
+)
+
+
 MIGRATIONS: tuple[Migration, ...] = (
     V4_2_CATALOG,
     V4_2_COMPARISON_RESULTS,
@@ -443,5 +472,6 @@ MIGRATIONS: tuple[Migration, ...] = (
     V4_9_2_TYRE_LEARNING,
     V4_9_7_RAW_SESSION_TYPE,
     V4_13_LIBRARY_INDEXES,
+    V4_13_1_PLAYER_FLAG_CONTEXT,
 )
 LATEST_SCHEMA_VERSION = MIGRATIONS[-1].version
