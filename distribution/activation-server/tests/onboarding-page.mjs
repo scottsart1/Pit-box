@@ -5,6 +5,7 @@ import test from 'node:test';
 
 const source = await readFile(new URL('../../../static/js/onboarding.js', import.meta.url), 'utf8');
 const html = await readFile(new URL('../../../static/index.html', import.meta.url), 'utf8');
+const version = (await readFile(new URL('../../../src/pitwall/__init__.py', import.meta.url), 'utf8')).match(/__version__ = "([\d.]+)"/)[1];
 const settle = async () => { for (let i = 0; i < 8; i++) await new Promise(resolve => setImmediate(resolve)); };
 const initialState = () => ({connected: false, game_paused: false, wake_enabled: false, wake_phrase: 'mark', wake_input_rms: 0, ptt_mask: 0});
 
@@ -230,8 +231,8 @@ test('onboarding markup has unique IDs, official key link, accessible password f
   assert.match(html, /id="onboardingKey" type="password" autocomplete="off"/);
   assert.match(html, /https:\/\/platform.openai.com\/api-keys" target="_blank" rel="noopener noreferrer"/);
   assert.match(html, /<dialog id="onboardingDialog"[^>]*aria-labelledby="onboardingTitle"/);
-  assert.match(html, /\/static\/js\/onboarding.js\?v=4\.13\.2/);
-  assert.match(html, /\/static\/css\/onboarding.css\?v=4\.13\.2/);
+  assert.ok(html.includes(`/static/js/onboarding.js?v=${version}`));
+  assert.ok(html.includes(`/static/css/onboarding.css?v=${version}`));
 });
 
 test('step 2 shows and copies actual UDP destination and port without leaving the guide', async () => {
