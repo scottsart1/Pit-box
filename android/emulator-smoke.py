@@ -215,6 +215,52 @@ def node_bounds(node: ET.Element) -> tuple[int, int, int, int] | None:
     return (x1, y1, x2, y2) if x2 > x1 and y2 > y1 else None
 
 
+def system_bar_state(display_dump: str) -> tuple[str, str, str]:
+    """Read Android's actual bar policy, not the activity's requested flags."""
+    policy = re.search(r"InsetsPolicy\s+status: (\w+)\s+nav: (\w+)([^\n]*\n[^\n]*)?", display_dump)
+    if policy is None:
+        raise AssertionError("Android did not report the status/navigation bar policy")
+    transient = re.search(r"mShowingTransientTypes=([^\n]+)", policy.group(3) or "")
+    return policy.group(1), policy.group(2), transient.group(1).strip() if transient else ""
+
+
+def prove_fullscreen(label: str, *, swipe: bool = False):
+    """The emulator must hide both bars and permit a temporary edge reveal."""
+    def snapshot(stage: str):
+        dump = adb("shell", "dumpsys", "window", "displays").stdout.decode(errors="replace")
+        (OUTPUT / f"{label}-{stage}-window.txt").write_text(dump)
+        return system_bar_state(dump)
+
+    def await_hidden(stage: str):
+        deadline = time.monotonic() + 20
+        while True:
+            state = snapshot(stage)
+            if state == ("WINDOW_STATE_HIDDEN", "WINDOW_STATE_HIDDEN", ""):
+                return
+            if time.monotonic() >= deadline:
+                raise AssertionError(f"System bars did not hide at {label}/{stage}: {state}")
+            time.sleep(0.5)
+
+    await_hidden("hidden")
+    if swipe:
+        # Use the freshly reported display size for the system edge gesture.
+        # This does not tap a page control or assume a dashboard coordinate.
+        sizes = re.findall(r"(?:Physical|Override) size: (\d+)x(\d+)",
+                           adb("shell", "wm", "size").stdout.decode())
+        assert sizes, "Android did not report display dimensions"
+        width, height = map(int, sizes[-1])
+        adb("shell", "input", "swipe", str(width // 2), "1",
+            str(width // 2), str(max(80, height // 6)), "300")
+        revealed = snapshot("swipe-reveal")
+        assert "statusBars" in revealed[2], f"Edge swipe did not reveal transient bars: {revealed}"
+        (OUTPUT / f"{label}-swipe-screen.png").write_bytes(adb("exec-out", "screencap", "-p").stdout)
+        await_hidden("auto-hidden")
+    (OUTPUT / f"{label}-fullscreen.json").write_text(json.dumps({
+        "status_bar_hidden": True, "navigation_bar_hidden": True,
+        "swipe_reveal_and_auto_hide": swipe,
+    }, indent=2))
+
+
 def page_scroll_bounds(tree: ET.Element) -> tuple[int, int, int, int] | None:
     regions = [bounds for node in tree.iter("node")
                if node.get("scrollable") == "true" and (bounds := node_bounds(node))]
@@ -278,6 +324,50 @@ def capture_view(label: str):
     (OUTPUT / f"{label}-screen.png").write_bytes(adb("exec-out", "screencap", "-p").stdout)
 
 
+def prove_fullscreen_keyboard():
+    """A real pairing field must remain above the IME and restore on Back."""
+    before = ui_tree("keyboard-before")
+
+    def web_bounds(tree):
+        regions = [bounds for node in tree.iter("node")
+                   if node.get("class") == "android.webkit.WebView" and (bounds := node_bounds(node))]
+        assert regions, "No WebView bounds available for the keyboard viewport check"
+        return max(regions, key=lambda bounds: bounds[3] - bounds[1])
+
+    full_view = web_bounds(before)
+    field = next((node for node in before.iter("node")
+                  if node.get("resource-id") == "transferPairCode" and node_bounds(node)), None)
+    assert field is not None, "Pairing input is not visible for keyboard QA"
+    tap_node(field)
+    try:
+        deadline = time.monotonic() + 10
+        while True:
+            dump = adb("shell", "dumpsys", "input_method").stdout.decode(errors="replace")
+            if "mInputShown=true" in dump:
+                break
+            assert time.monotonic() < deadline, "Pairing input did not open the soft keyboard"
+            time.sleep(0.5)
+        (OUTPUT / "keyboard-input-method.txt").write_text(dump)
+        after = ui_tree("keyboard-open")
+        resized_view = web_bounds(after)
+        assert resized_view[3] < full_view[3], "Keyboard covers the page instead of resizing its viewport"
+        focused = next((node for node in after.iter("node")
+                        if node.get("resource-id") == "transferPairCode" and node.get("focused") == "true"), None)
+        assert focused is not None and node_bounds(focused), "Pairing field lost focus or became invisible"
+        bounds = node_bounds(focused)
+        assert resized_view[1] <= bounds[1] < bounds[3] <= resized_view[3], "Focused input overlaps the keyboard"
+        (OUTPUT / "keyboard-open-screen.png").write_bytes(adb("exec-out", "screencap", "-p").stdout)
+    finally:
+        adb("shell", "input", "keyevent", "KEYCODE_BACK")
+    prove_fullscreen("keyboard-dismissed")
+    restored = web_bounds(ui_tree("keyboard-dismissed"))
+    assert restored == full_view, "Dismissing the keyboard did not restore the full viewport"
+    (OUTPUT / "fullscreen-keyboard.json").write_text(json.dumps({
+        "keyboard_opened": True, "focused_input_above_keyboard": True,
+        "viewport_resized": True, "fullscreen_restored": True,
+    }, indent=2))
+
+
 def capture_transfer_ui():
     """Navigate the installed WebView and open its actual pairing controls."""
     capture_view("drive")
@@ -297,6 +387,7 @@ def capture_transfer_ui():
         capture_view("transfer-invitation-controls")
         find_ui("transfer-pair-control", "Pair devices")
         capture_view("transfer-history")
+        prove_fullscreen_keyboard()
         (OUTPUT / "transfer-ui-summary.json").write_text(json.dumps({
             "scope": "Installed APK Connection and Transfer history UI",
             "status": "passed",
@@ -377,6 +468,10 @@ def main():
     expected_version = re.search(r'__version__ = "([^"]+)"', (ROOT / "src/pitwall/__init__.py").read_text()).group(1)
     adb("install", "-r", "-g", str(ROOT / args.apk))
     adb("logcat", "-c")
+    # A one-time OS tutorial can cover a fresh emulator's first immersive app.
+    # Mark only that emulator tutorial seen; never change app permissions/data.
+    adb("shell", "settings", "put", "secure", "immersive_mode_confirmations", "confirmed")
+    adb("shell", "settings", "put", "secure", "show_ime_with_hard_keyboard", "1")
     adb("forward", "tcp:18000", "tcp:8000")
     redir = adb("emu", "redir", "add", "udp:20777:20777")
     assert b"KO" not in redir.stdout, redir.stdout.decode(errors="replace")
@@ -393,14 +488,17 @@ def main():
             transfer_pin = prove_transfer_service(f"launch-{attempt}", transfer_pin)
             prove_udp(f"launch-{attempt}", attempt * 100)
             prove_sqlite_lifecycle(args.package, f"launch-{attempt}")
+            prove_fullscreen(f"launch-{attempt}")
         # The foreground service must retain receiving when the activity is
         # no longer visible. This is not a substitute for physical-device Doze QA.
         adb("shell", "input", "keyevent", "KEYCODE_HOME")
         prove_udp("background", 300)
         adb("shell", "am", "start", "-W", "-n", f"{args.package}/com.yourpitbox.app.MainActivity")
         ui_passed = prove_transfer_ui()
+        prove_fullscreen("foreground-return", swipe=True)
         prove_sqlite_lifecycle(args.package, "final")
         print("PASS: APK startup, exact engine version, UDP parsing/background reception, stationary trace stability, transfer TLS/QR management, and identity across listener/process restart.")
+        print("PASS: Status/navigation bars hidden after launch, process restart and foreground return; edge swipe reveals transient bars which hide again.")
         if ui_passed:
             print("PASS: Installed APK Connection/Transfer history UI navigation, enable action, and pairing controls.")
         print("LIMITATION: Paired-device history copying and physical Wi-Fi are not covered by this smoke check.")

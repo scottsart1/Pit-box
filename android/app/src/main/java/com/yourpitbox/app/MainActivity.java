@@ -23,6 +23,11 @@ import android.widget.ScrollView;
 import android.widget.TextView;
 
 import androidx.core.content.ContextCompat;
+import androidx.core.graphics.Insets;
+import androidx.core.view.ViewCompat;
+import androidx.core.view.WindowCompat;
+import androidx.core.view.WindowInsetsCompat;
+import androidx.core.view.WindowInsetsControllerCompat;
 
 import java.net.HttpURLConnection;
 import java.net.URL;
@@ -47,25 +52,31 @@ public class MainActivity extends Activity {
     private boolean pageReady;
     private String pendingInvitation;
     private int invitationAttempts;
+    private boolean keyboardVisible;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+        WindowCompat.setDecorFitsSystemWindows(getWindow(), false);
 
         FrameLayout root = new FrameLayout(this);
         root.setBackgroundColor(ContextCompat.getColor(this, R.color.pitbox_bg));
-        // Android 15 draws the window edge to edge, under the status bar and
-        // the gesture bar. The dashboard has its own header and footer at the
-        // window's edges, so the layout is inset by the bars (and the keyboard
-        // when it is up), leaving the bars over the page's own dark ground.
-        androidx.core.view.ViewCompat.setOnApplyWindowInsetsListener(root, (view, insets) -> {
-            androidx.core.graphics.Insets bars = insets.getInsets(
-                    androidx.core.view.WindowInsetsCompat.Type.systemBars()
-                            | androidx.core.view.WindowInsetsCompat.Type.displayCutout()
-                            | androidx.core.view.WindowInsetsCompat.Type.ime());
-            view.setPadding(bars.left, bars.top, bars.right, bars.bottom);
-            return androidx.core.view.WindowInsetsCompat.CONSUMED;
+        // Transient system bars overlay the dashboard without moving it.
+        // Keep controls clear of cutouts, desktop-window captions and the
+        // keyboard; text fields still resize into the available viewport.
+        ViewCompat.setOnApplyWindowInsetsListener(root, (view, insets) -> {
+            Insets safe = insets.getInsets(WindowInsetsCompat.Type.displayCutout()
+                    | WindowInsetsCompat.Type.captionBar() | WindowInsetsCompat.Type.ime());
+            view.setPadding(safe.left, safe.top, safe.right, safe.bottom);
+            boolean wasKeyboardVisible = keyboardVisible;
+            keyboardVisible = insets.isVisible(WindowInsetsCompat.Type.ime());
+            if (wasKeyboardVisible && !keyboardVisible) {
+                // Some Android versions expose navigation while typing. Let
+                // the keyboard finish closing before restoring immersive mode.
+                handler.post(this::hideSystemBars);
+            }
+            return WindowInsetsCompat.CONSUMED;
         });
 
         web = new WebView(this);
@@ -130,6 +141,8 @@ public class MainActivity extends Activity {
                 FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
 
         setContentView(root);
+        hideSystemBars();
+        ViewCompat.requestApplyInsets(root);
         capturePairingInvitation(getIntent());
         if (!requestPermissionsFirst()) startBackend();
     }
@@ -311,9 +324,25 @@ public class MainActivity extends Activity {
     @Override
     protected void onResume() {
         super.onResume();
+        hideSystemBars();
         if (loaded && !PitBoxService.isRunning() && PitBoxService.getFailure() == null) {
             finishAndRemoveTask();
         }
+    }
+
+    @Override
+    public void onWindowFocusChanged(boolean hasFocus) {
+        super.onWindowFocusChanged(hasFocus);
+        if (hasFocus) hideSystemBars();
+    }
+
+    private void hideSystemBars() {
+        if (isDestroyed() || isFinishing() || keyboardVisible) return;
+        WindowInsetsControllerCompat controller = WindowCompat.getInsetsController(
+                getWindow(), getWindow().getDecorView());
+        controller.setSystemBarsBehavior(
+                WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE);
+        controller.hide(WindowInsetsCompat.Type.systemBars());
     }
 
     @Override

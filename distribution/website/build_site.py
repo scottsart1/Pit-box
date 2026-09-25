@@ -27,6 +27,7 @@ SCREENSHOT_DIR = REPO_ROOT / "docs" / "screenshots"
 # The demo video lives here rather than in docs/: it is a website asset, not
 # documentation, and it is far too large to copy twice.
 ASSET_DIR = SITE_DIR / "assets"
+DRIVER_DASHBOARD_DIR = REPO_ROOT / "static" / "driver-dashboard"
 OUTPUT_DIR = SITE_DIR / "_site"
 
 PAGES = ("index.html", "guide.html", "diagnostics.html", "eula.html", "download-stats.html", "usage-stats.html", "owner.html")
@@ -116,6 +117,10 @@ def check() -> SiteCheck:
         if not (ASSET_DIR / asset).exists():
             problems.append(f"{asset} is referenced but not in website/assets/.")
 
+    for name in ("index.html", "dashboard.js", "dashboard.css", "downloads/driver-dashboard.html"):
+        if not (DRIVER_DASHBOARD_DIR / name).is_file():
+            problems.append(f"Driver dashboard {name} is missing. Run tools/build_driver_dashboard.py.")
+
     return SiteCheck(not problems, tuple(problems))
 
 
@@ -153,6 +158,8 @@ def build() -> Path:
 
     for name in (*PAGES, *ASSETS):
         shutil.copy2(SITE_DIR / name, OUTPUT_DIR / name)
+    shutil.copytree(DRIVER_DASHBOARD_DIR, OUTPUT_DIR / "driver-dashboard", dirs_exist_ok=True,
+                    ignore=shutil.ignore_patterns("README.md"))
     for image in sorted(_referenced_images()):
         shutil.copy2(SCREENSHOT_DIR / image, images / image)
 

@@ -3,9 +3,24 @@ from pathlib import Path
 import base64
 import re
 import struct
+import tempfile
 import zlib
 
 ROOT = Path(__file__).resolve().parents[1] / 'static' / 'driver-dashboard'
+
+def write_generated(path: Path, content: bytes) -> None:
+    """Avoid rewriting unchanged assets; publish complete files to readers."""
+    if path.exists() and path.read_bytes() == content:
+        return
+    temporary = None
+    try:
+        with tempfile.NamedTemporaryFile(dir=path.parent, prefix=path.name + '.', suffix='.tmp', delete=False) as handle:
+            temporary = Path(handle.name)
+            handle.write(content)
+        temporary.replace(path)
+    finally:
+        if temporary is not None and temporary.exists():
+            temporary.unlink()
 
 def build():
     modules = []
@@ -24,7 +39,7 @@ def build():
     html = html.replace('href="icon.svg"', 'href="data:image/svg+xml;base64,' + icon + '"')
     html = html.replace('<a href="downloads/driver-dashboard.html" download="YourPitBox-Driver-Dashboard.html">Download offline demo</a>', '<span>Offline demo · saved on your device</span>')
     (ROOT / 'downloads').mkdir(exist_ok=True)
-    (ROOT / 'downloads' / 'driver-dashboard.html').write_text(html, encoding='utf-8')
+    write_generated(ROOT / 'downloads' / 'driver-dashboard.html', html.encode('utf-8'))
     # Native vector logo rasterized geometrically; no external assets or fonts.
     for size in (192, 512):
         pixels = bytearray()
@@ -38,7 +53,7 @@ def build():
         def chunk(kind, payload):
             return struct.pack('!I',len(payload))+kind+payload+struct.pack('!I',zlib.crc32(kind+payload))
         png = b'\x89PNG\r\n\x1a\n' + chunk(b'IHDR',struct.pack('!2I5B',size,size,8,2,0,0,0)) + chunk(b'IDAT',zlib.compress(pixels)) + chunk(b'IEND',b'')
-        (ROOT / f'icon-{size}.png').write_bytes(png)
+        write_generated(ROOT / f'icon-{size}.png', png)
     print('Built offline HTML and 192/512 px PWA icons.')
 
 if __name__ == '__main__':

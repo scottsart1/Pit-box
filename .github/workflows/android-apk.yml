@@ -58,8 +58,8 @@ jobs:
           NODE_PATH="$RUNNER_TEMP/pitbox-ui/node_modules" node tools/usage-ui-smoke.cjs
           NODE_PATH="$RUNNER_TEMP/pitbox-ui/node_modules" node tools/onboarding-ui-smoke.cjs
           NODE_PATH="$RUNNER_TEMP/pitbox-ui/node_modules" node tools/analysis-ui-smoke.cjs
-      - name: Driver dashboard data and responsive profile regressions
-        run: node --test tests/driver_dashboard.test.mjs
+      - name: Driver dashboard and tyre insight regressions
+        run: node --test tests/driver_dashboard.test.mjs tests/drive_degradation.test.mjs
       - name: Strategy scrolling in real Chromium at phone, tablet and desktop sizes
         run: |
           npm install --prefix "$RUNNER_TEMP/pitbox-browser" --no-save playwright@1.58.2

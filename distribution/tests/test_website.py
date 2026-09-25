@@ -583,6 +583,24 @@ def test_the_build_copies_only_what_the_pages_use(tmp_path, monkeypatch):
     assert (output / "styles.css").exists()
 
 
+def test_public_dashboard_and_offline_download_ship_with_the_site(tmp_path, monkeypatch):
+    monkeypatch.setattr(build_site, "OUTPUT_DIR", tmp_path / "_site")
+    output = build_site.build()
+    assert 'href="/driver-dashboard/"' in INDEX
+    assert 'href="/driver-dashboard/downloads/driver-dashboard.html"' in INDEX
+    for source in build_site.DRIVER_DASHBOARD_DIR.rglob("*"):
+        if source.is_file() and source.name != "README.md":
+            shipped = output / "driver-dashboard" / source.relative_to(build_site.DRIVER_DASHBOARD_DIR)
+            assert shipped.read_bytes() == source.read_bytes()
+
+
+def test_missing_offline_dashboard_blocks_publication(tmp_path, monkeypatch):
+    monkeypatch.setattr(build_site, "DRIVER_DASHBOARD_DIR", tmp_path / "missing-dashboard")
+    result = build_site.check()
+    assert not result.ok
+    assert any("downloads/driver-dashboard.html" in problem for problem in result.problems)
+
+
 def test_rebuilding_over_an_existing_output_refreshes_it(tmp_path, monkeypatch):
     # A rebuild once crashed here: rmtree cannot remove a directory that a
     # preview server holds as its working directory, so the build died and
@@ -689,15 +707,12 @@ def test_unsigned_windows_notice_remains_without_removed_installation_wording():
 
 def test_current_release_describes_skippable_setup_tour_and_manual_updates():
     release = INDEX.split('id="new"', 1)[1].split('</section>', 1)[0]
-    assert release.split('<p class="section-lede">', 1)[1].startswith('Fairer lap comparisons')
-    assert 'follow the same flag rule' in release
-    assert 'flag stays active across the start line' in release
-    assert 'Comparisons warn when a lap includes flags or neutralisation' in release
-    assert 'including rivals on another compound' in release
-    assert 'The lap delta comes from official lap times' in release
-    assert 'says when patchy telemetry limits it' in release
-    assert 'Windows 4.13.2 and Android 4.13.2 (revision 26).' in release
-    for text in ('4.13.2', 'skippable setup', 'UDP IP and port', 'guided app tour',
+    assert release.split('<p class="section-lede">', 1)[1].startswith('Set up your dashboard before the game starts')
+    assert 'Labelled sample values' in release and 'without UDP' in release
+    assert 'swipe-to-reveal system bars' in release
+    assert 'tyre pace trend' in release
+    assert 'Windows 4.14.0 and Android 4.14.0 (revision 27).' in release
+    for text in ('4.14.0', 'skippable setup', 'UDP IP and port', 'guided app tour',
                  'Existing preferences stay unchanged', 'Nothing installs automatically'):
         assert text in release
     assert 'Install this update manually once' in INDEX
@@ -820,9 +835,12 @@ def test_source_links_and_ids_survive_platform_reorganization(page_name):
         link = urlsplit(href)
         if link.scheme or link.netloc:
             continue
-        target = link.path or page_name
+        target = link.path.lstrip('/') or page_name
         if target in parsed:
             assert not link.fragment or link.fragment in parsed[target].ids, href
+        elif target.startswith('driver-dashboard/'):
+            relative = target.removeprefix('driver-dashboard/') or 'index.html'
+            assert (build_site.DRIVER_DASHBOARD_DIR / relative).is_file(), href
         else:
             assert (DIST / "website" / target).is_file(), href
 

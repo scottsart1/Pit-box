@@ -92,7 +92,7 @@ def test_the_backend_is_a_source_root_not_a_copy():
 def test_candidate_targets_android_16_and_ci_tests_that_platform():
     assert "compileSdk = 36" in GRADLE and "targetSdk = 36" in GRADLE
     assert "platforms;android-36" in WORKFLOW and "api-level: 36" in WORKFLOW
-    assert "val androidRevision = 26" in GRADLE
+    assert "val androidRevision = 27" in GRADLE
 
 
 def test_isolated_release_qa_package_cannot_replace_existing_apps():
@@ -249,6 +249,28 @@ def test_emulator_fixed_tab_does_not_require_page_containment(monkeypatch):
     </hierarchy>''')
     monkeypatch.setattr(module, "ui_tree", lambda label: tree)
     assert module.node_bounds(module.find_ui("tab", "CONNECTION")) == (500, 148, 750, 236)
+
+
+@pytest.mark.parametrize("status,nav,transient", [
+    ("WINDOW_STATE_HIDDEN", "WINDOW_STATE_HIDDEN", ""),
+    ("WINDOW_STATE_SHOWING", "WINDOW_STATE_SHOWING", "statusBars navigationBars"),
+    ("WINDOW_STATE_HIDDEN", "WINDOW_STATE_SHOWING", ""),
+])
+def test_emulator_fullscreen_probe_distinguishes_hidden_revealed_and_keyboard_bars(status, nav, transient):
+    spec = importlib.util.spec_from_file_location("emulator_smoke", ROOT / "android/emulator-smoke.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    dump = f"""Display: mDisplayId=0
+    InsetsPolicy
+      status: {status}
+      nav: {nav}
+      {f'mShowingTransientTypes={transient}' if transient else ''}
+    InsetsStateController
+      mDisplayFrame=Rect(0, 0 - 2560, 1800)
+    """
+    assert module.system_bar_state(dump) == (status, nav, transient)
+    with pytest.raises(AssertionError, match="did not report"):
+        module.system_bar_state("display unavailable")
 
 
 @pytest.mark.parametrize("leaked", [False, True])
