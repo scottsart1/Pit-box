@@ -153,8 +153,11 @@ microphone; if it is refused, the app runs without voice (text radio still
 works) until the permission is granted in Android's settings and the app is
 restarted. Push-to-talk from the controller works as on the desktop: the
 game forwards the button inside its telemetry, so the driver never touches
-the phone. The speech-to-speech radio (Settings, "voice realtime") is
-available too.
+the phone. The speech-to-speech radio (Settings → Engineer → **Realtime radio**) is available too. It is off by
+default and takes effect immediately when toggled. Enabling it does not open
+a connection until the next wake phrase or push-to-talk interaction. Disabling
+it closes the conversation. Live voice can increase OpenAI API costs; the
+standard transcription/reasoning/speech pipeline remains available when off.
 
 Not yet: a Bluetooth headset's microphone. Playback reaches Bluetooth
 headphones, but capture uses the phone's own microphone until the headset

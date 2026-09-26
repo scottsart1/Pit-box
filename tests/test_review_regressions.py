@@ -203,13 +203,15 @@ def test_record_spoken_call_ignores_empty_text():
 def test_an_unset_fast_model_never_falls_back_to_the_flagship():
     from pitwall.config import Settings
 
-    for value in ("", "   ", "gpt-5.6"):
-        assert Settings(fast_model=value).fast_model == "gpt-5.6-luna", value
+    for value in ("", "   ", "gpt-6"):
+        assert Settings(fast_model=value).fast_model == "gpt-6-luna", value
+    assert Settings(fast_model="gpt-5.6").fast_model == "gpt-5.6-luna"
     # An explicitly chosen tier is respected, including the middle one.
     assert Settings(fast_model="gpt-5.6-terra").fast_model == "gpt-5.6-terra"
     # The deep model keeps resolving the bare alias to the flagship tier.
     assert Settings(model="gpt-5.6").model == "gpt-5.6-sol"
-    assert Settings(model="").model == "gpt-5.6-sol"
+    assert Settings(model="gpt-6").model == "gpt-6-sol"
+    assert Settings(model="").model == "gpt-6-sol"
 
 
 # ------------------------------------------- B10: restricted rival reporting

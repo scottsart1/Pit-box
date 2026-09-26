@@ -40,12 +40,10 @@ class Settings(BaseSettings):
         validation_alias="OPENAI_API_KEY",
     )
     # ``model`` is the deep-reasoning model: strategy, undercut maths, what-ifs.
-    # ``fast_model`` answers ordinary radio questions. The bare "gpt-5.6" alias
-    # resolves to the flagship Sol tier, so routing every "what's my fuel"
-    # through it paid frontier prices for a lookup; Luna is the same family at a
-    # fraction of the cost and is more than capable of narrating tool output.
-    model: str = "gpt-5.6-sol"
-    fast_model: str = "gpt-5.6-luna"
+    # ``fast_model`` answers ordinary radio questions using Luna. Keep both
+    # tiers explicit so simple telemetry lookups do not use the deep model.
+    model: str = "gpt-6-sol"
+    fast_model: str = "gpt-6-luna"
     tier_routing_enabled: bool = True
     reasoning_effort: str = "low"
     deep_reasoning_effort: str = "high"
@@ -119,15 +117,16 @@ class Settings(BaseSettings):
     deepseek_deep_retry_max_tokens: int = 6000
 
     tts_model: str = "gpt-4o-mini-tts"
-    stt_model: str = "gpt-4o-mini-transcribe"
+    stt_model: str = "gpt-transcribe"
     voice: str = "coral"
 
     # Speech-to-speech radio. The Realtime API removes the
     # transcribe -> reason -> synthesise chain, so the engineer can be
     # interrupted mid-sentence and answers without the acknowledgement clip that
     # exists only to mask chain latency. The session is opened when the driver
-    # starts talking and closed after a pause, because billing is per second of
-    # audio in the session, not per exchange.
+    # starts a radio interaction and closed after a pause. Billing is based on
+    # processed input/output tokens, including audio and conversation context;
+    # an idle connection alone is not billed. The UI opt-in is persisted locally.
     voice_realtime_enabled: bool = False
     realtime_model: str = "gpt-realtime-2.1-mini"
     realtime_voice: str = "coral"
@@ -497,11 +496,13 @@ class Settings(BaseSettings):
     def validate_openai_model(cls, value: str) -> str:
         normalized = value.strip()
         if not normalized:
-            return "gpt-5.6-sol"
+            return "gpt-6-sol"
         # The bare family alias resolves to the flagship tier. Naming it
         # explicitly makes the cost of each route visible in configuration
         # instead of hiding it behind an alias.
-        return "gpt-5.6-sol" if normalized == "gpt-5.6" else normalized
+        return {"gpt-5.6": "gpt-5.6-sol", "gpt-6": "gpt-6-sol"}.get(
+            normalized, normalized
+        )
 
     @field_validator("fast_model")
     @classmethod
@@ -511,7 +512,9 @@ class Settings(BaseSettings):
         # that is the exact cost this routing exists to avoid. Upgrades preserve
         # .env, so an installation that never had this key still gets the cheap
         # tier rather than paying Sol prices for every gap question.
-        if not normalized or normalized == "gpt-5.6":
+        if not normalized or normalized == "gpt-6":
+            return "gpt-6-luna"
+        if normalized == "gpt-5.6":
             return "gpt-5.6-luna"
         return normalized
 

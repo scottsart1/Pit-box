@@ -88,6 +88,7 @@ def _controller(transcript: str, audio: _Recorder):
     voice.store = _Store()
     voice.audio = audio
     voice.realtime = None
+    voice._realtime_mode_lock = asyncio.Lock()
     voice.loop = asyncio.get_running_loop()
     voice._signal_pressed = False
     voice._tts_playing = False

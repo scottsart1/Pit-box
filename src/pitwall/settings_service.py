@@ -75,6 +75,16 @@ SETTINGS_SPEC: dict[str, dict[str, Any]] = {
         "label": "Engineer voice",
         "description": "Applies from the next radio message.",
     },
+    "voice_realtime_enabled": {
+        "group": "Engineer", "type": "bool",
+        "label": "Realtime radio",
+        "description": (
+            "Optional live voice conversations with interruptions. May increase "
+            "OpenAI API costs. Opens when you use the wake phrase or push-to-talk; "
+            "closes after 25 seconds idle or 5 minutes. Off uses standard voice. "
+            "Switching off ends an active conversation immediately."
+        ),
+    },
     "voice_ack_enabled": {
         "group": "Engineer", "type": "bool",
         "label": "Radio acknowledgement beep",

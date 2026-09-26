@@ -261,13 +261,20 @@ class AudioService:
         # Keep steering concise. Wake capture gets an explicit name hint because
         # one-word clips otherwise tend to alternate between "Mark" and "Marc".
         prompt = self.transcription_prompt(driver_names, wake_phrases)
+        # GPT Transcribe accepts plural language hints and returns JSON. Older
+        # explicitly configured models retain their existing wire contract.
+        options: dict[str, Any] = (
+            {"response_format": "json", "extra_body": {"languages": ["en"]}}
+            if settings.stt_model == "gpt-transcribe"
+            or settings.stt_model.startswith("gpt-transcribe-")
+            else {"response_format": "text", "language": "en"}
+        )
         with path.open("rb") as audio_file:
             result: Any = await self.client.audio.transcriptions.create(
                 model=settings.stt_model,
                 file=audio_file,
-                response_format="text",
                 prompt=prompt,
-                language="en",
+                **options,
             )
         text = (
             result.strip()

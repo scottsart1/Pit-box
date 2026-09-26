@@ -562,7 +562,7 @@ async def lifespan(app: FastAPI):
     initial_provider = str(router_status["resolved_provider"])
     # The footer shows this pair before the first model call. Seeding the
     # OpenAI deep model against a non-OpenAI provider read as "kimi ·
-    # gpt-5.6-sol", which looks like a misconfiguration; use the resolved
+    # gpt-6-sol", which looks like a misconfiguration; use the resolved
     # provider own deep model instead.
     provider_models = (
         router_status["providers"].get(initial_provider, {}).get("models", {})
@@ -1248,9 +1248,9 @@ async def realtime_open() -> dict[str, object]:
     """Open a speech-to-speech session without waiting for the wake phrase."""
     if voice is None or voice.realtime is None:
         raise HTTPException(
-            409, "Realtime radio is disabled. Set PITWALL_VOICE_REALTIME_ENABLED=true."
+            409, "Realtime radio is off. Enable Realtime radio in Settings."
         )
-    opened = await voice.realtime.open()
+    opened = await voice._start_realtime(None, "dashboard")
     if not opened:
         snapshot = await store.snapshot_live()
         raise HTTPException(
@@ -1305,8 +1305,19 @@ async def get_app_settings() -> dict[str, object]:
     }
 
 
+_app_settings_lock = asyncio.Lock()
+
+
 @app.post("/api/v1/app-settings")
 async def save_app_settings(changes: dict[str, object]) -> dict[str, object]:
+    # Persist and apply as one ordered operation, including closing a live
+    # radio session. Rapid toggle requests must not leave storage and voice
+    # mode disagreeing about the user's last choice.
+    async with _app_settings_lock:
+        return await _save_app_settings(changes)
+
+
+async def _save_app_settings(changes: dict[str, object]) -> dict[str, object]:
     """Validate, persist, and hot-apply dashboard settings.
 
     Restart-flagged fields are persisted but not applied live — their
@@ -1321,10 +1332,17 @@ async def save_app_settings(changes: dict[str, object]) -> dict[str, object]:
             coerced[name] = coerce(name, value)
         except ValueError as exc:
             raise HTTPException(400, str(exc)) from exc
+    if coerced.get("voice_realtime_enabled") is True:
+        if not settings.api_key:
+            raise HTTPException(409, "Add your OpenAI API key in Connection before enabling Realtime radio.")
+        if voice is None:
+            raise HTTPException(409, "Voice is unavailable. Enable microphone access and restart the app.")
     await _persist_app_settings(coerced)
     results: dict[str, object] = {}
     for name, value in coerced.items():
         results[name] = apply_runtime(settings, name, value)
+    if "voice_realtime_enabled" in coerced and voice is not None:
+        await voice.configure_realtime(bool(settings.voice_realtime_enabled))
     if proactive is not None and {
         "proactive_enabled", "proactive_cadence_laps"
     } & coerced.keys():

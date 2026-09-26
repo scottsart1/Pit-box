@@ -123,6 +123,7 @@ class NativeVoiceController:
         # session and the microphone is routed straight to it; the file-based
         # transcribe/reason/synthesise chain stays available as the fallback.
         self.realtime: RealtimeRadio | None = None
+        self._realtime_mode_lock = asyncio.Lock()
         if settings.voice_realtime_enabled:
             self.realtime = RealtimeRadio(
                 store,
@@ -131,6 +132,27 @@ class NativeVoiceController:
                 situation_header=self._realtime_header,
             )
         self._load_config()
+
+    async def configure_realtime(self, enabled: bool) -> None:
+        """Switch voice mode live without opening a billable interaction.
+
+        Serialise against wake/PTT session opening so switching off cannot
+        leave an in-flight opener connected after the toggle has been saved.
+        """
+        async with self._realtime_mode_lock:
+            if enabled:
+                if self.realtime is None:
+                    self.realtime = RealtimeRadio(
+                        self.store, self.brain.tools,
+                        on_transcript=self._persist_realtime_transcript,
+                        situation_header=self._realtime_header,
+                    )
+            else:
+                radio, self.realtime = self.realtime, None
+                if radio is not None:
+                    await radio.close("disabled in Settings")
+                self._wake_armed_until = 0.0
+                await self.store.update(wake_armed=False)
 
     async def _realtime_header(self) -> str:
         """Live situation summary handed to the speech session."""
@@ -956,6 +978,11 @@ class NativeVoiceController:
         the driver's first question is not lost between the two pipelines: they
         say "Mark, what's the gap to Norris" once, not twice.
         """
+        async with self._realtime_mode_lock:
+            return await self._open_realtime(data, reason)
+
+    async def _open_realtime(self, data: np.ndarray | None, reason: str) -> bool:
+        """Called with the mode lock held by wake, PTT or the dashboard."""
         realtime = self.realtime
         if realtime is None:
             return False

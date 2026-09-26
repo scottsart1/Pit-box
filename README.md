@@ -911,12 +911,12 @@ or skip the file entirely and paste keys into the Connection Center.
 PITWALL_LLM_PROVIDER=openai
 PITWALL_LLM_FALLBACK_PROVIDER=none
 OPENAI_API_KEY=your_openai_api_key
-PITWALL_MODEL=gpt-5.6-sol
-PITWALL_FAST_MODEL=gpt-5.6-luna
+PITWALL_MODEL=gpt-6-sol
+PITWALL_FAST_MODEL=gpt-6-luna
 PITWALL_REASONING_EFFORT=low
 PITWALL_DEEP_REASONING_EFFORT=high
 PITWALL_OPENAI_TIMEOUT_S=30
-PITWALL_STT_MODEL=gpt-4o-mini-transcribe
+PITWALL_STT_MODEL=gpt-transcribe
 PITWALL_TTS_MODEL=gpt-4o-mini-tts
 PITWALL_VOICE=coral
 ```
@@ -995,7 +995,7 @@ Expected provider fields:
   "engineer_runtime": "multi-provider",
   "configured_llm_providers": ["openai"],
   "voice_ready": true,
-  "model": "gpt-5.6-sol",
+  "model": "gpt-6-sol",
   "llm": {
     "selected": "openai",
     "configured_provider": "openai",

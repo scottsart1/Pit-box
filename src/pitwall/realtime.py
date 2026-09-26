@@ -16,9 +16,9 @@ Two properties are preserved from the existing design:
 
 * Numbers come from tools, never from the model's memory. The tool layer is the
   identical :class:`TelemetryTools` allow-list used by the text path.
-* The session is not held open for a whole race. It opens when the driver
-  starts a conversation and closes after a pause, because a Realtime session
-  bills for audio while it is connected.
+* The session opens for a radio interaction and closes after a pause. Limits
+  bound processed speech and growing conversation context, which are metered;
+  simply keeping a connection open is not billed.
 """
 
 from __future__ import annotations
@@ -277,7 +277,15 @@ class RealtimeRadio:
             },
             # Transcription is for the dashboard and the stored radio log only;
             # the model itself consumes the audio directly.
-            "transcription": {"model": settings.stt_model, "language": "en"},
+            "transcription": {
+                "model": settings.stt_model,
+                **(
+                    {"languages": ["en"]}
+                    if settings.stt_model == "gpt-transcribe"
+                    or settings.stt_model.startswith("gpt-transcribe-")
+                    else {"language": "en"}
+                ),
+            },
         }
         if noise_reduction:
             audio_input["noise_reduction"] = noise_reduction
@@ -316,10 +324,31 @@ class RealtimeRadio:
                 await self._connection.send(
                     {"type": "session.update", "session": await self._session_payload()}
                 )
-            except Exception as exc:
-                log.exception("Realtime session could not be opened")
+                # A connected socket is not proof that the voice/model/tool
+                # configuration was accepted. Wait before handing off the clip,
+                # so rejected settings fall back to standard voice.
+                async with asyncio.timeout(10):
+                    async for event in self._connection:
+                        kind = self._event_type(event)
+                        if kind == "error":
+                            detail = getattr(event, "error", None)
+                            raise RuntimeError(getattr(detail, "message", None) or str(detail))
+                        if kind == "session.updated":
+                            break
+                    else:
+                        raise RuntimeError("Connection closed before accepting the session")
+            except (Exception, asyncio.CancelledError) as exc:
+                if self._connection is not None:
+                    with contextlib.suppress(Exception):
+                        await self._connection.close()
+                if self._manager is not None:
+                    with contextlib.suppress(Exception):
+                        await self._manager.__aexit__(None, None, None)
                 self._connection = None
                 self._manager = None
+                if isinstance(exc, asyncio.CancelledError):
+                    raise
+                log.exception("Realtime session could not be opened")
                 await self.store.update(
                     last_error=f"Realtime radio unavailable: {exc}",
                     radio_indicator="error",
@@ -377,7 +406,7 @@ class RealtimeRadio:
         The whole teardown holds the lock. Releasing it early let ``open()``
         establish a replacement session in the gap, after which the trailing
         ``self._receive_task = None`` cleared the *new* session's reader and idle
-        watchdog: a connected, billing socket with nothing reading it and no
+        watchdog: a connected socket with nothing reading it and no
         timeout to close it.
         """
         async with self._lock:
@@ -394,7 +423,7 @@ class RealtimeRadio:
                     task.cancel()
                     with contextlib.suppress(asyncio.CancelledError):
                         await task
-            self._close_output_stream()
+            self._flush_output()
 
             with contextlib.suppress(Exception):
                 await connection.close()
@@ -417,8 +446,8 @@ class RealtimeRadio:
     async def _idle_watchdog(self) -> None:
         """Close the session after a pause, and cap its total length.
 
-        A Realtime session bills while it is connected, so leaving one open for
-        a whole race would be the single largest running cost in the product.
+        Bound accidental conversations and accumulated context. An idle socket
+        alone is not billed; input/output tokens and optional transcription are.
         """
         try:
             while True:

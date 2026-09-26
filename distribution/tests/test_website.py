@@ -712,12 +712,13 @@ def test_unsigned_windows_notice_remains_without_removed_installation_wording():
 
 def test_current_release_describes_skippable_setup_tour_and_manual_updates():
     release = INDEX.split('id="new"', 1)[1].split('</section>', 1)[0]
-    assert release.split('<p class="section-lede">', 1)[1].startswith('Set up your dashboard before the game starts')
+    assert release.split('<p class="section-lede">', 1)[1].startswith('GPT-6 Luna handles everyday radio questions')
+    assert 'Realtime radio in Settings' in release and 'off by default' in release
     assert 'Labelled sample values' in release and 'without UDP' in release
     assert 'swipe-to-reveal system bars' in release
     assert 'tyre pace trend' in release
-    assert 'Windows 4.14.0 and Android 4.14.0 (revision 28).' in release
-    for text in ('4.14.0', 'skippable setup', 'UDP IP and port', 'guided app tour',
+    assert 'Windows 5.0.0 and Android 5.0.0 (revision 29).' in release
+    for text in ('5.0.0', 'skippable setup', 'UDP IP and port', 'guided app tour',
                  'Existing preferences stay unchanged', 'Nothing installs automatically'):
         assert text in release
     assert 'Install this update manually once' in INDEX

@@ -377,7 +377,7 @@ class OpenAIResponsesProvider:
                     # paying it once.
                     "prompt_cache_key": f"pitwall-{route}-{self.config.engineer_name}",
                 }
-                if model.startswith("gpt-5"):
+                if model.startswith(("gpt-5", "gpt-6")):
                     request["reasoning"] = {"effort": effort}
 
                 response = await self.client.responses.create(**request)
