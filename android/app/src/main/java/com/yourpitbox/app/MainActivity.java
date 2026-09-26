@@ -386,7 +386,7 @@ public class MainActivity extends Activity {
     private void cancelSystemBarRehide() {
         handler.removeCallbacks(delayedSystemBarRehide);
         handler.removeCallbacks(finishSystemBarRehide);
-        rehidePolicy.finishRestore();
+        rehidePolicy.cancelRestore();
         rehidePolicy.reset();
     }
 

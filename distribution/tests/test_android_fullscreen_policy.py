@@ -38,14 +38,23 @@ public final class FullscreenPolicyCheck {
         require(!p.finish(true), "completed gesture is consumed once");
         p.start(1, 0, 24); p.move(100);
         require(!p.finish(true), "unmeasured window cannot trigger a gesture");
-        require(p.canScheduleRestore() && p.beginRestore(), "first bounded restore starts");
+        p.cancelRestore();
+        require(!p.canScheduleRestore() && !p.beginRestore(), "insets alone cannot trigger a restore");
+        p.start(1, 1800, 24); p.move(200); p.finish(false);
+        require(p.canScheduleRestore() && p.beginRestore(), "edge reveal grants one restore");
         require(!p.canScheduleRestore(), "explicit show insets cannot schedule another timer");
         require(!p.beginRestore(), "restore cannot reenter during show/hide");
         p.finishRestore();
+        require(!p.canScheduleRestore() && !p.beginRestore(), "late visible insets cannot re-arm restore");
+        p.start(1, 1800, 24); p.finish(false);
+        require(!p.canScheduleRestore(), "ordinary tap after restore cannot flash hidden bars");
+        p.start(1799, 1800, 24); p.move(1600); p.finish(false);
         require(p.canScheduleRestore(), "a future edge gesture may restore once");
         require(p.beginRestore(), "next independent restore starts");
-        p.finishRestore();
-        require(p.canScheduleRestore(), "cancelling a restore clears its transition guard");
+        p.cancelRestore();
+        require(!p.canScheduleRestore(), "cancellation consumes pending restore");
+        p.start(1, 1800, 24); p.move(200); p.finish(false);
+        require(p.canScheduleRestore(), "edge gesture after cancellation may restore");
         for (int state = 0; state < 8; state++) {
             boolean resumed = (state & 1) != 0;
             boolean focused = (state & 2) != 0;

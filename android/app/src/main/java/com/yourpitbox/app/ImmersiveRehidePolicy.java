@@ -7,20 +7,30 @@ final class ImmersiveRehidePolicy {
     private float startY;
     private float threshold;
     private boolean restoring;
+    private boolean restoreArmed;
 
     static boolean canHide(boolean resumed, boolean focused, boolean keyboardVisible) {
         return resumed && focused && !keyboardVisible;
     }
 
     boolean beginRestore() {
-        if (restoring) return false;
+        if (!canScheduleRestore()) return false;
+        restoreArmed = false;
         restoring = true;
         return true;
     }
 
-    boolean canScheduleRestore() { return !restoring; }
+    // Only a new physical edge gesture grants a restore. Insets callbacks
+    // from our own show/hide may arrive after finishRestore, so a transition
+    // flag alone cannot prevent them from repeatedly flashing hidden bars.
+    boolean canScheduleRestore() { return restoreArmed && !restoring; }
 
     void finishRestore() { restoring = false; }
+
+    void cancelRestore() {
+        restoreArmed = false;
+        restoring = false;
+    }
 
     void start(float y, int height, float edgeSize) {
         threshold = edgeSize;
@@ -38,6 +48,7 @@ final class ImmersiveRehidePolicy {
         // takes over, sometimes before delivering its first MOVE to the app.
         boolean revealed = fromEdge && (moved || cancelled);
         reset();
+        if (revealed && !restoring) restoreArmed = true;
         return revealed;
     }
 
