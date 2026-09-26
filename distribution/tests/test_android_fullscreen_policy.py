@@ -55,6 +55,17 @@ public final class FullscreenPolicyCheck {
         require(!p.canScheduleRestore(), "cancellation consumes pending restore");
         p.start(1, 1800, 24); p.move(200); p.finish(false);
         require(p.canScheduleRestore(), "edge gesture after cancellation may restore");
+        p.deferRestore();
+        require(p.canScheduleRestore(), "keyboard keeps pending edge reveal budget");
+        require(!ImmersiveRehidePolicy.canHide(true, true, true), "deferred restore cannot hide while typing");
+        require(p.beginRestore(), "keyboard dismissal may complete pending reveal once");
+        p.deferRestore();
+        require(p.canScheduleRestore(), "keyboard also suspends an in-progress show/hide transition");
+        require(p.beginRestore(), "interrupted transition may finish after typing");
+        p.finishRestore();
+        require(!p.canScheduleRestore(), "completed keyboard restore cannot repeat");
+        p.deferRestore();
+        require(!p.canScheduleRestore(), "ordinary keyboard opening cannot create a reveal budget");
         for (int state = 0; state < 8; state++) {
             boolean resumed = (state & 1) != 0;
             boolean focused = (state & 2) != 0;

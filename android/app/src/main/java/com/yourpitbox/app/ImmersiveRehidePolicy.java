@@ -27,6 +27,14 @@ final class ImmersiveRehidePolicy {
 
     void finishRestore() { restoring = false; }
 
+    void deferRestore() {
+        // Typing suspends a pending edge reveal rather than forgetting it.
+        // Samsung can otherwise leave its transient status bar stuck after
+        // the keyboard closes, even though the app still requests hidden bars.
+        restoreArmed |= restoring;
+        restoring = false;
+    }
+
     void cancelRestore() {
         restoreArmed = false;
         restoring = false;

@@ -88,15 +88,20 @@ public class MainActivity extends Activity {
             view.setPadding(safe.left, safe.top, safe.right, safe.bottom);
             boolean wasKeyboardVisible = keyboardVisible;
             keyboardVisible = insets.isVisible(WindowInsetsCompat.Type.ime());
-            if (keyboardVisible) cancelSystemBarRehide();
-            else if (insets.isVisible(WindowInsetsCompat.Type.statusBars())
+            if (keyboardVisible) deferSystemBarRehideForKeyboard();
+            else if (wasKeyboardVisible) {
+                // Complete a suspended Samsung edge reveal after typing.
+                // A normal hide alone does not clear its transient bar state.
+                handler.post(() -> {
+                    if (needsSystemBarWorkaround() && rehidePolicy.canScheduleRestore()
+                            && canHideSystemBars()) {
+                        handler.removeCallbacks(delayedSystemBarRehide);
+                        handler.post(delayedSystemBarRehide);
+                    } else hideSystemBars();
+                });
+            } else if (insets.isVisible(WindowInsetsCompat.Type.statusBars())
                     || insets.isVisible(WindowInsetsCompat.Type.navigationBars())) {
                 scheduleSystemBarRehide();
-            }
-            if (wasKeyboardVisible && !keyboardVisible) {
-                // Some Android versions expose navigation while typing. Let
-                // the keyboard finish closing before restoring immersive mode.
-                handler.post(this::hideSystemBars);
             }
             return WindowInsetsCompat.CONSUMED;
         });
@@ -377,16 +382,27 @@ public class MainActivity extends Activity {
     }
 
     private void scheduleSystemBarRehide() {
-        if (Build.VERSION.SDK_INT != 36 || !"samsung".equalsIgnoreCase(Build.MANUFACTURER)
+        if (!needsSystemBarWorkaround()
                 || !rehidePolicy.canScheduleRestore() || !canHideSystemBars()) return;
         handler.removeCallbacks(delayedSystemBarRehide);
         handler.postDelayed(delayedSystemBarRehide, 5000);
+    }
+
+    private boolean needsSystemBarWorkaround() {
+        return Build.VERSION.SDK_INT == 36 && "samsung".equalsIgnoreCase(Build.MANUFACTURER);
     }
 
     private void cancelSystemBarRehide() {
         handler.removeCallbacks(delayedSystemBarRehide);
         handler.removeCallbacks(finishSystemBarRehide);
         rehidePolicy.cancelRestore();
+        rehidePolicy.reset();
+    }
+
+    private void deferSystemBarRehideForKeyboard() {
+        handler.removeCallbacks(delayedSystemBarRehide);
+        handler.removeCallbacks(finishSystemBarRehide);
+        rehidePolicy.deferRestore();
         rehidePolicy.reset();
     }
 

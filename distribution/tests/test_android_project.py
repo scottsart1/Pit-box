@@ -251,6 +251,52 @@ def test_emulator_fixed_tab_does_not_require_page_containment(monkeypatch):
     assert module.node_bounds(module.find_ui("tab", "CONNECTION")) == (500, 148, 750, 236)
 
 
+@pytest.mark.parametrize("prompt_visible", [False, True])
+def test_emulator_declines_usage_overlay_before_interacting_with_pairing_input(monkeypatch, prompt_visible):
+    spec = importlib.util.spec_from_file_location("emulator_smoke", ROOT / "android/emulator-smoke.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    # The failed API-36 CI snapshot exposed the underlying input even though
+    # the first-run consent card covered its tap center (1892, 1421).
+    clear = ET.fromstring('''<hierarchy>
+        <node resource-id="transferPairCode" bounds="[1328,1330][2456,1512]" />
+    </hierarchy>''')
+    obscured = ET.fromstring('''<hierarchy>
+        <node resource-id="transferPairCode" bounds="[1328,1330][2456,1512]" />
+        <node resource-id="usagePrompt" bounds="[1568,1306][2528,1692]">
+            <node resource-id="usageYes" enabled="true" bounds="[1594,1554][2042,1642]" />
+            <node resource-id="usageNo" enabled="true" bounds="[2056,1554][2236,1642]" />
+        </node>
+    </hierarchy>''')
+    snapshots = iter([obscured, obscured, clear] if prompt_visible else [clear])
+    calls = []
+    monkeypatch.setattr(module, "ui_tree", lambda label: next(snapshots))
+    monkeypatch.setattr(module, "adb", lambda *args: calls.append(args))
+    monkeypatch.setattr(module.time, "sleep", lambda seconds: None)
+    assert module.dismiss_usage_prompt("test") is clear
+    assert calls == ([("shell", "input", "tap", "2146", "1598")] if prompt_visible else [])
+
+
+def test_emulator_does_not_ignore_a_usage_prompt_that_fails_to_close(monkeypatch):
+    spec = importlib.util.spec_from_file_location("emulator_smoke", ROOT / "android/emulator-smoke.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    tree = ET.fromstring('''<hierarchy>
+        <node resource-id="usagePrompt" bounds="[100,100][800,800]">
+            <node resource-id="usageNo" enabled="true" bounds="[200,200][300,300]" />
+        </node>
+    </hierarchy>''')
+    calls = []
+    monkeypatch.setattr(module, "ui_tree", lambda label: tree)
+    monkeypatch.setattr(module, "adb", lambda *args: calls.append(args))
+    monkeypatch.setattr(module.time, "sleep", lambda seconds: None)
+    times = iter([0, 1, 11])
+    monkeypatch.setattr(module.time, "monotonic", lambda: next(times))
+    with pytest.raises(AssertionError, match="did not close"):
+        module.dismiss_usage_prompt("test")
+    assert calls == [("shell", "input", "tap", "250", "250")]
+
+
 @pytest.mark.parametrize("status,nav,transient", [
     ("WINDOW_STATE_HIDDEN", "WINDOW_STATE_HIDDEN", ""),
     ("WINDOW_STATE_SHOWING", "WINDOW_STATE_SHOWING", "statusBars navigationBars"),

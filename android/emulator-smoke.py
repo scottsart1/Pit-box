@@ -324,9 +324,31 @@ def capture_view(label: str):
     (OUTPUT / f"{label}-screen.png").write_bytes(adb("exec-out", "screencap", "-p").stdout)
 
 
+def dismiss_usage_prompt(label: str) -> ET.Element:
+    """Decline optional usage sharing before testing controls it can obscure."""
+    deadline = time.monotonic() + 10
+    tapped = False
+    attempt = 0
+    while True:
+        attempt += 1
+        tree = ui_tree(f"{label}-{attempt}")
+        prompt = next((node for node in tree.iter("node")
+                       if node.get("resource-id") == "usagePrompt" and node_bounds(node)), None)
+        if prompt is None:
+            return tree
+        if not tapped:
+            decline = next((node for node in prompt.iter("node")
+                            if node.get("resource-id") == "usageNo" and node_bounds(node)), None)
+            assert decline is not None, "Usage prompt has no visible No thanks control"
+            tap_node(decline)
+            tapped = True
+        assert time.monotonic() < deadline, "Usage prompt did not close after No thanks"
+        time.sleep(0.5)
+
+
 def prove_fullscreen_keyboard():
     """A real pairing field must remain above the IME and restore on Back."""
-    before = ui_tree("keyboard-before")
+    before = dismiss_usage_prompt("keyboard-before")
 
     def web_bounds(tree):
         regions = [bounds for node in tree.iter("node")
@@ -343,11 +365,11 @@ def prove_fullscreen_keyboard():
         deadline = time.monotonic() + 10
         while True:
             dump = adb("shell", "dumpsys", "input_method").stdout.decode(errors="replace")
+            (OUTPUT / "keyboard-input-method.txt").write_text(dump)
             if "mInputShown=true" in dump:
                 break
             assert time.monotonic() < deadline, "Pairing input did not open the soft keyboard"
             time.sleep(0.5)
-        (OUTPUT / "keyboard-input-method.txt").write_text(dump)
         after = ui_tree("keyboard-open")
         resized_view = web_bounds(after)
         assert resized_view[3] < full_view[3], "Keyboard covers the page instead of resizing its viewport"
@@ -370,6 +392,7 @@ def prove_fullscreen_keyboard():
 
 def capture_transfer_ui():
     """Navigate the installed WebView and open its actual pairing controls."""
+    dismiss_usage_prompt("usage-onboarding")
     capture_view("drive")
     tap_node(find_ui("connection-tab", "CONNECTION"))
     find_ui("connection-heading", "Connection Center")
