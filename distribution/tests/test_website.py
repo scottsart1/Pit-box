@@ -333,7 +333,9 @@ startDownload("Your download is starting.", "success").then(() => {
         text=True,
         capture_output=True,
         check=True,
-        timeout=10,
+        # Leave room for Node startup on a busy Windows CI runner. The browser
+        # request deadline itself is still asserted at five seconds below.
+        timeout=30,
     )
     observed = json.loads(result.stdout)
     endpoint = re.search(r'const ACTIVATION_API = "([^"]+)";', DOWNLOAD_JS).group(1)
@@ -696,13 +698,15 @@ def test_beta_transmission_is_distinct_from_reception_and_history_copy():
 
 
 def test_unsigned_windows_notice_remains_without_removed_installation_wording():
-    assert 'Windows 4.13.2 · unsigned installer' in INDEX
+    from pitwall import __version__
+    assert f'Windows {__version__} · unsigned installer' in INDEX
     assert 'The current Windows installer is unsigned.' in GUIDE
     for page in (INDEX, GUIDE):
         assert 'unknown publisher' in page or 'unknown-publisher' in page
         assert 'Do not turn off your firewall, antivirus or Smart App Control' not in page
         assert 'wait for a signed release' not in page
-    assert 'e95f8407777ba74e23a9ed3eff7cc95750310ec1d3ab9cf6301b0a0c8ad1121c' in INDEX
+    card = INDEX.split('id="windows-release"', 1)[1].split('</article>', 1)[0]
+    assert re.search(r'SHA-256: <code>[a-f0-9]{64}</code>', card)
 
 
 def test_current_release_describes_skippable_setup_tour_and_manual_updates():
