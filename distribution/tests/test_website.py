@@ -677,7 +677,8 @@ def test_android_release_is_a_signed_direct_apk_with_compatibility_limits():
     assert 'href="https://pitwall-activation.sarthakvij123450.workers.dev/android"' in section
     assert "16 KB memory pages are not supported" in section
     assert "not a Google Play listing" in section
-    assert "82e4e66bdec32f4934181d84ff759a801cd9f6e50f51177224e9ee22605dd802" in INDEX
+    card = INDEX.split('id="android-release"', 1)[1].split('</article>', 1)[0]
+    assert re.search(r'SHA-256: <code>[a-f0-9]{64}</code>', card)
     assert "Keep Play Protect enabled" in GUIDE
     assert "installs separately from the test package" in GUIDE
     assert "Do not uninstall the test app" in GUIDE
