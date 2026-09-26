@@ -40,6 +40,15 @@ undone. The old six-module order is migrated when existing preferences load.
 Global optional-card settings affect the preset race views; the custom
 workspace always shows the widgets explicitly selected in its library.
 
+In the Android app, dashboard preferences and named layouts also live in the
+app’s private durable storage. They restore before the editor appears and
+survive a backend port change or an app update. First use copies valid
+preferences from the current WebView origin only when no native record exists.
+An existing native record takes precedence; a failed read never overwrites it.
+Browser and offline copies continue using localStorage. If native storage
+fails, a visible message explains the temporary WebView fallback. This storage
+contains dashboard preferences only, with no cross-device synchronization.
+
 Race mode keeps flags at the top, hides configuration and requests a screen
 wake lock when the browser supports it. Escape or Exit race mode leaves it.
 Mobile operating systems may release wake locks; keep the racing app visible.

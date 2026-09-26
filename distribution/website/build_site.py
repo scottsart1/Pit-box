@@ -117,7 +117,8 @@ def check() -> SiteCheck:
         if not (ASSET_DIR / asset).exists():
             problems.append(f"{asset} is referenced but not in website/assets/.")
 
-    for name in ("index.html", "dashboard.js", "dashboard.css", "downloads/driver-dashboard.html"):
+    for name in ("index.html", "dashboard.js", "dashboard.css", "display.mjs",
+                 "model.mjs", "render.mjs", "preferences.mjs", "downloads/driver-dashboard.html"):
         if not (DRIVER_DASHBOARD_DIR / name).is_file():
             problems.append(f"Driver dashboard {name} is missing. Run tools/build_driver_dashboard.py.")
 

@@ -16,7 +16,7 @@ val nativeConstraints = rootProject.layout.projectDirectory.file("native-require
 // engine than the source which Chaquopy actually packages.
 val backendVersion = Regex("__version__ = \"([^\"]+)\"")
     .find(rootProject.file("../src/pitwall/__init__.py").readText())!!.groupValues[1]
-val androidRevision = 27
+val androidRevision = 28
 val signingPath = providers.environmentVariable("PITBOX_KEYSTORE_PATH").orNull
 val signingVariables = listOf("PITBOX_KEYSTORE_PATH", "PITBOX_KEYSTORE_PASSWORD",
     "PITBOX_KEY_ALIAS", "PITBOX_KEY_PASSWORD")
@@ -169,4 +169,5 @@ chaquopy {
 
 dependencies {
     implementation("androidx.core:core:1.13.1")
+    implementation("androidx.webkit:webkit:1.12.1")
 }

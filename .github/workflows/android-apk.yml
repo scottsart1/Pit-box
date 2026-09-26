@@ -45,9 +45,13 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
       - run: python -m pip install -e '.[dev]'
       - name: Shared engine and Android bridge regression tests
-        run: python -m pytest tests distribution/tests/test_android_network.py distribution/tests/test_android_project.py -q
+        run: python -m pytest tests distribution/tests/test_android_network.py distribution/tests/test_android_project.py distribution/tests/test_android_fullscreen_policy.py -q
       - name: Real UDP and transfer API integration
         run: python tools/backend_transfer_smoke.py
       - name: Transfer controls DOM checks

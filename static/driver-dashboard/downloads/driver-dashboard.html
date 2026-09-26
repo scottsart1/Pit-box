@@ -27,6 +27,7 @@ body[data-display=fold] main,body[data-display=tablet] main{padding-inline:16px}
 .battle-bottom,.dashboard.hide-resources .battle-bottom{grid-template-columns:repeat(auto-fit,minmax(min(100%,210px),1fr))}
 
 /* The custom workspace shares the instruments and colour system of the race views. */
+.preferences-loading main{visibility:hidden}.preferences-loading-message{padding:28px 24px;color:var(--muted);font-size:14px;line-height:1.6}
 .workspace-toolbar{border:1px solid var(--line);border-top:2px solid var(--accent);background:linear-gradient(120deg,#122132,#0d151d 65%);padding:20px 22px;margin:0 0 18px;border-radius:8px}
 .workspace-title h2{font-size:23px;letter-spacing:-.035em;margin:5px 0 6px}.workspace-title p,.workspace-tip{font-size:12px;line-height:1.6;color:var(--muted);margin:0}.workspace-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:18px 0 12px}.workspace-tip{max-width:850px}.workspace-actions select{flex:1;max-width:260px}
 .sample-banner{display:flex;align-items:center;gap:14px;border:1px solid #816b3e;background:#251f14;color:#e9c785;padding:10px 14px;margin-bottom:12px;border-radius:5px;font-size:12px;line-height:1.5}.sample-banner strong{font-size:10px;letter-spacing:.12em;white-space:nowrap}.sample-banner span{color:#cabb9e}.race-mode .sample-banner{margin-bottom:8px;padding-block:7px}.race-mode .sample-banner span{display:none}.race-mode .demo-watermark{color:var(--amber)}
@@ -42,7 +43,8 @@ body[data-display=fold] main,body[data-display=tablet] main{padding-inline:16px}
 @media(max-width:700px){.workspace-toolbar{padding:16px 14px}.workspace-title h2{font-size:21px}.workspace-actions{gap:7px}.workspace-actions .button{font-size:12px;padding-inline:12px}.workspace-actions select{max-width:none;flex-basis:50%;font-size:12px}.module-grid{grid-template-columns:minmax(0,1fr)}.module,.module[data-width="3"]{grid-column:span 1}.module-controls button{min-width:44px}.module-controls>span{font-size:12px}.module-controls .drag-handle{min-width:44px}.module-sizing{justify-content:flex-end}.module-sizing label{font-size:11px}.module-sizing select{min-height:44px;font-size:11px;max-width:100px}.module .timing-main{grid-template-columns:1fr 1fr;gap:10px}.module .timing-main .delta-display{padding-top:0}.module .timing-main .lap-prediction{grid-column:1/-1}.module .current-time{font-size:27px}.module .delta-value{font-size:34px}.module .lap-times-row{grid-template-columns:1fr 1fr;gap:10px}.module .lap-times-row .numeric{font-size:24px}.module .lap-times-row>div{border:0;padding-left:0}.sample-banner{align-items:flex-start;flex-direction:column;gap:3px}.sample-banner span{font-size:11px}.library-grid{grid-template-columns:1fr}.widget-dialog{padding:20px 16px}.widget-dialog h2{font-size:21px}.saved-layout-row{flex-wrap:wrap}.workspace-tip{font-size:11px}.module .rival-name{font-size:13px}.module .gap-value{font-size:33px}}
 @media(max-width:380px){.module-controls>span{font-size:10px}.module-controls button{min-width:40px}.module .lap-times-row .numeric{font-size:22px}.module .current-time{font-size:24px}.module .delta-value{font-size:30px}.wheel-metrics strong{font-size:27px}.module .relative-stack{padding-inline:10px}.module .rival-name{font-size:12px}.module .gap-value{font-size:29px}}
 </style></head>
-<body>
+<body class="preferences-loading">
+<div id="preferencesLoading" class="preferences-loading-message" role="status">Restoring your dashboard…</div>
 <header class="app-header review-chrome standalone-header"><a class="brand" href="./"><span class="brand-symbol" aria-hidden="true"><i></i><i></i><i></i></span>YOUR PIT BOX</a><div class="header-meta"><span class="demo-tag" id="sessionStatus">LOADING</span><span id="trackStatus">Driver Dashboard</span></div></header>
 <main>
 <div class="design-toolbar review-chrome"><div><div class="eyebrow">Built for your racing screen</div><h1>Driver Dashboard</h1></div><div class="toolbar-actions"><button class="button quiet" id="helpButton">Help &amp; install</button><button class="button" id="customizeButton">Customize</button><button class="button primary" id="raceModeButton">Race mode ↗</button></div></div>
@@ -55,7 +57,7 @@ body[data-display=fold] main,body[data-display=tablet] main{padding-inline:16px}
 </main>
 <dialog id="settingsDialog" aria-labelledby="settingsTitle"><div class="dialog-heading"><h2 id="settingsTitle">Make it yours</h2></div><div id="settingsBody"></div><div class="dialog-actions"><button class="button" id="resetPreferences">Reset defaults</button><button class="button primary" id="doneSettings">Done</button></div></dialog>
 <dialog id="widgetDialog" class="widget-dialog" aria-labelledby="widgetTitle"><div class="dialog-heading"><div><span class="eyebrow">Widget library</span><h2 id="widgetTitle">What do you want to see?</h2></div><button class="icon-button" id="doneWidgets" aria-label="Close widget library">×</button></div><label class="sr-only" for="widgetSearch">Search widgets</label><input id="widgetSearch" type="search" placeholder="Search speed, fuel, tyres…" autocomplete="off"><div id="widgetLibrary"></div><p class="settings-note">Sample values are available offline. In Live mode, unavailable readings show — until their telemetry arrives.</p></dialog>
-<dialog id="layoutsDialog" aria-labelledby="layoutsTitle"><div class="dialog-heading"><h2 id="layoutsTitle">Your saved layouts</h2><button class="icon-button" id="doneLayouts" aria-label="Close saved layouts">×</button></div><form id="saveLayoutForm"><label for="layoutName">Save the current layout</label><div class="save-layout-row"><input id="layoutName" maxlength="40" placeholder="e.g. Sunday race" required><button class="button primary" type="submit">Save</button></div></form><div id="savedLayoutsList"></div><p class="settings-note">Keep up to 8 layouts on this browser. Loading a layout can be undone.</p></dialog>
+<dialog id="layoutsDialog" aria-labelledby="layoutsTitle"><div class="dialog-heading"><h2 id="layoutsTitle">Your saved layouts</h2><button class="icon-button" id="doneLayouts" aria-label="Close saved layouts">×</button></div><form id="saveLayoutForm"><label for="layoutName">Save the current layout</label><div class="save-layout-row"><input id="layoutName" maxlength="40" placeholder="e.g. Sunday race" required><button class="button primary" type="submit">Save</button></div></form><div id="savedLayoutsList"></div><p class="settings-note">Keep up to 8 layouts. Loading a layout can be undone.</p></dialog>
 <dialog id="helpDialog" aria-labelledby="helpTitle"><div class="dialog-heading"><h2 id="helpTitle">Your screen. Your dashboard.</h2></div><div class="help-content"><p><b>Auto fits the available screen.</b> Fold or unfold your phone, rotate a tablet, or resize your window. The profile uses browser pixels, so browser zoom and split screen are respected. It does not need to identify your exact device.</p><p><b>Take control.</b> Choose a Galaxy Fold, Galaxy Tab, iPad, laptop or monitor profile. Pick any of the six layouts; your choice stays saved until you select Auto layout. Customize number size, units and cards.</p><p><b>During a race.</b> Open the Driver Dashboard tab in Your Pit Box for live telemetry. Race mode hides setup controls and requests a screen wake lock where supported. The app must keep receiving simulator data. Flags take priority; gaps are race gaps, not physical on-track distance.</p><p><b>Phone installation.</b> In Samsung Internet or Chrome, use the browser menu to add this page to your home screen. On iPad, use Safari → Share → Add to Home Screen. The public page and offline download use labelled sample data. Live telemetry is available inside the racing app.</p><p><b>Design references.</b> Inspired by the glanceable instruments in <a href="https://www.simhubdash.com/">SimHub</a> and the relative timing in <a href="https://www.simracingapps.com/">SIMRacingApps</a>.</p></div><div class="dialog-actions"><button class="button primary" id="doneHelp">Got it</button></div></dialog>
 <div class="toast" id="toast" role="status" hidden></div><script>
 (()=>{
@@ -317,10 +319,103 @@ function renderDashboard(layout,m,p) {
   return sourceBanner+flag+content+footer;
 }
 
-const $=id=>document.getElementById(id), storeKey='ypb-driver-dashboard-v2';
+const PREFERENCE_STORAGE_KEY='ypb-driver-dashboard-v2';
+const PREFERENCE_LIMIT_BYTES=64*1024;
+
+function decodePreferences(raw){
+  if(typeof raw!=='string'||new TextEncoder().encode(raw).length>PREFERENCE_LIMIT_BYTES)return null;
+  try{
+    const value=JSON.parse(raw);
+    return value&&typeof value==='object'&&!Array.isArray(value)?cleanPreferences(value):null;
+  }catch{return null}
+}
+
+// The Android object is injected only into the current trusted loopback origin.
+// It exposes this one preference record, not arbitrary storage or native methods.
+function nativePreferenceClient(bridge,{timeoutMs=4000}={}){
+  if(!bridge||typeof bridge.postMessage!=='function')return null;
+  const pending=new Map();let sequence=0;
+  bridge.onmessage=event=>{
+    let response;try{response=JSON.parse(event.data)}catch{return}
+    const request=pending.get(response?.id);
+    if(!request||response.op!==request.op)return;
+    pending.delete(response.id);clearTimeout(request.timer);
+    if(response.ok===true)request.resolve(response);
+    else request.reject(new Error('Android preference storage rejected the request.'));
+  };
+  return {
+    request(op,value){
+      return new Promise((resolve,reject)=>{
+        const id='dashboard-'+(++sequence),timer=setTimeout(()=>{
+          pending.delete(id);reject(new Error('Android preference storage did not respond.'));
+        },timeoutMs);
+        pending.set(id,{op,resolve,reject,timer});
+        try{bridge.postMessage(JSON.stringify({id,op,...(op==='save'?{value}: {})}))}
+        catch(error){clearTimeout(timer);pending.delete(id);reject(error)}
+      });
+    }
+  };
+}
+
+async function restorePreferences({storage=null,bridge=null,timeoutMs=4000}={}){
+  let local=null,storageReadable=true;
+  try{local=decodePreferences(storage?.getItem(PREFERENCE_STORAGE_KEY))}catch{storageReadable=false}
+  const native=nativePreferenceClient(bridge,{timeoutMs});
+  let nativeReady=false,issue=null,preferences=local||cleanPreferences(null);
+  if(native){
+    try{
+      const loaded=await native.request('load');
+      if(loaded.value===null){
+        // Only a confirmed absent native record may be seeded from this origin.
+        if(local)await native.request('save',JSON.stringify(local));
+      }else{
+        const restored=decodePreferences(loaded.value);
+        if(!restored)throw new Error('Android preference storage returned invalid data.');
+        preferences=restored;
+      }
+      nativeReady=true;
+      try{storage?.setItem(PREFERENCE_STORAGE_KEY,JSON.stringify(preferences))}catch{/* Native storage remains authoritative. */}
+    }catch{
+      // A timeout or error must never seed the native record with defaults or
+      // an old origin's values. Keep that record untouched for the next launch.
+      issue='Device storage is unavailable. Layout changes may not survive an app restart.';
+    }
+  }else if(!storageReadable||!storage){
+    issue='Preferences work for this visit; browser storage is unavailable.';
+  }
+  let saveQueue=Promise.resolve();
+  return {
+    preferences,
+    mode:nativeReady?'android':storage&&storageReadable?'browser':'memory',
+    nativeAvailable:!!native,
+    issue,
+    save(value){
+      const serialized=JSON.stringify(cleanPreferences(value));
+      let localSaved=false;
+      try{if(storage){storage.setItem(PREFERENCE_STORAGE_KEY,serialized);localSaved=true}}catch{/* Native may still save successfully. */}
+      // Never let a slow acknowledgement reorder successive layout edits.
+      const work=saveQueue.then(async()=>{
+        if(nativeReady){
+          try{await native.request('save',serialized);return {saved:true,mode:'android'}}
+          catch{nativeReady=false;return {saved:localSaved,mode:localSaved?'browser':'memory',issue:localSaved?'Device storage is unavailable. Layout changes may not survive an app restart.':'This change works for this visit; preference storage is unavailable.'}}
+        }
+        return {saved:localSaved,mode:localSaved?'browser':'memory',issue:localSaved?null:'Preferences work for this visit; browser storage is unavailable.'};
+      });
+      saveQueue=work.catch(()=>{});
+      return work;
+    }
+  };
+}
+
+async function initializeDashboard(){
+const $=id=>document.getElementById(id);
 const params=new URLSearchParams(location.search), installed=location.pathname.includes('/static/driver-dashboard/');
 const embedded=params.get('mode')==='embedded'&&parent!==window;
-let preferences;try{preferences=cleanPreferences(JSON.parse(localStorage.getItem(storeKey)))}catch{preferences=cleanPreferences(null)}
+let browserStorage=null;try{browserStorage=window.localStorage}catch{/* Private browsing may disable DOM storage. */}
+// Finish the native read (and first-use migration) before rendering or wiring
+// controls. Default values must never race a restored Android layout.
+const preferenceStore=await restorePreferences({storage:browserStorage,bridge:window.PitBoxDashboardPreferences});
+let preferences=preferenceStore.preferences;
 if(LAYOUTS.includes(location.hash.slice(1)))preferences.layout=location.hash.slice(1);
 let source=installed&&params.get('mode')==='live'?'live':'demo';
 let currentState=null,receivedAt=0,tick=0,motion=null,ws=null,retry=null,wakeLock=null,installPrompt=null,gesture=null;
@@ -329,7 +424,8 @@ const undoStack=[];
 let display,layout='cockpit',raceMode=false,framePending=false,lastFresh=null,renderedProvenance=null;
 const names={cockpit:'Cockpit',focus:'Race Focus',battle:'Battle',endurance:'Endurance',modular:'My Layout',portrait:'Phone'};
 const descriptions={cockpit:'Instruments, rivals and lap timing',focus:'Large delta and the essentials',battle:'Race order and rival lap comparisons',endurance:'Stint, fuel and lap consistency',modular:'Arrange your own cards',portrait:'A clear view for narrow screens'};
-function save(){try{localStorage.setItem(storeKey,JSON.stringify(preferences))}catch{toast('Preferences work for this visit; browser storage is unavailable.')}}
+function save(){preferenceStore.save(preferences).then(result=>{preferenceStore.mode=result.mode;if(result.issue)toast(result.issue);updateStorageLabel()})}
+function updateStorageLabel(){const label=$('dashboard').querySelector('.layout-saved');if(label)label.textContent=preferenceStore.mode==='android'?'AUTOSAVED ON THIS DEVICE':preferenceStore.mode==='memory'?'THIS VISIT ONLY':preferenceStore.nativeAvailable?'SAVED IN THIS VIEW':'AUTOSAVED ON THIS BROWSER'}
 function toast(message){$('toast').textContent=message;$('toast').hidden=false;clearTimeout(toast.timer);toast.timer=setTimeout(()=>$('toast').hidden=true,3000)}
 function viewportMetrics(){const v=window.visualViewport;return {width:document.documentElement.clientWidth,height:Math.round(v&&v.scale===1?v.height:innerHeight),touch:navigator.maxTouchPoints>0||matchMedia('(pointer:coarse)').matches}}
 function applyDisplay(){display=resolveDisplay(preferences.profile,viewportMetrics());layout=preferences.layout==='auto'?display.recommendedLayout:preferences.layout;document.body.dataset.display=display.family;document.body.dataset.orientation=display.orientation;document.body.classList.toggle('compact-screen',display.compact);document.body.classList.toggle('short-screen',display.short);document.documentElement.style.setProperty('--usable-height',display.height+'px');$('displayStatus').textContent=`${display.label} · ${display.width} × ${display.height} CSS px`;$('profileSelect').value=preferences.profile;$('autoLayout').setAttribute('aria-pressed',String(preferences.layout==='auto'));$('layoutStatus').textContent=`${names[layout]} · ${descriptions[layout]}`;$('workspaceToolbar').hidden=layout!=='modular';for(const b of $('conceptNav').children)b.setAttribute('aria-pressed',String(b.dataset.layout===layout));scheduleRender()}
@@ -354,6 +450,7 @@ function render(){
   });
   const sourceLabel=m.provenance==='sample'?'SAMPLE · SIMULATED':m.provenance==='replay'?'RECORDED REPLAY':m.fresh?'LIVE TELEMETRY':'WAITING FOR TELEMETRY';
   $('sessionStatus').textContent=sourceLabel;$('trackStatus').textContent=m.fresh?m.track+' · '+m.session:'Start a simulator session';$('raceModeSource').textContent=sourceLabel;
+  updateStorageLabel();
 }
 function acceptState(s){if(!s||typeof s!=='object')return;currentState=s;receivedAt=Date.now();scheduleRender()}
 function updateDemo(){acceptState(demoState($('scenarioSelect').value,tick))}
@@ -365,7 +462,7 @@ function chooseLayout(id){if(!['auto',...LAYOUTS].includes(id))return;preference
 async function acquireWake(){if(!raceMode||document.visibilityState!=='visible'||!('wakeLock'in navigator))return;try{wakeLock=await navigator.wakeLock.request('screen')}catch{/* Browser settings may deny a wake lock. */}}
 async function releaseWake(){const lock=wakeLock;wakeLock=null;try{await lock?.release()}catch{/* Already released. */}}
 function setRaceMode(on){raceMode=on;document.body.classList.toggle('race-mode',on);if(on){$('exitRaceMode').focus();window.scrollTo(0,0);acquireWake()}else{releaseWake();$('raceModeButton').focus()}applyDisplay()}
-function showSettings(){const p=preferences;$('settingsBody').innerHTML=`<label class="setting-row">Speed units<select id="unitsSetting"><option value="kmh">km/h</option><option value="mph">mph</option></select></label><label class="setting-row">Number size<select id="scaleSetting"><option value="1">Standard</option><option value="1.1">Large · 110%</option><option value="1.2">Extra large · 120%</option></select></label><label class="setting-row">Accent<select id="accentSetting"><option value="blue">Blue</option><option value="cyan">Cyan</option><option value="violet">Violet</option></select></label>${[['contrast','High contrast'],['tires','Tyre temperatures'],['resources','Fuel and energy'],['sectors','Sector progress'],['radio','Engineer message']].map(([k,l])=>`<label class="setting-row">${l}<input type="checkbox" data-setting="${k}" ${p[k]?'checked':''}></label>`).join('')}<p class="settings-note">Saved on this browser. Race control flags always remain visible.</p>`;for(const k of ['units','scale','accent'])$(k+'Setting').value=p[k];$('settingsDialog').showModal()}
+function showSettings(){const p=preferences;$('settingsBody').innerHTML=`<label class="setting-row">Speed units<select id="unitsSetting"><option value="kmh">km/h</option><option value="mph">mph</option></select></label><label class="setting-row">Number size<select id="scaleSetting"><option value="1">Standard</option><option value="1.1">Large · 110%</option><option value="1.2">Extra large · 120%</option></select></label><label class="setting-row">Accent<select id="accentSetting"><option value="blue">Blue</option><option value="cyan">Cyan</option><option value="violet">Violet</option></select></label>${[['contrast','High contrast'],['tires','Tyre temperatures'],['resources','Fuel and energy'],['sectors','Sector progress'],['radio','Engineer message']].map(([k,l])=>`<label class="setting-row">${l}<input type="checkbox" data-setting="${k}" ${p[k]?'checked':''}></label>`).join('')}<p class="settings-note">Saved locally. Race control flags always remain visible.</p>`;for(const k of ['units','scale','accent'])$(k+'Setting').value=p[k];$('settingsDialog').showModal()}
 $('settingsBody').addEventListener('change',e=>{const k=e.target.dataset.setting||e.target.id.replace('Setting','');preferences=cleanPreferences({...preferences,[k]:e.target.type==='checkbox'?e.target.checked:e.target.value});save();scheduleRender()});
 $('profileSelect').innerHTML=DISPLAY_PROFILES.map(p=>`<option value="${p.id}">${escapeHTML(p.name)}</option>`).join('');
 $('conceptNav').innerHTML=LAYOUTS.map((id,i)=>`<button type="button" class="concept-button" data-layout="${id}" aria-pressed="false" title="${descriptions[id]}"><small>0${i+1}</small>${names[id]}</button>`).join('');
@@ -511,8 +608,11 @@ window.addEventListener('beforeinstallprompt',e=>{e.preventDefault();installProm
 $('installButton').addEventListener('click',async()=>{if(installPrompt){await installPrompt.prompt();installPrompt=null;$('installButton').hidden=true}});
 if('serviceWorker'in navigator&&location.protocol==='https:'&&!installed)navigator.serviceWorker.register('./sw.js').catch(()=>{});
 setInterval(()=>{if(source!=='demo'&&lastFresh&&Date.now()-receivedAt>=3500)scheduleRender()},500);
-document.body.classList.toggle('embedded',embedded);applyDisplay();setSource();
+document.body.classList.toggle('embedded',embedded);document.body.classList.remove('preferences-loading');$('preferencesLoading').hidden=true;applyDisplay();setSource();
+if(preferenceStore.issue)toast(preferenceStore.issue);
 if(embedded)parent.postMessage({type:'pitbox:driver-ready'},location.origin);
+}
+initializeDashboard().catch(()=>{const status=document.getElementById('preferencesLoading');status.hidden=false;status.textContent='The dashboard could not start. Reload this page to try again.'});
 
 })();
 </script>

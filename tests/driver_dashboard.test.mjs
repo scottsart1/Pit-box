@@ -5,6 +5,7 @@ import {demoState,normalizeState,raceFlag,lapTime,escapeHTML} from '../static/dr
 import {renderDashboard,MODULES} from '../static/driver-dashboard/render.mjs';
 import {readFileSync} from 'node:fs';
 import vm from 'node:vm';
+import {PREFERENCE_STORAGE_KEY,decodePreferences,nativePreferenceClient,restorePreferences} from '../static/driver-dashboard/preferences.mjs';
 for(const [name,width,height,touch,family] of [['Fold cover',344,882,true,'compact'],['Fold open',690,829,true,'fold'],['Fold rotated',829,690,true,'fold'],['Galaxy Tab',800,1280,true,'tablet'],['iPad mini',744,1133,true,'tablet'],['iPad Air',820,1180,true,'tablet'],['iPad Pro',1024,1366,true,'tablet'],['laptop',1366,768,false,'laptop'],['desktop',1920,1080,false,'desktop'],['ultrawide',2560,1080,false,'wide'],['phone landscape',844,390,true,'compact'],['split screen',400,900,true,'compact']])test(name+' auto profile',()=>assert.equal(classifyViewport({width,height,touch}),family));
 test('Every manual profile still fits a cover screen',()=>{for(const p of DISPLAY_PROFILES){const d=resolveDisplay(p.id,{width:344,height:882,touch:true});assert.equal(d.width,344);assert.equal(d.recommendedLayout,'portrait');assert.equal(d.compact,true)}});
 test('Invalid and old saved preferences cannot create missing layouts or duplicate modules',()=>{const p=cleanPreferences({layout:'missing',profile:'old',scale:'300',contrast:'false',order:['relative','relative']});assert.equal(p.layout,'auto');assert.equal(p.profile,'auto');assert.equal(p.scale,'1');assert.equal(p.contrast,false);assert.equal(new Set(p.order).size,6)});
@@ -139,4 +140,117 @@ test('The downloadable dashboard is self-contained and its bundled script parses
   assert.ok(!html.includes('type="module"'));assert.match(html,/SAMPLE DATA/);assert.match(html,/widgetLibrary/);
   const script=html.match(/<script>([\s\S]*?)<\/script>/)?.[1];assert.ok(script);
   assert.doesNotThrow(()=>new vm.Script(script));
+});
+
+function preferenceStorage(initial=null){
+  let value=initial;
+  return {getItem(key){assert.equal(key,PREFERENCE_STORAGE_KEY);return value},setItem(key,next){assert.equal(key,PREFERENCE_STORAGE_KEY);value=next},read(){return value}};
+}
+function preferenceBridge(initial=null){
+  let value=initial;const calls=[];
+  const bridge={postMessage(raw){
+    const message=JSON.parse(raw);calls.push(message);
+    if(message.op==='save')value=message.value;
+    queueMicrotask(()=>bridge.onmessage({data:JSON.stringify({id:message.id,op:message.op,ok:true,...(message.op==='load'?{value}: {})})}));
+  }};
+  return {bridge,calls,read:()=>value};
+}
+
+test('Browser and offline preferences still load and save without a native bridge',async()=>{
+  const storage=preferenceStorage(JSON.stringify({layout:'modular',widgets:[{id:'timing',w:2,h:2}]}));
+  const restored=await restorePreferences({storage});
+  assert.equal(restored.mode,'browser');assert.equal(restored.preferences.widgets[0].w,2);
+  await restored.save({...restored.preferences,scale:'1.2'});
+  assert.equal(JSON.parse(storage.read()).scale,'1.2');
+  assert.equal(decodePreferences('invalid'),null);assert.equal(decodePreferences('[]'),null);
+  assert.equal(decodePreferences('null'),null);assert.equal(decodePreferences(JSON.stringify({name:'é'.repeat(40000)})),null);
+});
+
+test('Native preferences survive a changed localhost origin and override stale origin storage',async()=>{
+  const native=preferenceBridge(),firstOrigin=preferenceStorage();
+  const first=await restorePreferences({storage:firstOrigin,bridge:native.bridge});
+  const wanted=cleanPreferences({layout:'modular',widgets:[{id:'inputs',w:2,h:3}],savedLayouts:[{name:'Sunday race',widgets:[{id:'relative',w:3,h:2}]}]});
+  await first.save(wanted);
+  const nextOrigin=preferenceStorage(JSON.stringify({layout:'phone',widgets:[]}));
+  const restored=await restorePreferences({storage:nextOrigin,bridge:native.bridge});
+  assert.equal(restored.mode,'android');assert.deepEqual(restored.preferences,wanted);
+  assert.deepEqual(JSON.parse(nextOrigin.read()),wanted);assert.deepEqual(JSON.parse(native.read()),wanted);
+  assert.equal(native.calls.filter(c=>c.op==='save').length,1);
+});
+
+test('First native use migrates existing current-origin preferences only after confirmed empty load',async()=>{
+  const prior=cleanPreferences({layout:'modular',widgets:[{id:'fuel',w:2,h:1}],savedLayouts:[{name:'Fuel view',widgets:[{id:'fuel',w:2,h:1}]}]});
+  const storage=preferenceStorage(JSON.stringify(prior)),calls=[];
+  const bridge={postMessage(raw){calls.push(JSON.parse(raw))}};
+  let completed=false;
+  const starting=restorePreferences({storage,bridge}).then(value=>{completed=true;return value});
+  assert.equal(completed,false);assert.deepEqual(calls.map(c=>c.op),['load']);
+  bridge.onmessage({data:JSON.stringify({...calls[0],ok:true,value:null})});
+  await Promise.resolve();
+  assert.equal(completed,false);assert.deepEqual(calls.map(c=>c.op),['load','save']);
+  assert.deepEqual(JSON.parse(calls[1].value),prior);
+  bridge.onmessage({data:JSON.stringify({id:calls[1].id,op:'save',ok:true})});
+  const restored=await starting;assert.equal(completed,true);assert.deepEqual(restored.preferences,prior);
+});
+
+test('An empty native store without local data does not write defaults during startup',async()=>{
+  const native=preferenceBridge();
+  const restored=await restorePreferences({storage:preferenceStorage(),bridge:native.bridge});
+  assert.deepEqual(restored.preferences,cleanPreferences(null));assert.equal(restored.mode,'android');
+  assert.deepEqual(native.calls.map(c=>c.op),['load']);assert.equal(native.read(),null);
+});
+
+test('Native load timeout falls back locally and never overwrites a late native layout',async()=>{
+  const prior=cleanPreferences({layout:'battle'}),storage=preferenceStorage(JSON.stringify(prior)),calls=[];
+  const bridge={postMessage(raw){calls.push(JSON.parse(raw))}};
+  const restored=await restorePreferences({storage,bridge,timeoutMs:5});
+  assert.deepEqual(restored.preferences,prior);assert.equal(restored.mode,'browser');assert.ok(restored.issue);
+  bridge.onmessage({data:JSON.stringify({id:calls[0].id,op:'load',ok:true,value:JSON.stringify({layout:'endurance'})})});
+  await restored.save({...prior,scale:'1.2'});
+  assert.equal(JSON.parse(storage.read()).scale,'1.2');assert.deepEqual(calls.map(c=>c.op),['load']);
+  assert.equal(restored.preferences.layout,'battle');
+});
+
+test('Invalid or rejected native reads use local fallback without a migration write',async()=>{
+  for(const response of [{ok:false},{ok:true,value:'[]'},{ok:true,value:'invalid'},{ok:true}]){
+    const storage=preferenceStorage(JSON.stringify({layout:'focus'})),calls=[];
+    const bridge={postMessage(raw){const request=JSON.parse(raw);calls.push(request);queueMicrotask(()=>bridge.onmessage({data:JSON.stringify({...request,...response})}))}};
+    const restored=await restorePreferences({storage,bridge});
+    assert.equal(restored.preferences.layout,'focus');assert.equal(restored.mode,'browser');assert.ok(restored.issue);
+    await restored.save({...restored.preferences,scale:'1.1'});assert.deepEqual(calls.map(c=>c.op),['load']);
+  }
+});
+
+test('Rapid edits serialize native saves so the latest layout is durably last',async()=>{
+  const native=preferenceBridge(JSON.stringify({layout:'modular'}));
+  const restored=await restorePreferences({storage:preferenceStorage(),bridge:native.bridge});
+  const calls=[];native.bridge.postMessage=raw=>calls.push(JSON.parse(raw));
+  const first=restored.save({...restored.preferences,scale:'1.1'}),second=restored.save({...restored.preferences,scale:'1.2'});
+  await Promise.resolve();assert.equal(calls.length,1);assert.equal(JSON.parse(calls[0].value).scale,'1.1');
+  native.bridge.onmessage({data:JSON.stringify({id:calls[0].id,op:'save',ok:true})});
+  await first;await Promise.resolve();assert.equal(calls.length,2);assert.equal(JSON.parse(calls[1].value).scale,'1.2');
+  native.bridge.onmessage({data:JSON.stringify({id:calls[1].id,op:'save',ok:true})});
+  assert.equal((await second).mode,'android');
+});
+
+test('Native saving works without localStorage and errors report fallback honestly',async()=>{
+  const unavailable={getItem(){throw new Error('disabled')},setItem(){throw new Error('disabled')}};
+  const browserOnly=await restorePreferences({storage:unavailable});assert.equal(browserOnly.mode,'memory');
+  const native=preferenceBridge(JSON.stringify({layout:'focus'}));
+  const restored=await restorePreferences({storage:unavailable,bridge:native.bridge});
+  assert.equal(restored.mode,'android');assert.equal((await restored.save(restored.preferences)).saved,true);
+  native.bridge.postMessage=raw=>{const request=JSON.parse(raw);queueMicrotask(()=>native.bridge.onmessage({data:JSON.stringify({...request,ok:false})}))};
+  const failed=await restored.save({...restored.preferences,scale:'1.2'});
+  assert.equal(failed.saved,false);assert.equal(failed.mode,'memory');assert.ok(failed.issue);
+});
+
+test('Native responses require matching request IDs and operations',async()=>{
+  const calls=[],bridge={postMessage(raw){calls.push(JSON.parse(raw))}};
+  const client=nativePreferenceClient(bridge),request=client.request('load');let done=false;request.then(()=>{done=true});
+  bridge.onmessage({data:'invalid'});
+  bridge.onmessage({data:JSON.stringify({id:'other',op:'load',ok:true,value:'{}'})});
+  bridge.onmessage({data:JSON.stringify({id:calls[0].id,op:'save',ok:true})});
+  await Promise.resolve();assert.equal(done,false);
+  bridge.onmessage({data:JSON.stringify({id:calls[0].id,op:'load',ok:true,value:null})});
+  assert.equal((await request).value,null);
 });

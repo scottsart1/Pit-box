@@ -1,11 +1,17 @@
 import {DISPLAY_PROFILES,LAYOUTS,WIDGET_CATALOG,WIDGET_PRESETS,cleanPreferences,cleanWidgets,presetWidgets,reorderWidgets,resizedWidget,resolveDisplay} from './display.mjs';
 import {demoState,normalizeState,escapeHTML} from './model.mjs';
 import {renderDashboard} from './render.mjs';
+import {restorePreferences} from './preferences.mjs';
 
-const $=id=>document.getElementById(id), storeKey='ypb-driver-dashboard-v2';
+async function initializeDashboard(){
+const $=id=>document.getElementById(id);
 const params=new URLSearchParams(location.search), installed=location.pathname.includes('/static/driver-dashboard/');
 const embedded=params.get('mode')==='embedded'&&parent!==window;
-let preferences;try{preferences=cleanPreferences(JSON.parse(localStorage.getItem(storeKey)))}catch{preferences=cleanPreferences(null)}
+let browserStorage=null;try{browserStorage=window.localStorage}catch{/* Private browsing may disable DOM storage. */}
+// Finish the native read (and first-use migration) before rendering or wiring
+// controls. Default values must never race a restored Android layout.
+const preferenceStore=await restorePreferences({storage:browserStorage,bridge:window.PitBoxDashboardPreferences});
+let preferences=preferenceStore.preferences;
 if(LAYOUTS.includes(location.hash.slice(1)))preferences.layout=location.hash.slice(1);
 let source=installed&&params.get('mode')==='live'?'live':'demo';
 let currentState=null,receivedAt=0,tick=0,motion=null,ws=null,retry=null,wakeLock=null,installPrompt=null,gesture=null;
@@ -14,7 +20,8 @@ const undoStack=[];
 let display,layout='cockpit',raceMode=false,framePending=false,lastFresh=null,renderedProvenance=null;
 const names={cockpit:'Cockpit',focus:'Race Focus',battle:'Battle',endurance:'Endurance',modular:'My Layout',portrait:'Phone'};
 const descriptions={cockpit:'Instruments, rivals and lap timing',focus:'Large delta and the essentials',battle:'Race order and rival lap comparisons',endurance:'Stint, fuel and lap consistency',modular:'Arrange your own cards',portrait:'A clear view for narrow screens'};
-function save(){try{localStorage.setItem(storeKey,JSON.stringify(preferences))}catch{toast('Preferences work for this visit; browser storage is unavailable.')}}
+function save(){preferenceStore.save(preferences).then(result=>{preferenceStore.mode=result.mode;if(result.issue)toast(result.issue);updateStorageLabel()})}
+function updateStorageLabel(){const label=$('dashboard').querySelector('.layout-saved');if(label)label.textContent=preferenceStore.mode==='android'?'AUTOSAVED ON THIS DEVICE':preferenceStore.mode==='memory'?'THIS VISIT ONLY':preferenceStore.nativeAvailable?'SAVED IN THIS VIEW':'AUTOSAVED ON THIS BROWSER'}
 function toast(message){$('toast').textContent=message;$('toast').hidden=false;clearTimeout(toast.timer);toast.timer=setTimeout(()=>$('toast').hidden=true,3000)}
 function viewportMetrics(){const v=window.visualViewport;return {width:document.documentElement.clientWidth,height:Math.round(v&&v.scale===1?v.height:innerHeight),touch:navigator.maxTouchPoints>0||matchMedia('(pointer:coarse)').matches}}
 function applyDisplay(){display=resolveDisplay(preferences.profile,viewportMetrics());layout=preferences.layout==='auto'?display.recommendedLayout:preferences.layout;document.body.dataset.display=display.family;document.body.dataset.orientation=display.orientation;document.body.classList.toggle('compact-screen',display.compact);document.body.classList.toggle('short-screen',display.short);document.documentElement.style.setProperty('--usable-height',display.height+'px');$('displayStatus').textContent=`${display.label} · ${display.width} × ${display.height} CSS px`;$('profileSelect').value=preferences.profile;$('autoLayout').setAttribute('aria-pressed',String(preferences.layout==='auto'));$('layoutStatus').textContent=`${names[layout]} · ${descriptions[layout]}`;$('workspaceToolbar').hidden=layout!=='modular';for(const b of $('conceptNav').children)b.setAttribute('aria-pressed',String(b.dataset.layout===layout));scheduleRender()}
@@ -39,6 +46,7 @@ function render(){
   });
   const sourceLabel=m.provenance==='sample'?'SAMPLE · SIMULATED':m.provenance==='replay'?'RECORDED REPLAY':m.fresh?'LIVE TELEMETRY':'WAITING FOR TELEMETRY';
   $('sessionStatus').textContent=sourceLabel;$('trackStatus').textContent=m.fresh?m.track+' · '+m.session:'Start a simulator session';$('raceModeSource').textContent=sourceLabel;
+  updateStorageLabel();
 }
 function acceptState(s){if(!s||typeof s!=='object')return;currentState=s;receivedAt=Date.now();scheduleRender()}
 function updateDemo(){acceptState(demoState($('scenarioSelect').value,tick))}
@@ -50,7 +58,7 @@ function chooseLayout(id){if(!['auto',...LAYOUTS].includes(id))return;preference
 async function acquireWake(){if(!raceMode||document.visibilityState!=='visible'||!('wakeLock'in navigator))return;try{wakeLock=await navigator.wakeLock.request('screen')}catch{/* Browser settings may deny a wake lock. */}}
 async function releaseWake(){const lock=wakeLock;wakeLock=null;try{await lock?.release()}catch{/* Already released. */}}
 function setRaceMode(on){raceMode=on;document.body.classList.toggle('race-mode',on);if(on){$('exitRaceMode').focus();window.scrollTo(0,0);acquireWake()}else{releaseWake();$('raceModeButton').focus()}applyDisplay()}
-function showSettings(){const p=preferences;$('settingsBody').innerHTML=`<label class="setting-row">Speed units<select id="unitsSetting"><option value="kmh">km/h</option><option value="mph">mph</option></select></label><label class="setting-row">Number size<select id="scaleSetting"><option value="1">Standard</option><option value="1.1">Large · 110%</option><option value="1.2">Extra large · 120%</option></select></label><label class="setting-row">Accent<select id="accentSetting"><option value="blue">Blue</option><option value="cyan">Cyan</option><option value="violet">Violet</option></select></label>${[['contrast','High contrast'],['tires','Tyre temperatures'],['resources','Fuel and energy'],['sectors','Sector progress'],['radio','Engineer message']].map(([k,l])=>`<label class="setting-row">${l}<input type="checkbox" data-setting="${k}" ${p[k]?'checked':''}></label>`).join('')}<p class="settings-note">Saved on this browser. Race control flags always remain visible.</p>`;for(const k of ['units','scale','accent'])$(k+'Setting').value=p[k];$('settingsDialog').showModal()}
+function showSettings(){const p=preferences;$('settingsBody').innerHTML=`<label class="setting-row">Speed units<select id="unitsSetting"><option value="kmh">km/h</option><option value="mph">mph</option></select></label><label class="setting-row">Number size<select id="scaleSetting"><option value="1">Standard</option><option value="1.1">Large · 110%</option><option value="1.2">Extra large · 120%</option></select></label><label class="setting-row">Accent<select id="accentSetting"><option value="blue">Blue</option><option value="cyan">Cyan</option><option value="violet">Violet</option></select></label>${[['contrast','High contrast'],['tires','Tyre temperatures'],['resources','Fuel and energy'],['sectors','Sector progress'],['radio','Engineer message']].map(([k,l])=>`<label class="setting-row">${l}<input type="checkbox" data-setting="${k}" ${p[k]?'checked':''}></label>`).join('')}<p class="settings-note">Saved locally. Race control flags always remain visible.</p>`;for(const k of ['units','scale','accent'])$(k+'Setting').value=p[k];$('settingsDialog').showModal()}
 $('settingsBody').addEventListener('change',e=>{const k=e.target.dataset.setting||e.target.id.replace('Setting','');preferences=cleanPreferences({...preferences,[k]:e.target.type==='checkbox'?e.target.checked:e.target.value});save();scheduleRender()});
 $('profileSelect').innerHTML=DISPLAY_PROFILES.map(p=>`<option value="${p.id}">${escapeHTML(p.name)}</option>`).join('');
 $('conceptNav').innerHTML=LAYOUTS.map((id,i)=>`<button type="button" class="concept-button" data-layout="${id}" aria-pressed="false" title="${descriptions[id]}"><small>0${i+1}</small>${names[id]}</button>`).join('');
@@ -196,5 +204,8 @@ window.addEventListener('beforeinstallprompt',e=>{e.preventDefault();installProm
 $('installButton').addEventListener('click',async()=>{if(installPrompt){await installPrompt.prompt();installPrompt=null;$('installButton').hidden=true}});
 if('serviceWorker'in navigator&&location.protocol==='https:'&&!installed)navigator.serviceWorker.register('./sw.js').catch(()=>{});
 setInterval(()=>{if(source!=='demo'&&lastFresh&&Date.now()-receivedAt>=3500)scheduleRender()},500);
-document.body.classList.toggle('embedded',embedded);applyDisplay();setSource();
+document.body.classList.toggle('embedded',embedded);document.body.classList.remove('preferences-loading');$('preferencesLoading').hidden=true;applyDisplay();setSource();
+if(preferenceStore.issue)toast(preferenceStore.issue);
 if(embedded)parent.postMessage({type:'pitbox:driver-ready'},location.origin);
+}
+initializeDashboard().catch(()=>{const status=document.getElementById('preferencesLoading');status.hidden=false;status.textContent='The dashboard could not start. Reload this page to try again.'});

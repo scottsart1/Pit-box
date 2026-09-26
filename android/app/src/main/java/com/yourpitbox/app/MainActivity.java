@@ -11,6 +11,7 @@ import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.view.Gravity;
+import android.view.MotionEvent;
 import android.view.View;
 import android.view.WindowManager;
 import android.webkit.WebChromeClient;
@@ -53,6 +54,22 @@ public class MainActivity extends Activity {
     private String pendingInvitation;
     private int invitationAttempts;
     private boolean keyboardVisible;
+    private boolean resumed;
+    private final ImmersiveRehidePolicy rehidePolicy = new ImmersiveRehidePolicy();
+    private final Runnable finishSystemBarRehide = () -> {
+        hideSystemBars();
+        rehidePolicy.finishRestore();
+    };
+    private final Runnable delayedSystemBarRehide = () -> {
+        if (!canHideSystemBars() || !rehidePolicy.beginRestore()) return;
+        // One UI 8 can leave an edge reveal in its transient state forever.
+        // hide() alone is ignored because the app already requests hidden
+        // bars. Convert the existing reveal to explicit visibility, then
+        // hide it on the next frame. This runs once per edge reveal only.
+        WindowCompat.getInsetsController(getWindow(), getWindow().getDecorView())
+                .show(WindowInsetsCompat.Type.systemBars());
+        handler.postDelayed(finishSystemBarRehide, 100);
+    };
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -71,6 +88,11 @@ public class MainActivity extends Activity {
             view.setPadding(safe.left, safe.top, safe.right, safe.bottom);
             boolean wasKeyboardVisible = keyboardVisible;
             keyboardVisible = insets.isVisible(WindowInsetsCompat.Type.ime());
+            if (keyboardVisible) cancelSystemBarRehide();
+            else if (insets.isVisible(WindowInsetsCompat.Type.statusBars())
+                    || insets.isVisible(WindowInsetsCompat.Type.navigationBars())) {
+                scheduleSystemBarRehide();
+            }
             if (wasKeyboardVisible && !keyboardVisible) {
                 // Some Android versions expose navigation while typing. Let
                 // the keyboard finish closing before restoring immersive mode.
@@ -290,6 +312,7 @@ public class MainActivity extends Activity {
                         // still receives touches before the dashboard underneath.
                         startupContainer.setVisibility(View.GONE);
                         web.setVisibility(View.VISIBLE);
+                        DashboardPreferencesBridge.install(this, web, url);
                         web.loadUrl(join(url, ""));
                     } else {
                         handler.postDelayed(this::pollUntilReady, 400);
@@ -324,6 +347,7 @@ public class MainActivity extends Activity {
     @Override
     protected void onResume() {
         super.onResume();
+        resumed = true;
         hideSystemBars();
         if (loaded && !PitBoxService.isRunning() && PitBoxService.getFailure() == null) {
             finishAndRemoveTask();
@@ -334,15 +358,66 @@ public class MainActivity extends Activity {
     public void onWindowFocusChanged(boolean hasFocus) {
         super.onWindowFocusChanged(hasFocus);
         if (hasFocus) hideSystemBars();
+        else cancelSystemBarRehide();
     }
 
     private void hideSystemBars() {
-        if (isDestroyed() || isFinishing() || keyboardVisible) return;
+        if (!canHideSystemBars()) return;
+        handler.removeCallbacks(delayedSystemBarRehide);
         WindowInsetsControllerCompat controller = WindowCompat.getInsetsController(
                 getWindow(), getWindow().getDecorView());
         controller.setSystemBarsBehavior(
                 WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE);
         controller.hide(WindowInsetsCompat.Type.systemBars());
+    }
+
+    private boolean canHideSystemBars() {
+        return !isDestroyed() && !isFinishing()
+                && ImmersiveRehidePolicy.canHide(resumed, hasWindowFocus(), keyboardVisible);
+    }
+
+    private void scheduleSystemBarRehide() {
+        if (Build.VERSION.SDK_INT != 36 || !"samsung".equalsIgnoreCase(Build.MANUFACTURER)
+                || !rehidePolicy.canScheduleRestore() || !canHideSystemBars()) return;
+        handler.removeCallbacks(delayedSystemBarRehide);
+        handler.postDelayed(delayedSystemBarRehide, 5000);
+    }
+
+    private void cancelSystemBarRehide() {
+        handler.removeCallbacks(delayedSystemBarRehide);
+        handler.removeCallbacks(finishSystemBarRehide);
+        rehidePolicy.finishRestore();
+        rehidePolicy.reset();
+    }
+
+    @Override
+    public boolean dispatchTouchEvent(MotionEvent event) {
+        switch (event.getActionMasked()) {
+            case MotionEvent.ACTION_DOWN:
+                rehidePolicy.start(event.getY(), getWindow().getDecorView().getHeight(),
+                        24 * getResources().getDisplayMetrics().density);
+                break;
+            case MotionEvent.ACTION_MOVE:
+                rehidePolicy.move(event.getY());
+                break;
+            case MotionEvent.ACTION_UP:
+            case MotionEvent.ACTION_CANCEL:
+                rehidePolicy.move(event.getY());
+                if (rehidePolicy.finish(event.getActionMasked() == MotionEvent.ACTION_CANCEL)) {
+                    scheduleSystemBarRehide();
+                }
+                break;
+            default:
+                break;
+        }
+        return super.dispatchTouchEvent(event);
+    }
+
+    @Override
+    protected void onPause() {
+        resumed = false;
+        cancelSystemBarRehide();
+        super.onPause();
     }
 
     @Override

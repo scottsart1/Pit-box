@@ -25,6 +25,7 @@ body[data-display=fold] main,body[data-display=tablet] main{padding-inline:16px}
 .battle-bottom,.dashboard.hide-resources .battle-bottom{grid-template-columns:repeat(auto-fit,minmax(min(100%,210px),1fr))}
 
 /* The custom workspace shares the instruments and colour system of the race views. */
+.preferences-loading main{visibility:hidden}.preferences-loading-message{padding:28px 24px;color:var(--muted);font-size:14px;line-height:1.6}
 .workspace-toolbar{border:1px solid var(--line);border-top:2px solid var(--accent);background:linear-gradient(120deg,#122132,#0d151d 65%);padding:20px 22px;margin:0 0 18px;border-radius:8px}
 .workspace-title h2{font-size:23px;letter-spacing:-.035em;margin:5px 0 6px}.workspace-title p,.workspace-tip{font-size:12px;line-height:1.6;color:var(--muted);margin:0}.workspace-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:18px 0 12px}.workspace-tip{max-width:850px}.workspace-actions select{flex:1;max-width:260px}
 .sample-banner{display:flex;align-items:center;gap:14px;border:1px solid #816b3e;background:#251f14;color:#e9c785;padding:10px 14px;margin-bottom:12px;border-radius:5px;font-size:12px;line-height:1.5}.sample-banner strong{font-size:10px;letter-spacing:.12em;white-space:nowrap}.sample-banner span{color:#cabb9e}.race-mode .sample-banner{margin-bottom:8px;padding-block:7px}.race-mode .sample-banner span{display:none}.race-mode .demo-watermark{color:var(--amber)}

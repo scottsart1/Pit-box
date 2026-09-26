@@ -24,7 +24,7 @@ def write_generated(path: Path, content: bytes) -> None:
 
 def build():
     modules = []
-    for name in ('display.mjs', 'model.mjs', 'render.mjs', 'dashboard.js'):
+    for name in ('display.mjs', 'model.mjs', 'render.mjs', 'preferences.mjs', 'dashboard.js'):
         js = (ROOT / name).read_text(encoding='utf-8')
         js = re.sub(r'^import .*?;\s*', '', js, flags=re.M)
         js = re.sub(r'^export ', '', js, flags=re.M)

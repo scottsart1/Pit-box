@@ -716,7 +716,7 @@ def test_current_release_describes_skippable_setup_tour_and_manual_updates():
     assert 'Labelled sample values' in release and 'without UDP' in release
     assert 'swipe-to-reveal system bars' in release
     assert 'tyre pace trend' in release
-    assert 'Windows 4.14.0 and Android 4.14.0 (revision 27).' in release
+    assert 'Windows 4.14.0 and Android 4.14.0 (revision 28).' in release
     for text in ('4.14.0', 'skippable setup', 'UDP IP and port', 'guided app tour',
                  'Existing preferences stay unchanged', 'Nothing installs automatically'):
         assert text in release
