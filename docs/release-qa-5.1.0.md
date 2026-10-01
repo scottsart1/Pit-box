@@ -1,6 +1,7 @@
 # Your Pit Box 5.1.0 — setup scope and race radio
 
-Release validation is complete; production publication is pending.
+Version **5.1.0** is published for Windows and Android at
+[yourpitbox.com](https://yourpitbox.com), with update notices live for both.
 
 Setup Lab offers Minimum, Moderate and Radical changes. Minimum keeps the
 current setup and caps the final per-setting adjustments. Moderate starts
@@ -122,3 +123,23 @@ Windows remains unsigned, as disclosed on the download page.
 The tablet advertised a wireless-debug endpoint but connection attempts failed.
 No physical tablet upgrade or Wi-Fi/Bluetooth endurance test is claimed for
 this release. The dashboard-agent proposal remains a second phase.
+
+## Production publication — 1 October 2026
+
+- Website/artifact metadata commit: `ebe6836`.
+- Pages deployment: `https://06e34161.pitwall-2k7.pages.dev`.
+- Activation/download Worker version: `7eb18444-6ff7-4c59-b599-6b5d97bb12f6`.
+  The Android route now selects the signed revision 30 APK.
+- Both complete public downloads matched the artifact sizes and SHA-256
+  hashes above. The Windows endpoint still reports that no activation code
+  is needed.
+- Eighteen public website routes matched the built files, permitting only
+  Cloudflare's email-protection transformation and text line endings.
+- Both immutable release notices were published only after the download and
+  website checks. The actual update-service client passed six production
+  checks: Windows and Android at versions 4.14.0, 5.0.0 and 5.1.0. Older
+  versions offer 5.1.0; current versions report no newer release. Both
+  manifests contain the verified artifact hashes and sizes.
+
+This publication does not claim an upgrade of either of the user's installed
+devices. The production files are available for their normal manual update.
