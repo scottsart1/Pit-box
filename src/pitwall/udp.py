@@ -502,6 +502,7 @@ class F1DatagramProtocol(asyncio.DatagramProtocol):
         self.consumer_task = None
 
     async def _consume_packets(self) -> None:
+        yielded_at = time.monotonic()
         while True:
             received = await self.packet_queue.get()
             try:
@@ -553,7 +554,7 @@ class F1DatagramProtocol(asyncio.DatagramProtocol):
             finally:
                 self.packet_queue.task_done()
                 self._stats_counter += 1
-                if self._stats_counter >= 32:
+                if self._stats_counter >= 32 or time.monotonic() - yielded_at >= 0.004:
                     self._stats_counter = 0
                     await self.store.set_packet_queue_stats(
                         self.packet_queue.qsize(), self.packet_queue.maxsize
@@ -562,6 +563,7 @@ class F1DatagramProtocol(asyncio.DatagramProtocol):
                     # without suspending. Yield even for malformed packets so
                     # a sustained backlog cannot starve HTTP or shutdown work.
                     await asyncio.sleep(0)
+                    yielded_at = time.monotonic()
 
     async def _handle(
         self, packet: Any, received: ReceivedDatagram | None = None

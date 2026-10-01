@@ -108,14 +108,14 @@ class AnalysisEngine:
             f"turn_model:{int(lap['track_id'])}", None
         )
         if isinstance(turn_model, list) and turn_model:
-            corners = measure_turns(
+            corners = await asyncio.to_thread(measure_turns,
                 lap.get("trace", []),
                 turn_model,
                 (pb or {}).get("corner_metrics") or [],
             )
         else:
-            corners = self.segment_corners(lap.get("trace", []), pb)
-        racing_line = compare_lines(
+            corners = await asyncio.to_thread(self.segment_corners, lap.get("trace", []), pb)
+        racing_line = await asyncio.to_thread(compare_lines,
             lap.get("trace", []),
             pb.get("trace", []) if pb else None,
         )

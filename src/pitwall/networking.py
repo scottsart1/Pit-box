@@ -997,8 +997,10 @@ class PacketHealthTracker:
         stats.seen_order.append(frame)
         while len(stats.seen_order) > self.recent_frame_capacity:
             expired = stats.seen_order.popleft()
-            if expired not in stats.seen_order:
-                stats.seen.discard(expired)
+            # observe_header rejects duplicates before enqueueing, and rewind
+            # clears both collections. The queue therefore contains unique
+            # frames; scanning its full capacity on every packet is redundant.
+            stats.seen.discard(expired)
 
     def _add_confirmed_recent(self, stats: _PacketStats, frame: int) -> None:
         stats.confirmed_recent.add(frame)

@@ -36,7 +36,7 @@ async def test_detection_continues_while_the_engineer_speaks(monkeypatch) -> Non
     rec = _Recorder()
 
     class _Store:
-        async def snapshot_analysis(self):
+        async def snapshot_radio(self):
             return {"session_uid": 1}
 
         async def mutate(self, fn):
@@ -46,7 +46,8 @@ async def test_detection_continues_while_the_engineer_speaks(monkeypatch) -> Non
             return None
 
     engine.store = _Store()
-    engine.pending = []
+    engine.pending = [{"type": "test"}]
+    engine._discarded = []
     engine._session_uid = 1
     engine._task = None
     engine._deliver_task = None

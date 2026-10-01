@@ -841,9 +841,10 @@ class SessionAssembler:
             "overall_frame_identifier": "frame",
         }
         freshness: dict[str, int] = {}
+        field_freshness = event.freshness_ms if isinstance(event.freshness_ms, Mapping) else None
         scalar_freshness = (
             int(event.freshness_ms)
-            if not isinstance(event.freshness_ms, Mapping)
+            if field_freshness is None
             else 250
         )
         for name in row:
@@ -876,8 +877,8 @@ class SessionAssembler:
             provenance[name] = source
             units[name] = str(event.units.get(name, ""))
             freshness[name] = int(
-                event.freshness_ms.get(name, scalar_freshness)
-                if isinstance(event.freshness_ms, Mapping)
+                field_freshness.get(name, scalar_freshness)
+                if field_freshness is not None
                 else scalar_freshness
             )
         return _StoredSample(
@@ -960,15 +961,10 @@ class SessionAssembler:
         if accumulator is None:
             accumulator, finalized = self._new_accumulator(identity, event)
         accumulator.observe_stamp(event.stamp)
-        group = None
-        if (
-            event.sample_group in accumulator.groups
-            or len(accumulator.groups) < self.max_groups_per_lap
-        ):
-            group = accumulator.groups.setdefault(
-                event.sample_group,
-                _GroupAccumulator(event.sample_group),
-            )
+        group = accumulator.groups.get(event.sample_group)
+        if group is None and len(accumulator.groups) < self.max_groups_per_lap:
+            group = _GroupAccumulator(event.sample_group)
+            accumulator.groups[event.sample_group] = group
         self._counters.samples_received += 1
         if group is None:
             self._counters.samples_dropped += 1

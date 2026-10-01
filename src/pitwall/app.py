@@ -8,6 +8,7 @@ import time as _time
 from contextlib import asynccontextmanager, suppress
 from dataclasses import asdict
 from pathlib import Path
+from typing import Literal
 
 from fastapi import (
     FastAPI,
@@ -198,7 +199,7 @@ async def _connection_watchdog() -> None:
         await store.mark_disconnected_if_stale(
             settings.disconnect_after_s, settings.presence_grace_s
         )
-        snapshot = await store.snapshot_live()
+        snapshot = await store.snapshot_radio()
         usage_reporting.observe_racing(snapshot)
         # Keep full per-car traces for the cars the analysis actually reads
         # back — in a race that is the player, the teammate, the podium and
@@ -776,6 +777,7 @@ class CompareRequest(BaseModel):
 class SetupRequest(BaseModel):
     profile: str = "hybrid"
     track_id: int | None = None
+    change_level: Literal["minimum", "moderate", "radical"] = "minimum"
 
 
 class ProactiveRequest(BaseModel):
@@ -861,7 +863,13 @@ async def overlay() -> HTMLResponse:
 
 @app.get("/api/health")
 async def health() -> dict[str, object]:
-    snapshot = await store.snapshot_live()
+    # Health polls must stay independent of growing laps, traces and charts.
+    snapshot = await store.peek(
+        "connected", "last_packet_at", "ptt_status", "wake_enabled", "wake_status",
+        "wake_phrase", "wake_config_source", "wake_input_rms", "wake_noise_rms",
+        "wake_threshold_rms", "wake_last_transcript", "wake_last_reason",
+        "radio_indicator", "radio_latency", "proactive", "last_error",
+    )
     listener = network_service.listener_snapshot()
     return {
         "ok": True,
@@ -878,7 +886,7 @@ async def health() -> dict[str, object]:
         "trace_store": trace_store.cache_info(),
         "schema_version": database.schema_version,
         "telemetry_connected": snapshot["connected"],
-        "telemetry_stale": snapshot["telemetry_stale"],
+        "telemetry_stale": not snapshot["connected"] and bool(snapshot["last_packet_at"]),
         "openai_key_configured": bool(settings.api_key),
         "engineer_runtime": "multi-provider",
         "configured_llm_providers": settings.configured_llm_providers,
@@ -1283,7 +1291,7 @@ async def realtime_close() -> dict[str, object]:
 
 @app.post("/api/setup/recommend")
 async def setup_recommendation(request: SetupRequest) -> dict[str, object]:
-    result = await setup_advisor.generate(request.profile, request.track_id)
+    result = await setup_advisor.generate(request.profile, request.track_id, request.change_level)
     if not result.get("available"):
         raise HTTPException(409, result.get("reason", "Setup unavailable"))
     return result

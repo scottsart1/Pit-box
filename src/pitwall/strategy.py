@@ -4205,10 +4205,12 @@ class StrategyEngine:
         for driver in state.get("drivers", []):
             if int(driver.get("car_idx", -1)) == int(state.get("player_car_index", -1)):
                 continue
+            if int(driver.get("result_status", 0)) in {3, 4, 5, 6, 7}:
+                continue
             gap = driver.get("gap_to_player_s")
             compound = str(driver.get("tyre_compound", "UNKNOWN")).upper()
             age = int(driver.get("tyre_age", 0))
-            typical = TYPICAL_STINT_LAPS.get(compound)
+            typical = None if driver.get("restricted") else TYPICAL_STINT_LAPS.get(compound)
             laps_to_stop = max(0, typical - age) if typical else None
             projected_stop_lap = (
                 current_lap + laps_to_stop
@@ -4233,6 +4235,14 @@ class StrategyEngine:
                     "gap_to_player_s": round(float(gap), 2) if gap is not None else None,
                     "compound": compound,
                     "tyre_age": age,
+                    "completed_stops": driver.get("pit_stops"),
+                    "another_stop": (
+                        "unknown" if projected_stop_lap is None or total_laps <= 0
+                        or compound in {"INTER", "WET"} or state.get("mode_profile") not in {"race", "sprint"}
+                        or not state.get("connected") or rain.surface_is_wet(state)
+                        else "likely" if projected_stop_lap < total_laps else "unlikely_on_tyre_age"
+                    ),
+                    "confidence": "low",
                     "typical_stint_laps": typical,
                     "laps_until_estimated_stop": laps_to_stop,
                     "projected_stop_lap": (
@@ -4248,14 +4258,24 @@ class StrategyEngine:
             if item["gap_to_player_s"] is not None
             else 1e9
         )
+        selected = rivals[: max(1, min(24, int(top_n)))]
         return {
             "available": bool(rivals),
             "player_position": player_pos,
             "current_lap": current_lap,
-            "rivals": rivals[: max(1, top_n)],
+            "rivals": selected,
+            "scope": "opponents only; use the player's pit strategy for the player's remaining stops",
+            "another_stop_counts": {label: sum(rival["another_stop"] == label for rival in selected)
+                                    for label in ("likely", "unlikely_on_tyre_age", "unknown")},
+            "rivals_observed": len(rivals),
+            "truncated": len(rivals) > max(1, min(24, int(top_n))),
+            "telemetry_stale": not state.get("connected", False),
             "note": (
                 "Stop laps are estimated from typical compound life; the game AI "
-                "may pit earlier or later."
+                "may pit earlier or later. Completed stops are observed; another_stop is a low-confidence "
+                "tyre-age estimate, not a confirmed plan or exact count of remaining stops. "
+                "Unknown tyre data, wet weather and unknown race distance cannot establish a finish. "
+                "Compound rules, damage, weather changes and safety cars can require a stop even when tyre age suggests none."
             ),
         }
 

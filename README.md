@@ -1,8 +1,8 @@
-# Your Pit Box 4.13.2 — AI race engineer and driver dashboard
+# Your Pit Box 5.1.0 — AI race engineer and driver dashboard
 
 [Download Windows or Android](https://yourpitbox.com/#download),
 [try the Driver Dashboard](https://your-pit-box-driver-dashboard.sarthakvij123450.chatgpt.site/),
-or read the [release verification](docs/release-qa-4.13.2.md).
+or read the [release verification](docs/release-qa-5.1.0.md).
 
 Your Pit Box receives **F1 26** telemetry (UDP format **2026**) from a PS5, runs deterministic
 strategy/corner/setup analysis locally, keeps persistent SQLite history, answers spoken questions,
@@ -103,6 +103,13 @@ Only enable `PITWALL_WEB_LAN_ACCESS=true` when a phone/tablet needs the
 dashboard. Bind the web host to `0.0.0.0`, set a long
 `PITWALL_WEB_ACCESS_TOKEN`, and keep it on a trusted LAN. Your Pit Box never opens a
 router or firewall to the public internet automatically.
+
+## What changed in 5.1.0
+
+- Setup Lab offers Minimum, Moderate and Radical changes, with pace context and circuit-specific evidence.
+- Whole-request radio routing keeps qualified questions out of simple fact shortcuts; rival pit estimates cover the full field and distinguish observed stops from uncertain forecasts.
+- Compact radio snapshots, a time budget for UDP batches and background lap analysis reduce event-loop work at 60 Hz.
+- Android reports OS network loss events and thermal throttling. Physical Bluetooth/Wi-Fi dropouts still require device evidence.
 
 ## What changed in 4.13.2
 

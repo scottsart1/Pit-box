@@ -13,7 +13,7 @@ from typing import Any, Literal
 from .config import settings
 
 WHEEL_LABELS = ("FL", "FR", "RL", "RR")
-SnapshotProfile = Literal["full", "analysis", "live"]
+SnapshotProfile = Literal["full", "analysis", "live", "radio"]
 
 
 @dataclass(slots=True)
@@ -710,14 +710,14 @@ class StateStore:
                     # first Lap Data packet arrives.
                     if not is_player and not driver.active:
                         continue
-                    if profile == "live":
+                    if profile in {"live", "radio"}:
                         serialized = _serialize_live_driver(driver)
                     else:
                         serialized = asdict(driver)
                     drivers.append(serialized)
                 data[name] = drivers
             elif name == "traces":
-                if profile == "analysis":
+                if profile in {"analysis", "radio"}:
                     data[name] = []
                 else:
                     # Keep the dashboard responsive on long circuits, and keep
@@ -726,22 +726,39 @@ class StateStore:
                     # raw samples to reason over. Copying the whole list here
                     # cost 150 ms per tool call before this bound, growing with
                     # trace density and with any lap that never resets.
-                    step = max(1, len(value) // 1200)
-                    data[name] = copy.deepcopy(value[::step])
-                    if value and data[name] and data[name][-1] != value[-1]:
-                        data[name].append(copy.deepcopy(value[-1]))
-            elif name == "completed_laps" and profile == "live":
+                    step = max(1, math.ceil(len(value) / 1200))
+                    selected = value[::step]
+                    if value and selected and selected[-1] is not value[-1]:
+                        selected.append(value[-1])
+                    if profile == "live":
+                        # The live graph draws these scalar channels only.
+                        # Full motion/slip data stays in recordings and the
+                        # analysis APIs, not every dashboard refresh.
+                        data[name] = [{key: point[key] for key in ("t", "d", "speed", "throttle", "brake")
+                                       if key in point} for point in selected]
+                    else:
+                        data[name] = copy.deepcopy(selected)
+            elif name == "completed_laps" and profile in {"live", "radio"}:
                 # The live dashboard consumes derived analysis/strategy, not the
                 # full in-memory lap-summary history. Keep this payload bounded.
                 data[name] = []
-            elif name == "events_log" and profile == "live":
+            elif name == "events_log" and profile in {"live", "radio"}:
                 data[name] = copy.deepcopy(value[-30:])
-            elif name == "radio_log" and profile == "live":
+            elif name == "radio_log" and profile in {"live", "radio"}:
                 data[name] = copy.deepcopy(value[-40:])
-            elif name == "feedback" and profile == "live":
+            elif name == "feedback" and profile in {"live", "radio"}:
                 data[name] = copy.deepcopy(value[-10:])
-            elif name == "strategy" and profile == "live":
-                compact = copy.deepcopy(value)
+            elif name == "analysis" and profile == "radio":
+                compact = {key: val for key, val in value.items() if key not in {"corner_history", "line_history"}}
+                if isinstance(compact.get("racing_line"), dict):
+                    compact["racing_line"] = {key: val for key, val in compact["racing_line"].items()
+                                              if key not in {"current_line", "reference_line", "deviation_samples"}}
+                data[name] = copy.deepcopy(compact)
+            elif name == "strategy" and profile in {"live", "radio"}:
+                compact = dict(value)
+                if profile == "radio":
+                    for key in ("shapes", "rival_finish_projections", "personal_wear_model", "assumptions"):
+                        compact.pop(key, None)
                 if isinstance(compact, dict):
                     if len(compact.get("plans", [])) > 3:
                         compact["plans"] = compact["plans"][:3]
@@ -751,8 +768,8 @@ class StateStore:
                     # is going; the engine reads the full one in process.
                     crossover = compact.get("weather_crossover")
                     if isinstance(crossover, dict) and crossover.get("trajectory"):
-                        crossover["trajectory"] = crossover["trajectory"][:12]
-                data[name] = compact
+                        compact["weather_crossover"] = {**crossover, "trajectory": crossover["trajectory"][:12]}
+                data[name] = copy.deepcopy(compact)
             elif is_dataclass(value):
                 data[name] = asdict(value)
             else:
@@ -780,6 +797,16 @@ class StateStore:
         """Compact dashboard snapshot without per-driver history payloads."""
         async with self._lock:
             return self._serialize_locked("live")
+
+    async def snapshot_radio(self) -> dict[str, Any]:
+        """Live conditions for frequent radio checks, without traces or histories.
+
+        Detection consumes already-computed analysis and strategy. Copying all
+        24 drivers' growing histories at 16 Hz competes with UDP and audio.
+        Tools still use snapshot_analysis when a question needs that history.
+        """
+        async with self._lock:
+            return self._serialize_locked("radio")
 
     async def peek(self, *names: str) -> dict[str, Any]:
         """Read a few scalar fields without serialising the whole session.

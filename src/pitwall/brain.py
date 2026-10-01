@@ -45,6 +45,16 @@ Return only the words that should be spoken over team radio. Think privately: ne
 deliberation, tool-selection notes, self-talk, or phrases such as "let me check", "I need to",
 "wait", or "hold on". Do not use headings, bullet lists, markdown, or restate the prompt.
 Use telemetry tools for facts not already in the situation header. Never invent a number.
+Interpret the whole request, including who it concerns and whether it asks about the future.
+Choose and combine the tools that answer that request; a mention of the field or cars ahead
+does not make it a gap question. For another-stop questions use predict_rival_strategy,
+with top_n=24 for the whole field, and get_race_flow for stops already observed. Distinguish
+completed stops from predicted future stops; report unknown cars and low-confidence estimates.
+Use another_stop_counts for the selected opponents; the rival tool excludes the player.
+Do not include the player's future stops without checking the player's pit strategy.
+When no single tool answers a question, combine the relevant bounded tool results across rounds.
+If the needed measurement or calculation is unavailable, say exactly what is missing; never
+claim to have created or executed a new function, or substitute an unrelated fact as the answer.
 If telemetry is unavailable or stale, say so plainly once.
 Answer the driver's latest request first and stay on that subject. Do not append strategy, fuel,
 energy, or coaching advice unless it directly answers the request or is an immediate safety action.
@@ -280,6 +290,11 @@ _DEEP_TERMS = (
     "race plan",
     "tyre plan",
     "tire plan",
+    "another pit stop",
+    "another stop",
+    "stop again",
+    "how many pit stops",
+    "how many stops",
 )
 
 _FEEDBACK_PATTERNS = {
@@ -567,15 +582,37 @@ class EngineerBrain:
 
     @classmethod
     def _is_cars_ahead_request(cls, utterance: str) -> bool:
-        text = cls._normalize_text(utterance)
-        return has_any_phrase(
-            text,
-            (
-                "cars ahead", "cars in front", "car ahead", "car in front",
-                "closing in", "closing into", "am i closing", "what about the cars ahead",
-                "update on the cars ahead", "updates for the cars in front",
-            ),
-        )
+        text = " ".join(re.findall(r"[a-z0-9]+", cls._normalize_text(utterance)))
+        return bool(re.fullmatch(
+            r"(?:please )?(?:"
+            r"(?:what is the |what s the |the )?gap (?:to )?(?:the )?cars? (?:ahead|in front)|"
+            r"(?:update|updates|what about)(?: on| for)? (?:the )?cars? (?:ahead|in front)|"
+            r"(?:am i|are we) (?:closing|catching|gaining)(?: in| into)?(?: on| to)?(?: the)?(?: cars? (?:ahead|in front))?|"
+            r"cars? (?:ahead|in front))(?:(?: of me)? please)?", text
+        ))
+
+    @classmethod
+    def _is_simple_lookup(cls, utterance: str) -> bool:
+        """Only complete, single-purpose requests may bypass reasoning."""
+        text = " ".join(re.findall(r"[a-z0-9]+", cls._normalize_text(utterance)))
+        return cls._is_cars_ahead_request(text) or bool(re.fullmatch(
+            r"(?:please )?(?:"
+            r"radio check|can you hear me|time check|"
+            r"restart update|restart grid|update the restart grid|"
+            r"(?:i am|i m|im|we are|we re) (?:currently )?(?:in |running )?(?:p?[1-9]|p?1[0-9]|p?2[0-4]|first|second|third)|"
+            r"(?:what|which) (?:position|place)(?: am i(?: in)?)?|(?:what is |what s )?my position|current position|where am i running|"
+            r"(?:what is|what s|how is|how s|check|report)(?: my| the)? (?:fuel|damage|weather|rain|battery|ers|tyre condition|tire condition)|"
+            r"how much fuel(?: is)?(?: left| remaining)?|fuel (?:status|delta|margin|level)|"
+            r"(?:battery|ers|manual override|overtake available|gap ahead|gap behind|target lap|best lap|pole)|"
+            r"(?:what are |what s |what is )?(?:my |the )?(?:last (?:(?:two|three|[1-9]) )?laps?(?: time)?|tyre temperatures|tire temperatures)|"
+            r"(?:what tyres|what tires)(?: am i on)?|"
+            r"how many (?:warnings|penalties) do i have|(?:any|check|report) (?:damage|warnings|penalties)|damage report|"
+            r"(?:lap last time|last lap(?: time)?|lap time) of the car (?:ahead|in front)|"
+            r"(?:weather|rain) (?:forecast|risk|update)|"
+            r"(?:what is the |what s the )?gap to the car behind"
+            r"|(?:give me )?(?:tyre|tire) temperatures in (?:fahrenheit|celsius)"
+            r")(?: please)?", text
+        ))
 
     # Phrasings that mean "stop bringing this up", each paired with the subject
     # the driver wants dropped.
@@ -624,6 +661,7 @@ class EngineerBrain:
         form drivers actually use.
         """
         text = cls._normalize_text(utterance)
+
         cue = cls._SUPPRESSION_CUE.search(text)
         if not cue:
             return None
@@ -1148,6 +1186,11 @@ class EngineerBrain:
         """
         text = cls._normalize_text(utterance)
 
+        # Counts and forecasts precede named-rival lap-history and pit-call
+        # shortcuts. A previous lap mentioned in a forecast is still context.
+        if has_any_phrase(text, ("how many pit", "how many stops", "another stop", "another pit", "stop again", "pit again", "stops left", "stops remaining")):
+            return True
+
         # A named rival: only the branches that resolve a driver may answer.
         if match_drivers(state.get("drivers", []), utterance):
             return not cls._handles_named_rival(text)
@@ -1166,6 +1209,7 @@ class EngineerBrain:
                 "rest of the field", "other drivers", "anyone else",
                 "the leader", "leader s", "the guy ahead", "the guy behind",
                 "the car ahead", "the car in front", "the car behind",
+                "cars ahead", "cars in front", "cars behind", "other cars", "entire field",
                 "driver ahead", "driver behind", "car ahead has", "car behind has",
             ),
         )
@@ -1176,7 +1220,7 @@ class EngineerBrain:
             (
                 "tyre", "tyres", "tire", "tires", "wear", "fuel", "battery",
                 "ers", "energy", "damage", "stops", "stopped", "pitted", "pit",
-                "boxed", "compound", "strategy", "temperature", "temps", "age",
+                "boxed", "boxing", "pitting", "stop", "compound", "strategy", "temperature", "temps", "age",
                 "how old", "condition", "retired",
             ),
         )
@@ -1294,7 +1338,11 @@ class EngineerBrain:
 
         # A plain strategy request stays on the deterministic ranked plan.
         if cls._is_strategy_request(utterance):
-            return False
+            return not bool(re.fullmatch(
+                r"(?:please )?(?:any |what is (?:the |my )?|what s (?:the |my )?)?"
+                r"(?:race strategy|strategy|pit plan|tyre plan|tire plan)(?: updates?)?(?: please)?",
+                " ".join(re.findall(r"[a-z0-9]+", text)),
+            ))
 
 
         # A comparison or an open "how is it going" needs analysis, not a
@@ -1320,7 +1368,7 @@ class EngineerBrain:
             return True
 
         # Everything else that asks for reasoning rather than a value.
-        return has_any_phrase(
+        needs_reasoning = has_any_phrase(
             text,
             (
                 "why", "how come", "explain", "what if", "compare", "difference",
@@ -1330,6 +1378,7 @@ class EngineerBrain:
                 "the reason", "identify", "help me understand", "what might be",
             ),
         )
+        return needs_reasoning or not cls._is_simple_lookup(utterance)
 
     async def _fast_answer(self, utterance: str) -> str | None:
         """Answer operational radio requests from state before consulting a model.

@@ -10,6 +10,7 @@ import time
 from collections.abc import Iterator
 from contextlib import closing, contextmanager
 from datetime import UTC, datetime
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
@@ -39,6 +40,7 @@ def opaque_id(prefix: str, *parts: object) -> str:
     return f"{prefix}_{digest}"
 
 
+@lru_cache(maxsize=1024)
 def session_id(game_session_uid: int | str, restart_epoch: int = 0) -> str:
     return opaque_id("ses", str(game_session_uid), int(restart_epoch))
 

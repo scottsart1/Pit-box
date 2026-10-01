@@ -373,6 +373,21 @@ class SessionIdentityRegistry:
         if not 0 <= index < 24:
             raise ValueError("car_index must be between 0 and 23")
         current = self._current.get(index)
+        # High-rate samples only report player ownership and a frame. They
+        # cannot introduce an identity conflict, so avoid rebuilding/hashing
+        # a complete participant observation for every car on every packet.
+        if current is not None and values.keys() <= {"is_player"}:
+            last_frame = max(current.last_frame, int(frame_identifier))
+            is_player = current.is_player or bool(values.get("is_player", False))
+            if last_frame == current.last_frame and is_player == current.is_player:
+                return current
+            merged = replace(current, last_frame=last_frame, is_player=is_player)
+            self._current[index] = merged
+            for position in range(len(self._history) - 1, -1, -1):
+                if self._history[position].id == merged.id:
+                    self._history[position] = merged
+                    break
+            return merged
         revision = current.identity_revision if current else 0
         incoming = self._from_observation(
             index,

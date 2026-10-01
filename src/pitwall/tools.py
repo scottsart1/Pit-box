@@ -1742,8 +1742,9 @@ class TelemetryTools:
         self,
         profile: str = "hybrid",
         track_id: int = -1,
+        change_level: str = "minimum",
     ) -> dict[str, Any]:
-        return await self.setup_advisor.generate(profile, None if track_id < 0 else track_id)
+        return await self.setup_advisor.generate(profile, None if track_id < 0 else track_id, change_level)
 
     async def get_front_wing_adjustment(self) -> dict[str, Any]:
         state = await self.store.snapshot_analysis()
@@ -2841,10 +2842,11 @@ class TelemetryTools:
             ),
             (
                 "generate_setup",
-                "Generate a learned Race, Quali, or Hybrid setup recommendation.",
+                "Generate a complete setup and pace review. Minimum refines the current car; moderate rebalances it; radical rebuilds from the circuit foundation. Full setups are for the garage.",
                 {
                     "profile": {"type": "string", "enum": ["race", "quali", "hybrid"]},
                     "track_id": {"type": "integer", "minimum": -1, "maximum": 100},
+                    "change_level": {"type": "string", "enum": ["minimum", "moderate", "radical"]},
                 },
             ),
             (
@@ -2911,10 +2913,11 @@ class TelemetryTools:
             (
                 "predict_rival_strategy",
                 (
-                    "Estimate nearby rivals' likely next pit laps from tyre age "
-                    "and compound, flagging pre-emptive undercut threats."
+                    "Estimate whether rivals will stop again and their next pit laps from tyre age "
+                    "and compound, with completed stops, unknowns and low confidence. "
+                    "Use top_n=24 for the entire field or a smaller count for nearby rivals."
                 ),
-                {"top_n": {"type": "integer", "minimum": 1, "maximum": 12}},
+                {"top_n": {"type": "integer", "minimum": 1, "maximum": 24}},
             ),
             (
                 "get_championship_scenario",

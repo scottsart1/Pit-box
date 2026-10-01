@@ -403,7 +403,7 @@ class ProactiveEngineer:
 
     async def queue_test_update(self) -> dict[str, Any]:
         """Queue an immediate progress call for live hardware acceptance testing."""
-        state = await self.store.snapshot_analysis()
+        state = await self.store.snapshot_radio()
         if not state.get("connected") or state.get("game_paused"):
             return {
                 "ok": False,
@@ -412,7 +412,7 @@ class ProactiveEngineer:
         session_uid = int(state.get("session_uid", 0))
         if session_uid != self._session_uid:
             await self._reset_for_session(session_uid)
-            state = await self.store.snapshot_analysis()
+            state = await self.store.snapshot_radio()
         state = await self._refresh_strategy_if_needed(state)
         analyzed_lap = int(
             state.get("analysis", {}).get("last_lap_analyzed", 0)
@@ -1111,7 +1111,7 @@ class ProactiveEngineer:
         if signature != self._last_strategy_inputs_signature:
             self._last_strategy_inputs_signature = signature
             await self.strategy.recompute()
-            return await self.store.snapshot_analysis()
+            return await self.store.snapshot_radio()
         return state
 
     @staticmethod
@@ -1171,7 +1171,7 @@ class ProactiveEngineer:
             raised_after_release=False,
         )
         await self.store.update(strategy_hold=hold)
-        refreshed = await self.store.snapshot_analysis()
+        refreshed = await self.store.snapshot_radio()
         return refreshed, reason
 
     def _detect_driver_check(self, state: dict[str, Any]) -> None:
@@ -2200,13 +2200,16 @@ class ProactiveEngineer:
         announcement, never a missed event.
         """
         while True:
+            scheduled_at = time.monotonic()
             await asyncio.sleep(DETECT_INTERVAL_S)
             try:
-                state = await self.store.snapshot_analysis()
+                started_at = time.monotonic()
+                scheduler_delay_ms = max(0.0, (started_at - scheduled_at - DETECT_INTERVAL_S) * 1000)
+                state = await self.store.snapshot_radio()
                 session_uid = int(state.get("session_uid", 0))
                 if session_uid != self._session_uid:
                     await self._reset_for_session(session_uid)
-                    state = await self.store.snapshot_analysis()
+                    state = await self.store.snapshot_radio()
                 await self._detect(state)
                 oldest = max(0.0, time.time() - float(self.pending[0].get("queued_at", time.time()))) if self.pending else 0.0
                 # Why the queue is not moving, published every tick. Without it
@@ -2214,9 +2217,11 @@ class ProactiveEngineer:
                 # the count climbs, nothing is spoken, and the reason each call
                 # was held sits in memory where nobody can read it.
                 blocked = self._queue_blockage()
-                await self.store.mutate(lambda s, wait=oldest, b=blocked: s.proactive.update({
+                await self.store.mutate(lambda s, wait=oldest, b=blocked, delay=scheduler_delay_ms, started=started_at: s.proactive.update({
                     "queued": len(self.pending), "oldest_wait_s": round(wait, 1),
                     "delivery_state": "queued" if self.pending else "waiting",
+                    "scheduler_delay_ms": round(delay, 1),
+                    "evaluation_ms": round((time.monotonic() - started) * 1000, 1),
                     **b,
                 }))
             except asyncio.CancelledError:
@@ -2258,7 +2263,9 @@ class ProactiveEngineer:
         while True:
             await asyncio.sleep(DELIVER_INTERVAL_S)
             try:
-                await self._deliver(await self.store.snapshot_analysis())
+                if not self.pending and not self._discarded:
+                    continue
+                await self._deliver(await self.store.snapshot_radio())
             except asyncio.CancelledError:
                 raise
             except Exception as exc:

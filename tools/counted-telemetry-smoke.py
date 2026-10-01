@@ -26,6 +26,7 @@ def main():
     target.add_argument("--source", action="store_true")
     parser.add_argument("--version", required=True)
     parser.add_argument("--output-parent", type=Path, required=True)
+    parser.add_argument("--profile", action="store_true", help="Profile the source process; diagnostic overhead affects timings")
     args = parser.parse_args()
     version = args.version
     parent = args.output_parent.resolve(strict=True)
@@ -36,6 +37,9 @@ def main():
     data, diagnostics = root / "data", root / "diagnostics"
     (data / "license").mkdir(parents=True)
     diagnostics.mkdir()
+    if args.profile:
+        assert args.source, "--profile requires --source"
+        command = [sys.executable, "-m", "cProfile", "-o", str(diagnostics / "runtime.pstats"), "-m", "pitwall.main"]
     (data / "license/welcome_shown").write_text("shown\n")
     reservations = [smoke.reserve_port(socket.SOCK_STREAM), smoke.reserve_port(socket.SOCK_DGRAM)]
     web_port, udp_port = [item.getsockname()[1] for item in reservations]

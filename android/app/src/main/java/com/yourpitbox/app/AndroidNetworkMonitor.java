@@ -23,6 +23,9 @@ import org.json.JSONObject;
 import java.net.Inet4Address;
 import java.net.InetAddress;
 import java.io.IOException;
+import java.util.ArrayDeque;
+import java.util.HashMap;
+import java.util.Map;
 
 /**
  * Observe LAN and internet connections independently. A local Wi-Fi network
@@ -42,12 +45,25 @@ final class AndroidNetworkMonitor {
     private boolean registered;
     private volatile String snapshot = "{\"platform\":\"android\",\"networks\":[],\"warnings\":[]}";
     private String observerError;
+    private final ArrayDeque<JSONObject> recentEvents = new ArrayDeque<>();
+    private final Map<Network, String> transports = new HashMap<>();
+    private int networkLosses;
 
     private final Runnable refresh = this::refreshSnapshot;
     private final ConnectivityManager.NetworkCallback callback = new ConnectivityManager.NetworkCallback() {
-        @Override public void onAvailable(Network network) { scheduleRefresh(); }
-        @Override public void onLost(Network network) { scheduleRefresh(); }
-        @Override public void onCapabilitiesChanged(Network network, NetworkCapabilities caps) { scheduleRefresh(); }
+        @Override public void onAvailable(Network network) {
+            handler.post(() -> recordEvent("available", network));
+            scheduleRefresh();
+        }
+        @Override public void onLost(Network network) {
+            handler.post(() -> { recordEvent("lost", network); transports.remove(network); });
+            scheduleRefresh();
+        }
+        @Override public void onCapabilitiesChanged(Network network, NetworkCapabilities caps) {
+            String transport = transportOf(caps);
+            handler.post(() -> { if (!closed) transports.put(network, transport); });
+            scheduleRefresh();
+        }
         @Override public void onLinkPropertiesChanged(Network network, LinkProperties links) { scheduleRefresh(); }
     };
 
@@ -76,6 +92,24 @@ final class AndroidNetworkMonitor {
         handler.post(refresh);
     }
 
+    private static String transportOf(NetworkCapabilities caps) {
+        return caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN) ? "vpn"
+                : caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) ? "wifi"
+                : caps.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET) ? "ethernet"
+                : caps.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) ? "cellular" : "unknown";
+    }
+
+    private void recordEvent(String kind, Network network) {
+        if (closed) return;
+        if ("lost".equals(kind)) networkLosses++;
+        try {
+            recentEvents.addLast(new JSONObject().put("event", kind)
+                    .put("transport", transports.getOrDefault(network, "unknown"))
+                    .put("at_ms", System.currentTimeMillis()));
+            while (recentEvents.size() > 20) recentEvents.removeFirst();
+        } catch (JSONException ignored) { }
+    }
+
     private void refreshSnapshot() {
         if (closed) return;
         JSONObject result = new JSONObject();
@@ -87,6 +121,8 @@ final class AndroidNetworkMonitor {
             result.put("target_sdk", context.getApplicationInfo().targetSdkVersion);
             result.put("updated_at_ms", System.currentTimeMillis());
             result.put("network_observer_registered", registered);
+            result.put("network_losses", networkLosses);
+            result.put("recent_network_events", new JSONArray(recentEvents));
             result.put("internet_permission", context.checkSelfPermission(Manifest.permission.INTERNET)
                     == PackageManager.PERMISSION_GRANTED);
             if (observerError != null) warnings.put(observerError);
@@ -101,10 +137,8 @@ final class AndroidNetworkMonitor {
                     NetworkCapabilities caps = manager.getNetworkCapabilities(network);
                     LinkProperties links = manager.getLinkProperties(network);
                     if (caps == null || links == null) continue;
-                    String transport = caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN) ? "vpn"
-                            : caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) ? "wifi"
-                            : caps.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET) ? "ethernet"
-                            : caps.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) ? "cellular" : "unknown";
+                    String transport = transportOf(caps);
+                    transports.put(network, transport);
                     JSONArray addresses = new JSONArray();
                     for (LinkAddress link : links.getLinkAddresses()) {
                         if (link.getAddress() instanceof Inet4Address) {

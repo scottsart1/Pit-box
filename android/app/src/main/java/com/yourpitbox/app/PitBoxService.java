@@ -84,6 +84,10 @@ public class PitBoxService extends Service {
             status.put("wifi_lock_held", wifiLock != null && wifiLock.isHeld());
             status.put("multicast_lock_held", multicastLock != null && multicastLock.isHeld());
             status.put("wake_lock_held", wakeLock != null && wakeLock.isHeld());
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                PowerManager power = (PowerManager) getSystemService(Context.POWER_SERVICE);
+                if (power != null) status.put("thermal_status", power.getCurrentThermalStatus());
+            }
             JSONArray warnings = status.optJSONArray("warnings");
             if (warnings == null) warnings = new JSONArray();
             for (String warning : lockWarnings) warnings.put(warning);
@@ -271,7 +275,9 @@ public class PitBoxService extends Service {
         WifiManager wifi = (WifiManager) getApplicationContext().getSystemService(Context.WIFI_SERVICE);
         if (wifi != null) {
             try {
-                wifiLock = wifi.createWifiLock(WifiManager.WIFI_MODE_FULL_HIGH_PERF, "pitbox:telemetry");
+                int mode = Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE
+                        ? WifiManager.WIFI_MODE_FULL_LOW_LATENCY : WifiManager.WIFI_MODE_FULL_HIGH_PERF;
+                wifiLock = wifi.createWifiLock(mode, "pitbox:telemetry");
                 wifiLock.setReferenceCounted(false);
                 wifiLock.acquire();
             } catch (RuntimeException error) {

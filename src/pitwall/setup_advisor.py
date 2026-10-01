@@ -42,6 +42,18 @@ LEARNED_FIELDS = (
     "front_right_tyre_pressure", "ballast",
 )
 
+CHANGE_LEVELS = {"minimum": 1.0, "moderate": 0.5, "radical": 0.0}
+
+
+def _minimum_step(field: str) -> float:
+    if "tyre_pressure" in field:
+        return 0.3
+    if "camber" in field or "toe" in field:
+        return 0.05
+    if field in {"on_throttle", "off_throttle", "engine_braking"}:
+        return 5.0
+    return 2.0
+
 
 class SetupAdvisor:
     """Complete pre-weekend baselines plus conservative personal learning."""
@@ -89,26 +101,55 @@ class SetupAdvisor:
             "temps": temps,
         }
 
-    async def generate(self, profile: str, track_id: int | None = None) -> dict[str, Any]:
+    async def generate(
+        self, profile: str, track_id: int | None = None, change_level: str = "minimum"
+    ) -> dict[str, Any]:
         profile = profile.strip().lower()
         if profile not in {"race", "quali", "hybrid"}:
             return {"available": False, "reason": "Profile must be race, quali, or hybrid."}
+        if change_level not in CHANGE_LEVELS:
+            return {"available": False, "reason": "Change level must be minimum, moderate, or radical."}
 
         state = await self.store.snapshot_analysis()
         selected_track_id = int(track_id if track_id is not None else state.get("track_id", -1))
         if selected_track_id < 0:
             return {"available": False, "reason": "Select a track or connect live telemetry first."}
 
+        # A different selected circuit must not inherit the live car's setup,
+        # temperatures, feedback or pace as evidence for this circuit.
+        live_track_id = int(state.get("track_id", -1))
+        same_track = selected_track_id == live_track_id
+        if not same_track:
+            state = {"track_id": selected_track_id, "driver_preferences": state.get("driver_preferences", {})}
+
         foundation = foundational_setup(selected_track_id, profile)
         current = dict(state.get("car_setup", {}))
         source = "live_setup_refinement" if current else "foundational_pre_weekend"
-        # Before a weekend, provide every field. During a live session, preserve all
-        # transmitted values and use the foundation only to fill missing fields.
+        # The selected scope changes the starting point, not just the size of
+        # the same small nudge. Radical rebuilds from the circuit foundation.
         recommendation = dict(foundation)
-        recommendation.update({k: v for k, v in current.items() if v is not None})
+        current_weight = CHANGE_LEVELS[change_level]
+        for field, value in current.items():
+            if value is not None and field in SETUP_LIMITS:
+                base = float(foundation.get(field, value))
+                recommendation[field] = self._clamp(field, current_weight * float(value) + (1 - current_weight) * base)
+        if current:
+            source = {"minimum": "live_setup_refinement", "moderate": "circuit_setup_rebalance", "radical": "circuit_setup_rebuild"}[change_level]
+            # Fuel is a race-distance decision, not a chassis reset.
+            if current.get("fuel_load") is not None:
+                recommendation["fuel_load"] = current["fuel_load"]
         rationale: list[str] = [
             f"Complete {profile.title()} foundation for {track_name(selected_track_id)} ({track_archetype(selected_track_id).replace('_', ' ')} circuit)."
         ]
+        rationale.append({
+            "minimum": "Minimum change: keep the current balance and cap each adjustment to a small step.",
+            "moderate": "Moderate change: rebalance halfway toward the circuit foundation, then apply personal evidence.",
+            "radical": "Radical change: rebuild the chassis from the circuit foundation, then apply personal evidence; test in the garage before racing.",
+        }[change_level])
+        if not same_track and live_track_id >= 0:
+            rationale.append("Live evidence belongs to a different circuit; only this circuit's stored evidence and your preferences are used.")
+        pace_review = self._pace_review(state)
+        rationale.append(pace_review["summary"])
         signals = self._handling_signals(state)
         preferences = dict(state.get("driver_preferences", {}) or {})
 
@@ -141,7 +182,7 @@ class SetupAdvisor:
             rationale.append(f"Driver preference: straight-line speed level {straight_line}.")
 
         # Profile intent is applied even when refining a live setup.
-        if current:
+        if current and current_weight:
             if profile == "race":
                 recommendation["on_throttle"] = self._clamp("on_throttle", float(recommendation["on_throttle"]) - 2)
                 recommendation["rear_anti_roll_bar"] = self._clamp("rear_anti_roll_bar", float(recommendation["rear_anti_roll_bar"]) - 1)
@@ -255,6 +296,12 @@ class SetupAdvisor:
                 recommendation[field] = self._clamp(field, (1 - influence) * float(recommendation[field]) + influence * learned)
             rationale.append(f"Blended with {len(history)} stored {profile} run(s), weighted toward the best repeatable performance.")
 
+        if current and change_level == "minimum":
+            rationale.append("The final values below include Minimum's per-setting caps; individual corner suggestions are combined before applying those caps.")
+            for field in LEARNED_FIELDS:
+                if field in current and current[field] is not None and field in recommendation:
+                    step = _minimum_step(field)
+                    recommendation[field] = max(float(current[field]) - step, min(float(current[field]) + step, float(recommendation[field])))
         recommendation = {field: self._clamp(field, float(value)) if field in SETUP_LIMITS else value for field, value in recommendation.items()}
         comparison_base = current if current else foundation
         changes = {
@@ -267,12 +314,14 @@ class SetupAdvisor:
         wing_change = wing_to - wing_from
         effects = setup_effects(recommendation, selected_track_id)
         pit_adjustment = {
-            "available": bool(current) and wing_change != 0,
+            "available": bool(current) and wing_change != 0 and change_level == "minimum",
             "next_front_wing": wing_to,
             "change": wing_change,
             "instruction": (
                 f"At the next stop, set front wing to {wing_to} ({wing_change:+d} click)."
-                if current and wing_change else "No live pit-stop front-wing change is recommended."
+                if current and wing_change and change_level == "minimum" else
+                "Test this full setup in the garage; use Minimum for a separate live front-wing adjustment."
+                if change_level != "minimum" else "No live pit-stop front-wing change is recommended."
             ),
             "note": "The full setup is for garage/pre-weekend use; only permitted front-wing adjustment is presented for an in-race stop.",
         }
@@ -282,6 +331,8 @@ class SetupAdvisor:
         result = {
             "available": True,
             "profile": profile,
+            "change_level": change_level,
+            "pace_review": pace_review,
             "track_id": selected_track_id,
             "track": track_name(selected_track_id),
             "track_character": track_archetype(selected_track_id),
@@ -301,6 +352,42 @@ class SetupAdvisor:
         }
         await self.database.save_setup_recommendation(selected_track_id, track_name(selected_track_id), profile, recommendation, rationale, confidence)
         await self.store.update(setup_recommendation=result)
+        return result
+
+    @staticmethod
+    def _pace_review(state: dict[str, Any]) -> dict[str, Any]:
+        """Describe observed pace without claiming that setup caused a deficit."""
+        clean = [lap for lap in state.get("completed_laps", []) if lap.get("valid")
+                 and float(lap.get("lap_time_ms", 0)) > 0 and not lap.get("learning_exclusions")][-5:]
+        if not clean:
+            return {"available": False, "summary": "Pace review unavailable: record clean laps at this circuit before judging whether the car is too slow."}
+        own = median(float(lap["lap_time_ms"]) for lap in clean) / 1000
+        lap_numbers = {int(lap.get("lap_num", 0)) for lap in clean}
+        compounds = {str(lap.get("compound", "UNKNOWN")) for lap in clean}
+        rivals = []
+        for driver in state.get("drivers", []):
+            if driver.get("is_player") or driver.get("car_idx") == state.get("player_car_index") or driver.get("restricted"):
+                continue
+            # Current compound does not establish an earlier stint's compound.
+            age = int(driver.get("tyre_age", 0))
+            first_stint_lap = int(driver.get("current_lap", 0)) - age
+            if len(compounds) != 1 or driver.get("tyre_compound", "UNKNOWN") not in compounds or "UNKNOWN" in compounds:
+                continue
+            times = [float(lap.get("lap_ms", 0)) / 1000 for lap in driver.get("lap_history", [])
+                     if int(lap.get("lap_num", 0)) in lap_numbers and int(lap.get("lap_num", 0)) > first_stint_lap
+                     and int(lap.get("valid_flags", 0)) & 1 and float(lap.get("lap_ms", 0)) > 0
+                     and not lap.get("learning_exclusions")]
+            if times:
+                rivals.append(median(times))
+        result = {"available": True, "player_median_s": round(own, 3), "clean_laps": len(clean), "rival_samples": len(rivals)}
+        if rivals:
+            benchmark = median(rivals)
+            delta = own - benchmark
+            result.update(field_median_s=round(benchmark, 3), delta_s=round(delta, 3))
+            verdict = f"{abs(delta):.2f}s {'slower' if delta > 0 else 'faster'} than" if abs(delta) >= 0.05 else "level with"
+            result["summary"] = f"Recent clean pace: {own:.2f}s, {verdict} the same-compound field median across {len(rivals)} rivals on matching lap numbers. Fuel, traffic and tyre age can differ; this does not establish a setup-caused loss."
+        else:
+            result["summary"] = f"Recent clean pace: {own:.2f}s over {len(clean)} laps. No matching same-compound rival sample is available; a pace deficit cannot be established."
         return result
 
     async def _corner_causal_findings(

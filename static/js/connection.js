@@ -224,6 +224,8 @@ async function refreshAndroidStatus() {
     if (addresses.length) parts.push(`Local address${addresses.length > 1 ? "es" : ""}: ${[...new Set(addresses)].join(", ")}.`);
     else parts.push("Check the network adapter address below; a Wi-Fi or Ethernet connection is needed to receive from the game.");
     if (payload.internet_permission === false) parts.push("This installation is missing network permission.");
+    if (Number.isInteger(payload.network_losses)) parts.push(`Android reported ${payload.network_losses} network loss event${payload.network_losses === 1 ? "" : "s"} since the receiver started.`);
+    if (Number(payload.thermal_status) >= 3) parts.push("Android reports thermal throttling; processing may slow while the device cools.");
     if (Array.isArray(payload.warnings)) parts.push(...payload.warnings);
     setNotice("androidConnectionStatus", parts.join(" "), payload.service_running && payload.internet_permission !== false ? "info" : "error");
   } catch {
