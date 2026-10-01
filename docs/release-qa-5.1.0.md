@@ -1,6 +1,6 @@
 # Your Pit Box 5.1.0 — setup scope and race radio
 
-Release candidate; production publication is pending validation.
+Release validation is complete; production publication is pending.
 
 Setup Lab offers Minimum, Moderate and Radical changes. Minimum keeps the
 current setup and caps the final per-setting adjustments. Moderate starts
@@ -45,7 +45,7 @@ The proposed dashboard-agent work is documented separately in
 [engineer-dashboard-agent-proposal.md](engineer-dashboard-agent-proposal.md).
 It is not implemented in this release.
 
-## Validation in progress
+## Validation
 
 - Initial local full run: 1,928 passed, two failed, two skipped. Both failures
   were supported radio requests affected by stricter routing. The corrected
@@ -76,3 +76,49 @@ It is not implemented in this release.
 
 No personal library was used for synthetic telemetry. No credentials or private
 recordings are included in this document.
+
+## Release builds
+
+Both workflows passed against source commit
+`03263cd3fb7c2f08cf2be35926039ca21c001435`:
+
+- [Windows run 36812193621](https://github.com/scottsart1/Pit-box/actions/runs/36812193621):
+  **1,933 tests passed, one skipped**. The installed artifact passed startup,
+  UDP, a 25-lap accelerated replay, strategy/classification persistence,
+  restart, uninstall and retained-data checks. Its separate 100-second,
+  20-car, 60 Hz run received, parsed and recorded all **18,604** datagrams,
+  with zero queue drops, write errors or polling timeouts. Health p95 was
+  0.453 s (max 1.954 s); state p95 was 0.281 s (max 0.531 s).
+- [Android run 36812188231](https://github.com/scottsart1/Pit-box/actions/runs/36812188231):
+  **1,663 shared engine/bridge tests passed**, plus interface, browser and
+  Worker checks. Android 16 emulator startup, background UDP reception,
+  restart, transfer management, fullscreen/keyboard and SQLite lifecycle
+  checks passed. No unclosed SQLite warnings were found. This runtime run
+  uses the isolated debug package, not a physical production installation.
+- The downloaded Windows frozen runtime also passed an isolated local
+  four-lap replay, persistence and restart check. Transfer TLS/QR identity and
+  the saved usage-reporting decline survived restart. Synthetic data went to
+  a new temporary directory, without installing over the user's app.
+- All 28 Windows static assets match the tested source after normalizing
+  Windows checkout line endings. The signed Android APK passes ZIP integrity,
+  package/version and alignment checks; all 28 static assets and 82 embedded
+  Python modules match the tested source.
+- Final website/publication checks: **87 Python tests and 87 Node tests passed**.
+  The website was visually checked at desktop and phone widths, with no
+  horizontal overflow. Setup Lab was checked in tablet portrait and landscape.
+
+## Artifacts
+
+| Artifact | Bytes | SHA-256 |
+| --- | ---: | --- |
+| Windows `PitWall-Setup.exe` | 34,898,407 | `f39fab39ba1b066fbeeea47c847b94e1fc38dd5154818cb6e81dd05d91f1d143` |
+| Android `YourPitBox-5.1.0-android.30.apk` | 73,021,756 | `e3f2c24ffa23877c861b706428d3f5537913ecc35faf8aced932dd135118cb14` |
+
+Android is the production `com.yourpitbox.app` package, versionCode **30**,
+signed with the existing production certificate:
+`20c2751e5c0ede43a2442331336b990433e53d9e512f3f1bca3e8d5bee4c6983`.
+Windows remains unsigned, as disclosed on the download page.
+
+The tablet advertised a wireless-debug endpoint but connection attempts failed.
+No physical tablet upgrade or Wi-Fi/Bluetooth endurance test is claimed for
+this release. The dashboard-agent proposal remains a second phase.
