@@ -39,8 +39,10 @@ metadata and publishes read-only finalized rows without copying each row again.
 Android now retains the last 20 network availability/loss events and reports
 thermal status. Code inspection found no Bluetooth toggles, Wi-Fi disable calls
 or process-wide network rebinding. This does not establish the cause of the
-reported physical radio disconnections. No physical tablet is currently connected
-to ADB; a successful emulator or localhost test cannot prove those drops fixed.
+reported physical radio disconnections. A subsequent physical-tablet test
+reproduced a combined Wi-Fi/Bluetooth failure with Bluetooth audio connected.
+**5.1.0 does not resolve that observed condition.** See the physical-device
+results below; emulator and localhost passes do not override this failure.
 
 The proposed dashboard-agent work is documented separately in
 [engineer-dashboard-agent-proposal.md](engineer-dashboard-agent-proposal.md).
@@ -120,9 +122,66 @@ signed with the existing production certificate:
 `20c2751e5c0ede43a2442331336b990433e53d9e512f3f1bca3e8d5bee4c6983`.
 Windows remains unsigned, as disclosed on the download page.
 
-The tablet advertised a wireless-debug endpoint but connection attempts failed.
-No physical tablet upgrade or Wi-Fi/Bluetooth endurance test is claimed for
-this release. The dashboard-agent proposal remains a second phase.
+The physical tablet was subsequently paired and upgraded from production
+5.0 revision 29 to the signed 5.1.0 revision 30 APK. The dashboard-agent
+proposal remains a second phase.
+
+## Physical-device follow-up — 1 October 2026
+
+Target: Samsung Galaxy Tab S11 Ultra (SM-X930), Android 16. The production
+upgrade preserved the existing session and lap counts and the canonical
+session-inventory hash. Synthetic telemetry was sent only to the separately
+installed `com.yourpitbox.app.qa` package, signed with the existing certificate.
+The preexisting QA library was retained. After testing, the temporary QA speech
+credential was removed, the QA service stopped, and the normal production app
+reopened. Its saved credential remained configured and the production library
+inventory was reverified unchanged.
+
+Each replay emitted 18,604 datagrams over 100 seconds: 20 cars, nominal 60 Hz
+motion/lap/telemetry packets, plus slower supporting packets. Speech used the
+native Android audio adapter and the configured live speech service.
+
+| Run | Received / sent | Wireless result | Native speech completion |
+| --- | ---: | --- | ---: |
+| Initial run, Bluetooth audio connected | 12,574 / 18,604 | Wi-Fi lost; Bluetooth service crashed | 3 calls before interruption |
+| App in background, Bluetooth audio disconnected | 18,008 / 18,604 | No new service crash; packet loss remains | 3 calls |
+| App visible, Bluetooth audio disconnected | 18,604 / 18,604 | No new service crash in this bounded run | 3 calls |
+
+The initial failure occurred about 68 seconds into the replay. Android recorded
+a Wi-Fi disconnect at 00:51:49.870 EDT, a Bluetooth controller hardware error
+at 00:51:54.340, and a Bluetooth service crash at 00:51:54.875. The crash counter
+increased from four to five. Four earlier Wi-Fi disconnects were also followed
+roughly four to five seconds later by Bluetooth controller errors and service
+crashes. The new Wi-Fi failure occurred at reported RSSI -42 dBm; Android
+reported thermal status 0. These observations establish the system-level
+symptom, not which component triggered it.
+
+The app process survived and its API recovered after Wi-Fi reconnected. All
+12,574 received datagrams were parsed and written, with no application queue
+drops or write errors. Before the disconnect, successful health/state requests
+had p95 latencies of 0.047/0.078 seconds. The failed run is not a reception or
+endurance pass.
+
+The visible-app repeat received and wrote every emitted datagram, with no
+request timeouts or application queue/write errors; health/state p95 latency
+was 0.078/0.063 seconds. The background repeat lost 596 datagrams before the
+app receiver and had a longest successful health request of 4.953 seconds.
+It is not a 60 Hz reception pass despite the absence of a new wireless crash.
+
+Android reported Wi-Fi operation mode 0 in the background and mode 4
+(low latency) with the app visible. Android 14 and later also map the older
+high-performance lock to low-latency mode, so the explicit mode selection in
+5.1 did not newly enable it on this tablet. See the
+[Android Wi-Fi lock documentation](https://developer.android.com/reference/android/net/wifi/WifiManager#WIFI_MODE_FULL_LOW_LATENCY).
+The connected Bluetooth audio device did not reconnect after the first
+failure, so these repeats cannot isolate the Wi-Fi lock as a cause or fix.
+
+Speech completion means the native playback operation returned successfully;
+human confirmation of audibility is still pending. The next comparison needs
+the same Bluetooth audio device connected in both app visibility states.
+USB debugging, when available, would preserve access to failure logs while
+Wi-Fi is down. Raw device logs, network identifiers and credentials remain
+outside the repository.
 
 ## Production publication — 1 October 2026
 
@@ -141,5 +200,6 @@ this release. The dashboard-agent proposal remains a second phase.
   versions offer 5.1.0; current versions report no newer release. Both
   manifests contain the verified artifact hashes and sizes.
 
-This publication does not claim an upgrade of either of the user's installed
-devices. The production files are available for their normal manual update.
+The Android production upgrade was subsequently verified as described above.
+The Windows publication does not claim an upgrade of the installed desktop
+app; its production installer is available for the normal manual update.
