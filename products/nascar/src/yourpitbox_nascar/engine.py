@@ -62,7 +62,7 @@ class RaceEngine:
             self.evidence = {k: {**v, "source": "history", "at": 0} for k, v in saved["snapshot"].get("evidence", {}).items()}
             self.laps = deque((Lap.model_validate(x) for x in saved["laps"]), maxlen=2200)
             self.sequences, self.anchor, self.lap_flag = {}, None, None
-            self.stint = saved["snapshot"].get("stint", max((x.stint for x in self.laps), default=1))
+            self.stint = max(saved["snapshot"].get("stint", 1), max((x.stint for x in self.laps), default=1))
             self.lap_dirty = False
             self.handling_report = next((x["data"]["report"] for x in reversed(saved["notes"]) if x["kind"] == "handling"), None)
             self.radio.clear()
@@ -170,6 +170,7 @@ class RaceEngine:
             for lap in laps:
                 self._lap(lap)
             self.laps = deque(sorted(self.laps, key=lambda x: x.number), maxlen=2200)
+            self.stint = max(self.stint, max((x.stint for x in self.laps), default=1))
 
     def import_laps(self, config: RaceConfig, laps: list[Lap]) -> str:
         # Creating a CSV session and saving its laps must remain one operation
@@ -177,6 +178,7 @@ class RaceEngine:
         with self.lock:
             sid = self.start(config)
             self.add_laps(laps)
+            self.flush()
             return sid
 
     def live_values(self) -> tuple[dict, list[str]]:

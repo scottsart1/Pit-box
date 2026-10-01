@@ -148,6 +148,16 @@ def test_ragged_csv_optional_fields_are_handled_without_server_error(client):
     assert client.get('/api/sessions/'+result.json()['id']).json()['laps'][0]['clean'] is True
 
 
+def test_import_continues_the_latest_stint_after_resume(client):
+    result=client.post('/api/import',json={'config':{},'csv':'number,time_s,stint\n1,31.2,1\n2,31.1,2\n'})
+    assert result.status_code==200
+    assert client.get('/api/state').json()['stint']==2
+    client.post('/api/sessions/'+result.json()['id']+'/resume')
+    assert client.get('/api/state').json()['stint']==2
+    client.post('/api/pits',json={'tires':'four'})
+    assert client.get('/api/state').json()['stint']==3
+
+
 def test_spoken_handling_review_uses_selected_controls_and_survives_resume(client):
     sid=client.post('/api/sessions',json={}).json()['id']
     engineer=client.app.state.engineer

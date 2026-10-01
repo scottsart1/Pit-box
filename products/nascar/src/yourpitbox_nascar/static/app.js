@@ -148,7 +148,7 @@ $("observe-open").onclick = () => openDialog("observation-dialog", true);
 $("pit-log-open").onclick = () => openDialog("pit-dialog", true);
 $("lap-log-open").onclick = () => openDialog("lap-dialog", true);
 $("import-open").onclick = () => openDialog("import-dialog");
-$("demo-start").onclick = () =>
+$("demo-start").onclick = $("demo-restart").onclick = () =>
   action(async () => {
     await api("demo", {});
     showView("race");

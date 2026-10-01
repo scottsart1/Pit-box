@@ -4,7 +4,7 @@
 
 ## Completed
 
-- 68 NASCAR tests pass: domain math, independent green/yellow learning, pit access,
+- 69 NASCAR tests pass: domain math, independent green/yellow learning, pit access,
   overtime, lap deficits, field uncertainty, stale evidence, CSV validation,
   session persistence, replay isolation, authentication, credentials, bounded
   high-rate ingestion and read-only model tools.
@@ -30,8 +30,20 @@
   display, scenario calculation and radical setup review. Desktop, 412-pixel
   phone and 1024-pixel tablet breakpoints checked; no page-wide horizontal overflow
   or browser console errors. Mobile navigation corrected during visual QA.
+- CSV file-picker import and downloaded JSON export checked in the browser.
+  Six imported fixture laps retained their two stints; the excluded caution lap
+  did not affect clean pace. Continuing the latest imported stint after resume
+  is covered by a regression test.
 - Android debug and release variants compile. Separate QA app installed and
   activity launched on the connected Samsung tablet.
+- The Android release APK has a verified publisher signature and package
+  `com.yourpitbox.nascar`, version 0.1.0 / code 1. The independent Windows
+  installer completed successfully; the installed executable passed the same
+  launch, calculation, actual OCR and restart checks.
+- [Independent cloud build run](https://github.com/scottsart1/Pit-box/actions/runs/36831831498)
+  passed for both Windows and Android. Windows also ran its tests and frozen
+  OCR smoke check. The first Android job requested the removed legacy SDK
+  `tools` package; using `platform-tools` fixed the build environment.
 
 ## Open release gates
 
