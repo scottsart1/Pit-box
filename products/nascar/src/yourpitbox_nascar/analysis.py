@@ -36,12 +36,15 @@ def long_run(laps: list[Lap]) -> dict:
 
 
 def fuel_rate(laps: list[Lap], flag: Flag, configured: float | None) -> dict:
-    rates = [x.fuel_used_pct for x in laps if x.clean and x.flag == flag and x.fuel_used_pct is not None and x.fuel_used_pct > 0][-12:]
+    rates = [x.fuel_used_pct for x in laps if x.clean and x.flag == flag and x.fuel_used_pct is not None and x.fuel_used_pct >= 0][-12:]
     if len(rates) >= 3:
         median = statistics.median(rates)
         spread = statistics.median(abs(x - median) for x in rates)
-        kept = [x for x in rates if abs(x - median) <= max(median * .3, spread * 3)]
-        if len(kept) >= 3:
+        # Whole-percent HUDs can alternate unchanged and one-percent-drop laps.
+        # Omitting the unchanged laps would inflate a 0.5% caution rate to 1%.
+        quantization = 1.0 if all(float(x).is_integer() for x in rates) else 0
+        kept = [x for x in rates if abs(x - median) <= max(median * .3, spread * 3, quantization)]
+        if len(kept) >= 3 and sum(kept) > 0:
             return {"value": round(statistics.mean(kept), 4), "source": "measured", "samples": len(kept),
                     "high": round(max(kept), 4), "low": round(min(kept), 4)}
     return {"value": configured, "source": "driver estimate" if configured else "unknown", "samples": len(rates),
@@ -60,14 +63,15 @@ def fuel_plan(config: RaceConfig, values: dict, laps: list[Lap], yellow_laps: fl
         completed = values["leader_completed_laps"]
         frac = 0  # Player's fractional lap cannot describe the leader's progress.
     remaining = max(0, config.total_laps - completed - frac) if completed is not None else None
-    overtime = completed is not None and completed >= config.total_laps and values.get("flag") not in (Flag.CHECKERED, Flag.WHITE)
+    distance_reached = completed is not None and completed >= config.total_laps and values.get("flag") not in (Flag.CHECKERED, Flag.WHITE)
+    overtime = distance_reached and config.overtime_enabled and config.session_type == "race"
     if values.get("flag") == Flag.WHITE:
         remaining = 1 - frac
     if values.get("flag") == Flag.CHECKERED:
         remaining = 0
     reserve = config.reserve_laps if config.overtime_enabled and values.get("flag") not in (Flag.CHECKERED, Flag.WHITE) else 0
     # Once advertised distance has passed, race control must establish the finish.
-    if overtime:
+    if distance_reached:
         remaining = None
     stage = next((x for x in config.stage_ends if completed is not None and x > completed), None)
     result = {"green": green, "yellow": yellow, "fuel_pct": fuel, "remaining_laps": remaining,
@@ -81,8 +85,9 @@ def fuel_plan(config: RaceConfig, values: dict, laps: list[Lap], yellow_laps: fl
         result["fuel_laps"] = round(fuel / green["value"], 1)
         if player_completed is not None:
             result["latest_pit_completed_lap"] = player_completed + math.floor(player_frac + max(0, fuel / green["high"] - 1))
-    if overtime:
-        result["message"] = "Past the scheduled distance. Confirm the current overtime attempt; another restart can add more laps."
+    if distance_reached:
+        result["message"] = ("Past the scheduled distance. Confirm the current overtime attempt; another restart can add more laps." if overtime else
+                             "The configured distance has been reached. Confirm race control or update the planned distance before estimating the finish.")
         return result
     if lapped_without_leader and values.get("flag") != Flag.CHECKERED:
         result.update(remaining_laps=None, stage_remaining=None, stage_end=None,

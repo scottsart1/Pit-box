@@ -4,7 +4,7 @@
 
 ## Completed
 
-- 69 NASCAR tests pass: domain math, independent green/yellow learning, pit access,
+- 71 NASCAR tests pass: domain math, independent green/yellow learning, pit access,
   overtime, lap deficits, field uncertainty, stale evidence, CSV validation,
   session persistence, replay isolation, authentication, credentials, bounded
   high-rate ingestion and read-only model tools.
@@ -12,6 +12,10 @@
   expires, pit entry until an explicit exit, fresh low-fuel alerts with unconfirmed
   race control, lapped-player pit targets, saved garage control choices in spoken
   reviews, malformed scenarios, ragged CSV input and multiple network invitations.
+- Rounded whole-percent fuel observations retain zero-change laps: alternating
+  0/1% caution laps learn 0.5%, rather than the former incorrect 1%. All-zero
+  readings cannot establish free fuel. Disabled overtime cannot be reported as
+  an overtime attempt when the configured distance has been reached.
 - The unchanged F1 application suite passes: 1,613 tests. No F1 runtime, website,
   installer identity, Android app ID or update endpoint was modified.
 - A paced one-minute API test accepted 3,600 / 3,600 observations at 60 Hz with

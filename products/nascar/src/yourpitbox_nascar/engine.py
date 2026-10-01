@@ -138,7 +138,7 @@ class RaceEngine:
                 if self.anchor and n == self.anchor["number"] + 1:
                     fresh_fuel = incoming.get("fuel_pct")
                     used = self.anchor["fuel"] - fresh_fuel if fresh_fuel is not None and self.anchor["fuel"] is not None else None
-                    if used is not None and not 0 < used <= 100:
+                    if used is not None and not 0 <= used <= 100:
                         used = None
                     lap = Lap(number=n, time_s=incoming.get("last_lap_s"), fuel_used_pct=used,
                               flag=self.lap_flag or Flag.UNKNOWN, clean=not self.lap_dirty,

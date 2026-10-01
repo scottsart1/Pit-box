@@ -60,6 +60,13 @@ def test_overtime_does_not_invent_finish():
     assert plan["minimum_stops"] is None
 
 
+def test_disabled_overtime_does_not_infer_an_overtime_attempt():
+    plan=fuel_plan(RaceConfig(overtime_enabled=False),{'completed_laps':100,'flag':'green'},[])
+    assert plan['overtime'] is False
+    assert plan['remaining_laps'] is None
+    assert 'configured distance' in plan['message']
+
+
 def test_white_flag_one_partial_lap_without_overtime_reserve():
     plan = fuel_plan(RaceConfig(fuel_burn_green=2), {"completed_laps": 103, "lap_fraction": .4, "flag": "white", "fuel_pct": 2}, [])
     assert plan["remaining_laps"] == pytest.approx(.6)
@@ -194,6 +201,15 @@ def test_three_clean_samples_learn_separate_burn(engine):
     assert snap["fuel"]["green"]["value"] == 2.5
     assert snap["fuel"]["green"]["source"] == "measured"
     assert snap["fuel"]["yellow"]["value"] == .5
+
+
+def test_whole_percent_hud_keeps_unchanged_laps_in_caution_burn(engine):
+    for n,fuel in enumerate([100,100,99,99,98,98,97]):
+        observe(engine,n,completed_laps=n,fuel_pct=fuel,flag='yellow')
+    assert engine.snapshot()['fuel']['yellow']['value']==.5
+    assert engine.snapshot()['fuel']['yellow']['source']=='measured'
+    zeros=[Lap(number=n,flag='green',fuel_used_pct=0) for n in range(1,5)]
+    assert fuel_rate(zeros,Flag.GREEN,None)['value'] is None
 
 
 def test_lost_feed_resets_lap_anchor(engine):
