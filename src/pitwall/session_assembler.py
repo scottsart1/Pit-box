@@ -806,7 +806,7 @@ class SessionAssembler:
             values,
         )
 
-    def _stored_sample(self, event: SampleEvent) -> _StoredSample:
+    def _stored_sample(self, event: SampleEvent, previous: _StoredSample | None = None) -> _StoredSample:
         if len(event.values) > self.max_fields_per_sample:
             raise ValueError(
                 f"sample has {len(event.values)} fields; maximum is "
@@ -883,10 +883,13 @@ class SessionAssembler:
             )
         return _StoredSample(
             row=row,
-            availability=availability,
-            provenance=provenance,
-            units=units,
-            freshness_ms=freshness,
+            # These maps are privately owned and never mutated after creation.
+            # A race otherwise retains four identical dictionaries for every
+            # sample of every car, creating large memory spikes at lap end.
+            availability=previous.availability if previous is not None and availability == previous.availability else availability,
+            provenance=previous.provenance if previous is not None and provenance == previous.provenance else provenance,
+            units=previous.units if previous is not None and units == previous.units else units,
+            freshness_ms=previous.freshness_ms if previous is not None and freshness == previous.freshness_ms else freshness,
             monotonic_ns=event.stamp.monotonic_ns,
         )
 
@@ -954,7 +957,8 @@ class SessionAssembler:
 
     def _add_sample(self, event: SampleEvent) -> list[FinalizedLapBatch]:
         identity = self._identity_for_sample(event)
-        sample = self._stored_sample(event)
+        previous = self._latest_groups.get((identity.id, event.sample_group))
+        sample = self._stored_sample(event, previous.sample if previous is not None else None)
         key = (identity.id, self._timeline_epoch, event.lap_number)
         finalized: list[FinalizedLapBatch] = []
         accumulator = self._open.get(key)
@@ -1069,7 +1073,9 @@ class SessionAssembler:
                     default=250,
                 ),
             }
-        rows = tuple(MappingProxyType(dict(sample.row)) for sample in retained)
+        # _stored_sample already took ownership of each numeric row. Publish a
+        # read-only view without duplicating the entire car-lap at the finish.
+        rows = tuple(MappingProxyType(sample.row) for sample in retained)
         frozen_metadata = MappingProxyType(
             {
                 name: MappingProxyType(dict(field_metadata))

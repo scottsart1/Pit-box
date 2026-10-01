@@ -29,6 +29,12 @@ count. Corner and racing-line calculations run outside the event loop. Health
 polls copy only the fields they return. Scheduling delay and evaluation duration
 are available in proactive diagnostics.
 
+The connection watchdog also avoids graph copies. The live graph carries only
+the plotted channels, with a corrected sample bound; full recordings retain
+the motion and slip data. Repeated identity-only observations avoid rebuilding
+participant identities. The assembler shares unchanged, privately owned sample
+metadata and publishes read-only finalized rows without copying each row again.
+
 Android now retains the last 20 network availability/loss events and reports
 thermal status. Code inspection found no Bluetooth toggles, Wi-Fi disable calls
 or process-wide network rebinding. This does not establish the cause of the
@@ -49,8 +55,24 @@ It is not implemented in this release.
   analysis snapshot versus 2.15 ms for the compact radio snapshot on this PC.
   This is a microbenchmark, not a tablet race or end-to-end voice measurement.
 - Initial counted 60 Hz source tests failed: one final health timeout and one
-  receive-count deficit (12,703 of 18,604). These failures remain recorded and
-  are release blockers until investigated and retested.
+  receive-count deficit (12,703 of 18,604). Profiling led to the identity,
+  graph, watchdog and retained-metadata improvements above. Intermediate runs
+  improved reception but still failed; their failures were not waived.
+- Final local counted source run: **18,604 sent, received, parsed and written**
+  in a 100-second, 20-car replay (about 186 datagrams/s). No queue drops, write
+  errors or request timeouts. Health p95 0.421 s / max 2.984 s; state p95 0.469 s
+  / max 1.328 s. All 19 rival laps persisted; shutdown and database integrity
+  passed. This bounded test is not a full-race or physical-tablet endurance test.
+- A separate parser/proactive integration test delivered a penalty call to a
+  recording voice sink while 60 Hz frames continued. It exercised detection,
+  queuing and delivery with retained rival history; it did not test a speaker.
+- Final live stored-key model probe used both field-stop tools and correctly
+  reported 22 likely / one unknown opponent, answered the cars-ahead question,
+  and declined to invent a rival's radio message. Times were 9.86, 4.94 and
+  4.52 seconds. Earlier probes hit route deadlines; this does not guarantee a
+  response under all network/model conditions.
+- Additional focused runs passed 135 tests (one platform skip), 44 networking
+  and identity tests, and 28 assembler/setup/radio tests.
 
 No personal library was used for synthetic telemetry. No credentials or private
 recordings are included in this document.
