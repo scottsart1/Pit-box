@@ -1,0 +1,63 @@
+name: NASCAR product candidate
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - products/nascar/**
+      - .github/workflows/nascar-candidate.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nascar-candidate-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: products/nascar
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install the independent NASCAR package
+        run: python -m pip install -e ".[dev,windows]"
+      - name: Run NASCAR domain, API, OCR and radio tests
+        run: python -m pytest tests -q
+      - name: Build the standalone Windows package
+        run: python packaging/build.py
+      - name: Smoke-test the frozen product
+        run: python tools/smoke_windows.py "dist/YourPitBox NASCAR/YourPitBox NASCAR.exe"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: YourPitBox-NASCAR-Windows-candidate
+          path: products/nascar/dist/YourPitBox NASCAR/
+
+  android:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    defaults:
+      run:
+        working-directory: products/nascar/android
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v3
+      - name: Prepare SDK
+        run: sdkmanager "platforms;android-36" "build-tools;35.0.0"
+      - name: Build the separate companion
+        run: bash gradlew :app:assembleDebug :app:assembleRelease --console=plain
+      - uses: actions/upload-artifact@v4
+        with:
+          name: YourPitBox-NASCAR-Android-candidate-unsigned
+          path: products/nascar/android/app/build/outputs/apk/
+      # Candidate artifacts only. No publishing to the F1 release/update channel.

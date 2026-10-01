@@ -1,0 +1,1086 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      name="viewport"
+      content="width=device-width,initial-scale=1,viewport-fit=cover"
+    />
+    <meta name="theme-color" content="#090e13" />
+    <meta name="pitbox-token" content="__LOCAL_TOKEN__" />
+    <title>YourPitBox · NASCAR</title>
+    <link rel="icon" href="/static/icon.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="/static/app.css" />
+    <script src="/static/app.js" defer></script>
+  </head>
+  <body>
+    <a class="skip" href="#main">Skip to workspace</a>
+    <aside class="sidebar">
+      <a class="brand" href="#race" aria-label="YourPitBox NASCAR home"
+        ><img src="/static/icon.svg" alt="" width="38" height="38" /><span
+          >YourPitBox<small>FOR NASCAR 26</small></span
+        ></a
+      >
+      <div class="nav-label">YOUR RACE WORKSPACE</div>
+      <nav aria-label="Workspace">
+        <button class="nav-item active" data-view="race">
+          <span>◉</span>Race room
+        </button>
+        <button class="nav-item" data-view="strategy">
+          <span>↗</span>Strategy
+        </button>
+        <button class="nav-item" data-view="garage">
+          <span>⊞</span>Garage
+        </button>
+        <button class="nav-item" data-view="runs">
+          <span>≋</span>Runs &amp; notes
+        </button>
+        <button class="nav-item" data-view="connection">
+          <span>⌁</span>Connection
+        </button>
+      </nav>
+      <div class="sidebar-bottom">
+        <span class="edition">STOCK CAR EDITION</span>
+        <p>Read the run.<br />Make the right call.</p>
+        <small id="version">Independent NASCAR workspace</small>
+      </div>
+    </aside>
+    <div class="workspace">
+      <header class="topbar">
+        <div class="health">
+          <i id="health-dot"></i
+          ><span id="health-text">Connecting to your workspace…</span>
+        </div>
+        <div class="top-actions">
+          <button id="radio-toggle" class="quiet" aria-pressed="false">
+            Radio off</button
+          ><button class="button small" id="new-weekend">+ New weekend</button>
+        </div>
+      </header>
+      <div id="demo-banner" class="banner hidden">
+        <strong>SAMPLE RACE</strong
+        ><span
+          >Accelerated synthetic data · separate from your driving history</span
+        ><button id="stop-demo">Pause replay</button>
+      </div>
+      <main id="main">
+        <section id="view-race" class="view">
+          <div id="welcome" class="welcome hidden">
+            <div class="eyebrow">YOUR NEXT LONG RUN STARTS HERE</div>
+            <h1>One race.<br />The whole picture.</h1>
+            <p>
+              A NASCAR workspace for fuel windows, tire decisions and a car that
+              stays with you through the run.
+            </p>
+            <div class="actions">
+              <button class="button primary" id="welcome-start">
+                Create your weekend <span>↗</span></button
+              ><button class="button" id="demo-start">
+                Explore a sample race
+              </button>
+            </div>
+            <div class="welcome-steps">
+              <div>
+                <b>01</b><strong>Set the race</strong
+                ><span>Your series, distance and stage settings.</span>
+              </div>
+              <div>
+                <b>02</b><strong>Bring the evidence</strong
+                ><span
+                  >Read a calibrated HUD, log observations or import laps.</span
+                >
+              </div>
+              <div>
+                <b>03</b><strong>Work the whole run</strong
+                ><span
+                  >Compare your options with a crew chief that knows what's
+                  missing.</span
+                >
+              </div>
+            </div>
+          </div>
+          <div id="race-content" class="hidden">
+            <div class="page-heading">
+              <div>
+                <div class="eyebrow" id="race-series">CUP SERIES · RACE</div>
+                <h1 id="race-track">Your weekend</h1>
+                <p id="race-name">Race workspace</p>
+              </div>
+              <button class="button" id="observe-open">Log observation</button>
+            </div>
+            <div class="race-strip">
+              <div>
+                <span class="label">POSITION</span
+                ><strong id="position">—</strong>
+              </div>
+              <div>
+                <span class="label">CURRENT LAP</span
+                ><strong id="lap">—</strong>
+              </div>
+              <div>
+                <span class="label">RACE CONTROL</span
+                ><strong id="flag">Unknown</strong>
+              </div>
+              <div>
+                <span class="label">PIT ROAD</span
+                ><strong id="pit-access">Confirm in game</strong>
+              </div>
+            </div>
+            <div class="dashboard-grid">
+              <article class="card fuel-card">
+                <div class="card-head">
+                  <h2>Fuel window</h2>
+                  <span id="fuel-source" class="pill"
+                    >Waiting for evidence</span
+                  >
+                </div>
+                <div class="fuel-hero">
+                  <strong id="fuel-laps">—</strong
+                  ><span>estimated<br />green laps</span>
+                </div>
+                <div class="fuel-meter"><div id="fuel-fill"></div></div>
+                <div class="meter-caption">
+                  <span id="fuel-tank">Tank unknown</span
+                  ><span id="fuel-rate">Burn unknown</span>
+                </div>
+                <p id="fuel-message" class="callout">
+                  Your fuel plan appears here.
+                </p>
+                <button class="text-button" data-brief="fuel">
+                  Hear the fuel brief →
+                </button>
+              </article>
+              <article class="card horizon-card">
+                <div class="card-head">
+                  <h2>Race horizon</h2>
+                  <span id="stage-label" class="pill">Configured distance</span>
+                </div>
+                <div class="horizon">
+                  <div>
+                    <strong id="laps-left">—</strong
+                    ><span>laps to scheduled finish</span>
+                  </div>
+                  <div>
+                    <strong id="stage-left">—</strong
+                    ><span>laps to stage end</span>
+                  </div>
+                </div>
+                <div id="stage-track" class="stage-track"></div>
+                <div class="mini-stats">
+                  <div>
+                    <span class="label">FUEL RESERVE</span><b id="reserve">—</b>
+                  </div>
+                  <div>
+                    <span class="label">MINIMUM FUEL STOPS</span
+                    ><b id="stops">—</b>
+                  </div>
+                </div>
+                <p class="muted" id="horizon-note">
+                  Race settings drive this plan. A stage ending does not confirm
+                  a caution.
+                </p>
+                <button class="text-button" data-goto="strategy">
+                  Compare pit options →
+                </button>
+              </article>
+              <article class="card pace-card">
+                <div class="card-head">
+                  <h2>The long run</h2>
+                  <span class="pill" id="clean-laps">0 clean laps</span>
+                </div>
+                <div id="pace-chart" class="chart"></div>
+                <div class="mini-stats">
+                  <div>
+                    <span class="label">BEST CLEAN LAP</span
+                    ><b id="best-lap">—</b>
+                  </div>
+                  <div>
+                    <span class="label">LATEST STINT MEDIAN</span
+                    ><b id="median-lap">—</b>
+                  </div>
+                  <div>
+                    <span class="label">CONSISTENCY</span><b id="spread">—</b>
+                  </div>
+                </div>
+              </article>
+              <article class="card tires-card">
+                <div class="card-head">
+                  <h2>Tires</h2>
+                  <span class="muted">Life remaining</span>
+                </div>
+                <div class="tire-grid" id="tires"></div>
+                <p class="muted">
+                  Separate left and right sides. A two-tire stop changes the
+                  balance.
+                </p>
+              </article>
+              <article class="card field-card">
+                <div class="card-head">
+                  <h2>The field</h2>
+                  <span id="field-count" class="pill">No observations</span
+                  ><button class="text-button" data-brief="field">
+                    Pit outlook →
+                  </button>
+                </div>
+                <div class="table-scroll">
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>Pos</th>
+                        <th>Car / driver</th>
+                        <th>Gap</th>
+                        <th>Laps down</th>
+                        <th>Last stop</th>
+                        <th>Fuel range</th>
+                      </tr>
+                    </thead>
+                    <tbody id="field-rows"></tbody>
+                  </table>
+                </div>
+                <p class="muted">
+                  Last stop and gaps alone don't reveal another car's next stop.
+                </p>
+              </article>
+            </div>
+          </div>
+        </section>
+        <section id="view-strategy" class="view hidden">
+          <div class="page-heading">
+            <div>
+              <div class="eyebrow">THINK AHEAD</div>
+              <h1>Win the next decision.</h1>
+              <p>
+                Work through the fuel window, then weigh tires against track
+                position.
+              </p>
+            </div>
+          </div>
+          <div class="two-col">
+            <article class="card">
+              <div class="card-head">
+                <h2>What if?</h2>
+                <span class="pill">Planning assumptions</span>
+              </div>
+              <form id="scenario-form" class="form-grid">
+                <label
+                  >Yellow laps remaining<input
+                    name="yellow_laps"
+                    type="number"
+                    min="0"
+                    max="2000"
+                    value="0"
+                    step="1"
+                    required /></label
+                ><label
+                  >Overtime reserve, laps<input
+                    name="reserve_laps"
+                    type="number"
+                    min="0"
+                    max="30"
+                    value="3"
+                    step="0.5"
+                    required /></label
+                ><label
+                  >Green-flag fuel saving, %<input
+                    name="saving_percent"
+                    type="number"
+                    min="0"
+                    max="30"
+                    value="0"
+                    step="0.5"
+                    required
+                /></label>
+                <div class="form-action">
+                  <button class="button primary">Compare scenario</button>
+                </div>
+              </form>
+              <div id="scenario-result" class="result-placeholder">
+                A scenario tests your assumptions. It doesn't predict the next
+                caution.
+              </div>
+            </article>
+            <article class="card">
+              <h2>Pit-road decision</h2>
+              <p id="strategy-access" class="callout">
+                Confirm race control in the game.
+              </p>
+              <p class="muted">
+                Being open does not guarantee your car is eligible. Free passes,
+                wave-arounds and penalties need the game's explicit call.
+              </p>
+              <div id="pit-comparison"></div>
+              <p class="muted">
+                Pit transit excludes stationary service. Enter measured times
+                below to compare stop duration.
+              </p>
+              <button class="text-button" id="pit-log-open">
+                Record a completed stop →
+              </button>
+            </article>
+          </div>
+          <article class="card settings-card">
+            <div class="card-head">
+              <h2>Your race assumptions</h2>
+              <span class="pill">Measured in your game</span>
+            </div>
+            <p class="muted">
+              Enter observed burn after your game's fuel multiplier. Learned
+              clean-lap rates take priority after three samples; the multiplier
+              is recorded for run comparisons.
+            </p>
+            <form id="strategy-settings" class="form-grid four-col">
+              <label
+                >Green burn, tank % / lap<input
+                  name="fuel_burn_green"
+                  type="number"
+                  min="0.01"
+                  max="100"
+                  step="0.01" /></label
+              ><label
+                >Yellow burn, tank % / lap<input
+                  name="fuel_burn_yellow"
+                  type="number"
+                  min="0.01"
+                  max="100"
+                  step="0.01" /></label
+              ><label
+                >Fuel multiplier<input
+                  name="fuel_multiplier"
+                  type="number"
+                  min="0.1"
+                  max="10"
+                  step="0.1" /></label
+              ><label
+                >Tire multiplier<input
+                  name="tire_multiplier"
+                  type="number"
+                  min="0.1"
+                  max="10"
+                  step="0.1" /></label
+              ><label
+                >Green pit transit loss, s<input
+                  name="green_pit_loss_s"
+                  type="number"
+                  min="0"
+                  max="300"
+                  step="0.1" /></label
+              ><label
+                >Yellow pit transit loss, s<input
+                  name="yellow_pit_loss_s"
+                  type="number"
+                  min="0"
+                  max="300"
+                  step="0.1" /></label
+              ><label
+                >Four tires, s<input
+                  name="four_tire_s"
+                  type="number"
+                  min="0.1"
+                  max="120"
+                  step="0.1" /></label
+              ><label
+                >Two tires, s<input
+                  name="two_tire_s"
+                  type="number"
+                  min="0.1"
+                  max="120"
+                  step="0.1" /></label
+              ><label
+                >Refill, tank % / second<input
+                  name="fuel_fill_pct_s"
+                  type="number"
+                  min="0.1"
+                  max="100"
+                  step="0.1" /></label
+              ><label
+                >Overtime reserve, laps<input
+                  name="reserve_laps"
+                  type="number"
+                  min="0"
+                  max="30"
+                  step="0.5" /></label
+              ><label
+                >Service timing<select name="service_parallel">
+                  <option value="true">Fuel and tires overlap</option>
+                  <option value="false">Fuel and tires are sequential</option>
+                </select></label
+              >
+              <div class="form-action">
+                <button class="button primary">Save assumptions</button>
+              </div>
+            </form>
+          </article>
+        </section>
+        <section id="view-garage" class="view hidden">
+          <div class="page-heading">
+            <div>
+              <div class="eyebrow">BUILD THE CAR AROUND THE RUN</div>
+              <h1>Feel it. Test it. Keep it.</h1>
+              <p>Review the whole situation before deciding what to change.</p>
+            </div>
+          </div>
+          <form id="handling-form">
+            <div class="scope-options">
+              <label
+                ><input type="radio" name="scope" value="minimum" /><span
+                  ><b>Minimum</b
+                  ><small
+                    >One focused correction.<br />Keep the baseline.</small
+                  ></span
+                ></label
+              ><label
+                ><input
+                  type="radio"
+                  name="scope"
+                  value="moderate"
+                  checked
+                /><span
+                  ><b>Moderate</b
+                  ><small
+                    >Balance, tires and approach.<br />A controlled
+                    comparison.</small
+                  ></span
+                ></label
+              ><label
+                ><input type="radio" name="scope" value="radical" /><span
+                  ><b>Radical</b
+                  ><small
+                    >Reassess the whole platform.<br />Challenge the
+                    baseline.</small
+                  ></span
+                ></label
+              >
+            </div>
+            <article class="card">
+              <div class="form-grid four-col">
+                <label
+                  >Where in the corner?<select name="phase">
+                    <option value="entry">Entry · braking &amp; turn-in</option>
+                    <option value="middle" selected>
+                      Middle · steady balance
+                    </option>
+                    <option value="exit">Exit · throttle pickup</option>
+                  </select></label
+                ><label
+                  >What does the car do?<select name="balance">
+                    <option value="tight">Tight · pushes wide</option>
+                    <option value="loose">Loose · rear steps out</option>
+                    <option value="neutral">Balanced</option>
+                  </select></label
+                ><label
+                  >When does it happen?<select name="timing">
+                    <option value="whole">Throughout the run</option>
+                    <option value="early">On fresh tires</option>
+                    <option value="late">Later in the run</option>
+                  </select></label
+                ><label
+                  >What matters most?<select name="goal">
+                    <option value="consistency">Consistency</option>
+                    <option value="pace">Pace</option>
+                    <option value="tire_life">Tire life</option>
+                  </select></label
+                >
+              </div>
+              <fieldset class="checks">
+                <legend>Controls available in your car's garage</legend>
+                <label
+                  ><input
+                    type="checkbox"
+                    name="control"
+                    value="wedge"
+                    checked
+                  />Wedge / crossweight</label
+                ><label
+                  ><input
+                    type="checkbox"
+                    name="control"
+                    value="pressures"
+                    checked
+                  />Pressures</label
+                ><label
+                  ><input
+                    type="checkbox"
+                    name="control"
+                    value="brake_bias"
+                  />Brake balance</label
+                ><label
+                  ><input
+                    type="checkbox"
+                    name="control"
+                    value="springs"
+                  />Springs</label
+                ><label
+                  ><input
+                    type="checkbox"
+                    name="control"
+                    value="bars"
+                  />Bars</label
+                ><label
+                  ><input
+                    type="checkbox"
+                    name="control"
+                    value="camber"
+                  />Camber</label
+                ><label
+                  ><input
+                    type="checkbox"
+                    name="control"
+                    value="gearing"
+                  />Gearing</label
+                >
+              </fieldset>
+              <label
+                >Driver notes<textarea
+                  name="notes"
+                  rows="2"
+                  maxlength="1500"
+                  placeholder="For example: stable for 8 laps, then tight in the center and difficult to hold the bottom."
+                ></textarea></label
+              ><button class="button primary">Build a test plan</button>
+            </article>
+          </form>
+          <div id="handling-result"></div>
+        </section>
+        <section id="view-runs" class="view hidden">
+          <div class="page-heading">
+            <div>
+              <div class="eyebrow">EVERY RUN LEAVES EVIDENCE</div>
+              <h1>Your race notebook.</h1>
+              <p>
+                Clean-lap comparisons, handling notes and pit history in one
+                place.
+              </p>
+            </div>
+            <div class="actions">
+              <button class="button" id="lap-log-open">Log a lap</button
+              ><button class="button primary" id="import-open">
+                Import lap CSV
+              </button>
+            </div>
+          </div>
+          <div class="two-col">
+            <article class="card">
+              <div class="card-head">
+                <h2>Saved weekends</h2>
+                <button class="text-button" id="refresh-runs">Refresh</button>
+              </div>
+              <div id="session-list"></div>
+            </article>
+            <article class="card">
+              <div class="card-head">
+                <h2>Run detail</h2>
+                <button class="text-button hidden" id="export-session">
+                  Export JSON ↗
+                </button>
+              </div>
+              <div id="session-detail" class="result-placeholder">
+                Choose a saved weekend to review it.
+              </div>
+            </article>
+          </div>
+        </section>
+        <section id="view-connection" class="view hidden">
+          <div class="page-heading">
+            <div>
+              <div class="eyebrow">GIVE YOUR CREW CHIEF THE PICTURE</div>
+              <h1>Connect the evidence.</h1>
+              <p>Your NASCAR data, devices and radio.</p>
+            </div>
+          </div>
+          <div class="notice">
+            <b>NASCAR 26 data connection</b>
+            <p>
+              A native external telemetry feed is not confirmed. The Windows
+              observer reads only calibrated HUD regions. It cannot see hidden
+              opponent fuel or provide a reliable side-by-side spotter.
+              Game-specific calibration still needs verification in a real
+              session.
+            </p>
+          </div>
+          <div class="two-col">
+            <article class="card">
+              <div class="card-head">
+                <h2>Windows HUD observer</h2>
+                <span class="pill" id="observer-status">Stopped</span>
+              </div>
+              <p class="muted">
+                Select the game window, capture a preview and draw a box around
+                each visible value. Images stay on this PC.
+              </p>
+              <div class="actions">
+                <select id="window-select" aria-label="Game window">
+                  <option value="">Choose a window</option></select
+                ><button class="button" id="refresh-windows">
+                  Refresh windows
+                </button>
+              </div>
+              <div class="actions">
+                <button class="button" id="capture-preview">
+                  Capture selected window</button
+                ><select id="region-field" aria-label="HUD field">
+                  <option value="current_lap">Current lap (1-based)</option>
+                  <option value="position">Position</option>
+                  <option value="fuel_pct">Fuel · % of tank</option>
+                  <option value="speed_mph">Speed · mph</option>
+                  <option value="last_lap_s">Last lap · seconds</option>
+                  <option value="flag">Race-control text</option>
+                  <option value="pit_open">Pit-road open / closed text</option>
+                  <option value="tire_lf">Left-front life %</option>
+                  <option value="tire_rf">Right-front life %</option>
+                  <option value="tire_lr">Left-rear life %</option>
+                  <option value="tire_rr">Right-rear life %</option>
+                </select>
+              </div>
+              <div class="canvas-wrap">
+                <canvas
+                  id="calibration"
+                  width="960"
+                  height="540"
+                  aria-label="Draw a rectangle around the selected HUD field"
+                  >HUD preview</canvas
+                >
+              </div>
+              <div id="region-list" class="muted">No regions selected.</div>
+              <div class="actions">
+                <button class="button" id="test-regions">Test readings</button
+                ><button class="button primary" id="start-observer">
+                  Start observer</button
+                ><button class="button" id="stop-observer">Stop</button>
+              </div>
+              <pre id="ocr-readings" class="readings">
+Waiting for a calibrated window.</pre
+              >
+              <p class="muted">
+                Percentage fields require a percentage display. Keep the game in
+                windowed or borderless mode. Recalibrate if the HUD or
+                resolution changes.
+              </p>
+            </article>
+            <div class="stack">
+              <article class="card">
+                <h2>Conversational crew chief</h2>
+                <p class="muted">
+                  Ask naturally about fuel, the field, handling or a different
+                  plan. On-demand questions send race evidence to OpenAI. Local
+                  alerts and briefs work without a key.
+                </p>
+                <form id="engineer-settings">
+                  <label
+                    >OpenAI API key<input
+                      name="api_key"
+                      type="password"
+                      autocomplete="new-password"
+                      placeholder="Leave blank to keep the current key" /></label
+                  ><label
+                    >Model<input
+                      name="model"
+                      value="gpt-6-luna"
+                      maxlength="80"
+                      required
+                  /></label>
+                  <div class="actions">
+                    <button class="button primary">Save engineer</button
+                    ><button class="button" type="button" id="clear-key">
+                      Remove key
+                    </button>
+                  </div>
+                  <p id="key-status" class="muted">Checking configuration…</p>
+                </form>
+              </article>
+              <article class="card">
+                <h2>Tablet companion</h2>
+                <p class="muted">
+                  The separate NASCAR Android app connects to this PC over your
+                  local Wi-Fi. It has its own app identity and never opens the
+                  F1 database.
+                </p>
+                <button class="button" id="show-pairing">
+                  Show tablet connection
+                </button>
+                <div id="pairing-detail"></div>
+              </article>
+              <article class="card">
+                <h2>Data health</h2>
+                <div id="data-health"></div>
+                <p class="muted">
+                  Stale observations stop contributing to live calls. Reopening
+                  an old run does not make its measurements current.
+                </p>
+              </article>
+            </div>
+          </div>
+        </section>
+        <section class="radio-dock" aria-label="Crew chief">
+          <div class="radio-identity">
+            <span class="radio-mark">▥</span>
+            <div>
+              <b>CREW CHIEF</b
+              ><small id="engineer-mode">Local race briefs</small>
+            </div>
+          </div>
+          <div class="radio-body">
+            <div id="radio-text" role="status" aria-live="polite">
+              Ready when you are. Build a weekend or explore the sample race.
+            </div>
+            <div id="chat-history" class="hidden"></div>
+            <form id="chat-form">
+              <button
+                type="button"
+                id="microphone"
+                aria-label="Speak to crew chief"
+                title="Push to talk"
+              >
+                ◉</button
+              ><input
+                id="chat-message"
+                aria-label="Message to crew chief"
+                maxlength="2000"
+                placeholder="Ask about the race, a pit plan or how the car feels…"
+                required
+              /><button
+                class="button primary"
+                id="send-chat"
+                aria-label="Send question"
+              >
+                ↗
+              </button>
+            </form>
+            <div class="brief-buttons">
+              <button data-brief="fuel">Fuel window</button
+              ><button data-brief="pits">Pit options</button
+              ><button data-brief="field">Will the field pit?</button
+              ><button data-brief="pace">Long-run pace</button>
+            </div>
+          </div>
+        </section>
+      </main>
+      <footer>
+        YOURPITBOX FOR NASCAR · Independent companion, not affiliated with
+        NASCAR or iRacing.
+      </footer>
+    </div>
+    <div id="connection-warning" class="connection-warning">
+      Connection lost. Displayed race readings are historical; live radio is
+      paused.
+    </div>
+    <div id="toast" role="status" class="toast hidden"></div>
+    <dialog id="weekend-dialog">
+      <form id="weekend-form">
+        <div class="dialog-head">
+          <div>
+            <div class="eyebrow">MAKE IT YOUR RACE</div>
+            <h2>New weekend</h2>
+          </div>
+          <button
+            class="close"
+            type="button"
+            data-close="weekend-dialog"
+            aria-label="Close"
+          >
+            ×
+          </button>
+        </div>
+        <label
+          >Weekend name<input
+            name="name"
+            value="Race weekend"
+            maxlength="100"
+            required
+        /></label>
+        <div class="form-grid">
+          <label
+            >Track<input
+              name="track"
+              list="tracks"
+              value="Charlotte"
+              required
+              maxlength="80" /><datalist id="tracks"></datalist></label
+          ><label
+            >Track character<select name="track_type">
+              <option value="intermediate">Intermediate oval</option>
+              <option value="short">Short track</option>
+              <option value="superspeedway">Drafting / superspeedway</option>
+              <option value="road">Road course</option>
+            </select></label
+          ><label
+            >Series<select name="series">
+              <option value="cup">NASCAR Cup Series</option>
+              <option value="oreilly">O'Reilly Auto Parts Series</option>
+              <option value="trucks">Craftsman Truck Series</option>
+              <option value="arca">ARCA Menards Series</option>
+            </select></label
+          ><label
+            >Session<select name="session_type">
+              <option value="race">Race</option>
+              <option value="practice">Practice</option>
+              <option value="qualifying">Qualifying</option>
+            </select></label
+          ><label
+            >Scheduled laps<input
+              name="total_laps"
+              type="number"
+              min="1"
+              max="2000"
+              value="100"
+              required /></label
+          ><label
+            >Stage end laps<input
+              name="stage_ends"
+              placeholder="For example: 25, 50" /></label
+          ><label
+            >Green burn, tank % / lap<input
+              name="fuel_burn_green"
+              type="number"
+              min="0.01"
+              max="100"
+              step="0.01"
+              placeholder="Optional; learn from clean laps" /></label
+          ><label
+            >Yellow burn, tank % / lap<input
+              name="fuel_burn_yellow"
+              type="number"
+              min="0.01"
+              max="100"
+              step="0.01"
+              placeholder="Optional; measured separately"
+          /></label>
+        </div>
+        <div class="checks">
+          <label
+            ><input name="stage_cautions" type="checkbox" checked />Stage
+            cautions enabled</label
+          ><label
+            ><input name="overtime_enabled" type="checkbox" checked />Overtime
+            enabled</label
+          >
+        </div>
+        <p class="muted">
+          Use your game's selected race length and stage settings. Starting a
+          weekend saves the current one.
+        </p>
+        <button class="button primary wide">Start weekend</button>
+      </form>
+    </dialog>
+    <dialog id="observation-dialog">
+      <form id="observation-form">
+        <div class="dialog-head">
+          <h2>Log what you can see</h2>
+          <button
+            class="close"
+            type="button"
+            data-close="observation-dialog"
+            aria-label="Close"
+          >
+            ×
+          </button>
+        </div>
+        <p class="muted">
+          Blank fields keep prior observations. Numeric values last up to five
+          minutes; race control and pit access last eight seconds. A new lap
+          needs a fresh fuel reading.
+        </p>
+        <div class="form-grid">
+          <label
+            >Completed laps<input
+              name="completed_laps"
+              type="number"
+              min="0"
+              max="2200" /></label
+          ><label
+            >Position<input
+              name="position"
+              type="number"
+              min="1"
+              max="80" /></label
+          ><label
+            >Fuel, % of tank<input
+              name="fuel_pct"
+              type="number"
+              min="0"
+              max="100"
+              step="0.1" /></label
+          ><label
+            >Last lap, seconds<input
+              name="last_lap_s"
+              type="number"
+              min="0.1"
+              max="1800"
+              step="0.001" /></label
+          ><label
+            >Race control<select name="flag">
+              <option value="">Leave unchanged</option>
+              <option value="green">Green</option>
+              <option value="yellow">Yellow / caution</option>
+              <option value="red">Red flag</option>
+              <option value="white">White flag</option>
+              <option value="checkered">Checkered</option>
+              <option value="unknown">Unknown</option>
+            </select></label
+          ><label
+            >Pit road<select name="pit_open">
+              <option value="">Leave unchanged</option>
+              <option value="true">Open</option>
+              <option value="false">Closed</option>
+              <option value="null">Unknown</option>
+            </select></label
+          ><label
+            >Laps down<input
+              name="laps_down"
+              type="number"
+              min="0"
+              max="100" /></label
+          ><label
+            >In pit lane?<select name="in_pit">
+              <option value="">Leave unchanged</option>
+              <option value="false">No</option>
+              <option value="true">Yes</option>
+            </select></label
+          >
+        </div>
+        <button class="button primary wide">Save observation</button>
+      </form>
+    </dialog>
+    <dialog id="pit-dialog">
+      <form id="pit-form">
+        <div class="dialog-head">
+          <h2>Record a completed stop</h2>
+          <button
+            class="close"
+            type="button"
+            data-close="pit-dialog"
+            aria-label="Close"
+          >
+            ×
+          </button>
+        </div>
+        <label
+          >Tires changed<select name="tires">
+            <option value="four">All four</option>
+            <option value="right">Right side</option>
+            <option value="left">Left side</option>
+            <option value="none">None</option>
+          </select></label
+        ><label
+          >Fuel added, % of tank<input
+            name="fuel_added_pct"
+            type="number"
+            min="0"
+            max="100"
+            step="0.1"
+            value="0"
+            required /></label
+        ><label
+          >Damage repair time, seconds<input
+            name="damage_s"
+            type="number"
+            min="0"
+            max="600"
+            step="0.1"
+            value="0"
+            required
+        /></label>
+        <p class="muted">
+          This records the service and starts a new stint. Update actual fuel
+          and tire readings separately.
+        </p>
+        <button class="button primary wide">Save stop</button>
+      </form>
+    </dialog>
+    <dialog id="lap-dialog">
+      <form id="lap-form">
+        <div class="dialog-head">
+          <h2>Log a completed lap</h2>
+          <button
+            class="close"
+            type="button"
+            data-close="lap-dialog"
+            aria-label="Close"
+          >
+            ×
+          </button>
+        </div>
+        <div class="form-grid">
+          <label
+            >Lap number<input
+              name="number"
+              type="number"
+              min="1"
+              max="2200"
+              required /></label
+          ><label
+            >Lap time, seconds<input
+              name="time_s"
+              type="number"
+              min="0.1"
+              max="1800"
+              step="0.001"
+              required /></label
+          ><label
+            >Fuel used, tank %<input
+              name="fuel_used_pct"
+              type="number"
+              min="0"
+              max="100"
+              step="0.01" /></label
+          ><label
+            >Entire lap flag<select name="flag">
+              <option value="green">Green</option>
+              <option value="yellow">Yellow</option>
+              <option value="unknown">Mixed / unknown</option>
+            </select></label
+          >
+        </div>
+        <label class="check-label"
+          ><input name="clean" type="checkbox" checked />Clean lap: no pit stop,
+          caution transition or incident</label
+        ><button class="button primary wide">Save lap</button>
+      </form>
+    </dialog>
+    <dialog id="import-dialog">
+      <form id="import-form">
+        <div class="dialog-head">
+          <h2>Import a practice run</h2>
+          <button
+            class="close"
+            type="button"
+            data-close="import-dialog"
+            aria-label="Close"
+          >
+            ×
+          </button>
+        </div>
+        <label
+          >CSV file<input
+            name="file"
+            id="import-file"
+            type="file"
+            accept=".csv,text/csv"
+            required /></label
+        ><label
+          >Track<input
+            name="track"
+            value="Charlotte"
+            list="tracks"
+            required /></label
+        ><label
+          >Track character<select name="track_type">
+            <option value="intermediate">Intermediate</option>
+            <option value="short">Short track</option>
+            <option value="superspeedway">Superspeedway</option>
+            <option value="road">Road course</option>
+          </select></label
+        >
+        <p class="muted">
+          Creates a separate practice weekend. CSV fields: number, time_s,
+          fuel_used_pct, flag, clean, stint. Imported laps are historical, not
+          live observations.
+        </p>
+        <div class="actions">
+          <button type="button" class="button" id="template-download">
+            Download template</button
+          ><button class="button primary">Import run</button>
+        </div>
+      </form>
+    </dialog>
+  </body>
+</html>
