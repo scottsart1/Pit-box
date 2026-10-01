@@ -1,4 +1,4 @@
-"""Exercise the actual frozen executable, persistence, and Windows OCR DLLs."""
+"""Exercise the frozen executable, persistence, window capture and bundled OCR."""
 from __future__ import annotations
 
 import argparse

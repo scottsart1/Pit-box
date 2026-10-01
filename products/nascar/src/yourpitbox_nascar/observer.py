@@ -8,9 +8,10 @@ import re
 import time
 from ctypes import wintypes
 
-from PIL import Image, ImageGrab, ImageOps
+from PIL import Image, ImageGrab
 
 from .engine import RaceEngine
+from .hud_ocr import read_regions
 from .models import OCRConfig, Observation, Sample
 
 
@@ -70,7 +71,7 @@ def parse_reading(field: str, text: str):
         # Windows OCR commonly reads the percent glyph as a small 0/0.
         text = re.sub(r"[0O]\s*/\s*[0O]$", "%", text)
     if field in ("current_lap", "leader_current_lap", "completed_laps", "position"):
-        match = re.fullmatch(r"(\d{1,4})(?:\s*/\s*\d{1,4})?", text)
+        match = re.fullmatch(r"(\d{1,4})(?:\s*(?:/|OF)\s*\d{1,4})?", text)
         if not match:
             return None
         value = int(match[1])
@@ -90,33 +91,8 @@ def parse_reading(field: str, text: str):
 
 
 async def recognize(frame: Image.Image) -> str:
-    try:
-        from winrt.windows.media.ocr import OcrEngine
-        from winrt.windows.globalization import Language
-        from winrt.windows.graphics.imaging import BitmapPixelFormat, SoftwareBitmap
-        from winrt.windows.storage.streams import DataWriter
-    except ImportError as exc:
-        raise ValueError("Install the Windows OCR component to read HUD regions locally") from exc
-    engine = OcrEngine.try_create_from_language(Language("en-US")) or OcrEngine.try_create_from_user_profile_languages()
-    if engine is None:
-        raise ValueError("Install an OCR language in Windows Settings > Language & region")
-    # A local crop only; no frame or OCR image is sent to an online provider.
-    scale = max(1, min(4, 90 / max(1, frame.height)))
-    frame = ImageOps.grayscale(frame).resize((int(frame.width * scale), int(frame.height * scale))).convert("RGBA")
-    if max(frame.size) > OcrEngine.max_image_dimension:
-        frame.thumbnail((OcrEngine.max_image_dimension, OcrEngine.max_image_dimension))
-    writer = DataWriter()
-    bitmap = None
-    try:
-        writer.write_bytes(frame.tobytes("raw", "BGRA"))
-        buffer = writer.detach_buffer()
-        bitmap = SoftwareBitmap.create_copy_from_buffer(buffer, BitmapPixelFormat.BGRA8, frame.width, frame.height)
-        result = await engine.recognize_async(bitmap)
-        return result.text
-    finally:
-        if bitmap:
-            bitmap.close()
-        writer.close()
+    reading = (await asyncio.to_thread(read_regions, [frame]))[0]
+    return reading["text"] if reading["accepted"] else ""
 
 
 class Observer:
@@ -125,15 +101,21 @@ class Observer:
         self.task: asyncio.Task | None = None
         self.config: OCRConfig | None = None
         self.previous: dict = {}
+        self.read_lock = asyncio.Lock()
         self.status = {"running": False, "frames": 0, "last_error": None, "readings": {}, "latency_ms": None}
 
     async def read(self, frame: Image.Image, config: OCRConfig) -> dict:
-        readings = {}
+        crops = []
         for region in config.regions:
             left, top = int(region.x * frame.width), int(region.y * frame.height)
             right, bottom = int((region.x + region.width) * frame.width), int((region.y + region.height) * frame.height)
-            text = await recognize(frame.crop((left, top, right, bottom)))
-            readings[region.field] = {"text": text[:100], "value": parse_reading(region.field, text)}
+            crops.append(frame.crop((left, top, right, bottom)))
+        async with self.read_lock:
+            results = await asyncio.to_thread(read_regions, crops)
+        readings = {}
+        for region, result in zip(config.regions, results):
+            value = parse_reading(region.field, result["text"]) if result["accepted"] else None
+            readings[region.field] = {**result, "value": value}
         return readings
 
     async def start(self, config: OCRConfig):
@@ -142,7 +124,9 @@ class Observer:
         await self.stop()
         # Validate selected handle and OCR availability before reporting running.
         frame = await asyncio.to_thread(capture, config.window_id)
-        await self.read(frame, config)
+        readings = await self.read(frame, config)
+        if not any(item["value"] is not None for item in readings.values()):
+            raise ValueError("No configured HUD values are readable. Crop one number or text line per box, then test again.")
         self.config, self.previous = config, {}
         self.status.update(running=True, last_error=None)
         self.task = asyncio.create_task(self.loop(self.engine.sid))

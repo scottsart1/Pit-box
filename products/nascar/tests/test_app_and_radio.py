@@ -78,6 +78,8 @@ def test_csv_rejects_ambiguous_rows(text):
 
 @pytest.mark.parametrize('field,text,expected',[
     ('current_lap','LAP 17 / 100',17),('position','P0S 2',None),
+    ('current_lap','LAP 17 of 50',17),('current_lap','LAP6 of 11',6),
+    ('current_lap','STAGE 2 LAP 6 of 11',None),('current_lap','LAP 17 or 50',None),
     ('fuel_pct','FUEL 71.5%',71.5),('fuel_pct','FUEL 71.50/0',71.5),
     ('fuel_pct','5.2 L',None),('fuel_pct','101%',None),
     ('last_lap_s','LAST LAP 1:02.521',62.521),('flag','YELLOW FLAG','yellow'),
@@ -90,8 +92,12 @@ def test_ocr_parser_has_strict_units_and_context(field,text,expected):
 
 
 @pytest.mark.skipif(os.name!='nt',reason='Windows OCR')
-async def test_actual_windows_ocr_on_synthetic_hud():
-    pytest.importorskip('winrt.windows.media.ocr')
+async def test_actual_local_ocr_on_synthetic_hud(monkeypatch):
+    pytest.importorskip('rapidocr')
+    import requests
+    def no_network(*args, **kwargs):
+        raise AssertionError('HUD recognition must work without network access')
+    monkeypatch.setattr(requests.sessions.Session, 'request', no_network)
     from PIL import Image,ImageDraw,ImageFont
     image = Image.new('RGB',(420,100),'black')
     ImageDraw.Draw(image).text((10,10),'FUEL 71.5%',font=ImageFont.truetype('C:/Windows/Fonts/arial.ttf',48),fill='white')

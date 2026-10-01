@@ -4,7 +4,7 @@
 
 ## Completed
 
-- 71 NASCAR tests pass: domain math, independent green/yellow learning, pit access,
+- 85 NASCAR tests pass: domain math, independent green/yellow learning, pit access,
   overtime, lap deficits, field uncertainty, stale evidence, CSV validation,
   session persistence, replay isolation, authentication, credentials, bounded
   high-rate ingestion and read-only model tools.
@@ -24,8 +24,19 @@
   This is localhost JSON ingestion, not evidence of NASCAR 26 telemetry export
   or real Wi-Fi packet reception.
 - Frozen Windows executable: launch, static assets, fuel calculation, capture of
-  an explicitly created synthetic Windows HUD, actual Windows OCR recognition,
+  an explicitly created synthetic Windows HUD, actual bundled local recognition,
   clean shutdown and restart persistence pass. Reopened observations remain stale.
+- Two independently cropped frames from [recorded NASCAR 26 gameplay](https://www.youtube.com/watch?v=3oOJMrMxrXo)
+  were visually checked at 23:30 and 25:52. All six lap/position/mph values match
+  the local recognizer's output: 17/3/174 and 21/1/171. The original Windows OCR
+  reader returned no lap or position value on these crops. Single-line PP-OCRv6
+  recognition fixes that observed failure; full-frame detection is not used.
+  A three-crop batch took about 71 ms warm on the development PC; first load took
+  about 1.5 seconds including model initialization. This small recorded sample
+  does not establish accuracy across cameras, resolutions or complete races.
+- Local OCR tests also cover italic numeric fixtures, rejection of low/nonfinite
+  recognition scores, no network access, event-loop responsiveness during slow
+  inference, ambiguous stage text and refusal to start with no readable values.
 - Actual OpenAI requests: field pit-stop question uses `field_strategy` and
   reports unknown fuel/intent; a caution plus saving question uses `fuel_scenario`;
   a radical handling request uses `handling_review` and discusses a full baseline
@@ -51,13 +62,13 @@
 
 ## Open release gates
 
-- **Real game access:** no NASCAR 26 installation was found on the development
-  PC. PS Remote Play is installed; this does not establish ownership or access
-  to NASCAR 26. Platform and game access remain unconfirmed.
+- **Real game access:** a licensed NASCAR 26 test environment is not available.
+  Public footage supports bounded recorded-image checks; it cannot satisfy the
+  live integration release gate. The target platform remains unconfirmed.
 - **Actual game observation:** calibrate and record a full NASCAR 26 session,
   including fuel display units, tire display semantics, race-control visibility,
-  stage transitions, pit service and overtime. OCR of synthetic text does not
-  prove correct capture of the game's DirectX/Remote Play surface or HUD fonts.
+  stage transitions, pit service and overtime. Recorded images and synthetic
+  fixtures do not prove correct capture of the game's DirectX/Remote Play surface.
 - **Tablet visual/voice checks:** the tablet is behind a secure lock screen.
   Installation/launch are confirmed, but pairing, layout, speech recognition,
   TTS completion and human audibility need an unlocked-device test.

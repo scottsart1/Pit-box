@@ -5,8 +5,9 @@ installer, Android companion, data directory, certificate and app ID. The F1
 app does not import or run any of this code.
 
 **Development build 0.1.0.** Race planning, local OCR, recording and the workspace
-are implemented. A real NASCAR 26 session has not yet been available to validate
-game HUD capture. There is no verified native game telemetry adapter. This build
+are implemented. Recorded gameplay digits have been checked, but a live NASCAR
+26 session has not yet been available to validate game capture and transitions.
+There is no verified native game telemetry adapter. This build
 must not be sold or described as a finished automatic NASCAR 26 race engineer.
 
 ## Run on Windows
@@ -30,8 +31,11 @@ Wi-Fi, Bluetooth, low-latency Wi-Fi mode or audio routing.
 2. Enter a measured fuel-burn estimate, or log at least three clean fuel laps.
    Fuel uses **percentage points of a tank per lap** after your game's multiplier.
 3. Log visible observations, import a CSV, or calibrate the Windows observer in
-   Connection. Pick the game window and draw regions around the HUD values.
+   Connection. Pick the game window and draw a tight region around each number
+   or single text line. Select the overall lap counter, not the stage lap.
    Fuel and tire regions must show percentages; mph requires an mph display.
+   The bundled local reader needs no cloud key or model download. Unclear text
+   is rejected; two consistent readings are required before a value is used.
 4. Enable Radio for spoken local alerts. The separate Android app uses native
    speech and text-to-speech. Desktop speech uses the browser's available service.
 5. Optionally add your OpenAI API key in Connection for natural conversation.

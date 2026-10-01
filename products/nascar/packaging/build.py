@@ -11,6 +11,27 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def collect_licenses(folder: Path):
+    licenses = folder / "THIRD_PARTY_LICENSES"
+    licenses.mkdir(exist_ok=True)
+    inventory = []
+    for distribution in importlib.metadata.distributions():
+        name = distribution.metadata["Name"]
+        inventory.append({"name":name,"version":distribution.version,"license":distribution.metadata.get("License-Expression") or distribution.metadata.get("License", "See package metadata")})
+        for item in distribution.files or []:
+            if item.name.lower().startswith(("license", "licence", "copying", "notice", "thirdpartynotice")):
+                path = distribution.locate_file(item)
+                if path.is_file():
+                    # Preserve notices with the same basename from different
+                    # bundled components instead of overwriting one another.
+                    target = name.replace("/", "_") + "-" + "_".join(item.parts).replace(":", "_")
+                    (licenses / target).write_bytes(path.read_bytes())
+    # RapidOCR's wheel declares Apache-2.0 but omits a copy of the license.
+    for path in (ROOT / "packaging/licenses").glob("*.txt"):
+        (licenses / path.name).write_bytes(path.read_bytes())
+    (licenses / "inventory.json").write_text(json.dumps(inventory,indent=2),encoding="utf-8")
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--installer", action="store_true")
@@ -26,22 +47,11 @@ def main():
     image.save(icon, sizes=[(16,16),(32,32),(48,48),(64,64),(128,128),(256,256)])
     command = [sys.executable,"-m","PyInstaller","--noconfirm","--windowed","--name","YourPitBox NASCAR",
                "--paths",str(ROOT/"src"),"--add-data",str(ROOT/"src/yourpitbox_nascar/static")+";yourpitbox_nascar/static",
-               "--collect-all","winrt","--icon",str(icon),"--specpath",str(build),str(ROOT/"packaging/entry.py")]
+               "--collect-all","rapidocr","--collect-all","onnxruntime","--icon",str(icon),"--specpath",str(build),str(ROOT/"packaging/entry.py")]
     subprocess.run(command,cwd=ROOT,check=True)
     folder = ROOT/"dist/YourPitBox NASCAR"
     (folder/"NOTICE.txt").write_text((ROOT/"NOTICE.txt").read_text(),encoding="utf-8")
-    licenses = folder/"THIRD_PARTY_LICENSES"
-    licenses.mkdir(exist_ok=True)
-    inventory = []
-    for distribution in importlib.metadata.distributions():
-        name = distribution.metadata["Name"]
-        inventory.append({"name":name,"version":distribution.version,"license":distribution.metadata.get("License-Expression") or distribution.metadata.get("License", "See package metadata")})
-        for item in distribution.files or []:
-            if any(part.lower() in ("license","license.txt","license.md","copying","notice","notice.txt") for part in item.parts):
-                path = distribution.locate_file(item)
-                if path.is_file():
-                    (licenses/(name.replace("/","_")+"-"+path.name)).write_bytes(path.read_bytes())
-    (licenses/"inventory.json").write_text(json.dumps(inventory,indent=2),encoding="utf-8")
+    collect_licenses(folder)
     if args.installer:
         candidates=[Path.home()/"AppData/Local/Programs/Inno Setup 6/ISCC.exe",Path("C:/Program Files (x86)/Inno Setup 6/ISCC.exe")]
         compiler=next((x for x in candidates if x.exists()),None)

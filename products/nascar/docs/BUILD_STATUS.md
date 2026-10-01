@@ -22,7 +22,9 @@ settings, update channel, application ID, installer identity or history database
 Version 0.1.0 is a working development candidate. The Windows installer and
 separate Android application build successfully. Local domain/API tests, browser
 journeys, actual provider tool calls and a frozen Windows capture/OCR smoke test
-have passed. See [VALIDATION.md](VALIDATION.md) for results and their limits.
+have passed. The local reader also recognizes lap, position and speed on two
+recorded gameplay frames; live game capture remains unverified. See
+[VALIDATION.md](VALIDATION.md) for results and their limits.
 
 The NASCAR build workflow produces candidate artifacts only. It cannot publish
 to the F1 download or update endpoints. The code, installer identity, Android

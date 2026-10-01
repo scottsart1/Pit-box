@@ -18,9 +18,21 @@ Reviewed 2026-10-01. These are references, not bundled copies of their content.
   and [crossweight explanation](https://www.iracing.com/commodores-garage-19-crossweight/):
   general stock-car handling principles. NASCAR 26 garage availability, ranges
   and direction must be confirmed in the selected car; no copied paid setups.
-- [Windows OCR](https://learn.microsoft.com/en-us/uwp/api/windows.media.ocr.ocrengine):
-  local text recognition. Cropped numeric HUD evidence is not full telemetry,
-  and it cannot support a reliable side-by-side collision spotter.
+- [Recorded NASCAR 26 gameplay](https://www.youtube.com/watch?v=3oOJMrMxrXo&t=1410s),
+  Jeff Favignano, *NASCAR 26 Career Mode and Wheel Gameplay*: at 23:30, the visible
+  overall lap is 17, position 3 and speed 174 mph; at 25:52 they are 21, 1 and
+  171 mph. The overall and stage lap counters are separate. These two frames
+  validate selected digits only; they do not establish current game behavior,
+  fuel/tire units, live capture, race control or latency. Source frames are not
+  redistributed with the app or repository.
+- [RapidOCR](https://github.com/RapidAI/RapidOCR) and its
+  [usage documentation](https://rapidai.github.io/RapidOCRDocs/main/en/install_usage/rapidocr/usage/):
+  bundled local recognition of calibrated single-line crops using CPU inference.
+  The original Windows OCR reader failed the stylized lap and position digits
+  in the recorded frames. RapidOCR 3.9.2 with PP-OCRv6 recognition reads those
+  tightly cropped values; full-frame detection did not. Model files are pinned
+  by hash and must already exist, so runtime cannot download replacements.
+  Cropped HUD evidence is not full telemetry and cannot provide a collision spotter.
 - [OpenAI function calling](https://developers.openai.com/api/docs/guides/function-calling):
   bounded read-only tools and structured arguments. The conversational engineer
   can inspect laps and compare scenarios; missing data remains explicit.
