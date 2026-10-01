@@ -39,6 +39,11 @@ let regions = [],
   lastSequence = Date.now(),
   settingsFilled = null;
 let toastTimer;
+$("crew-access").onclick = () =>
+  document.querySelector(".radio-dock").scrollIntoView({ behavior: "smooth", block: "center" });
+new IntersectionObserver(([entry]) => {
+  $("crew-access").classList.toggle("hidden", entry.intersectionRatio >= .5);
+}, { threshold: .5 }).observe(document.querySelector(".radio-dock"));
 const leaderLabel = document.createElement("label");
 leaderLabel.textContent = "Leader's completed laps (if lapped)";
 const leaderInput = document.createElement("input");

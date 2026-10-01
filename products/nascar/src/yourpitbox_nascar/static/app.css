@@ -578,6 +578,23 @@ td:first-child {
   background: linear-gradient(100deg, #19232b, #111a23);
   padding: 24px;
 }
+.crew-access {
+  position: fixed;
+  right: 20px;
+  bottom: calc(18px + env(safe-area-inset-bottom, 0px));
+  z-index: 30;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-height: 48px;
+  padding: 12px 18px;
+  border: 1px solid #ffdb9e;
+  border-radius: 28px;
+  background: var(--accent);
+  color: #111a23;
+  box-shadow: 0 5px 20px #0008;
+  font-weight: 700;
+}
 .radio-identity {
   display: flex;
   align-items: flex-start;
