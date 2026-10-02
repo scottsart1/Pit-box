@@ -409,6 +409,11 @@ class SessionCatalog:
                     or _utc_now(),
                 ),
             )
+            # Store the small frozen lap context with its canonical identity.
+            # The legacy lap key can be reused after a restart or flashback.
+            context = {name: value for name, value in lap.items() if name != "trace"}
+            db.execute("UPDATE recorded_laps SET engineering_json=? WHERE id=?",
+                       (json.dumps(context, allow_nan=False), key))
         return key
 
     async def upsert_live_session(self, state: dict[str, Any]) -> str | None:

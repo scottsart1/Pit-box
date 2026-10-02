@@ -19,6 +19,7 @@ from .intent import (
 )
 from .prerace import PreRacePlanner
 from .providers import ProviderResult, ProviderRouter
+from .session_guard import SessionChangedError, session_scoped
 from .state import StateStore
 from .tools import TelemetryTools
 
@@ -59,6 +60,10 @@ If telemetry is unavailable or stale, say so plainly once.
 Answer the driver's latest request first and stay on that subject. Do not append strategy, fuel,
 energy, or coaching advice unless it directly answers the request or is an immediate safety action.
 Older radio calls are context, not authority: the current deterministic state wins.
+For "who am I actually racing", call get_strategic_rivals: projected finish gaps and
+estimated stops matter more than physical proximity. State projection uncertainty.
+For practice runs, stint debriefs and what to test next, call get_practice_run_review.
+Use its measured evidence and next test; observed pace trend is not isolated tyre degradation.
 Use the temperature unit named in the situation header and retain the driver's latest unit request.
 Never infer that the driver is closing from a single lap-time comparison; use measured gap trend.
 A positive player-minus-rival lap delta means the player was slower.
@@ -2090,6 +2095,7 @@ class EngineerBrain:
             enforce_radio_limit=False,
         )
 
+    @session_scoped()
     async def compare(self, utterance: str) -> dict[str, Any]:
         """Run an opt-in, non-spoken A/B comparison on one frozen context."""
         state = await self.store.snapshot_analysis()
@@ -2122,8 +2128,12 @@ class EngineerBrain:
             max_rounds=4 if route == "deep" else 3,
         )
 
+    @session_scoped()
     async def ask(self, utterance: str) -> str:
+        origin = await self.store.snapshot_analysis()
         await self._capture_feedback(utterance)
+        if not await self.store.matches_session(origin):
+            raise SessionChangedError("Session changed; the previous radio request was discarded.")
         lowered = utterance.lower()
         if "fahrenheit" in lowered or re.search(r"(?:°|degrees?\s*)f\b", lowered):
             await self.store.update(temperature_unit="f")
@@ -2149,9 +2159,10 @@ class EngineerBrain:
                 llm_last_tool_rounds=0,
                 llm_last_error="",
             )
-            await self.store.append_radio("engineer", direct)
+            if not await self.store.append_radio("engineer", direct, expected=origin):
+                raise SessionChangedError("Session changed; the previous radio request was discarded.")
             await self.database.save_radio_message(
-                await self.store.snapshot_analysis(), "engineer", direct, "deterministic_response"
+                origin, "engineer", direct, "deterministic_response"
             )
             return direct
 
@@ -2189,10 +2200,11 @@ class EngineerBrain:
             max_rounds=4 if route == "deep" else 3,
             route=route,
         )
-        await self.store.append_radio("engineer", text)
+        if not await self.store.append_radio("engineer", text, expected=origin):
+            raise SessionChangedError("Session changed; the previous radio request was discarded.")
         provider_name = self.last_provider_result.provider if self.last_provider_result is not None else "unknown"
         await self.database.save_radio_message(
-            await self.store.snapshot_analysis(), "engineer", text, f"response:{provider_name}"
+            origin, "engineer", text, f"response:{provider_name}"
         )
         return text
 

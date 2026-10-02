@@ -669,7 +669,7 @@ export function setConnectionCenterActive(active) {
 // collect the sub-tab buttons themselves: matching them made knownPage a
 // sub-view id, no <main> matched it, and every page went hidden at once —
 // the blank-screen-with-status-rail bug (2026-08-12).
-const ANALYSIS_SUBVIEWS = ["library", "session-review", "lap-lab", "field", "review"];
+const ANALYSIS_SUBVIEWS = ["test-engineer", "library", "session-review", "lap-lab", "field", "review"];
 
 function syncTabs(pageName) {
   if (ANALYSIS_SUBVIEWS.includes(pageName)) pageName = "analysis";

@@ -712,15 +712,15 @@ def test_unsigned_windows_notice_remains_without_removed_installation_wording():
 
 def test_current_release_describes_skippable_setup_tour_and_manual_updates():
     release = INDEX.split('id="new"', 1)[1].split('</section>', 1)[0]
-    assert release.split('<p class="section-lede">', 1)[1].startswith('Choose how much of your setup to rethink')
-    for text in ('Minimum', 'Moderate', 'Radical', 'future stops', 'network loss events'):
+    assert release.split('<p class="section-lede">', 1)[1].startswith('Track runs and setup changes')
+    for text in ('Test Engineer', 'A/B comparison', 'projected finish gap', 'sector differences', 'system file picker'):
         assert text in release
     assert 'Realtime radio in Settings' in release and 'off by default' in release
     assert 'Labelled sample values' in release and 'without UDP' in release
     assert 'swipe-to-reveal system bars' in release
     assert 'tyre pace trend' in release
-    assert 'Windows 5.1.0 and Android 5.1.0 (revision 30).' in release
-    for text in ('5.1.0', 'skippable setup', 'UDP IP and port', 'guided app tour',
+    assert 'Windows 5.2.0 and Android 5.2.0 (revision 31).' in release
+    for text in ('5.2.0', 'skippable setup', 'UDP IP and port', 'guided app tour',
                  'Existing preferences stay unchanged', 'Nothing installs automatically'):
         assert text in release
     assert 'Install this update manually once' in INDEX

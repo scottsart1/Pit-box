@@ -4,6 +4,7 @@ import asyncio
 import contextlib
 import logging
 import time
+from collections import deque
 from collections.abc import Awaitable, Callable, Iterable
 from dataclasses import dataclass
 from typing import Any
@@ -335,6 +336,7 @@ class F1DatagramProtocol(asyncio.DatagramProtocol):
         session_assembler: SessionAssembler | None = None,
         capture_mode: str = "balanced",
         on_session_key_change: Callable[[str], None] | None = None,
+        on_stint_end: Callable[[dict[str, Any]], Awaitable[Any]] | None = None,
     ) -> None:
         self.store = store
         self.on_button_status = on_button_status
@@ -347,6 +349,7 @@ class F1DatagramProtocol(asyncio.DatagramProtocol):
         self.session_assembler = session_assembler
         self.capture_mode = str(capture_mode)
         self.on_session_key_change = on_session_key_change
+        self.on_stint_end = on_stint_end
         self.loop = asyncio.get_running_loop()
         self.transport: asyncio.DatagramTransport | None = None
         self.packet_queue: asyncio.Queue[ReceivedDatagram] = asyncio.Queue(
@@ -362,6 +365,8 @@ class F1DatagramProtocol(asyncio.DatagramProtocol):
         self._classified_sessions: set[str] = set()
         self._qualifying_debrief_laps: set[tuple[int, int]] = set()
         self._briefing_tasks: set[asyncio.Task[Any]] = set()
+        self._live_uid = 0
+        self._retired_uids: deque[int] = deque(maxlen=32)
         self._last_header_error: str | None = None
         self._assembler_laps = [0] * 24
         self._assembler_distances = [0.0] * 24
@@ -569,6 +574,15 @@ class F1DatagramProtocol(asyncio.DatagramProtocol):
         self, packet: Any, received: ReceivedDatagram | None = None
     ) -> None:
         header = packet.header
+        incoming_uid = int(header.session_uid)
+        if not incoming_uid and self._live_uid:
+            return
+        if incoming_uid in self._retired_uids:
+            return
+        if self._live_uid and incoming_uid and incoming_uid != self._live_uid:
+            self._retired_uids.append(self._live_uid)
+        if incoming_uid:
+            self._live_uid = incoming_uid
         await self.store.mark_packet(
             header.packet_format,
             header.game_year,
@@ -1434,6 +1448,15 @@ class F1DatagramProtocol(asyncio.DatagramProtocol):
             )
             state.unserved_stop_go_penalties = int(player.num_unserved_stop_go_pens)
             state.pit_stop_should_serve_penalty = bool(player.pit_stop_should_serve_pen)
+            if state.pit_status != 0 and int(player.pit_status) == 0:
+                state.run_serial += 1
+                if state.current_lap_started:
+                    state.current_lap_started["run_serial"] = state.run_serial
+                    state.current_lap_started["setup"] = dict(state.car_setup)
+                    state.current_lap_started["compound"] = state.tyre.compound
+                    state.current_lap_started["tyre_age"] = state.tyre.age_laps
+                    state.current_lap_started["fuel_kg"] = state.fuel_kg
+                    state.current_lap_started["wear"] = list(state.tyre.wear)
             state.pit_status = int(player.pit_status)
             state.pit_lane_time_ms = int(player.pit_lane_time_in_lane_in_ms)
             for index, lap in enumerate(packet.lap_data):
@@ -1539,6 +1562,21 @@ class F1DatagramProtocol(asyncio.DatagramProtocol):
                         )
                         del history[:-90]
 
+            # Include cars on a different racing lap: classification gaps alone
+            # miss backmarkers occupying the same stretch of track.
+            if state.current_lap_started and state.track_length_m > 0 and state.speed_kph > 50:
+                state.current_lap_started["traffic_observed"] = True
+                window_m = max(20.0, state.speed_kph / 3.6 * 1.5)
+                traffic = any(
+                    driver.active and driver.car_idx != player_index and not driver.pit_status
+                    and driver.result_status not in RETIRED_RESULT_STATUS
+                    and 0 < (driver.lap_distance_m - state.lap_distance_m) % state.track_length_m < window_m
+                    for driver in state.drivers
+                )
+                reasons = state.current_lap_started.setdefault("learning_exclusions", [])
+                if traffic and "traffic" not in reasons:
+                    reasons.append("traffic")
+
         await self.store.mutate(apply)
 
         # A qualifying in-lap is the safe, deterministic delivery point for the
@@ -1546,6 +1584,11 @@ class F1DatagramProtocol(asyncio.DatagramProtocol):
         # pit_status, others only via driver_status==2, so support both and
         # de-duplicate by completed lap.
         mode = str(before.get("mode_profile", ""))
+        if self.on_stint_end and mode in {"practice", "race"} and int(player.pit_status) != 0 and not before.get("pit_status"):
+            snapshot = await self.store.snapshot_analysis()
+            task = self.loop.create_task(self.on_stint_end(snapshot), name="pitwall-stint-debrief")
+            self._briefing_tasks.add(task)
+            task.add_done_callback(self._briefing_tasks.discard)
         entered_in_lap = (
             int(player.pit_status) != 0 and int(before.get("pit_status", 0) or 0) == 0
         ) or int(getattr(player, "driver_status", 0) or 0) == 2
@@ -1561,19 +1604,19 @@ class F1DatagramProtocol(asyncio.DatagramProtocol):
         ):
             self._qualifying_debrief_laps.add(marker)
             task = self.loop.create_task(
-                self._qualifying_debrief_after_history(),
+                self._qualifying_debrief_after_history(self.store.session_changed),
                 name=f"pitwall-quali-debrief-{timed_lap}",
             )
             self._briefing_tasks.add(task)
             task.add_done_callback(self._briefing_tasks.discard)
 
-    async def _qualifying_debrief_after_history(self) -> None:
+    async def _qualifying_debrief_after_history(self, signal: asyncio.Event | None = None) -> None:
         # SessionHistory normally trails the LapData in-lap transition by a few
         # frames. Yielding lets that packet update lap/sector history before the
         # deterministic payload freezes, without blocking the UDP consumer.
         try:
             await asyncio.sleep(0.30)
-            if self.on_qualifying_lap:
+            if self.on_qualifying_lap and not (signal and signal.is_set()):
                 await self.on_qualifying_lap()
         except asyncio.CancelledError:
             raise

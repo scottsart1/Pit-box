@@ -12,6 +12,7 @@ from . import rain
 from .analysis import fmt_ms
 from .brain import EngineerBrain
 from .config import settings
+from .session_guard import session_key, session_scoped
 from .setup_advisor import SetupAdvisor
 from .state import StateStore
 from .strategy import StrategyEngine
@@ -229,6 +230,7 @@ class ProactiveEngineer:
         self._task: asyncio.Task[None] | None = None
         self._deliver_task: asyncio.Task[None] | None = None
         self._session_uid = 0
+        self._session_context = (0, 0, 0, 0)
         self._last_spoken_at = 0.0
         self._last_lap_queued = 0
         self._last_learning_lap = 0
@@ -533,6 +535,7 @@ class ProactiveEngineer:
             "deliver_by": now + (8.0 if critical else settings.proactive_delivery_deadline_s),
             "expires_at": now + (expires_s if expires_s is not None else (45.0 if critical else 180.0)),
             "session_uid": self._session_uid,
+            "session_context": self._session_context,
             "blocked_reasons": [],
         }
         if len(self.pending) == self.pending.maxlen:
@@ -544,6 +547,7 @@ class ProactiveEngineer:
 
     async def _reset_for_session(self, session_uid: int) -> None:
         self._session_uid = int(session_uid)
+        self._session_context = session_key(await self.store.peek("session_uid", "restart_epoch", "timeline_epoch", "session_generation"))
         self.pending.clear()
         self._discarded.clear()
         self._last_spoken_at = 0.0
@@ -823,6 +827,8 @@ class ProactiveEngineer:
 
     @staticmethod
     def _event_still_relevant(event: dict[str, Any], state: dict[str, Any]) -> bool:
+        if "session_context" in event and tuple(event["session_context"]) != session_key(state):
+            return False
         if int(event.get("session_uid", 0)) != int(state.get("session_uid", 0)):
             return False
         if time.time() > float(event.get("expires_at", 0)):
@@ -2017,6 +2023,7 @@ class ProactiveEngineer:
             ),
         )
 
+    @session_scoped(raise_on_change=False)
     async def _deliver(self, state: dict[str, Any]) -> None:
         while self._discarded:
             discarded = self._discarded.popleft()
@@ -2081,6 +2088,8 @@ class ProactiveEngineer:
         self._refresh_payload(event, state)
         await self.store.mutate(lambda s: s.proactive.update({"queued": len(self.pending), "delivery_state": "generating"}))
         text = await self._narrate(event, state)
+        if not await self.store.matches_session(state):
+            return
         # Different event types can converge on the same content: a real
         # session heard "Practice complete, P8" three times in thirty seconds,
         # worded three ways by the model. The per-type cooldown cannot see
@@ -2207,7 +2216,7 @@ class ProactiveEngineer:
                 scheduler_delay_ms = max(0.0, (started_at - scheduled_at - DETECT_INTERVAL_S) * 1000)
                 state = await self.store.snapshot_radio()
                 session_uid = int(state.get("session_uid", 0))
-                if session_uid != self._session_uid:
+                if session_key(state) != self._session_context:
                     await self._reset_for_session(session_uid)
                     state = await self.store.snapshot_radio()
                 await self._detect(state)

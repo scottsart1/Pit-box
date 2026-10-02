@@ -140,14 +140,17 @@
 
 <section id="new" class="soft">
   <div class="wrap">
-    <div class="eyebrow">The current release · 5.1.0</div>
-    <h2>A broader setup review. A more responsive engineer.</h2>
-    <p class="section-lede">Choose how much of your setup to rethink, ask the engineer about the whole field, and keep more processing time available for radio at high telemetry rates.</p>
+    <div class="eyebrow">The current release · 5.2.0</div>
+    <h2>Turn practice into a useful test.</h2>
+    <p class="section-lede">Track runs and setup changes, compare laps under similar conditions, and take a session report away with you. Open Test Engineer from Setup Lab or Analysis.</p>
     <div class="release-grid">
-      <article><h3>Choose how much to change</h3><p>Minimum fine-tunes, Moderate rebalances, and Radical rebuilds a complete garage setup from the circuit baseline. Pace and handling evidence explain the recommendation.</p></article>
-      <article><h3>Questions in context</h3><p>Ask whether the field will stop again. The engineer can combine telemetry tools to estimate future stops, explain uncertainty and identify missing evidence.</p></article>
-      <article><h3>More room for radio</h3><p>Lighter radio checks and time-bounded telemetry processing reduce contention at high packet rates. Android now shows network loss events and thermal warnings for troubleshooting.</p></article>
+      <article><h3>A debrief for each stint</h3><p>Returning to the pits creates a short review of clean pace, consistency, observed pace trend, temperatures and the next test. Save your objective and conclusion with each run.</p></article>
+      <article><h3>Compare fairer laps</h3><p>A/B comparison matches compound, tyre age, fuel, weather and temperatures. Traffic, invalid, pit, flagged and incomplete laps are excluded. Matched sector differences show where time changed.</p></article>
+      <article><h3>Find the strategic battle</h3><p>Strategy ranks rivals by projected finish gap, including estimated remaining stops and tyre age. Forecast uncertainty stays visible.</p></article>
+      <article><h3>Keep the session report</h3><p>Export runs, setups, incidents, conclusions and test notes as text or JSON. Android saves through its system file picker. Session Review opens the report for any saved session.</p></article>
+      <article><h3>Radio follows the current session</h3><p>Changing session, restarting or rewinding cancels obsolete radio work and clears live analysis. Delayed packets from a retired session cannot restore the previous track.</p></article>
     </div>
+    <p>Pace trends include fuel and driving effects; they do not isolate tyre degradation. Older recordings may lack the evidence needed for matched setup comparisons. <a href="guide.html#test-engineer">Read the Test Engineer guide</a>.</p>
     <p>GPT-6 Luna handles everyday radio questions; GPT-6 Sol handles deeper strategy. Turn on Realtime radio in Settings for live voice conversations you can interrupt. It is off by default, applies immediately and may increase API costs.</p>
     <p>Set up your dashboard before the game starts. Labelled sample values let you choose instruments, arrange cards and save your layout without UDP. Touch-friendly editing gives you more control over the numbers you see. Android fills the screen with swipe-to-reveal system bars, and Drive explains your tyre pace trend and the evidence behind it.</p>
     <h2>From install to your first radio check.</h2>
@@ -165,7 +168,7 @@
       <article><h3>Make it yours</h3><p>Choose instruments, resize cards and drag them into place. Build your layout with sample numbers before the race, save it, then switch to live telemetry.</p></article>
     </div>
     <p><a class="button" href="/driver-dashboard/">Try Driver Dashboard · public demo</a> <a class="button ghost" href="/driver-dashboard/downloads/driver-dashboard.html" download="YourPitBox-Driver-Dashboard.html">Download offline demo (.html)</a></p>
-    <p class="section-footnote">Windows 5.1.0 and Android 5.1.0 (revision 30). The dashboard demos use labelled sample data. Live telemetry and the walkthrough are in the installed apps. See the <a href="guide.html#android-wireless-note">Android Bluetooth stability note</a>.</p>
+    <p class="section-footnote">Windows 5.2.0 and Android 5.2.0 (revision 31). The dashboard demos use labelled sample data. Live telemetry and the walkthrough are in the installed apps. See the <a href="guide.html#android-wireless-note">Android Bluetooth stability note</a>.</p>
   </div>
 </section>
 
@@ -359,7 +362,7 @@
     <div class="platform-grid download-grid">
       <article class="platform-card" id="windows-release">
         <div class="platform-label">Windows 10 / 11</div>
-        <h3>Windows 5.1.0 · unsigned installer</h3>
+        <h3>Windows 5.2.0 · unsigned installer</h3>
         <p>Install for your Windows account, then open Your Pit Box from the Start Menu. The engine runs on this PC and opens its dashboard in your browser.</p>
         <p class="download-cta"><button id="downloadButton" class="button primary" type="button">Download for Windows</button></p>
         <p class="field-help"><code>PitWall-Setup.exe</code> · 34.9 MB</p>
@@ -380,11 +383,11 @@
       </article>
       <article class="platform-card" id="android-release">
         <div class="platform-label">Android phone / tablet</div>
-        <h3>Android 5.1.0 · signed APK</h3>
+        <h3>Android 5.2.0 · signed APK</h3>
         <p>Install the native app on the device beside your wheel. Reception, strategy and recordings run there; no laptop or Windows installation is needed.</p>
         <p class="download-cta"><a class="button primary" data-download-platform="android" href="https://pitwall-activation.sarthakvij123450.workers.dev/android">Download Android APK</a></p>
         <p id="androidDownloadStatus" class="download-status" role="status" aria-live="polite"></p>
-        <p class="field-help"><code>5.1.0-android.30.apk</code> · 73.0 MB</p>
+        <p class="field-help"><code>5.2.0-android.31.apk</code> · 73.0 MB</p>
         <div class="guide-warning">
           <p><strong>Android 7+ · 64-bit ARM or x86 · 4 KB memory pages only.</strong> This release does not support 16 KB memory-page devices. Direct APK download, not a Google Play listing.</p>
           <p>Keep Play Protect enabled. Grant installation permission only to the browser or file manager used, then turn it off after installing. Do not bypass a security-policy or incompatible-device block.</p>

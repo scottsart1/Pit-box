@@ -1125,6 +1125,7 @@ class PitWallDatabase:
         self,
         session_uid: int,
         laps: list[dict[str, Any]],
+        *, restart_epoch: int = 0, timeline_epoch: int = 0,
     ) -> int:
         """Fill sector times on rows that were saved before the game reported them.
 
@@ -1143,13 +1144,15 @@ class PitWallDatabase:
             return 0
         async with self._lock:
             return await asyncio.to_thread(
-                self._backfill_lap_sectors_sync, session_uid, pending
+                self._backfill_lap_sectors_sync, session_uid, pending, restart_epoch, timeline_epoch
             )
 
     def _backfill_lap_sectors_sync(
         self,
         session_uid: int,
         pending: list[tuple[int, int, int, int]],
+        restart_epoch: int = 0,
+        timeline_epoch: int = 0,
     ) -> int:
         stored_uid = _session_uid_to_sqlite(session_uid)
         with self._connect() as db:
@@ -1164,6 +1167,19 @@ class PitWallDatabase:
                     (s1_ms, s2_ms, s3_ms, stored_uid, lap_num),
                 )
                 updated += cursor.rowcount or 0
+            by_lap = {lap_num: (s1, s2, s3) for s1, s2, s3, lap_num in pending}
+            rows = db.execute("""SELECT r.id,r.lap_number,r.lap_time_ms,r.engineering_json
+                FROM recorded_laps r JOIN session_cars c ON c.id=r.session_car_id
+                JOIN recorded_sessions s ON s.id=c.session_id
+                WHERE s.game_session_uid=? AND s.restart_epoch=? AND r.timeline_epoch=? AND c.is_player=1""",
+                (str(session_uid), restart_epoch, timeline_epoch)).fetchall()
+            for row in rows:
+                context = json.loads(row["engineering_json"] or "{}")
+                sectors = by_lap.get(row["lap_number"])
+                if context and sectors and not all(context.get(key) for key in ("s1_ms", "s2_ms", "s3_ms")):
+                    if abs(sum(sectors) - (row["lap_time_ms"] or 0)) <= 5:
+                        context.update(zip(("s1_ms", "s2_ms", "s3_ms"), sectors))
+                        db.execute("UPDATE recorded_laps SET engineering_json=? WHERE id=?", (json.dumps(context), row["id"]))
             return updated
 
     async def recent_laps(

@@ -17,6 +17,7 @@ from .audio import AudioService
 from .brain import EngineerBrain
 from .config import settings
 from .realtime import RealtimeRadio
+from .session_guard import SessionChangedError, session_scoped
 from .state import StateStore
 
 log = logging.getLogger(__name__)
@@ -92,6 +93,7 @@ class NativeVoiceController:
         # backpressure without ever blocking the audio callback.
         self._audio_queue: asyncio.Queue[np.ndarray] = asyncio.Queue(maxsize=64)
         self._audio_consumer_task: asyncio.Task[None] | None = None
+        self._session_watch_task: asyncio.Task[None] | None = None
 
         self._mask_event_count = 0
         self._first_mask_event_at = 0.0
@@ -298,6 +300,7 @@ class NativeVoiceController:
         await self.store.update(radio_latency=latency)
 
     async def initialize(self) -> None:
+        self._session_watch_task = self.loop.create_task(self._watch_session(), name="pitwall-radio-session")
         settings.data_dir.mkdir(parents=True, exist_ok=True)
         if self._persisted_wake_enabled is not None:
             settings.wake_enabled = self._persisted_wake_enabled
@@ -354,6 +357,7 @@ class NativeVoiceController:
             self._ack_prepare_task,
             self._release_candidate_task,
             self._audio_consumer_task,
+            self._session_watch_task,
         ):
             if task and not task.done():
                 task.cancel()
@@ -857,6 +861,7 @@ class NativeVoiceController:
         if not keep_pending:
             self._wake_finalize_pending = False
 
+    @session_scoped(raise_on_change=False)
     async def _process_wake_candidate(
         self,
         frames: list[np.ndarray],
@@ -1082,6 +1087,22 @@ class NativeVoiceController:
             ),
         )
 
+    async def _watch_session(self) -> None:
+        while not self._shutdown:
+            signal = self.store.session_changed
+            await signal.wait()
+            self._pending_clips.clear()
+            self.frames.clear()
+            self._wake_preroll.clear()
+            while not self._audio_queue.empty():
+                self._audio_queue.get_nowait()
+                self._audio_queue.task_done()
+            await self._interrupt_pipeline()
+            if self.realtime is not None:
+                await self.realtime.close("telemetry session changed")
+            await self.store.update(radio_queue_depth=0, wake_armed=False, radio_indicator="idle")
+
+    @session_scoped(raise_on_change=False)
     async def _run_command(self, command: str, source: str) -> None:
         if getattr(self.store, "usage_event", None):
             self.store.usage_event("voice")
@@ -1108,12 +1129,14 @@ class NativeVoiceController:
             self.audio.play_ack(ack_kind),
             name="pitwall-radio-ack",
         )
-        with contextlib.suppress(Exception):
-            await ack_task
         try:
+            with contextlib.suppress(Exception):
+                await ack_task
             reply = await brain_task
         except asyncio.CancelledError:
             raise
+        except SessionChangedError:
+            return
         except Exception as exc:  # noqa: BLE001 - every failure must be spoken
             # The driver heard "Copy" and is waiting. Dead air here reads as a
             # broken radio and they will keep waiting instead of re-asking, so
@@ -1132,6 +1155,11 @@ class NativeVoiceController:
             with contextlib.suppress(Exception):
                 await self.speak_text(BRAIN_FALLBACK_LINE)
             return
+        finally:
+            for task in (ack_task, brain_task):
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(ack_task, brain_task, return_exceptions=True)
         await self._mark_latency("model_ms")
         await self.speak_text(reply)
 
@@ -1242,6 +1270,7 @@ class NativeVoiceController:
             output.setframerate(settings.audio_sample_rate)
             output.writeframes(data.astype(np.int16, copy=False).tobytes())
 
+    @session_scoped(raise_on_change=False)
     async def _process(self, data: np.ndarray) -> None:
         if not getattr(self.audio, "voice_ready", True):
             # Speech-to-text always runs on OpenAI, whatever provider reasons.
@@ -1309,6 +1338,7 @@ class NativeVoiceController:
                     name="pitwall-queued-ptt",
                 )
 
+    @session_scoped(discarded=False, raise_on_change=False)
     async def speak_text(self, text: str) -> bool:
         if not text.strip() or self._signal_pressed:
             return False

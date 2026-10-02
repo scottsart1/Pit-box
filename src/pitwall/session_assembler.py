@@ -1341,6 +1341,18 @@ class SessionAssembler:
                 and event.stamp.session_time_s <= 1.0
                 and self._is_implicit_rewind(event.stamp)
             )
+            # Some game transitions retain the UID. Circuit and session type
+            # are authoritative boundaries too; never merge their recordings.
+            metadata_changed = current is not None and any(
+                value is not None and self._session_metadata.get(key) is not None
+                and value >= (0 if key == "track_id" else 1)
+                and self._session_metadata[key] >= (0 if key == "track_id" else 1)
+                and value != self._session_metadata[key]
+                for key, value in (("track_id", event.track_id), ("session_type", event.session_type))
+            )
+            automatic_restart = automatic_restart or (
+                metadata_changed and current.game_session_uid == str(event.stamp.session_uid)
+            )
             transitioning = (
                 current is None
                 or current.game_session_uid != str(event.stamp.session_uid)

@@ -34,6 +34,7 @@ from .analysis import AnalysisEngine
 from .analysis_jobs import AnalysisJobService
 from .api.analysis import create_analysis_router
 from .api.credentials import create_credentials_router
+from .api.engineering import create_engineering_router
 from .api.field import create_field_router
 from .api.live import create_live_router
 from .api.network import create_network_router
@@ -41,8 +42,8 @@ from .api.sessions import create_sessions_router
 from .api.storage import create_storage_router
 from .api.track_models import create_track_models_router
 from .api.transfers import create_transfer_router
-from .api.usage import create_usage_router
 from .api.updates import create_updates_router
+from .api.usage import create_usage_router
 from .audio import AudioService
 from .brain import EngineerBrain
 from .briefing import BriefingEngine
@@ -52,14 +53,15 @@ from .catalog import session_id
 from .comparison_service import ComparisonService
 from .config import settings
 from .database import PitWallDatabase
+from .engineering import EngineeringService, build_runs
 from .field_service import FieldAnalysisService
 from .forwarding import DatagramForwarder
 from .full_field_archive import FullFieldArchiveService, cars_in_trace_scope
+from .history_transfer import HistoryTransferService
 from .line_insights import line_findings
 from .network_profiles import NetworkProfileRepository
 from .network_service import ListenerBindError, NetworkService
 from .networking import PacketHealthTracker
-from .history_transfer import HistoryTransferService
 from .peer_transfer import PeerTransferService
 from .prerace import PreRacePlanner
 from .proactive import ProactiveEngineer
@@ -71,8 +73,11 @@ from .race_plan import (
 )
 from .realtime import RealtimeRadio
 from .session_assembler import SessionAssembler
+from .session_guard import SessionChangedError
 from .settings_service import (
     PREFERENCE_KEY as APP_SETTINGS_KEY,
+)
+from .settings_service import (
     apply_runtime,
     apply_saved_overrides,
     coerce,
@@ -87,9 +92,9 @@ from .trace_archive import TraceArchiveService
 from .trace_store import RecoveryReport, TraceStore
 from .track_model_service import TrackModelService
 from .udp import TRACKS, F1DatagramProtocol, classify_session
-from .voice import NativeVoiceController
-from .usage_reporting import UsageReporting
 from .update_service import UpdateService
+from .usage_reporting import UsageReporting
+from .voice import NativeVoiceController
 from .web_security import LanAccessMiddleware, is_loopback_host
 
 log = logging.getLogger(__name__)
@@ -169,6 +174,8 @@ tools = TelemetryTools(
     field_analysis_service=field_service,
 )
 brain = EngineerBrain(store, tools, database)
+engineering = EngineeringService(database)
+tools.engineering = engineering
 briefing = BriefingEngine(store, database, analysis, setup_advisor, tools)
 prerace = PreRacePlanner(store, strategy)
 audio = AudioService()
@@ -183,11 +190,8 @@ corner_rebuild_task: asyncio.Task[None] | None = None
 interfaces_task: asyncio.Task[None] | None = None
 post_race_tasks: set[asyncio.Task[None]] = set()
 POST_RACE_TIMEOUT_S = 60.0
-
-
-def _briefing_session_key(snapshot: dict[str, object]) -> tuple[int, int]:
-    return (int(snapshot.get("session_uid", 0) or 0),
-            int(snapshot.get("restart_epoch", 0) or 0))
+browser_audio_origin: dict[str, object] | None = None
+browser_audio_lock = asyncio.Lock()
 
 
 async def _connection_watchdog() -> None:
@@ -262,25 +266,22 @@ async def _event_persistence_worker() -> None:
 async def _persist_briefing(
     kind: str, payload: dict[str, object], *, origin: dict[str, object] | None = None,
 ) -> dict[str, object]:
+    snapshot = origin if origin is not None else await store.snapshot_analysis()
     try:
         text = await brain.narrate_briefing(kind, payload)
     except Exception as exc:
         log.warning("Briefing narration fell back to deterministic text: %s", exc)
         text = briefing.fallback_text(kind, payload)
-    snapshot = origin if origin is not None else await store.snapshot_analysis()
     save_state = dict(snapshot)
     if payload.get("track_id") is not None:
         save_state["track_id"] = int(payload["track_id"])
     await database.save_briefing(save_state, kind, payload, text)
-    expected = _briefing_session_key(snapshot)
-
     def publish(state):  # type: ignore[no-untyped-def]
-        if (int(state.session_uid), int(state.restart_epoch)) == expected:
-            briefings = dict(state.briefings)
-            briefings[kind] = {"payload": payload, "text": text}
-            state.briefings = briefings
+        briefings = dict(state.briefings)
+        briefings[kind] = {"payload": payload, "text": text}
+        state.briefings = briefings
 
-    await store.mutate(publish)
+    await store.mutate_for_session(snapshot, publish)
     return {"kind": kind, "payload": payload, "text": text}
 
 
@@ -313,8 +314,7 @@ async def _debrief_finished_session(snapshot: dict[str, object]) -> None:
             result = await _persist_briefing(
                 "post_race", await briefing.post_race(state=snapshot), origin=snapshot,
             )
-            current = await store.peek("session_uid", "restart_epoch")
-            if voice is not None and _briefing_session_key(current) == _briefing_session_key(snapshot):
+            if voice is not None and await store.matches_session(snapshot):
                 await voice.speak_text(str(result["text"]))
     except asyncio.CancelledError:
         raise
@@ -333,14 +333,63 @@ async def _stop_post_race_debriefs() -> None:
 
 
 async def _persist_qualifying_lap() -> None:
+    snapshot = await store.snapshot_analysis()
     try:
         result = await _persist_briefing(
-            "post_qualifying_lap", await briefing.post_qualifying_lap()
+            "post_qualifying_lap", await briefing.post_qualifying_lap(), origin=snapshot
         )
-        if voice is not None:
+        if voice is not None and await store.matches_session(snapshot):
             await voice.speak_text(str(result["text"]))
     except Exception as exc:
         log.warning("Qualifying-lap debrief could not be generated: %s", exc)
+
+
+async def _persist_stint_debrief(snapshot: dict[str, object]) -> None:
+    """Freeze a short measured review at pit entry without blocking ingestion."""
+    try:
+        async with asyncio.timeout(20):
+            await store.lap_queue.join()
+            if not await store.matches_session(snapshot):
+                return
+            current = await store.snapshot_analysis()
+            runs = await asyncio.to_thread(build_runs, current.get("completed_laps", []))
+            runs = [run for run in runs if run.get("run_serial") == snapshot.get("run_serial")]
+            if not runs:
+                return
+            run = runs[-1]
+            summary = run["summary"]
+            pace = summary["median_pace_s"]
+            consistency = summary["consistency_stdev_s"]
+            trend = summary["observed_pace_trend_s_per_lap"]
+            temperature = summary["tyre_inner_temp_range_c"]
+            text = f"Run {run['number']}, {run['compound']}: {summary['clean_lap_count']} clean laps. "
+            if pace is not None:
+                text += f"Median {pace:.2f} seconds"
+                text += f", variation {consistency:.2f}" if consistency is not None else ""
+                text += ". "
+            if trend is not None:
+                text += f"Observed pace trend {trend:+.2f} seconds per lap. "
+            if temperature:
+                text += f"Tyre inner temperatures {temperature[0]:.0f} to {temperature[1]:.0f} Celsius. "
+            text += summary["takeaway"] + " " + summary["next_test"]
+            payload = {key: value for key, value in run.items() if key != "laps"}
+            await database.save_briefing(snapshot, "post_stint", payload, text)
+            await store.mutate_for_session(snapshot, lambda live: live.briefings.update({"post_stint": {"payload": payload, "text": text}}))
+            if voice is not None and current.get("proactive", {}).get("enabled") and await store.matches_session(snapshot):
+                # Do not queue a garage debrief behind a driver's active question.
+                if not voice.is_busy:
+                    await voice.speak_text(text)
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        log.warning("Stint debrief unavailable: %s", exc)
+
+
+async def _backfill_player_sectors(uid: int, history: list[dict]) -> None:
+    snapshot = await store.peek("session_uid", "restart_epoch", "timeline_epoch")
+    if int(snapshot["session_uid"]) == uid:
+        await database.backfill_lap_sectors(uid, history, restart_epoch=int(snapshot["restart_epoch"]),
+                                           timeline_epoch=int(snapshot["timeline_epoch"]))
 
 
 def _create_udp_protocol() -> F1DatagramProtocol:
@@ -349,7 +398,7 @@ def _create_udp_protocol() -> F1DatagramProtocol:
     return F1DatagramProtocol(
         store,
         voice.on_button_status if voice is not None else None,
-        on_player_lap_history=database.backfill_lap_sectors,
+        on_player_lap_history=_backfill_player_sectors,
         on_final_classification=_persist_finished_session,
         on_qualifying_lap=_persist_qualifying_lap,
         packet_health=packet_health,
@@ -357,6 +406,7 @@ def _create_udp_protocol() -> F1DatagramProtocol:
         session_assembler=session_assembler,
         capture_mode=settings.capture_mode,
         on_session_key_change=capture_coordinator.observe_session,
+        on_stint_end=_persist_stint_debrief,
     )
 
 
@@ -721,6 +771,7 @@ app.include_router(
 )
 app.include_router(create_analysis_router(comparison_service, usage_record=usage_reporting.record))
 app.include_router(create_field_router(field_service))
+app.include_router(create_engineering_router(engineering, store))
 app.include_router(create_storage_router(storage_service))
 app.include_router(create_track_models_router(track_model_service))
 app.include_router(
@@ -1202,6 +1253,8 @@ async def ask(request: AskRequest) -> dict[str, str]:
     try:
         reply = await brain.ask(request.text.strip())
         return {"reply": reply}
+    except SessionChangedError as exc:
+        raise HTTPException(409, str(exc)) from exc
     except Exception as exc:
         await store.update(last_error=str(exc), engineer_status="error")
         raise HTTPException(503, str(exc)) from exc
@@ -1720,6 +1773,16 @@ async def recompute_strategy() -> dict[str, object]:
 
 @app.post("/api/voice")
 async def browser_voice(file: UploadFile = File(...)) -> dict[str, str]:
+    origin = await store.snapshot_live()
+    async with browser_audio_lock:
+        if not await store.matches_session(origin):
+            raise HTTPException(409, "Session changed; the previous recording was discarded.")
+        return await _browser_voice_locked(file, origin)
+
+
+async def _browser_voice_locked(file: UploadFile, origin: dict[str, object]) -> dict[str, str]:
+    global browser_audio_origin
+    browser_audio_origin = None
     suffix = Path(file.filename or "clip.webm").suffix or ".webm"
     with tempfile.TemporaryDirectory() as directory:
         source = Path(directory) / f"input{suffix}"
@@ -1730,11 +1793,16 @@ async def browser_voice(file: UploadFile = File(...)) -> dict[str, str]:
                 source,
                 [driver["name"] for driver in snapshot["drivers"]],
             )
+            if not await store.matches_session(origin):
+                raise HTTPException(409, "Session changed; the previous recording was discarded.")
             if not text:
                 raise HTTPException(422, "No speech detected")
             reply = await brain.ask(text)
             target = settings.data_dir / "latest_engineer.mp3"
             await audio.synthesize(reply, target, "mp3")
+            if not await store.matches_session(origin):
+                raise HTTPException(409, "Session changed; the previous recording was discarded.")
+            browser_audio_origin = origin
             return {
                 "transcript": text,
                 "reply": reply,
@@ -1742,15 +1810,18 @@ async def browser_voice(file: UploadFile = File(...)) -> dict[str, str]:
             }
         except HTTPException:
             raise
+        except SessionChangedError as exc:
+            raise HTTPException(409, str(exc)) from exc
         except Exception as exc:
             raise HTTPException(503, str(exc)) from exc
 
 
 @app.get("/api/latest-audio")
 async def latest_audio() -> FileResponse:
+    if browser_audio_origin is None or not await store.matches_session(browser_audio_origin):
+        raise HTTPException(409, "No browser radio audio belongs to the current session.")
     candidates = [
         settings.data_dir / "latest_engineer.mp3",
-        settings.data_dir / "latest_engineer.wav",
     ]
     path = next((candidate for candidate in candidates if candidate.exists()), None)
     if path is None:
@@ -1758,4 +1829,5 @@ async def latest_audio() -> FileResponse:
     return FileResponse(
         path,
         media_type="audio/mpeg" if path.suffix == ".mp3" else "audio/wav",
+        headers={"Cache-Control": "no-store"},
     )

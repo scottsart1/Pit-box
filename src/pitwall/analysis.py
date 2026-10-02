@@ -93,12 +93,14 @@ class AnalysisEngine:
 
     async def process_lap(self, lap: dict[str, Any]) -> dict[str, Any]:
         state = await self.store.snapshot_analysis()
+        if not await self.store.matches_session(lap):
+            state = {}
         pb = await self.database.get_personal_best(int(lap["track_id"]))
         # Keep the live delta reference pointed at the current personal best so
         # the next lap is compared against it in real time.
         if pb and pb.get("trace"):
             await self.store.set_delta_reference(
-                pb["trace"], f"PB {fmt_ms(int(pb.get('lap_time_ms', 0)))}"
+                pb["trace"], f"PB {fmt_ms(int(pb.get('lap_time_ms', 0)))}", expected=lap
             )
         # A track with a canonical turn model gets fixed-window measurement,
         # so this lap's corner times are directly comparable with every other
@@ -132,6 +134,7 @@ class AnalysisEngine:
         }
         timing_fields = lap_summary.get("timing_fields", {})
         lap.update(timing_fields)
+        lap["corner_metrics"] = corners
         recorded_lap_id = await self.database.save_lap(lap, corners)
         if self.trace_archive is not None:
             try:
@@ -154,10 +157,6 @@ class AnalysisEngine:
                 }
         # Laps saved before their session-history packet arrived carry zero
         # sectors; fill them once the game has reported the split.
-        await self.database.backfill_lap_sectors(
-            int(lap["session_uid"]),
-            state.get("completed_laps", []),
-        )
         await self.database.save_line_metrics(
             int(lap["session_uid"]),
             int(lap["track_id"]),
@@ -178,10 +177,19 @@ class AnalysisEngine:
                     for key, value in racing_line.items()
                     if key not in {"current_line", "reference_line", "deviation_samples"}
                 },
-            },
+            }, expected=lap,
         )
 
         state = await self.store.snapshot_analysis()
+        if not await self.store.matches_session(lap):
+            return state.get("analysis", {})
+        # Analysis can outlast a history packet. Read the current completed-lap
+        # splits after persistence so an early packet is not permanently lost.
+        await self.database.backfill_lap_sectors(
+            int(lap["session_uid"]), state.get("completed_laps", []),
+            restart_epoch=int(lap.get("restart_epoch", 0)),
+            timeline_epoch=int(lap.get("timeline_epoch", 0)),
+        )
         deg = self.compute_degradation(state)
         fuel = self.compute_fuel_model(state)
         target = self.compute_target(state)
@@ -220,8 +228,9 @@ class AnalysisEngine:
                 "progress": progress,
             }
         )
-        await self.store.update(analysis=analysis)
-        await self.strategy.recompute()
+        published = await self.store.mutate_for_session(lap, lambda live: setattr(live, "analysis", analysis))
+        if published:
+            await self.strategy.recompute()
         return analysis
 
     @staticmethod

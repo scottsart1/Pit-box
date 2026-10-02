@@ -166,6 +166,7 @@ class RealtimeRadio:
         # Tool output was returned during the current response; a reply
         # must be requested once that response closes.
         self._tool_results_pending = False
+        self._session_signal = store.session_changed
 
     # ------------------------------------------------------------------ state
 
@@ -317,6 +318,7 @@ class RealtimeRadio:
                 self._last_activity = time.monotonic()
                 return True
             try:
+                self._session_signal = self.store.session_changed
                 self._manager = self.client.realtime.connect(
                     model=settings.realtime_model
                 )
@@ -493,6 +495,9 @@ class RealtimeRadio:
         return str(getattr(event, "type", "") or "")
 
     async def _handle_event(self, event: Any) -> None:
+        if self._session_signal.is_set():
+            self._flush_output()
+            return
         kind = self._event_type(event)
         self._last_activity = time.monotonic()
 
@@ -581,6 +586,8 @@ class RealtimeRadio:
         self._close_output_stream()
 
     async def _record(self, role: str, text: str) -> None:
+        if self._session_signal.is_set():
+            return
         cleaned = " ".join((text or "").split())
         if not cleaned:
             return
@@ -601,6 +608,8 @@ class RealtimeRadio:
         and validated exactly as on the text path.
         """
         name = str(getattr(event, "name", "") or "")
+        if self._session_signal.is_set():
+            return
         call_id = str(getattr(event, "call_id", "") or "")
         raw_arguments = getattr(event, "arguments", "") or "{}"
         connection = self._connection
@@ -630,6 +639,8 @@ class RealtimeRadio:
         # conversation — with parallel tool calls that would be one rejected
         # response.create per call, and the driver's question would go
         # unanswered. The reply is requested once, on response.done.
+        if self._session_signal.is_set():
+            return
         try:
             await connection.send(
                 {

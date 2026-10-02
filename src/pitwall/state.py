@@ -178,6 +178,8 @@ class SessionState:
     packet_format: int = 0
     game_year: int = 0
     session_uid: int = 0
+    session_generation: int = 0
+    run_serial: int = 1
     # Packet event time, independent of host/replay speed. None means no
     # authoritative packet clock has been received yet.
     session_time_s: float | None = None
@@ -530,6 +532,7 @@ class SessionState:
 class StateStore:
     def __init__(self) -> None:
         self._lock = asyncio.Lock()
+        self.session_changed = asyncio.Event()
         self.usage_event: Callable[[str], None] | None = None
         self.state = SessionState()
         self._packet_times: deque[float] = deque()
@@ -542,6 +545,8 @@ class StateStore:
         """Reset session-scoped state while retaining driver preferences/voice."""
 
         previous = self.state
+        self.session_changed.set()
+        self.session_changed = asyncio.Event()
         cadence = int(previous.proactive.get("cadence_laps", 2))
         proactive = {
             "enabled": bool(previous.proactive.get("enabled", True)),
@@ -555,6 +560,7 @@ class StateStore:
             "delivery_state": "idle",
         }
         self.state = SessionState(
+            session_generation=previous.session_generation + 1,
             ptt_mask=previous.ptt_mask,
             ptt_status=previous.ptt_status,
             ptt_release_mode=previous.ptt_release_mode,
@@ -634,9 +640,18 @@ class StateStore:
                 self.state.restart_epoch = restart
                 changed = True
             if self.state.session_uid == uid and self.state.timeline_epoch != timeline:
+                self.session_changed.set()
+                self.session_changed = asyncio.Event()
+                self.state.session_generation += 1
                 self.state.timeline_epoch = timeline
                 # Never splice a pre-rewind in-progress trace into the new branch.
                 self.state.traces.clear()
+                self.state.current_lap_started.clear()
+                self.state.completed_laps.clear()
+                self.state.radio_log.clear()
+                self.state.briefings.clear()
+                self.state.analysis.clear()
+                self.state.run_serial += 1
                 changed = True
             if changed:
                 self.state.state_revision += 1
@@ -645,6 +660,7 @@ class StateStore:
         self,
         trace: list[dict[str, Any]],
         label: str,
+        expected: dict[str, Any] | None = None,
     ) -> None:
         """Install a reference lap for the live delta.
 
@@ -666,6 +682,10 @@ class StateStore:
             last_d = distance
             pairs.append((distance, float(point["t"]) - base_t))
         async with self._lock:
+            if expected is not None:
+                from .session_guard import session_key
+                if session_key(self.state) != session_key(expected):
+                    return
             self._delta_ref = pairs
             self.state.live_delta_reference = label if pairs else ""
             if not pairs:
@@ -832,6 +852,13 @@ class StateStore:
 
     async def update(self, **values: Any) -> None:
         async with self._lock:
+            if self.state.session_uid and any(
+                name in values and values[name] != getattr(self.state, name)
+                for name in ("session_uid", "restart_epoch", "timeline_epoch")
+            ):
+                self.session_changed.set()
+                self.session_changed = asyncio.Event()
+                self.state.session_generation += 1
             changed = False
             for key, value in values.items():
                 if hasattr(self.state, key) and getattr(self.state, key) != value:
@@ -840,6 +867,20 @@ class StateStore:
             if changed:
                 self._mark_learning_context_locked()
                 self.state.state_revision += 1
+
+    async def mutate_for_session(self, expected: dict[str, Any], callback: Callable[[SessionState], Any]) -> bool:
+        from .session_guard import session_key
+        async with self._lock:
+            if session_key(self.state) != session_key(expected):
+                return False
+            callback(self.state)
+            self.state.state_revision += 1
+            return True
+
+    async def matches_session(self, expected: dict[str, Any]) -> bool:
+        from .session_guard import session_key
+        async with self._lock:
+            return session_key(self.state) == session_key(expected)
 
     async def mutate(self, callback: Callable[[SessionState], Any]) -> None:
         async with self._lock:
@@ -853,6 +894,25 @@ class StateStore:
         if not state.current_lap_started:
             return
         reasons = state.current_lap_started.setdefault("learning_exclusions", [])
+        start = state.current_lap_started
+        player = state.drivers[state.player_car_index] if 0 <= state.player_car_index < len(state.drivers) else None
+        gap = player.delta_to_front_s if player is not None else None
+        if gap is not None:
+            start["traffic_observed"] = True
+            if 0 < gap < 1.5 and state.speed_kph > 50 and "traffic" not in reasons:
+                reasons.append("traffic")
+        if state.current_lap_invalid and "invalid_lap" not in reasons:
+            reasons.append("invalid_lap")
+        if start.get("compound") and state.tyre.compound != start["compound"] and "tyre_change" not in reasons:
+            reasons.append("tyre_change")
+        if start.get("weather") and state.weather != start["weather"] and "weather_change" not in reasons:
+            reasons.append("weather_change")
+        if start.get("setup") and state.car_setup != start["setup"] and "setup_change" not in reasons:
+            # Fuel is carried in the setup packet but is a separate lap context.
+            old = {key: value for key, value in start["setup"].items() if key != "fuel_load"}
+            new = {key: value for key, value in state.car_setup.items() if key != "fuel_load"}
+            if old != new:
+                reasons.append("setup_change")
         if state.pit_status and "pit_lap" not in reasons:
             reasons.append("pit_lap")
         if ("neutralised_lap" not in reasons and (
@@ -1098,8 +1158,11 @@ class StateStore:
             self._mark_learning_context_locked()
             if old_lap and new_lap > old_lap and state.traces:
                 start = state.current_lap_started or {}
+                distances = [point.get("d", 0) for point in state.traces]
+                coverage = (max(distances) - min(distances)) / max(1, state.track_length_m)
                 completed = {
                     "session_uid": state.session_uid,
+                    "session_generation": state.session_generation,
                     "restart_epoch": state.restart_epoch,
                     "timeline_epoch": state.timeline_epoch,
                     "player_car_index": state.player_car_index,
@@ -1113,6 +1176,10 @@ class StateStore:
                     "lap_time_ms": int(last_lap_ms or state.last_lap_ms),
                     "valid": not bool(state.current_lap_invalid),
                     "compound": state.tyre.compound,
+                    "run_serial": int(start.get("run_serial", state.run_serial)),
+                    "traffic_observed": bool(start.get("traffic_observed")),
+                    "context_observed": all(str(packet) in state.packet_group_freshness for packet in (2, 5, 6, 7)),
+                    "trace_coverage": round(min(1.0, max(0.0, coverage)), 3),
                     "tyre_age_end": state.tyre.age_laps,
                     "tyre_age_start": int(
                         start.get("tyre_age", max(0, state.tyre.age_laps - 1))
@@ -1140,7 +1207,9 @@ class StateStore:
                     # test the field's laps get in the archive.
                     "flag_context": "neutralised_lap"
                     in start.get("learning_exclusions", []),
-                    "setup": copy.deepcopy(state.car_setup),
+                    "setup": copy.deepcopy(start.get("setup", state.car_setup)),
+                    "incidents": [copy.deepcopy(event) for event in state.events_log if event.get("lap") == old_lap
+                                  and event.get("type") in {"PENA", "COLL", "RTMT", "SPTP", "SCAR", "RDFL"}],
                     "trace": copy.deepcopy(state.traces),
                     "created_at": time.time(),
                 }
@@ -1157,6 +1226,10 @@ class StateStore:
             state.last_lap_ms = int(last_lap_ms)
             if new_lap != old_lap:
                 state.current_lap_started = {
+                    "run_serial": state.run_serial,
+                    "setup": copy.deepcopy(state.car_setup),
+                    "compound": state.tyre.compound,
+                    "weather": state.weather,
                     "fuel_kg": state.fuel_kg,
                     "tyre_age": state.tyre.age_laps,
                     "wear": list(state.tyre.wear),
@@ -1181,11 +1254,20 @@ class StateStore:
         self,
         lap_num: int,
         values: dict[str, Any],
+        expected: dict[str, Any] | None = None,
     ) -> None:
         async with self._lock:
+            if expected is not None:
+                from .session_guard import session_key
+                if session_key(self.state) != session_key(expected):
+                    return
             for lap in reversed(self.state.completed_laps):
                 if int(lap.get("lap_num", -1)) == int(lap_num):
-                    lap.update(copy.deepcopy(values))
+                    update = copy.deepcopy(values)
+                    for key in ("s1_ms", "s2_ms", "s3_ms"):
+                        if not update.get(key) and lap.get(key):
+                            update.pop(key, None)
+                    lap.update(update)
                     break
 
     async def merge_player_lap_history(self, history: list[dict[str, Any]]) -> None:
@@ -1204,18 +1286,23 @@ class StateStore:
                         }
                     )
 
-    async def append_radio(self, role: str, text: str) -> None:
+    async def append_radio(self, role: str, text: str, *, expected: dict[str, Any] | None = None) -> bool:
         async with self._lock:
+            if expected is not None:
+                from .session_guard import session_key
+                if session_key(self.state) != session_key(expected):
+                    return False
             self.state.radio_log.append({"role": role, "text": text})
             self.state.radio_log = self.state.radio_log[-100:]
         if role == "engineer" and text and self.usage_event:
             self.usage_event("engineer")
+        return True
 
     async def append_event(self, event_type: str, payload: dict[str, Any]) -> None:
         queued: dict[str, Any]
         async with self._lock:
             now = time.time()
-            event = {"time": now, "type": event_type, "payload": copy.deepcopy(payload)}
+            event = {"time": now, "lap": self.state.current_lap, "type": event_type, "payload": copy.deepcopy(payload)}
             self.state.events_log.append(event)
             self.state.events_log = self.state.events_log[-200:]
             queued = {

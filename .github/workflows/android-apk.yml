@@ -71,6 +71,8 @@ jobs:
           NODE_PATH="$RUNNER_TEMP/pitbox-browser/node_modules" node tools/strategy-layout-smoke.cjs
       - name: Analysis touch scrolling and unobstructed playback controls
         run: NODE_PATH="$RUNNER_TEMP/pitbox-browser/node_modules" node tools/analysis-layout-smoke.cjs
+      - name: Test Engineer real UDP runs, session boundaries, comparison and report export
+        run: NODE_PATH="$RUNNER_TEMP/pitbox-browser/node_modules" python tools/engineering-acceptance.py --output "$RUNNER_TEMP/engineering-acceptance"
       - name: Optional usage ingestion and owner report checks (local fixtures only)
         run: node --test distribution/activation-server/tests/*.mjs
 

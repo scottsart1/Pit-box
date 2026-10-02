@@ -465,6 +465,16 @@ V4_13_1_PLAYER_FLAG_CONTEXT = Migration(
 )
 
 
+V5_2_ENGINEERING = Migration(
+    version=5200,
+    app_version="5.2.0",
+    statements=(
+        "ALTER TABLE recorded_laps ADD COLUMN engineering_json TEXT NOT NULL DEFAULT '{}'",
+        "ALTER TABLE recorded_sessions ADD COLUMN engineering_notes_json TEXT NOT NULL DEFAULT '{}'",
+    ),
+)
+
+
 MIGRATIONS: tuple[Migration, ...] = (
     V4_2_CATALOG,
     V4_2_COMPARISON_RESULTS,
@@ -473,5 +483,6 @@ MIGRATIONS: tuple[Migration, ...] = (
     V4_9_7_RAW_SESSION_TYPE,
     V4_13_LIBRARY_INDEXES,
     V4_13_1_PLAYER_FLAG_CONTEXT,
+    V5_2_ENGINEERING,
 )
 LATEST_SCHEMA_VERSION = MIGRATIONS[-1].version

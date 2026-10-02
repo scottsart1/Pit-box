@@ -301,6 +301,7 @@ async function deleteSession(session) {
 }
 
 function resetSelectedSession() {
+  if (byId("reviewEngineering")) byId("reviewEngineering").disabled = true;
   state.sessionRequest += 1;
   state.selectedSessionId = "";
   state.sessionDetail = null;
@@ -329,6 +330,13 @@ async function selectSession(sessionId) {
   resetSelectedSession();
   const request = state.sessionRequest;
   state.selectedSessionId = sessionId;
+  if (byId("reviewEngineering")) {
+    byId("reviewEngineering").disabled = false;
+    byId("reviewEngineering").onclick = () => {
+    window.dispatchEvent(new CustomEvent("pitwall:engineering-session", { detail: { sessionId } }));
+    navigate("test-engineer");
+    };
+  }
   state.fieldCache.clear();
   refreshSessionSelectors();
   renderSessionRows();

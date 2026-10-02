@@ -55,6 +55,8 @@ public class MainActivity extends Activity {
     private int invitationAttempts;
     private boolean keyboardVisible;
     private boolean resumed;
+    private static final int SAVE_REPORT = 52;
+    private String pendingReportUrl;
     private final ImmersiveRehidePolicy rehidePolicy = new ImmersiveRehidePolicy();
     private final Runnable finishSystemBarRehide = () -> {
         hideSystemBars();
@@ -74,6 +76,7 @@ public class MainActivity extends Activity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        if (savedInstanceState != null) pendingReportUrl = savedInstanceState.getString("pendingReportUrl");
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
         WindowCompat.setDecorFitsSystemWindows(getWindow(), false);
 
@@ -121,6 +124,7 @@ public class MainActivity extends Activity {
         // key, unpairing a device - cancelled itself on the tablet before the
         // driver saw it. The default client shows the platform dialogs.
         web.setWebChromeClient(new WebChromeClient());
+        web.setDownloadListener((url, userAgent, disposition, mimeType, length) -> saveReport(url));
         web.setWebViewClient(new WebViewClient() {
             @Override
             public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
@@ -196,6 +200,76 @@ public class MainActivity extends Activity {
         if (invitation == null || invitation.isEmpty() || invitation.length() > 4096) return;
         pendingInvitation = invitation;
         invitationAttempts = 0;
+    }
+
+    private void saveReport(String url) {
+        if (!isTrustedDashboard(url) || pendingReportUrl != null) return;
+        Uri uri = Uri.parse(url);
+        String path = uri.getPath();
+        if (path == null || !(path.startsWith("/api/export/")
+                || (path.startsWith("/api/v1/sessions/") && path.endsWith("/engineering/export")))) return;
+        boolean json = "json".equals(uri.getQueryParameter("format")) || path.endsWith(".json");
+        boolean csv = path.endsWith(".csv");
+        Intent intent = new Intent(Intent.ACTION_CREATE_DOCUMENT);
+        intent.addCategory(Intent.CATEGORY_OPENABLE);
+        intent.setType(json ? "application/json" : csv ? "text/csv" : "text/plain");
+        intent.putExtra(Intent.EXTRA_TITLE, "YourPitBox-session-report." + (json ? "json" : csv ? "csv" : "txt"));
+        pendingReportUrl = url;
+        try { startActivityForResult(intent, SAVE_REPORT); }
+        catch (android.content.ActivityNotFoundException error) {
+            pendingReportUrl = null;
+            android.widget.Toast.makeText(this, "No file picker is available.", android.widget.Toast.LENGTH_LONG).show();
+        }
+    }
+
+    @Override
+    protected void onSaveInstanceState(Bundle state) {
+        super.onSaveInstanceState(state);
+        state.putString("pendingReportUrl", pendingReportUrl);
+    }
+
+    @Override
+    protected void onActivityResult(int request, int result, Intent data) {
+        super.onActivityResult(request, result, data);
+        if (request != SAVE_REPORT) return;
+        String source = pendingReportUrl;
+        pendingReportUrl = null;
+        if (result != RESULT_OK || data == null || data.getData() == null || source == null
+                || !isTrustedDashboard(source)) return;
+        Uri destination = data.getData();
+        new Thread(() -> {
+            HttpURLConnection connection = null;
+            String message;
+            try {
+                connection = (HttpURLConnection) new URL(source).openConnection();
+                connection.setConnectTimeout(10000);
+                connection.setReadTimeout(30000);
+                connection.setInstanceFollowRedirects(false);
+                if (connection.getResponseCode() != 200) throw new java.io.IOException("Report is unavailable");
+                // Buffer a bounded report before opening the destination, so an
+                // interrupted local request does not leave a partial export.
+                java.io.ByteArrayOutputStream bytes = new java.io.ByteArrayOutputStream();
+                try (java.io.InputStream input = connection.getInputStream()) {
+                    byte[] buffer = new byte[8192];
+                    int count;
+                    while ((count = input.read(buffer)) != -1) {
+                        if (bytes.size() + count > 16 * 1024 * 1024) throw new java.io.IOException("Report exceeds 16 MB");
+                        bytes.write(buffer, 0, count);
+                    }
+                }
+                try (java.io.OutputStream output = getContentResolver().openOutputStream(destination, "wt")) {
+                    if (output == null) throw new java.io.IOException("Cannot open the selected file");
+                    bytes.writeTo(output);
+                }
+                message = "Session report saved.";
+            } catch (Exception error) {
+                message = "Could not save the report. Please try exporting again.";
+            } finally {
+                if (connection != null) connection.disconnect();
+            }
+            final String notice = message;
+            handler.post(() -> android.widget.Toast.makeText(getApplicationContext(), notice, android.widget.Toast.LENGTH_LONG).show());
+        }, "pitbox-report-export").start();
     }
 
     private boolean isTrustedDashboard(String url) {

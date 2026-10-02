@@ -49,6 +49,7 @@ async def test_detection_continues_while_the_engineer_speaks(monkeypatch) -> Non
     engine.pending = [{"type": "test"}]
     engine._discarded = []
     engine._session_uid = 1
+    engine._session_context = (1, 0, 0, 0)
     engine._task = None
     engine._deliver_task = None
 

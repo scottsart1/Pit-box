@@ -57,7 +57,7 @@ async def test_lap_analysis_segments_and_persists(stack):
         "created_at": 1.0,
     }
     await store.update(
-        track_id=10, track_name="Spa", session_type="Race", total_laps=20, current_lap=3
+        session_uid=1, track_id=10, track_name="Spa", session_type="Race", total_laps=20, current_lap=3
     )
     await store.mutate(lambda state: state.completed_laps.append(lap))
     result = await analysis.process_lap(lap)

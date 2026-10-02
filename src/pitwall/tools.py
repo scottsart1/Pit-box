@@ -42,6 +42,19 @@ class TelemetryTools:
         self.session_catalog = session_catalog
         self.comparison_service = comparison_service
         self.field_analysis_service = field_analysis_service
+        self.engineering = None
+
+    async def get_strategic_rivals(self) -> dict[str, Any]:
+        from .engineering import strategic_rivals
+        return strategic_rivals(await self.store.snapshot_analysis())
+
+    async def get_practice_run_review(self) -> dict[str, Any]:
+        from .engineering import build_runs
+        state = await self.store.snapshot_analysis()
+        runs = build_runs(state.get("completed_laps", []))
+        return {"track": state.get("track_name"), "runs": [
+            {key: value for key, value in run.items() if key != "laps"} for run in runs[-6:]
+        ], "note": "Observed pace trends include fuel and conditions. The Test Engineer tab compares matched runs and exports reports."}
 
     @staticmethod
     def _service_unavailable(name: str) -> dict[str, Any]:
@@ -2442,6 +2455,8 @@ class TelemetryTools:
 
     def schemas(self) -> list[dict[str, Any]]:
         definitions = [
+            ("get_strategic_rivals", "Identify who the driver is actually racing using projected finish gaps, tyre age and estimated remaining stops; includes uncertainty.", {}),
+            ("get_practice_run_review", "Review recent practice/test runs, compounds, setup changes, clean pace, observed degradation, handling indicators and what to test next.", {}),
             (
                 "get_session_overview",
                 "Get session, track, lap, weather, race-control and telemetry health.",
