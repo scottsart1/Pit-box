@@ -74,6 +74,7 @@ async def test_it_respects_the_ack_setting(monkeypatch) -> None:
 class _Store:
     def __init__(self) -> None:
         self.fields: dict = {}
+        self.session_changed = asyncio.Event()
 
     async def update(self, **fields) -> None:
         self.fields.update(fields)
