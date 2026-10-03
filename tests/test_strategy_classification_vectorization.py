@@ -53,6 +53,29 @@ def scalar_reference(plan, state, rivals, outcomes):
     }
 
 
+def _modelled(result):
+    """Only the keys the scalar reference models.
+
+    The distribution also carries the decision utility, which is a valuation of
+    these same outcomes rather than a second way of computing them, and has no
+    counterpart in this reference implementation.
+    """
+    return {
+        key: value
+        for key, value in result.items()
+        if key not in _UTILITY_KEYS
+    }
+
+
+_UTILITY_KEYS = {
+    "decision_utility",
+    "expected_value_points",
+    "tail_value_points",
+    "utility_risk_appetite",
+    "utility_basis",
+}
+
+
 @pytest.mark.parametrize("mode", ["race", "sprint"])
 @pytest.mark.parametrize("stops", [0, 1, 3])
 @pytest.mark.parametrize("rival_count", [0, 4, 23])
@@ -72,7 +95,9 @@ def test_vectorized_distribution_preserves_scalar_results(mode, stops, rival_cou
     plan = {"stops_remaining": stops, "projected_rejoin_position": 15,
             "expected_positions_recovered": 4.9, "pending_finish_penalty_s": 5}
     outcomes = rng.normal(1000, 15, samples)
-    assert StrategyEngine._position_distribution(plan, state, rivals, outcomes) == scalar_reference(plan, state, rivals, outcomes)
+    assert _modelled(
+        StrategyEngine._position_distribution(plan, state, rivals, outcomes)
+    ) == scalar_reference(plan, state, rivals, outcomes)
 
 
 @pytest.mark.parametrize("player_penalty", [0, 5, math.nan, math.inf])
@@ -89,7 +114,9 @@ def test_strict_ties_nonfinite_times_and_penalty_boundaries_are_unchanged(player
         {"position": 6},
     ]
     outcomes = np.array([99.9, 100, 100.1, 104.9, 105, 105.1, math.nan, math.inf, -math.inf])
-    assert StrategyEngine._position_distribution(plan, state, rivals, outcomes) == scalar_reference(plan, state, rivals, outcomes)
+    assert _modelled(
+        StrategyEngine._position_distribution(plan, state, rivals, outcomes)
+    ) == scalar_reference(plan, state, rivals, outcomes)
 
 
 def test_exact_finish_tie_does_not_move_a_rival_ahead():
