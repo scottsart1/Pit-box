@@ -166,6 +166,26 @@ checks. This is not evidence of a native QA visual or Android system-export
 pass. The production installation and its active recording remained separate;
 the subsequent in-place production upgrade is recorded below.
 
+### Scheduled native follow-up — 3 October, 03:46 EDT
+
+The requested one-time follow-up started at **07:46 UTC**. The tablet was not
+connected to ADB over USB or wireless debugging. Initial discovery retained
+the previous Samsung advertisement at `192.168.12.189:41045`, but connecting
+was refused (Windows error 10061). A subsequent bounded TCP attempt timed out,
+and two ICMP probes received no replies. Restarting the host ADB server and
+refreshing discovery produced no connected devices or advertised ADB services.
+These observations establish an unavailable debugging connection; they do not
+establish an application, Wi-Fi or Bluetooth defect.
+
+No tablet inputs, synthetic telemetry, application restart, installation or
+data mutation occurred during this attempt. Native Setup Lab selection and
+scrolling, Test Engineer editing and Android's system report-export flow remain
+**unverified**, rather than passed. The existing QA fixture and signed APKs
+remain available for resumption. Reconnect USB, or wake/unlock the tablet and
+enable wireless debugging on the same Wi-Fi, before resuming these checks.
+Connection evidence is retained at
+`%LOCALAPPDATA%/YourPitBoxRelease/5.3.1/tablet-native-20261003T074617Z/connection-preflight.json`.
+
 ## Android CI and signed artifacts
 
 [Android run 37096074694](https://github.com/scottsart1/Pit-box/actions/runs/37096074694)
@@ -370,7 +390,7 @@ verified build.
 | [Final Android CI](https://github.com/scottsart1/Pit-box/actions/runs/37096074694) | Passed: 1,862 Python tests, 139 JavaScript tests, three browser suites at three viewports, APK builds and emulator gates |
 | Windows installer/archive identity and frozen acceptance | Passed; exact source and GitHub digests, three browser suites at three viewports, cold data and captures verified; unsigned artifacts staged locally |
 | Android APK identity and signing | Passed; production and QA hashes/certificate recorded above; both installed packages matched their signed bytes |
-| Physical Android native visual/system-export acceptance | Not completed; production activity remained foreground during QA attempts |
+| Physical Android native visual/system-export acceptance | Blocked; initial activity contention, then no reachable USB/wireless ADB connection at the scheduled 03:46 EDT follow-up; no native pass claimed |
 | Physical Android QA backend/browser acceptance | Passed; nine direct checks and three suites at three viewports; native touch checks separate |
 | Production in-place upgrade and data preservation | Passed; revision 33, same 144 sessions and 25,301 laps, finalized-capture storage accounting reconciled |
 | Website/public downloads/update metadata | Passed; both full-download hashes, 18 routes/assets and six update-client cases |
