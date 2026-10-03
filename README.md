@@ -1,8 +1,8 @@
-# Your Pit Box 5.1.0 — AI race engineer and driver dashboard
+# Your Pit Box 5.2.0 — AI race engineer and driver dashboard
 
 [Download Windows or Android](https://yourpitbox.com/#download),
 [try the Driver Dashboard](https://your-pit-box-driver-dashboard.sarthakvij123450.chatgpt.site/),
-or read the [release verification](docs/release-qa-5.1.0.md).
+or read the [release verification](docs/release-qa-5.2.0.md).
 
 Your Pit Box receives **F1 26** telemetry (UDP format **2026**) from a PS5, runs deterministic
 strategy/corner/setup analysis locally, keeps persistent SQLite history, answers spoken questions,
@@ -103,6 +103,33 @@ Only enable `PITWALL_WEB_LAN_ACCESS=true` when a phone/tablet needs the
 dashboard. Bind the web host to `0.0.0.0`, set a long
 `PITWALL_WEB_ACCESS_TOKEN`, and keep it on a trusted LAN. Your Pit Box never opens a
 router or firewall to the public internet automatically.
+
+## What changed in 5.2.0
+
+Open **Setup Lab → Open Test Engineer** or **Analysis → Test Engineer** to
+review practice runs, compounds, setup changes, clean pace, consistency,
+temperatures and handling indicators. Returning to the pits creates a short
+debrief with a suggested next test. Add objectives and conclusions per run or
+whole session, then export a text or JSON report. Android saves through its
+system file picker. **Session Review → Review runs / export report** opens a
+saved session directly.
+
+**A/B setup comparison** uses unique matched lap pairs: same compound and
+weather, tyre age within one lap, fuel within 3 kg and air/track temperatures
+within 3°C. Invalid, pit, flagged, traffic, outlier and incomplete laps are
+excluded. Three pairs are needed for a verdict; sector deltas show where time
+changed. Missing evidence stays unavailable. Observed pace trend includes fuel
+and driving effects and does not isolate tyre degradation.
+
+**Strategy → Strategically relevant rivals** ranks projected finish gaps after
+estimated remaining stops, with tyre age and forecast confidence. Radio tools
+can use that strategic view and the latest run reviews.
+
+Session changes, restarts and flashbacks now cancel obsolete engineer, wake,
+speech and Realtime work, clear live analysis and radio context, and ignore
+late packets from retired sessions. Saved history remains intact. See the
+[Test Engineer guide](https://yourpitbox.com/guide.html#test-engineer) for the
+workflow and [verification](docs/release-qa-5.2.0.md) for test results and limits.
 
 ## What changed in 5.1.0
 
