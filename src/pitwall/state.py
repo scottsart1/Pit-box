@@ -899,8 +899,16 @@ class StateStore:
         gap = player.delta_to_front_s if player is not None else None
         if gap is not None:
             start["traffic_observed"] = True
+            if gap > 0 and state.speed_kph > 50:
+                start["min_gap_ahead_s"] = min(float(gap), start.get("min_gap_ahead_s", float("inf")))
             if 0 < gap < 1.5 and state.speed_kph > 50 and "traffic" not in reasons:
                 reasons.append("traffic")
+        if "2" in state.packet_group_freshness:
+            for field in ("air_temp_c", "track_temp_c"):
+                value = float(getattr(state, field))
+                bounds = start.setdefault(f"{field}_range", [value, value])
+                bounds[0] = min(bounds[0], value)
+                bounds[1] = max(bounds[1], value)
         if state.current_lap_invalid and "invalid_lap" not in reasons:
             reasons.append("invalid_lap")
         if start.get("compound") and state.tyre.compound != start["compound"] and "tyre_change" not in reasons:
@@ -1178,6 +1186,12 @@ class StateStore:
                     "compound": state.tyre.compound,
                     "run_serial": int(start.get("run_serial", state.run_serial)),
                     "traffic_observed": bool(start.get("traffic_observed")),
+                    "traffic_evidence": {
+                        "gap_observed": bool(start.get("traffic_observed")),
+                        "min_gap_ahead_s": start.get("min_gap_ahead_s"),
+                        "close_following_observed": "traffic" in start.get("learning_exclusions", []),
+                        "basis": "Measured gap ahead while above 50 km/h; this does not establish all traffic interference.",
+                    },
                     "context_observed": all(str(packet) in state.packet_group_freshness for packet in (2, 5, 6, 7)),
                     "trace_coverage": round(min(1.0, max(0.0, coverage)), 3),
                     "tyre_age_end": state.tyre.age_laps,
@@ -1189,6 +1203,8 @@ class StateStore:
                     "temps_end": list(state.tyre.inner_temps_c),
                     "track_temp_c": int(state.track_temp_c),
                     "air_temp_c": int(state.air_temp_c),
+                    "air_temp_c_range": copy.deepcopy(start.get("air_temp_c_range")),
+                    "track_temp_c_range": copy.deepcopy(start.get("track_temp_c_range")),
                     "weather": state.weather,
                     # Historical forecast chance for context, never intensity.
                     "rain_pct": int(state.rain_now_pct),

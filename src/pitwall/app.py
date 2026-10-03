@@ -352,8 +352,18 @@ async def _persist_stint_debrief(snapshot: dict[str, object]) -> None:
             if not await store.matches_session(snapshot):
                 return
             current = await store.snapshot_analysis()
-            runs = await asyncio.to_thread(build_runs, current.get("completed_laps", []))
-            runs = [run for run in runs if run.get("run_serial") == snapshot.get("run_serial")]
+            from .catalog import session_id as engineering_session_id
+            from .engineering_groups import context_notes
+
+            try:
+                report = await engineering.report(engineering_session_id(int(snapshot["session_uid"]), int(snapshot.get("restart_epoch", 0))))
+                runs = report["runs"]
+            except KeyError:
+                runs = await asyncio.to_thread(build_runs, current.get("completed_laps", []))
+            if not await store.matches_session(snapshot):
+                return
+            runs = [run for run in runs if run.get("run_serial") == snapshot.get("run_serial")
+                    and all(int(lap.get("timeline_epoch", 0)) == int(snapshot.get("timeline_epoch", 0)) for lap in run["laps"])]
             if not runs:
                 return
             run = runs[-1]
@@ -371,8 +381,13 @@ async def _persist_stint_debrief(snapshot: dict[str, object]) -> None:
                 text += f"Observed pace trend {trend:+.2f} seconds per lap. "
             if temperature:
                 text += f"Tyre inner temperatures {temperature[0]:.0f} to {temperature[1]:.0f} Celsius. "
+            reported = context_notes(run["laps"])
+            exclusions = sum(bool(note.get("exclude_from_pace")) for note in reported)
+            if exclusions:
+                text += "Reported compromised laps were excluded from pace. "
             text += summary["takeaway"] + " " + summary["next_test"]
             payload = {key: value for key, value in run.items() if key != "laps"}
+            payload["context_notes"] = reported
             await database.save_briefing(snapshot, "post_stint", payload, text)
             await store.mutate_for_session(snapshot, lambda live: live.briefings.update({"post_stint": {"payload": payload, "text": text}}))
             if voice is not None and current.get("proactive", {}).get("enabled") and await store.matches_session(snapshot):
@@ -1797,7 +1812,13 @@ async def _browser_voice_locked(file: UploadFile, origin: dict[str, object]) -> 
                 raise HTTPException(409, "Session changed; the previous recording was discarded.")
             if not text:
                 raise HTTPException(422, "No speech detected")
-            reply = await brain.ask(text)
+            from .engineering_context import lap_note_origin
+
+            token = lap_note_origin.set(origin)
+            try:
+                reply = await brain.ask(text)
+            finally:
+                lap_note_origin.reset(token)
             target = settings.data_dir / "latest_engineer.mp3"
             await audio.synthesize(reply, target, "mp3")
             if not await store.matches_session(origin):

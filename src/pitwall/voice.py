@@ -16,6 +16,7 @@ import numpy as np
 from .audio import AudioService
 from .brain import EngineerBrain
 from .config import settings
+from .engineering_context import lap_note_context, lap_note_origin, lap_note_task_context
 from .realtime import RealtimeRadio
 from .session_guard import SessionChangedError, session_scoped
 from .state import StateStore
@@ -69,7 +70,7 @@ class NativeVoiceController:
         self.stream: Any = None
         self.frames: list[np.ndarray] = []
         self.busy = False
-        self._pending_clips: deque[np.ndarray] = deque(
+        self._pending_clips: deque[tuple[np.ndarray, dict | None]] = deque(
             maxlen=max(1, settings.voice_clip_queue_size)
         )
         self._ack_prepare_task: asyncio.Task[None] | None = None
@@ -78,6 +79,7 @@ class NativeVoiceController:
         self._legacy_wake_setting_ignored = False
         self._interaction_source = ""
         self._interaction_finalized_at = 0.0
+        self._interaction_lap_origins: dict[str, dict] = {}
 
         self._signal_pressed = False
         self._transition_lock = asyncio.Lock()
@@ -249,6 +251,9 @@ class NativeVoiceController:
 
     async def _begin_interaction(self, source: str) -> None:
         self._interaction_source = source
+        self._interaction_lap_origins[source] = await self.store.peek(
+            "session_uid", "restart_epoch", "timeline_epoch", "session_generation", "current_lap"
+        )
         await self.store.update(
             radio_indicator="listening",
             radio_source=source,
@@ -849,6 +854,7 @@ class NativeVoiceController:
         self._wake_process_task = self.loop.create_task(
             self._process_wake_candidate(frames, reason),
             name="pitwall-wake-candidate",
+            context=lap_note_task_context(self._interaction_lap_origins.get("wake")),
         )
 
     def _clear_wake_capture(self, keep_pending: bool = False) -> None:
@@ -862,6 +868,7 @@ class NativeVoiceController:
             self._wake_finalize_pending = False
 
     @session_scoped(raise_on_change=False)
+    @lap_note_context
     async def _process_wake_candidate(
         self,
         frames: list[np.ndarray],
@@ -1005,6 +1012,9 @@ class NativeVoiceController:
             last_error="",
         )
         if data is not None and getattr(data, "size", 0):
+            origin = lap_note_origin.get() or self._interaction_lap_origins.get("ptt" if reason == "ptt" else "wake")
+            if origin is not None and hasattr(realtime, "queue_clip_origin"):
+                realtime.queue_clip_origin(origin)
             await realtime.send_audio(data, settings.audio_sample_rate)
         return True
 
@@ -1091,6 +1101,7 @@ class NativeVoiceController:
         while not self._shutdown:
             signal = self.store.session_changed
             await signal.wait()
+            self._interaction_lap_origins.clear()
             self._pending_clips.clear()
             self.frames.clear()
             self._wake_preroll.clear()
@@ -1259,7 +1270,9 @@ class NativeVoiceController:
         # routes reach the same engineer.
         if await self._start_realtime(data, "ptt"):
             return
-        self._process_task = self.loop.create_task(self._process(data))
+        self._process_task = self.loop.create_task(
+            self._process(data), context=lap_note_task_context(self._interaction_lap_origins.get("ptt"))
+        )
 
     @staticmethod
     def _write_wav(path: Path, data: np.ndarray) -> None:
@@ -1271,6 +1284,7 @@ class NativeVoiceController:
             output.writeframes(data.astype(np.int16, copy=False).tobytes())
 
     @session_scoped(raise_on_change=False)
+    @lap_note_context
     async def _process(self, data: np.ndarray) -> None:
         if not getattr(self.audio, "voice_ready", True):
             # Speech-to-text always runs on OpenAI, whatever provider reasons.
@@ -1284,7 +1298,7 @@ class NativeVoiceController:
             return
         if self.busy:
             if len(self._pending_clips) < self._pending_clips.maxlen:
-                self._pending_clips.append(data)
+                self._pending_clips.append((data, lap_note_origin.get()))
                 await self.store.update(
                     radio_queue_depth=len(self._pending_clips),
                     last_error="Radio busy; your latest PTT clip is queued.",
@@ -1331,11 +1345,12 @@ class NativeVoiceController:
             if not self._signal_pressed:
                 await self.store.update(engineer_status="standing by")
             if self._pending_clips and not self._shutdown:
-                queued = self._pending_clips.popleft()
+                queued, origin = self._pending_clips.popleft()
                 await self.store.update(radio_queue_depth=len(self._pending_clips))
                 self._process_task = self.loop.create_task(
                     self._process(queued),
                     name="pitwall-queued-ptt",
+                    context=lap_note_task_context(origin),
                 )
 
     @session_scoped(discarded=False, raise_on_change=False)

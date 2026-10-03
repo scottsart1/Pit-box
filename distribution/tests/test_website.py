@@ -22,7 +22,7 @@ import pytest
 DIST = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(DIST.parent))
 
-from distribution.website import build_site  # noqa: E402
+from distribution.website import build_site
 
 INDEX = (DIST / "website" / "index.html").read_text(encoding="utf-8")
 GUIDE = (DIST / "website" / "guide.html").read_text(encoding="utf-8")
@@ -402,7 +402,7 @@ def test_reviews_can_be_posted_and_are_read_before_they_appear():
     # Both scripts are classic scripts on one page and share a global scope;
     # a top-level `status` or `form` in reviews.js would collide with
     # download.js and stop the file from running at all.
-    assert not re.search(r"^const (status|form|button) ", REVIEWS_JS, re.M)
+    assert not re.search(r"^const (status|form|button) ", REVIEWS_JS, re.MULTILINE)
 
 
 def test_the_eula_sections_are_numbered_contiguously():
@@ -711,6 +711,10 @@ def test_unsigned_windows_notice_remains_without_removed_installation_wording():
 
 
 def test_current_release_describes_skippable_setup_tour_and_manual_updates():
+    from pitwall import __version__
+
+    gradle = (DIST.parent / 'android' / 'app' / 'build.gradle.kts').read_text(encoding='utf-8')
+    revision = re.search(r'val androidRevision = (\d+)', gradle).group(1)
     release = INDEX.split('id="new"', 1)[1].split('</section>', 1)[0]
     assert release.split('<p class="section-lede">', 1)[1].startswith('Track runs and setup changes')
     for text in ('Test Engineer', 'A/B comparison', 'projected finish gap', 'sector differences', 'system file picker'):
@@ -719,14 +723,41 @@ def test_current_release_describes_skippable_setup_tour_and_manual_updates():
     assert 'Labelled sample values' in release and 'without UDP' in release
     assert 'swipe-to-reveal system bars' in release
     assert 'tyre pace trend' in release
-    assert 'Windows 5.2.0 and Android 5.2.0 (revision 31).' in release
-    for text in ('5.2.0', 'skippable setup', 'UDP IP and port', 'guided app tour',
+    assert f'Windows {__version__} and Android {__version__} (revision {revision}).' in release
+    assert f'{__version__}-android.{revision}.apk' in INDEX
+    for text in (__version__, 'skippable setup', 'UDP IP and port', 'guided app tour',
                  'Existing preferences stay unchanged', 'Nothing installs automatically'):
         assert text in release
     assert 'Install this update manually once' in INDEX
     assert 'setup step 2 open' in GUIDE
     assert 'Every step is skippable' in GUIDE
     assert 'App updates are at the bottom of Settings' in GUIDE
+
+
+def test_engineering_guide_explains_group_selection_and_evidence_limits():
+    guide = GUIDE.split('id="test-engineer"', 1)[1].split('</section>', 1)[0]
+    assert 'href="#test-engineer"' in GUIDE
+    for label in ('Define my lap groups', 'Add group', 'Suggest groups', 'Save groups',
+                  'My saved lap groups', 'Automatic runs', 'Baseline A', 'Test B',
+                  'Lap context and driver reports', 'Exclude these laps from pace comparisons'):
+        assert label in guide
+    for evidence in ('2–12', 'do not cluster unrelated fast and slow laps',
+                     'does not isolate a tyre or setup effect', 'one recorded setup',
+                     'Driver reports and engineer interpretations are labelled separately',
+                     'Missing traffic evidence does not establish clear air',
+                     'Notes never replace the original telemetry',
+                     'unfinished lap', 'lap where the request started',
+                     '2.5 seconds or 3%', 'one second or 1%', 'Excluded laps and their reasons remain visible'):
+        assert evidence in guide
+
+
+def test_unresolved_android_bluetooth_condition_stays_disclosed_for_current_release():
+    from pitwall import __version__
+
+    note = GUIDE.split('id="android-wireless-note"', 1)[1].split('</p>', 1)[0]
+    assert f'version {__version__} does not yet resolve this observed condition' in note
+    assert 'combined Wi-Fi/Bluetooth disconnect' in note
+    assert 'tablet speakers does not verify your Bluetooth headset' in note
 
 
 def test_cross_device_copy_is_not_promised_as_automatic_sync():
@@ -787,7 +818,7 @@ def test_connectivity_table_discloses_online_requirements_and_cost():
 
 
 def test_platform_choice_is_the_primary_story_not_a_windows_appendix():
-    hero = re.search(r'<section class="hero">(.*?)</section>', INDEX, re.S).group(1)
+    hero = re.search(r'<section class="hero">(.*?)</section>', INDEX, re.DOTALL).group(1)
     for page in (INDEX, GUIDE):
         title = re.search(r"<title>(.*?)</title>", page).group(1)
         description = re.search(r'<meta name="description" content="([^"]+)"', page).group(1)

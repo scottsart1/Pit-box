@@ -6,6 +6,9 @@ import asyncio
 import hashlib
 import json
 import math
+import uuid
+from datetime import UTC, datetime
+from itertools import pairwise
 from statistics import median, pstdev
 from typing import Any
 
@@ -52,20 +55,126 @@ def exclusions(lap: dict, *, strict: bool = False) -> list[str]:
             reasons.append("incomplete_lap_telemetry")
         if setup_key(lap) == "unknown":
             reasons.append("unknown_setup")
-        if str(lap.get("compound", "UNKNOWN")).upper() == "UNKNOWN":
+        if str(lap.get("compound", "UNKNOWN")).upper() in {"UNKNOWN", "NONE", ""}:
             reasons.append("unknown_compound")
         if str(lap.get("weather", "Unknown")).lower() in {"unknown", "", "none"}:
             reasons.append("unknown_weather")
         for field in ("tyre_age_start", "fuel_start_kg", "track_temp_c", "air_temp_c"):
             if number(lap.get(field)) is None:
                 reasons.append(f"missing_{field}")
+        for field in ("track_temp_c", "air_temp_c"):
+            bounds = lap.get(f"{field}_range")
+            if (
+                isinstance(bounds, list)
+                and len(bounds) == 2
+                and all(number(item) is not None for item in bounds)
+                and abs(bounds[1] - bounds[0]) > 3
+            ):
+                reasons.append(f"changing_{field}")
         if (number(lap.get("fuel_start_kg")) or 0) <= 0:
             reasons.append("unknown_fuel")
     return sorted(set(reasons))
 
 
+def _summary_lap_id(lap: dict) -> str:
+    return (
+        str(lap["id"])
+        if lap.get("id") is not None
+        else f"epoch-{lap.get('timeline_epoch', 0)}-lap-{lap.get('lap_num')}"
+    )
+
+
+def _isolated_slow_lap_ids(laps: list[dict]) -> set[str]:
+    """Flag a temporary pace excursion only when measured context stays stable.
+
+    The label describes an observation, not its cause: a cooldown, driving
+    error or obstruction cannot be distinguished from lap times alone.
+    """
+    result = set()
+    for before, current, after in zip(laps, laps[1:], laps[2:]):
+        trio = (before, current, after)
+        if any(exclusions(lap) for lap in trio):
+            continue
+        if not all(
+            lap.get("context_observed") and lap.get("traffic_observed") for lap in trio
+        ):
+            continue
+        if not all(
+            number(lap.get("lap_num")) is not None
+            and number(lap.get("lap_time_ms")) is not None
+            for lap in trio
+        ):
+            continue
+        if not (
+            before["lap_num"] + 1 == current["lap_num"]
+            and current["lap_num"] + 1 == after["lap_num"]
+        ):
+            continue
+        if any(
+            len({lap.get(field) for lap in trio}) != 1
+            for field in ("timeline_epoch", "run_serial", "compound", "weather")
+        ):
+            continue
+        if any(
+            current.get(field) is None
+            for field in ("timeline_epoch", "run_serial", "compound", "weather")
+        ):
+            continue
+        if str(current["compound"]).lower() == "unknown" or str(
+            current["weather"]
+        ).lower() in {"unknown", "", "none"}:
+            continue
+        setups = {setup_key(lap) for lap in trio}
+        if len(setups) != 1 or "unknown" in setups:
+            continue
+        stable = True
+        for field in ("air_temp_c", "track_temp_c"):
+            values = []
+            for lap in trio:
+                measured_range = lap.get(f"{field}_range")
+                if (
+                    isinstance(measured_range, (list, tuple))
+                    and len(measured_range) == 2
+                    and all(number(value) is not None for value in measured_range)
+                    and float(measured_range[0]) <= float(measured_range[1])
+                ):
+                    values.extend(float(value) for value in measured_range)
+                elif number(lap.get(field)) is not None:
+                    values.append(float(lap[field]))
+                else:
+                    stable = False
+            if not values or max(values) - min(values) > 3:
+                stable = False
+        fuel = [number(lap.get("fuel_start_kg")) for lap in trio]
+        age = [number(lap.get("tyre_age_start")) for lap in trio]
+        if any(value is None or value <= 0 for value in fuel) or any(
+            value is None or value < 0 for value in age
+        ):
+            continue
+        if any(abs(right - left) > 3 for left, right in pairwise(fuel)):
+            continue
+        if any(not 0 <= right - left <= 2 for left, right in pairwise(age)):
+            continue
+        baseline = (before["lap_time_ms"] + after["lap_time_ms"]) / 2
+        returned = abs(before["lap_time_ms"] - after["lap_time_ms"]) <= max(
+            1000, baseline * 0.01
+        )
+        if (
+            stable
+            and returned
+            and current["lap_time_ms"] - baseline > max(2500, baseline * 0.03)
+        ):
+            result.add(_summary_lap_id(current))
+    return result
+
+
 def run_summary(laps: list[dict]) -> dict:
-    clean = [lap for lap in laps if not exclusions(lap)]
+    transient = _isolated_slow_lap_ids(laps)
+    clean = [
+        lap
+        for lap in laps
+        if not exclusions(lap) and _summary_lap_id(lap) not in transient
+    ]
     # A median/MAD screen rejects unusually slow or short laps without deleting
     # them from the report. It is deliberately conservative for short runs.
     if len(clean) >= 4:
@@ -114,7 +223,17 @@ def run_summary(laps: list[dict]) -> dict:
         takeaway = "The clean laps provide a baseline for a controlled setup test."
         next_test = "Change one setup setting, keep compound and starting fuel comparable, then compare matched laps."
     excluded = [
-        {"lap": lap.get("lap_num"), "reasons": exclusions(lap) or ["pace_outlier"]}
+        {
+            "lap": lap.get("lap_num"),
+            "lap_id": lap.get("id"),
+            "timeline_epoch": lap.get("timeline_epoch", 0),
+            "reasons": exclusions(lap)
+            or (
+                ["isolated_slow_lap"]
+                if _summary_lap_id(lap) in transient
+                else ["pace_outlier"]
+            ),
+        }
         for lap in laps
         if lap not in clean
     ]
@@ -140,6 +259,14 @@ def run_summary(laps: list[dict]) -> dict:
             "caveat": "Handling indicators only; telemetry does not establish a setup cause.",
         },
         "excluded_laps": excluded,
+        "pace_filter": {
+            "isolated_slow_lap_ids": sorted(transient),
+            "rule": "An isolated slow lap is excluded only between consecutive clean laps returning to similar pace with stable recorded setup, compound, weather, fuel and temperatures. It remains in its original run; the cause is not inferred.",
+            "slow_threshold_s": 2.5,
+            "slow_threshold_fraction": 0.03,
+            "return_tolerance_s": 1.0,
+            "return_tolerance_fraction": 0.01,
+        },
         "takeaway": takeaway,
         "next_test": next_test,
     }
@@ -215,17 +342,33 @@ MATCH_LIMITS = {
 
 def compare_runs(a: dict, b: dict) -> dict:
     """One-to-one nearest-condition matching. Positive deltas mean B is slower."""
+    from .engineering_groups import conditions_summary, context_notes
+
     rejected: dict[str, list] = {"a": [], "b": []}
     eligible = {}
     for side, run in (("a", a), ("b", b)):
+        mixed_setup = len({setup_key(lap) for lap in run["laps"]}) > 1
         clean_ids = set(run["summary"]["clean_lap_ids"])
+        summary_exclusions = {
+            item.get("lap_id"): item["reasons"]
+            for item in run["summary"]["excluded_laps"]
+        }
         eligible[side] = []
         for lap in run["laps"]:
             reasons = exclusions(lap, strict=True)
+            if mixed_setup:
+                reasons.append("multiple_setups_in_group")
             if lap.get("id") not in clean_ids and not reasons:
-                reasons.append("pace_outlier")
+                reasons.extend(summary_exclusions.get(lap.get("id"), ["pace_outlier"]))
             if reasons:
-                rejected[side].append({"lap": lap["lap_num"], "reasons": reasons})
+                rejected[side].append(
+                    {
+                        "lap": lap["lap_num"],
+                        "lap_id": lap.get("id"),
+                        "timeline_epoch": lap.get("timeline_epoch", 0),
+                        "reasons": reasons,
+                    }
+                )
             else:
                 eligible[side].append(lap)
     candidates = []
@@ -237,7 +380,7 @@ def compare_runs(a: dict, b: dict) -> dict:
             ):
                 continue
             differences = [
-                abs(left[key] - right[key]) / limit
+                abs(number(left[key]) - number(right[key])) / limit
                 for key, limit in (
                     ("tyre_age_start", 1),
                     ("fuel_start_kg", 3),
@@ -257,12 +400,17 @@ def compare_runs(a: dict, b: dict) -> dict:
             continue
         used_a.add(left_id)
         used_b.add(right_id)
-        sectors = [
-            (right.get(key, 0) - left.get(key, 0)) / 1000
-            if left.get(key, 0) > 0 and right.get(key, 0) > 0
-            else None
-            for key in ("s1_ms", "s2_ms", "s3_ms")
-        ]
+        sectors = []
+        for key in ("s1_ms", "s2_ms", "s3_ms"):
+            left_sector, right_sector = number(left.get(key)), number(right.get(key))
+            sectors.append(
+                (right_sector - left_sector) / 1000
+                if left_sector is not None
+                and right_sector is not None
+                and left_sector > 0
+                and right_sector > 0
+                else None
+            )
         pairs.append(
             {
                 "a_lap": left["lap_num"],
@@ -278,17 +426,34 @@ def compare_runs(a: dict, b: dict) -> dict:
                 "tyre_ages": [left["tyre_age_start"], right["tyre_age_start"]],
                 "fuel_kg": [left["fuel_start_kg"], right["fuel_start_kg"]],
                 "track_temp_c": [left["track_temp_c"], right["track_temp_c"]],
+                "air_temp_c": [left["air_temp_c"], right["air_temp_c"]],
+                "context_notes": {
+                    "a": left.get("context_notes", []),
+                    "b": right.get("context_notes", []),
+                },
+                "traffic_evidence": {
+                    "a": left.get("traffic_evidence"),
+                    "b": right.get("traffic_evidence"),
+                },
             }
         )
     for side, used in (("a", used_a), ("b", used_b)):
         rejected[side].extend(
-            {"lap": lap["lap_num"], "reasons": ["no_unused_condition_match"]}
+            {
+                "lap": lap["lap_num"],
+                "lap_id": lap.get("id"),
+                "timeline_epoch": lap.get("timeline_epoch", 0),
+                "reasons": ["no_unused_condition_match"],
+            }
             for lap in eligible[side]
             if str(lap["id"]) not in used
         )
     delta = round(median(pair["delta_s"] for pair in pairs), 3) if pairs else None
     enough = len(pairs) >= MATCH_LIMITS["minimum_pairs"]
-    same_setup = a["setup_id"] == b["setup_id"]
+    same_setup = a["setup_id"] == b["setup_id"] and a["setup_id"] not in {
+        "mixed",
+        "unknown",
+    }
     sectors = [
         round(median(pair["sector_deltas_s"][i] for pair in pairs), 3)
         if pairs and all(pair["sector_deltas_s"][i] is not None for pair in pairs)
@@ -296,6 +461,7 @@ def compare_runs(a: dict, b: dict) -> dict:
         for i in range(3)
     ]
     return {
+        "mode": "setup",
         "a_run": a["number"],
         "b_run": b["number"],
         "pairs": pairs,
@@ -305,6 +471,11 @@ def compare_runs(a: dict, b: dict) -> dict:
         "same_setup": same_setup,
         "median_delta_s": delta,
         "sector_deltas_s": sectors,
+        "conditions": {
+            "a": conditions_summary(a["laps"]),
+            "b": conditions_summary(b["laps"]),
+        },
+        "notes": {"a": context_notes(a["laps"]), "b": context_notes(b["laps"])},
         "delta_definition": "B minus A; negative means B was quicker.",
         "conclusion": (
             f"B was {'quicker' if delta < 0 else 'slower' if delta > 0 else 'equal'} by {abs(delta):.3f} s on the median matched lap."
@@ -314,6 +485,13 @@ def compare_runs(a: dict, b: dict) -> dict:
         "caveats": [
             "Observational comparison; matched conditions do not prove setup caused the difference."
         ]
+        + (
+            [
+                "Each setup-test group must contain one recorded setup. Use stint comparison for groups with setup changes."
+            ]
+            if any(len({setup_key(lap) for lap in run["laps"]}) > 1 for run in (a, b))
+            else []
+        )
         + (["Both runs have the same recorded setup."] if same_setup else []),
     }
 
@@ -380,6 +558,12 @@ class EngineeringService:
         return await asyncio.to_thread(self._report, session_id)
 
     def _report(self, session_id: str) -> dict:
+        from .engineering_groups import (
+            apply_lap_notes,
+            build_groups,
+            conditions_summary,
+        )
+
         with self.database._connect() as db:
             row = db.execute(
                 "SELECT * FROM recorded_sessions WHERE id=?", (session_id,)
@@ -413,9 +597,29 @@ class EngineeringService:
                 context.setdefault(key, row[column])
             laps.append(context)
         notes = json.loads(session["engineering_notes_json"] or "{}")
+        lap_notes = []
+        for saved in notes.get("lap_notes", []):
+            # A note recorded during a lap binds only to that timeline and lap.
+            # Flashbacks and restarts never redirect it to another attempt.
+            pending = {
+                (item["timeline_epoch"], item["lap_num"])
+                for item in saved.get("pending_laps", [])
+            }
+            targets = set(saved["lap_ids"])
+            targets.update(
+                lap["id"]
+                for lap in laps
+                if (lap["timeline_epoch"], lap["lap_num"]) in pending
+            )
+            lap_notes.append({**saved, "lap_ids": sorted(targets)})
+        laps = apply_lap_notes(laps, lap_notes)
         runs = build_runs(laps)
         for run in runs:
             run["notes"] = notes.get("runs", {}).get(run["id"], {})
+            run["conditions"] = conditions_summary(run["laps"])
+        groups = build_groups(laps, notes.get("groups", []))
+        for group in groups:
+            group["notes"] = notes.get("runs", {}).get(group["id"], {})
         from .udp import TRACKS
 
         track = TRACKS.get(session["track_id"], f"Track {session['track_id']}")
@@ -437,6 +641,9 @@ class EngineeringService:
             "started_at": session["started_at"],
             "notes": notes,
             "runs": runs,
+            "laps": laps,
+            "groups": groups,
+            "lap_notes": lap_notes,
             "incidents": incidents,
             "conclusions": [
                 f"Run {run['number']}: {run['summary']['takeaway']}" for run in runs
@@ -460,10 +667,11 @@ class EngineeringService:
     ) -> dict:
         report = self._report(session_id)
         if run_id is not None and not any(
-            run["id"] == run_id for run in report["runs"]
+            run["id"] == run_id for run in report["runs"] + report["groups"]
         ):
             raise KeyError(run_id)
         with self.database._connect() as db:
+            db.execute("BEGIN IMMEDIATE")
             row = db.execute(
                 "SELECT engineering_notes_json FROM recorded_sessions WHERE id=?",
                 (session_id,),
@@ -481,6 +689,136 @@ class EngineeringService:
                 (json.dumps(notes), session_id),
             )
         return item
+
+    async def save_groups(self, session_id: str, groups: list[dict]) -> dict:
+        from .engineering_groups import validate_groups
+
+        async with self.database._lock:
+            report = await self.report(session_id)
+            definitions = validate_groups(report["laps"], groups) if groups else []
+            if any(
+                group["id"] in {run["id"] for run in report["runs"]}
+                for group in definitions
+            ):
+                raise ValueError(
+                    "Custom group identifiers must differ from automatic run identifiers."
+                )
+            await asyncio.to_thread(
+                self._update_metadata,
+                session_id,
+                lambda notes: notes.update(groups=definitions),
+            )
+        return await self.report(session_id)
+
+    def _update_metadata(self, session_id: str, change):
+        # Notes and groups share a document. Read-modify-write inside a SQLite
+        # transaction so another UI/voice request cannot drop unrelated edits.
+        with self.database._connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            row = db.execute(
+                "SELECT engineering_notes_json FROM recorded_sessions WHERE id=?",
+                (session_id,),
+            ).fetchone()
+            if row is None:
+                raise KeyError(session_id)
+            notes = json.loads(row[0] or "{}")
+            result = change(notes)
+            db.execute(
+                "UPDATE recorded_sessions SET engineering_notes_json=? WHERE id=?",
+                (json.dumps(notes, ensure_ascii=False), session_id),
+            )
+        return result
+
+    async def save_lap_note(
+        self,
+        session_id: str,
+        lap_ids: list[str],
+        text: str,
+        category: str = "other",
+        exclude_from_pace: bool = False,
+        source: str = "driver",
+        note_id: str | None = None,
+        pending_laps: list[dict] | None = None,
+    ) -> dict:
+        if category not in {
+            "traffic",
+            "mistake",
+            "balance",
+            "conditions",
+            "mechanical",
+            "other",
+        }:
+            raise ValueError("Choose a supported note category.")
+        if source not in {"driver", "engineer"}:
+            raise ValueError("A note must identify its source.")
+        if not isinstance(text, str) or not text.strip() or len(text) > 2000:
+            raise ValueError("A lap note needs 1–2000 characters.")
+        if not isinstance(exclude_from_pace, bool):
+            raise TypeError("Exclusion must be a boolean.")
+        pending_laps = pending_laps or []
+        if (
+            len(lap_ids) > 5000
+            or len(set(lap_ids)) != len(lap_ids)
+            or len(pending_laps) > 100
+        ):
+            raise ValueError("Choose unique laps within the selected session.")
+        for target in pending_laps:
+            if (
+                set(target) != {"lap_num", "timeline_epoch"}
+                or any(type(target[k]) is not int for k in target)
+                or target["lap_num"] < 1
+                or target["timeline_epoch"] < 0
+            ):
+                raise ValueError("Pending notes need an exact lap number and timeline.")
+        if not lap_ids and not pending_laps:
+            raise ValueError("Choose at least one lap for this note.")
+        async with self.database._lock:
+            report = await self.report(session_id)
+            if not set(lap_ids).issubset({lap["id"] for lap in report["laps"]}):
+                raise ValueError("Every selected lap must belong to this session.")
+            now = datetime.now(UTC).isoformat()
+            item = {
+                "id": note_id or f"note-{uuid.uuid4().hex}",
+                "lap_ids": list(lap_ids),
+                "text": text.strip(),
+                "category": category,
+                "exclude_from_pace": exclude_from_pace,
+                "source": source,
+                "created_at": now,
+                "updated_at": now,
+                "pending_laps": pending_laps,
+            }
+
+            def save(notes):
+                items = notes.setdefault("lap_notes", [])
+                existing = next(
+                    (entry for entry in items if entry["id"] == note_id), None
+                )
+                if note_id and existing is None:
+                    raise KeyError(note_id)
+                if existing is not None:
+                    item["created_at"] = existing["created_at"]
+                    items[items.index(existing)] = item
+                else:
+                    if len(items) >= 1000:
+                        raise ValueError(
+                            "This session already has 1000 notes; edit an existing note."
+                        )
+                    items.append(item)
+                return item
+
+            return await asyncio.to_thread(self._update_metadata, session_id, save)
+
+    async def delete_lap_note(self, session_id: str, note_id: str) -> None:
+        def delete(notes):
+            items = notes.get("lap_notes", [])
+            filtered = [item for item in items if item["id"] != note_id]
+            if len(items) == len(filtered):
+                raise KeyError(note_id)
+            notes["lap_notes"] = filtered
+
+        async with self.database._lock:
+            await asyncio.to_thread(self._update_metadata, session_id, delete)
 
 
 def report_text(report: dict) -> str:
@@ -501,12 +839,43 @@ def report_text(report: dict) -> str:
             f"Setup: {json.dumps(run['setup'], sort_keys=True)}",
             f"Changes: {json.dumps(run['setup_changes'], sort_keys=True)}",
             f"Handling: {json.dumps(summary['balance'])}",
+            f"Measured conditions: {json.dumps(run.get('conditions', {}), ensure_ascii=False)}",
             f"Takeaway: {summary['takeaway']}",
             f"Next test: {summary['next_test']}",
             f"Run objective: {run['notes'].get('objective', '')}",
             f"Run conclusion: {run['notes'].get('conclusion', '')}",
             "",
         ]
+    if report.get("groups"):
+        lines += ["Custom lap groups:"]
+        for group in report["groups"]:
+            lines += [
+                f"{group['name']} | laps "
+                + ", ".join(
+                    f"{lap['lap_num']} (timeline {lap.get('timeline_epoch', 0)})"
+                    for lap in group["laps"]
+                ),
+                f"Clean laps: {group['summary']['clean_lap_count']} / {group['summary']['lap_count']}; median pace: {group['summary']['median_pace_s']} s",
+                f"Measured conditions: {json.dumps(group.get('conditions', {}), ensure_ascii=False)}",
+                f"Group objective: {group.get('notes', {}).get('objective', '')}",
+                f"Group conclusion: {group.get('notes', {}).get('conclusion', '')}",
+            ]
+    lines += ["", "Lap context notes (reported, not measured):"]
+    by_id = {lap["id"]: lap for lap in report.get("laps", [])}
+    for note in report.get("lap_notes", []):
+        targets = [
+            f"lap {by_id[key]['lap_num']} (timeline {by_id[key]['timeline_epoch']})"
+            for key in note["lap_ids"]
+            if key in by_id
+        ]
+        if not targets:
+            targets = [
+                f"pending lap {item['lap_num']} (timeline {item['timeline_epoch']})"
+                for item in note.get("pending_laps", [])
+            ]
+        lines.append(
+            f"{', '.join(targets)} | {note['source']}-reported {note['category']} | {'excluded from pace' if note['exclude_from_pace'] else 'context only'}: {note['text']}"
+        )
     lines += [
         "Incidents and exclusions:",
         *[

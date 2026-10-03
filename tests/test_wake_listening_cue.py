@@ -82,6 +82,9 @@ class _Store:
     async def snapshot_live(self) -> dict:
         return {"drivers": [], "wake_trigger_count": 0}
 
+    async def peek(self, *names) -> dict:
+        return {name: self.fields.get(name, 0) for name in names}
+
 
 def _controller(transcript: str, audio: _Recorder):
     """A controller wired up just far enough to run the wake pipeline."""
@@ -94,6 +97,7 @@ def _controller(transcript: str, audio: _Recorder):
     voice._signal_pressed = False
     voice._tts_playing = False
     voice._interaction_finalized_at = 0.0
+    voice._interaction_lap_origins = {}
     voice._wake_armed_until = 0.0
     voice._wake_cooldown_until = 0.0
     voice._wake_effective_threshold = 0.0

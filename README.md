@@ -1,4 +1,4 @@
-# Your Pit Box 5.2.0 — AI race engineer and driver dashboard
+# Your Pit Box 5.3.0 — AI race engineer and driver dashboard
 
 [Download Windows or Android](https://yourpitbox.com/#download),
 [try the Driver Dashboard](https://your-pit-box-driver-dashboard.sarthakvij123450.chatgpt.site/),
@@ -33,8 +33,10 @@ claim from what the application does while you drive. At runtime, the
 strategy, tyre and corner maths are deterministic Python covered by the suite
 in `tests/`. The language model is never handed raw telemetry to interpret; it
 is only allowed to narrate results that code has already computed, through an
-allow-listed set of tools with validated arguments, and it has no filesystem,
-shell, network or database access. It cannot invent a lap time. See
+allow-listed set of tools with validated arguments. It has no direct filesystem,
+shell, network or database access. A bounded lap-note tool can save attributed
+driver reports and engineer interpretations against the current session;
+it cannot rewrite measured telemetry. See
 [Tool safety](#tool-safety) and `docs/PROVIDER_ARCHITECTURE.md` for how that
 boundary is enforced, and `tests/` for what is asserted about it.
 
@@ -103,6 +105,47 @@ Only enable `PITWALL_WEB_LAN_ACCESS=true` when a phone/tablet needs the
 dashboard. Bind the web host to `0.0.0.0`, set a long
 `PITWALL_WEB_ACCESS_TOKEN`, and keep it on a trusted LAN. Your Pit Box never opens a
 router or firewall to the public internet automatically.
+
+## What changed in 5.3.0
+
+**Test Engineer** keeps automatic event-based runs and adds named custom lap
+groups. Select exact laps or ranges for Stint A, B, C and beyond, or suggest
+2–12 continuous groups and edit the boundaries before saving. Suggestions use
+recorded events and lap order, not fast/slow pace clusters. Unassigned new laps
+stay outside your saved groups until you add them.
+
+Open **Setup Lab → Open Test Engineer** or **Analysis → Test Engineer**.
+Expand **Define my lap groups**, use **Add group** or **Suggest groups**, then
+**Save groups**. Under **Choose from**, select **My saved lap groups** and pick
+**Baseline A** and **Test B**. **Automatic runs** remains available in the same
+selector. Group cards expand to show the included laps and evidence.
+
+Choose **Stint comparison** to compare different compounds or experiments, or
+**Matched setup test** for the stricter same-compound, matched-condition test.
+Both show air/track temperatures, fuel, tyre age, available traffic evidence,
+excluded laps and reported notes. A mixed-setup group cannot produce a
+controlled setup verdict. A descriptive pace difference does not prove its cause.
+
+The engineer can record driver explanations against specific laps or groups,
+including an unfinished lap. “This lap” stays attached to the lap at the start
+of the radio request even if the timing line is crossed during the reply.
+Reports distinguish measured telemetry from driver/engineer observations;
+explicitly compromised laps are excluded from pace, and notes can be corrected
+or removed. Later reviews, comparisons, pit-entry debriefs and exports use this
+context. Raw telemetry is preserved.
+
+Use **Lap context and driver reports** to inspect or correct those notes.
+**Exclude these laps from pace comparisons** applies only to the selected
+laps; a context-only note does not itself exclude them. Measured proximity
+indicates nearby cars, not the time they cost. An absence of traffic observations does
+not establish clear air. Saved notes and selected groups are included in the
+text and JSON session exports.
+
+An isolated slow lap remains in its stint. When measured conditions stay
+stable and the neighbouring laps return to baseline, a slowdown exceeding
+the greater of 2.5 seconds or 3% is labelled separately and excluded from
+clean pace. The neighbours must agree within the greater of one second or 1%.
+Missing context or a sustained change does not establish an isolated slowdown.
 
 ## What changed in 5.2.0
 
@@ -1078,7 +1121,13 @@ Provider unavailable            -> configured fallback, or an explicit radio
 
 ## Tool safety
 
-The model never receives direct filesystem, shell, network, or database-write access. It can only request the allow-listed telemetry tools defined in `TelemetryTools.schemas()`.
+The model never receives direct filesystem, shell, network, or database-write
+access. It can only request the allow-listed tools defined in
+`TelemetryTools.schemas()`. The lap-observation tool permits bounded note
+writes through the engineering service: validated lap/group references,
+source attribution and an explicit pace-exclusion choice. Notes are stored
+separately from the measured lap data, and session/timeline checks prevent a
+delayed request from attaching a note to a different track or attempt.
 
 Before execution, Your Pit Box:
 
@@ -1098,9 +1147,10 @@ Runtime data remains under:
 ```
 
 Your Pit Box sends compact situation summaries and selected tool results to the
-configured AI provider only for questions that require model judgement. Exact
-live telemetry questions and unsolicited proactive calls are handled locally
-and deterministically. It does not upload the SQLite database, raw 60 Hz trace
+configured AI provider only for questions that require model judgement. Those
+reviews can include saved lap notes, selected group membership and measured
+lap context. Exact live telemetry questions and unsolicited proactive calls
+are handled locally and deterministically. It does not upload the SQLite database, raw 60 Hz trace
 files, Windows username, or full microphone recordings to the reasoning model.
 Each provider's key is sent only to that provider. Audio clips are sent to
 OpenAI transcription when cloud voice is enabled.

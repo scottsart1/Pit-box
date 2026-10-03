@@ -94,6 +94,12 @@ def main():
                     env=env,
                     check=True,
                 )
+                subprocess.run(
+                    ["node", "tools/engineering-groups-ui-smoke.cjs"],
+                    cwd=ROOT,
+                    env=env,
+                    check=True,
+                )
             finally:
                 if os.name == "nt":
                     # The Windows venv launcher owns a child Python process.

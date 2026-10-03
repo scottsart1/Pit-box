@@ -51,10 +51,245 @@ class TelemetryTools:
     async def get_practice_run_review(self) -> dict[str, Any]:
         from .engineering import build_runs
         state = await self.store.snapshot_analysis()
+        report = await self._engineering_report(state)
+        if report is not None:
+            return self._bounded_engineering_payload({
+                "available": True,
+                "session_id": report["session_id"],
+                "track": report["track_name"],
+                "runs": [self._compact_engineering_group(run) for run in report["runs"][-12:]],
+                "groups": [self._compact_engineering_group(group) for group in report.get("groups", [])],
+                "lap_notes": report.get("lap_notes", [])[-100:],
+                "note_count": len(report.get("lap_notes", [])),
+                "notes_truncated": len(report.get("lap_notes", [])) > 100,
+                "runs_truncated": len(report["runs"]) > 12,
+                "laps_truncated": len(report.get("laps", [])) > 100,
+                "session_notes": {key: report.get("notes", {}).get(key, "") for key in ("objective", "conclusion")},
+                "lap_evidence": [self._engineering_lap_evidence(lap) for lap in report.get("laps", [])[-100:]],
+                "note": "Run, group and lap notes are qualitative evidence with an explicit source. Read them before explaining pace. Observed trends include fuel and conditions; a reported cause is not a measured cause. Use get_lap_observations for particular laps and compare_practice_groups for a chosen comparison.",
+            })
         runs = build_runs(state.get("completed_laps", []))
         return {"track": state.get("track_name"), "runs": [
             {key: value for key, value in run.items() if key != "laps"} for run in runs[-6:]
-        ], "note": "Observed pace trends include fuel and conditions. The Test Engineer tab compares matched runs and exports reports."}
+        ], "groups": [], "lap_notes": [], "note": "The saved-session review is not available yet. Observed pace trends include fuel and conditions. The Test Engineer tab compares runs and exports reports."}
+
+    async def _engineering_report(self, state: dict[str, Any], *, create: bool = False) -> dict[str, Any] | None:
+        from .catalog import session_id
+        from .session_guard import SessionChangedError
+
+        if self.engineering is None or not state.get("session_uid"):
+            return None
+        key = session_id(int(state["session_uid"]), int(state.get("restart_epoch", 0) or 0))
+        try:
+            report = await self.engineering.report(key)
+        except KeyError:
+            if not create:
+                return None
+            if not await self.store.matches_session(state):
+                raise SessionChangedError("Session changed before the lap note could be saved.")
+            catalog = self.session_catalog or self.database.catalog
+            await catalog.upsert_live_session(state)
+            report = await self.engineering.report(key)
+        if not await self.store.matches_session(state):
+            raise SessionChangedError("Session changed before the engineering request completed.")
+        return report
+
+    @staticmethod
+    def _bounded_engineering_payload(payload: dict[str, Any]) -> dict[str, Any]:
+        """Keep long notebooks bounded for model calls; recordings stay intact."""
+        import json
+
+        if len(json.dumps(payload, ensure_ascii=False, default=str)) <= 64_000:
+            return payload
+
+        def compact(value, limit):
+            if isinstance(value, dict):
+                return {key: compact(item, limit) for key, item in value.items()}
+            if isinstance(value, list):
+                return [compact(item, limit) for item in value[:limit]]
+            if isinstance(value, str) and len(value) > 800:
+                return value[:800] + " [truncated]"
+            return value
+
+        for limit in (20, 8, 3, 1):
+            result = compact(payload, limit)
+            result["notes_truncated"] = True
+            result["evidence_truncated"] = True
+            result["retrieval_hint"] = "Some note text and evidence lists were omitted. Request get_lap_observations for specific laps or a smaller group before attributing pace; the full notebook remains in Test Engineer and session exports."
+            if len(json.dumps(result, ensure_ascii=False, default=str)) <= 64_000:
+                return result
+        return {"available": False, "notes_truncated": True,
+                "reason": "This review is too large; request get_lap_observations for a specific lap."}
+
+    @staticmethod
+    def _compact_engineering_group(group: dict[str, Any]) -> dict[str, Any]:
+        compact = {key: value for key, value in group.items() if key != "laps"}
+        summary = dict(compact.get("summary", {}))
+        compact["summary_evidence_truncated"] = any(len(summary.get(key, [])) > 100 for key in ("clean_lap_ids", "excluded_laps"))
+        for key in ("clean_lap_ids", "excluded_laps"):
+            if key in summary:
+                summary[key] = summary[key][:100]
+        compact["summary"] = summary
+        compact["lap_ids"] = [lap["id"] for lap in group.get("laps", [])][:100]
+        compact["lap_ids_truncated"] = len(group.get("laps", [])) > 100
+        return compact
+
+    @staticmethod
+    def _engineering_lap_evidence(lap: dict[str, Any]) -> dict[str, Any]:
+        keys = ("id", "lap_num", "timeline_epoch", "lap_time_ms", "compound", "tyre_age_start",
+                "fuel_start_kg", "air_temp_c", "track_temp_c", "air_temp_c_range", "track_temp_c_range",
+                "weather", "traffic_observed", "traffic_evidence", "context_observed", "learning_exclusions", "context_notes")
+        return {key: lap.get(key) for key in keys}
+
+    async def _lap_note_state(self) -> dict[str, Any]:
+        from .engineering_context import lap_note_origin
+        from .session_guard import SessionChangedError, session_key
+
+        state = await self.store.snapshot_analysis()
+        origin = lap_note_origin.get()
+        if origin is not None:
+            if session_key(origin) != session_key(state):
+                raise SessionChangedError("The lap note belongs to a previous session or timeline.")
+            # Provider calls can finish after the timing line. "This lap" still
+            # refers to the lap where the driver started the request.
+            state["current_lap"] = origin["current_lap"]
+        return state
+
+    @staticmethod
+    def _observation_targets(
+        state: dict[str, Any], report: dict[str, Any], reference: str,
+        lap_numbers: list[int] | None, group_id: str | None,
+    ) -> tuple[list[str], list[dict[str, int]]]:
+        """Resolve spoken lap numbers in one timeline; group IDs preserve exact membership."""
+        if reference not in {"all", "current_lap", "last_lap", "laps", "group"}:
+            raise ValueError("reference must be all, current_lap, last_lap, laps or group")
+        if reference != "laps" and lap_numbers:
+            raise ValueError("lap_numbers must be empty unless reference is laps")
+        if reference != "group" and group_id:
+            raise ValueError("group_id must be null unless reference is group")
+        if reference == "all":
+            return [lap["id"] for lap in report.get("laps", [])], []
+        if reference == "group":
+            groups = report.get("groups", []) + report.get("runs", [])
+            group = next((item for item in groups if item["id"] == group_id), None)
+            if group is None:
+                raise ValueError("The group or run ID was not found in this session; retrieve the practice review first")
+            return [lap["id"] for lap in group.get("laps", [])], []
+        current = int(state.get("current_lap", 0) or 0)
+        timeline = int(state.get("timeline_epoch", 0) or 0)
+        if reference == "current_lap":
+            numbers = [current]
+        elif reference == "last_lap":
+            numbers = [current - 1]
+        else:
+            if not isinstance(lap_numbers, list) or not 1 <= len(lap_numbers) <= 100:
+                raise ValueError("Choose between 1 and 100 explicit lap numbers")
+            numbers = list(dict.fromkeys(lap_numbers))
+        if any(isinstance(number, bool) or not isinstance(number, int) or number < 1 or number > 1000 for number in numbers):
+            raise ValueError("No valid lap reference is available; ask which lap the driver means")
+        ids, pending = [], []
+        for number in numbers:
+            matches = [lap for lap in report.get("laps", [])
+                       if lap.get("lap_num") == number and int(lap.get("timeline_epoch", 0) or 0) == timeline]
+            if len(matches) > 1:
+                raise ValueError("That lap number is ambiguous; select the exact laps in Test Engineer")
+            if matches:
+                ids.append(matches[0]["id"])
+            elif number in {current, current - 1} and current > 0:
+                pending.append({"lap_num": number, "timeline_epoch": timeline})
+            else:
+                raise ValueError(f"Lap {number} is not recorded in the current timeline")
+        return ids, pending
+
+    async def record_lap_observation(
+        self, text: str, category: str = "other", source: str = "driver",
+        exclude_from_pace: bool = False, reference: str = "last_lap",
+        lap_numbers: list[int] | None = None, group_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Persist reported context separately from the telemetry measurements."""
+        from .session_guard import SessionChangedError
+
+        if not isinstance(text, str) or not text.strip() or len(text) > 2000:
+            return {"saved": False, "reason": "A lap note needs 1 to 2000 characters of reported context."}
+        if category not in {"traffic", "mistake", "balance", "conditions", "mechanical", "other"}:
+            return {"saved": False, "reason": "Unknown lap-note category."}
+        if source not in {"driver", "engineer"} or not isinstance(exclude_from_pace, bool):
+            return {"saved": False, "reason": "A note needs an explicit source and a boolean pace-exclusion decision."}
+        if reference == "all":
+            return {"saved": False, "reason": "Choose the affected lap or group; a report does not apply to the whole session by default."}
+        state = await self._lap_note_state()
+        report = await self._engineering_report(state, create=True)
+        if report is None:
+            return {"saved": False, "reason": "No active session is available for this note."}
+        try:
+            lap_ids, pending = self._observation_targets(state, report, reference, lap_numbers, group_id)
+        except ValueError as exc:
+            return {"saved": False, "reason": str(exc)}
+        if not await self.store.matches_session(state):
+            raise SessionChangedError("Session changed before the lap note could be saved.")
+        try:
+            note = await self.engineering.save_lap_note(
+                report["session_id"], lap_ids, text.strip(), category=category,
+                exclude_from_pace=exclude_from_pace, source=source, pending_laps=pending,
+            )
+        except (KeyError, ValueError) as exc:
+            return {"saved": False, "reason": str(exc)}
+        if not await self.store.matches_session(state):
+            raise SessionChangedError("Session changed; the note belongs only to its original session.")
+        return {"saved": True, "session_id": report["session_id"], "note": note,
+                "provenance": "driver_reported" if source == "driver" else "engineer_interpretation",
+                "pace_effect": "Excluded from comparison pace" if exclude_from_pace else "Context only; lap remains eligible"}
+
+    async def get_lap_observations(
+        self, reference: str = "all", lap_numbers: list[int] | None = None,
+        group_id: str | None = None,
+    ) -> dict[str, Any]:
+        state = await self._lap_note_state()
+        report = await self._engineering_report(state)
+        if report is None:
+            return {"available": False, "reason": "No saved engineering context is available for the active session."}
+        try:
+            ids, pending = self._observation_targets(state, report, reference, lap_numbers, group_id)
+        except ValueError as exc:
+            return {"available": False, "reason": str(exc)}
+        wanted = set(ids)
+        pending_set = {(item["lap_num"], item["timeline_epoch"]) for item in pending}
+        notes = [note for note in report.get("lap_notes", []) if reference == "all"
+                 or wanted.intersection(note.get("lap_ids", []))
+                 or pending_set.intersection((item["lap_num"], item["timeline_epoch"]) for item in note.get("pending_laps", []))]
+        laps = [lap for lap in report.get("laps", []) if lap["id"] in wanted]
+        return self._bounded_engineering_payload({"available": True, "session_id": report["session_id"], "track": report["track_name"],
+                "lap_notes": notes[-100:], "note_count": len(notes), "notes_truncated": len(notes) > 100,
+                "lap_evidence": [self._engineering_lap_evidence(lap) for lap in laps[-100:]],
+                "lap_count": len(laps), "laps_truncated": len(laps) > 100,
+                "note": "Notes describe reported context, not measured causes. No traffic observation is not proof of a clear lap. Missing temperatures stay unknown."})
+
+    async def compare_practice_groups(
+        self, group_a_id: str, group_b_id: str, mode: str = "stint", source: str = "groups",
+    ) -> dict[str, Any]:
+        import asyncio
+
+        from .engineering import compare_runs
+        from .engineering_groups import compare_groups
+        from .session_guard import SessionChangedError
+
+        if mode not in {"stint", "setup"} or source not in {"groups", "runs"}:
+            return {"available": False, "reason": "Choose stint or setup comparison, and groups or runs."}
+        state = await self.store.snapshot_analysis()
+        report = await self._engineering_report(state)
+        if report is None:
+            return {"available": False, "reason": "No saved engineering context is available for the active session."}
+        choices = {group["id"]: group for group in report.get(source, [])}
+        if group_a_id == group_b_id or group_a_id not in choices or group_b_id not in choices:
+            return {"available": False, "reason": "Select two different IDs from the current practice review."}
+        result = await asyncio.to_thread(compare_runs if mode == "setup" else compare_groups,
+                                         choices[group_a_id], choices[group_b_id])
+        if not await self.store.matches_session(state):
+            raise SessionChangedError("Session changed before the comparison completed.")
+        ids = {lap["id"] for group in (choices[group_a_id], choices[group_b_id]) for lap in group.get("laps", [])}
+        return self._bounded_engineering_payload({"available": True, "session_id": report["session_id"], "mode": mode,
+                "comparison": result, "lap_notes": [note for note in report.get("lap_notes", []) if ids.intersection(note.get("lap_ids", []))],
+                "note": "Review the reported notes and condition differences before explaining the result. Stint pace differences do not isolate setup or tyre effects."})
 
     @staticmethod
     def _service_unavailable(name: str) -> dict[str, Any]:
@@ -2456,7 +2691,39 @@ class TelemetryTools:
     def schemas(self) -> list[dict[str, Any]]:
         definitions = [
             ("get_strategic_rivals", "Identify who the driver is actually racing using projected finish gaps, tyre age and estimated remaining stops; includes uncertainty.", {}),
-            ("get_practice_run_review", "Review recent practice/test runs, compounds, setup changes, clean pace, observed degradation, handling indicators and what to test next.", {}),
+            ("get_practice_run_review", "Review this session's automatic runs and saved lap groups with exact IDs, measured air/track temperatures and traffic evidence, reported lap notes, clean pace and what to test next. Read before comparing or explaining a stint.", {}),
+            (
+                "record_lap_observation",
+                "Save a driver's reported lap context, or a clearly labelled engineer interpretation, for later comparison and debrief. Name the affected current/last/numbered laps or exact group ID. Ask which lap if unclear; never guess a group. Set exclude_from_pace only for an explicitly compromised lap or requested exclusion, not merely a setup, balance or temperature observation. A current lap is saved pending its completion. Confirm saved=true before saying it was logged.",
+                {
+                    "text": {"type": "string", "minLength": 1, "maxLength": 2000},
+                    "category": {"type": "string", "enum": ["traffic", "mistake", "balance", "conditions", "mechanical", "other"]},
+                    "source": {"type": "string", "enum": ["driver", "engineer"]},
+                    "exclude_from_pace": {"type": "boolean"},
+                    "reference": {"type": "string", "enum": ["current_lap", "last_lap", "laps", "group"]},
+                    "lap_numbers": {"type": "array", "items": {"type": "integer", "minimum": 1, "maximum": 1000}, "maxItems": 100},
+                    "group_id": {"type": ["string", "null"], "maxLength": 180},
+                },
+            ),
+            (
+                "get_lap_observations",
+                "Retrieve this session's reported driver/engineer notes and measured condition evidence for all laps, a specific current/last/numbered lap, or an exact group/run ID. Use before attributing a bad lap or comparing stints; notes are qualitative evidence rather than telemetry.",
+                {
+                    "reference": {"type": "string", "enum": ["all", "current_lap", "last_lap", "laps", "group"]},
+                    "lap_numbers": {"type": "array", "items": {"type": "integer", "minimum": 1, "maximum": 1000}, "maxItems": 100},
+                    "group_id": {"type": ["string", "null"], "maxLength": 180},
+                },
+            ),
+            (
+                "compare_practice_groups",
+                "Compare two exact saved group/run IDs from get_practice_run_review. Stint mode permits different compounds and reports descriptive pace and condition changes; setup mode requires comparable laps and adequate evidence. Review included driver/engineer notes before stating why time changed.",
+                {
+                    "group_a_id": {"type": "string", "minLength": 1, "maxLength": 180},
+                    "group_b_id": {"type": "string", "minLength": 1, "maxLength": 180},
+                    "mode": {"type": "string", "enum": ["stint", "setup"]},
+                    "source": {"type": "string", "enum": ["groups", "runs"]},
+                },
+            ),
             (
                 "get_session_overview",
                 "Get session, track, lap, weather, race-control and telemetry health.",

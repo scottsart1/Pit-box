@@ -22,6 +22,36 @@ class CompareRunsRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     a: str = Field(min_length=1, max_length=180)
     b: str = Field(min_length=1, max_length=180)
+    source: Literal["runs", "groups"] = "runs"
+    mode: Literal["setup", "stint"] = "setup"
+
+
+class LapGroup(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    id: str = Field(min_length=1, max_length=180)
+    name: str = Field(min_length=1, max_length=80)
+    lap_ids: list[str] = Field(min_length=1, max_length=5000)
+
+
+class SaveGroupsRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    groups: list[LapGroup] = Field(max_length=12)
+
+
+class SuggestGroupsRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    count: int = Field(ge=2, le=12, strict=True)
+
+
+class LapNoteRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    note_id: str | None = Field(default=None, min_length=1, max_length=180)
+    lap_ids: list[str] = Field(min_length=1, max_length=5000)
+    text: str = Field(min_length=1, max_length=2000)
+    category: Literal[
+        "traffic", "mistake", "balance", "conditions", "mechanical", "other"
+    ] = "other"
+    exclude_from_pace: bool = Field(default=False, strict=True)
 
 
 class RunNotesRequest(BaseModel):
@@ -74,12 +104,64 @@ def create_engineering_router(
         if body.a == body.b:
             raise HTTPException(422, "Choose two different runs.")
         report = await get_report(key)
-        runs = {run["id"]: run for run in report["runs"]}
+        runs = {run["id"]: run for run in report[body.source]}
         if body.a not in runs or body.b not in runs:
             raise HTTPException(404, "Both runs must belong to the selected session.")
         import asyncio
 
-        return await asyncio.to_thread(compare_runs, runs[body.a], runs[body.b])
+        from ..engineering_groups import compare_groups
+
+        return await asyncio.to_thread(
+            compare_runs if body.mode == "setup" else compare_groups,
+            runs[body.a],
+            runs[body.b],
+        )
+
+    @router.post("/sessions/{key}/engineering/groups/suggest")
+    async def suggest(key: str, body: SuggestGroupsRequest) -> dict:
+        import asyncio
+
+        from ..engineering_groups import suggest_groups
+
+        report = await get_report(key)
+        try:
+            groups = await asyncio.to_thread(suggest_groups, report["laps"], body.count)
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from exc
+        return {
+            "groups": groups,
+            "method": "chronological",
+            "explanation": "Continuous lap groups, prioritising session timeline, tyre and setup changes. Review the boundaries before saving.",
+        }
+
+    @router.put("/sessions/{key}/engineering/groups")
+    async def groups(key: str, body: SaveGroupsRequest) -> dict:
+        try:
+            return await service.save_groups(
+                key, [item.model_dump() for item in body.groups]
+            )
+        except KeyError as exc:
+            raise HTTPException(404, "Saved session was not found.") from exc
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from exc
+
+    @router.patch("/sessions/{key}/engineering/lap-notes")
+    async def lap_notes(key: str, body: LapNoteRequest) -> dict:
+        try:
+            await service.save_lap_note(key, **body.model_dump(), source="driver")
+        except KeyError as exc:
+            raise HTTPException(404, "Saved session or note was not found.") from exc
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from exc
+        return await get_report(key)
+
+    @router.delete("/sessions/{key}/engineering/lap-notes/{note_id}")
+    async def delete_lap_note(key: str, note_id: str) -> dict:
+        try:
+            await service.delete_lap_note(key, note_id)
+        except KeyError as exc:
+            raise HTTPException(404, "Saved session or note was not found.") from exc
+        return await get_report(key)
 
     @router.patch("/sessions/{key}/engineering/notes")
     async def notes(key: str, body: RunNotesRequest) -> dict:

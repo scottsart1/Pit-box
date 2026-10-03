@@ -1122,11 +1122,38 @@ button:disabled,
 #driver-dashboard{padding:0;overflow:hidden}#driverDashboardFrame{display:block;width:100%;height:100%;min-height:calc(100dvh - 140px);border:0;background:#070b0f}.tabs{overflow-x:auto;flex-shrink:0}.tabs .tab{white-space:nowrap}
 /* Run review reuses the existing panels and stays readable on tablets. */
 .engineering-workspace { grid-template-columns: minmax(0, 1fr); }
-.engineering-runs { display: grid; gap: 16px; min-width: 0; }
+.engineering-runs { display: grid; gap: 8px; min-width: 0; }
 .engineering-run { overflow-wrap: anywhere; }
 .engineering-controls { display: flex; flex-wrap: wrap; gap: 16px; align-items: end; margin: 16px 0; }
 .engineering-controls label { flex: 1 1 220px; min-width: 0; display: grid; gap: 8px; }
-.engineering-controls select, .engineering-controls textarea, #engineeringSession { width: 100%; max-width: 100%; min-height: 44px; color: #e6eef7; background: #070b0f; border: 1px solid #263542; border-radius: 8px; padding: 10px; font: inherit; }
+.engineering-controls select, .engineering-controls textarea, .engineering-controls input, #engineeringSession { width: 100%; max-width: 100%; min-height: 44px; color: #e6eef7; background: #070b0f; border: 1px solid #263542; border-radius: 8px; padding: 10px; font: inherit; box-sizing: border-box; }
 .engineering-controls textarea { resize: vertical; }
-.engineering-run summary { min-height: 44px; cursor: pointer; padding: 12px 0; }
+.engineering-run > summary, .engineering-editor > summary, .engineering-evidence > summary { min-height: 44px; cursor: pointer; padding: 12px 0; box-sizing: border-box; }
+.engineering-run > summary > span { display: block; margin: 6px 0 0 18px; }
+.engineering-run:not([open]) { padding-top: 8px; padding-bottom: 8px; }
+.engineering-editor { min-width: 0; overflow-wrap: anywhere; }
+.engineering-editor > summary { font-size: 16px; }
+.engineering-lap-choices { max-height: 400px; overflow-y: auto; overscroll-behavior: contain; border: 1px solid #263542; border-radius: 8px; margin: 12px 0 18px; }
+.engineering-lap-choice, .engineering-check { display: flex; gap: 12px; align-items: center; min-height: 44px; cursor: pointer; padding: 10px; box-sizing: border-box; }
+.engineering-lap-choice + .engineering-lap-choice { border-top: 1px solid #263542; }
+.engineering-lap-choice:has(input:checked) { background: rgba(73, 209, 125, .08); }
+.engineering-lap-choice:has(input:disabled) { opacity: .6; }
+.engineering-lap-choice > span { min-width: 0; }
+.engineering-lap-choice > span > span, .engineering-lap-choice strong { display: block; }
+.engineering-lap-choice input, .engineering-check input { appearance: auto; flex: 0 0 22px; width: 22px; height: 22px; min-height: 22px; accent-color: #49d17d; }
+.engineering-context-note { border: 1px solid #263542; border-left: 3px solid #ffc15c; border-radius: 8px; padding: 14px; margin-bottom: 12px; }
+.engineering-context-note p, .engineering-reported { white-space: pre-wrap; overflow-wrap: anywhere; }
+.engineering-reported { color: #ffc15c; }
+.engineering-editor .linked-actions, .engineering-workspace .linked-actions { flex-wrap: wrap; }
+.engineering-workspace button, .engineering-workspace summary, .engineering-workspace a.button { min-height: 44px; }
+.engineering-workspace .inline-notice:empty { display: none; }
+.engineering-workspace h4 { margin-bottom: 8px; }
+@media (max-width: 560px) {
+  .engineering-controls { gap: 12px; }
+  .engineering-controls label { flex-basis: 100%; }
+  .engineering-controls button { width: 100%; }
+  .engineering-editor > summary > span { display: block; margin: 6px 0 0 18px; }
+  .engineering-workspace .workspace-actions { width: 100%; }
+  .engineering-workspace .workspace-actions label { min-width: 0; flex: 1; }
+}
 #engineeringComparison, #strategicRivals { overflow-wrap: anywhere; }

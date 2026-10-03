@@ -126,10 +126,9 @@ async def test_a_reported_mistake_is_pinned_to_the_lap_it_happened_on(stack):
 
     incidents = (await store.snapshot_analysis()).get("driver_lap_incidents") or []
     laps = {int(item["lap"]) for item in incidents}
-    assert 18 in laps
-    # A driver reports the mistake as they cross the line as often as during the
-    # lap itself, so the lap just completed has to be covered too.
-    assert 17 in laps
+    # A vague report may be a current-lap hint to the live wetness model, but
+    # must not also discard the previous lap. The note tool resolves its scope.
+    assert laps == {18}
 
 
 @pytest.mark.asyncio

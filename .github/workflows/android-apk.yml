@@ -17,6 +17,8 @@ on:
       - tools/strategy-layout-smoke.cjs
       - tools/analysis-ui-smoke.cjs
       - tools/analysis-layout-smoke.cjs
+      - tools/engineering*.py
+      - tools/engineering*.cjs
       - distribution/tests/test_android*.py
       - .github/workflows/android-apk.yml
   workflow_dispatch:

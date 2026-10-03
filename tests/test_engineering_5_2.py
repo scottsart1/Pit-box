@@ -117,6 +117,8 @@ async def test_history_arriving_during_analysis_retains_official_sectors(
     "change",
     [
         {"compound": "HARD"},
+        {"compound": None},
+        {"compound": ""},
         {"weather": "Rain"},
         {"fuel_start_kg": 40},
         {"tyre_age_start": 20},
@@ -151,6 +153,14 @@ def test_one_quick_lap_is_not_a_verdict_and_same_setup_is_disclosed():
     assert len(result["pairs"]) == 1
     assert not result["enough_evidence"]
     assert result["same_setup"]
+
+
+def test_explicitly_missing_sectors_remain_unavailable_without_losing_lap_match():
+    a, b = runs()
+    b["laps"][0]["s2_ms"] = None
+    result = compare_runs(a, b)
+    assert result["enough_evidence"] and result["sector_deltas_s"][1] is None
+    assert result["median_delta_s"] == -0.3
 
 
 def test_run_boundaries_and_missing_temperature_are_honest():

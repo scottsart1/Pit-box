@@ -54,7 +54,7 @@
         <div><strong>Your Pit Box runs beside the game, not inside it.</strong> Keep the app running on your chosen Android device or Windows PC. That device receives telemetry, computes the race data and keeps the recordings. Its microphone captures your questions; its speakers or headset play the engineer's replies.</div>
       </div>
       <h2>Start with the in-app walkthrough</h2>
-      <p>Version 5.1.0 uses GPT-6 Luna and Sol plus updated speech recognition. Realtime radio is an optional switch under Settings → Engineer. It starts a live voice session on your next wake phrase or push-to-talk, closes after 25 seconds idle or 5 minutes, and ends when switched off. It may increase OpenAI API costs. The app also guides you through your API key, game UDP address and port, L3 mapping and Mark's radio. Every step is skippable. Choose <strong>Begin app tour</strong> to explore the features, or reopen either guide from Settings.</p>
+      <p>Version 5.3.0 uses GPT-6 Luna and Sol plus updated speech recognition. Realtime radio is an optional switch under Settings → Engineer. It starts a live voice session on your next wake phrase or push-to-talk, closes after 25 seconds idle or 5 minutes, and ends when switched off. It may increase OpenAI API costs. The app also guides you through your API key, game UDP address and port, L3 mapping and Mark's radio. Every step is skippable. Choose <strong>Begin app tour</strong> to explore the features, or reopen either guide from Settings.</p>
       <p>New installs use proactive calls, all-car recording and full trace detail. Upgrades preserve your choices. Privacy &amp; usage reporting and App updates are at the bottom of Settings.</p>
       <h2>Have these ready</h2>
       <div class="guide-checklist">
@@ -66,6 +66,7 @@
       <nav class="guide-jumps" aria-label="Choose a setup or transfer guide">
         <a href="#android">Android setup</a>
         <a href="#step-1">Windows setup</a>
+        <a href="#test-engineer">Lap groups, comparisons &amp; notes</a>
         <a href="#history-transfer">History transfer · beta</a>
         <a href="#telemetry-transmission">UDP forwarding · beta</a>
       </nav>
@@ -104,7 +105,7 @@
       <p>Future updates to the release app use the same permanent signing identity. Install a verified release update over the release app; do not remove its saved data.</p>
       <p>Before a full-length race, check your microphone, selected speaker or headset, wake phrase and background settings on the device you will use. A short radio check verifies that setup, not every Bluetooth device or power-saving mode.</p>
       <div class="guide-warning"><strong>Keep the Android app visible and the screen awake during live racing.</strong> Screen-off reception is best-effort: Android Doze and manufacturer battery management can suspend network access even while the app's running notification is present. If you choose background use, review the app's battery restrictions in Android Settings and test a full session on your device first. Do not rely on a short packet check as proof of uninterrupted screen-off recording.</div>
-      <p id="android-wireless-note"><strong>Bluetooth stability on Galaxy Tab S11 Ultra (Android 16):</strong> a combined Wi-Fi/Bluetooth disconnect was reproduced with Bluetooth audio connected during a 60 Hz telemetry test. The cause is under investigation; version 5.2.0 does not yet resolve this observed condition. A successful test using the tablet speakers does not verify your Bluetooth headset.</p>
+      <p id="android-wireless-note"><strong>Bluetooth stability on Galaxy Tab S11 Ultra (Android 16):</strong> a combined Wi-Fi/Bluetooth disconnect was reproduced with Bluetooth audio connected during a 60 Hz telemetry test. The cause is under investigation; version 5.3.0 does not yet resolve this observed condition. A successful test using the tablet speakers does not verify your Bluetooth headset.</p>
     </div>
   </section>
 
@@ -294,13 +295,29 @@
 
   <section id="test-engineer" class="guide-help soft">
     <div class="wrap">
-      <div class="eyebrow">Practice and session review · 5.2.0</div>
-      <h2>Run a controlled setup test</h2>
+      <div class="eyebrow">Practice and session review · 5.3.0</div>
+      <h2>Compare the laps you choose</h2>
+      <p>Open <strong>Setup Lab → Open Test Engineer</strong>, or <strong>Analysis → Test Engineer</strong>. Choose the current session or a saved session. Automatic runs remain available alongside your own named lap groups.</p>
+      <h3>Define Stint A, B and C</h3>
       <ol class="guide-checks">
-        <li>Open <strong>Setup Lab → Open Test Engineer</strong>, or <strong>Analysis → Test Engineer</strong>. Choose the current session and record your test objective.</li>
+        <li>Open <strong>Define my lap groups</strong>. Use <strong>Add group</strong> and give it a name, then choose <strong>From lap</strong> and <strong>Through lap</strong> and select <strong>Use this range</strong>. Check or uncheck individual laps to refine the selection.</li>
+        <li>For a starting point, set <strong>Number of suggested groups</strong> to 2–12 and choose <strong>Suggest groups</strong>. You need at least one recorded lap per group. Suggestions follow session order and favour recorded tyre, setup and session changes; they do not cluster unrelated fast and slow laps.</li>
+        <li>Review every group, then choose <strong>Save groups</strong>. A lap can belong to one custom group. Laps left unassigned, including newly completed laps, stay in the recording and can be added later. After a rewind, the timeline label distinguishes repeated lap numbers.</li>
+        <li>Under <strong>Choose from</strong>, select <strong>My saved lap groups</strong>. Choose <strong>Baseline A</strong> and <strong>Test B</strong>, then <strong>Stint comparison — any compound</strong> and <strong>Compare stints</strong>. Choose <strong>Automatic runs</strong> to return to event-based runs.</li>
+      </ol>
+      <p>Use stint comparison for medium versus hard tyres or other experiments you want to review. It describes selected clean pace and sectors alongside the conditions; it does not isolate a tyre or setup effect. A group containing different tyre sets, setups or timelines has no single pace-trend estimate. Sector differences use laps with all three sectors recorded, which may be a smaller cohort than the overall pace comparison.</p>
+      <h3>Keep the explanation with the lap</h3>
+      <p>Open <strong>Lap context and driver reports</strong>, choose the affected lap range and reason, describe what happened, then select <strong>Save lap note</strong>. Check <strong>Exclude these laps from pace comparisons</strong> only when that assessment applies to every selected lap. Leave it unchecked for context such as a handling observation. Use <strong>Edit note</strong> or <strong>Remove note</strong> if the assessment changes; removing a note also removes any exclusion supplied by that note.</p>
+      <p>With a reasoning provider configured, you can tell the engineer, “Lap 6 was compromised because I was held up in sector two,” or ask it to note an issue on a named group. Wait for the engineer to confirm that the note was saved. A report about “this lap” stays attached to the lap where the request started, even if you cross the timing line during the reply. An unfinished lap's note remains pending until that attempt is recorded.</p>
+      <p>Later reviews, comparisons, pit-entry debriefs and exports include the saved context. Driver reports and engineer interpretations are labelled separately from measured air/track temperatures, fuel, tyre age and traffic evidence. A proximity flag shows nearby cars; it does not measure how much time traffic cost. Missing traffic evidence does not establish clear air. Notes never replace the original telemetry.</p>
+      <h3>Understand a slow lap in the middle</h3>
+      <p>A slow lap stays in the same run. With stable measured conditions and consecutive neighbouring laps back at baseline, a slowdown greater than 2.5 seconds or 3% (whichever is larger) is labelled <strong>isolated slow lap</strong> and excluded from clean pace. The neighbours must agree within one second or 1% (whichever is larger). This identifies a temporary pace change; it does not establish whether you cooled the tyres, made a mistake or met traffic. Missing context and sustained changes do not establish an isolated slow lap. Excluded laps and their reasons remain visible.</p>
+      <h3>Run a matched setup test</h3>
+      <ol class="guide-checks">
+        <li>Use <strong>Test plan and conclusions</strong> to record your objective for the whole session, an automatic run or a saved group.</li>
         <li>Complete at least three clean timed laps. Returning to the pits creates a debrief on Drive; it can also be spoken when proactive radio is enabled and the engineer is free. Leaving the pits starts the next run.</li>
         <li>Change one setup setting. Keep compound and starting fuel comparable, then repeat the run in clear air. Runs also split when the recorded setup or tyre set changes.</li>
-        <li>Select runs A and B. Matching requires the same compound and weather, tyre age within one lap, fuel within 3 kg and track/air temperatures within 3°C. Invalid, pit, flagged, traffic, outlier and incomplete laps are excluded. At least three matched pairs are needed for a verdict.</li>
+        <li>Select A and B and choose <strong>Matched setup test</strong>, then <strong>Compare matched laps</strong>. Each group must contain one recorded setup. Matching requires the same compound and weather, tyre age within one lap, fuel within 3 kg and track/air temperatures within 3°C. Invalid, pit, flagged, traffic, reported exclusions, outlier and incomplete laps are excluded. At least three matched pairs are needed for a verdict.</li>
         <li>Read the B-minus-A lap and sector differences: negative means B was quicker. Save your conclusion, then choose <strong>Export session report</strong> for text or <strong>Export JSON</strong>. On Android, choose a destination in the file picker.</li>
       </ol>
       <p><strong>Session Review → Review runs / export report</strong> opens a saved session's Test Engineer report. Older sessions remain available, but missing setup or condition evidence cannot be reconstructed. Observed pace trend includes fuel and driving effects; a matched comparison does not prove the setup caused the difference.</p>
