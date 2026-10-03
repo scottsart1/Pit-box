@@ -13,6 +13,7 @@ const { chromium } = require('playwright');
   fs.mkdirSync(output, { recursive: true });
   const browser = await chromium.launch({ headless: true, ...(process.env.PITBOX_BROWSER_CHANNEL ? { channel: process.env.PITBOX_BROWSER_CHANNEL } : {}) });
   const results = [];
+  let lastPage = null, currentWidth = null;
   try {
     for (const [width, height] of [[1280, 800], [800, 1280], [390, 844]]) {
       const context = await browser.newContext({ viewport: { width, height }, acceptDownloads: true });
@@ -22,6 +23,7 @@ const { chromium } = require('playwright');
       assert.equal((await context.request.put(`${endpoint}/groups`, { data: { groups: [] } })).status(), 200);
       for (const note of fixture.lap_notes) assert.equal((await context.request.delete(`${endpoint}/lap-notes/${note.id}`)).status(), 200);
       const page = await context.newPage(), errors = [];
+      lastPage = page; currentWidth = width;
       const submit = (id, suffix, method) => Promise.all([
         page.waitForResponse(response => response.url() === `${endpoint}${suffix}` && response.request().method() === method),
         page.locator(id).click(),
@@ -170,9 +172,16 @@ const { chromium } = require('playwright');
         assert.equal(await page.locator('#engineeringSuggestGroups').isDisabled(), true);
         assert.equal(await page.locator('#engineeringSaveLapNote').isDisabled(), true);
         await page.locator('#engineeringConclusion').fill('Newer conclusion while saving');
-        await page.locator('#engineeringRefresh').click();
+        // Force Refresh's session-list request to complete after the plan save.
+        // Its normal session-count notice may replace the transient saved notice.
+        const refreshList = await holdSave(`${base}/api/v1/sessions?limit=200`, 'GET');
+        await page.locator('#engineeringRefresh').click(); await refreshList.ready;
         await planSave.release();
-        await page.getByText('Test notes saved. They are included in the session report.', { exact: true }).waitFor();
+        await page.waitForFunction(() => !document.getElementById('engineeringSaveNotes').disabled);
+        assert.equal((await read()).notes.conclusion, 'First saved conclusion');
+        const refreshedReport = page.waitForResponse(response => response.url() === endpoint && response.request().method() === 'GET');
+        await refreshList.release(); await refreshedReport;
+        await page.waitForFunction(() => document.getElementById('engineeringStatus').textContent.includes('automatic runs'));
         assert.equal(await page.locator('#engineeringConclusion').inputValue(), 'Newer conclusion while saving');
         await submit('#engineeringSaveNotes', '/notes', 'PATCH');
         await page.locator('#engineeringLapNoteText').fill('Original lap report');
@@ -195,6 +204,19 @@ const { chromium } = require('playwright');
       results.push({ width, height, grouping: 'pass', manualLapSelection: 'pass', draftProtection: 'pass', contextNotes: 'pass', noteCorrection: 'pass', ...(width === 1280 ? { saveRaces: 'pass' } : {}), export: 'pass', overflow: false });
       await context.close();
     }
+  } catch (error) {
+    if (lastPage && !lastPage.isClosed()) {
+      await lastPage.screenshot({ path: path.join(output, `failure-${currentWidth}.png`) }).catch(() => {});
+      const state = await lastPage.evaluate(() => ({
+        status: document.getElementById('engineeringStatus')?.textContent,
+        groupStatus: document.getElementById('engineeringGroupStatus')?.textContent,
+        noteStatus: document.getElementById('engineeringLapNoteStatus')?.textContent,
+        conclusion: document.getElementById('engineeringConclusion')?.value,
+        saveNotesDisabled: document.getElementById('engineeringSaveNotes')?.disabled,
+      })).catch(() => ({}));
+      fs.writeFileSync(path.join(output, `failure-${currentWidth}.json`), JSON.stringify({ error: String(error), state }, null, 2));
+    }
+    throw error;
   } finally { await browser.close(); }
   fs.writeFileSync(path.join(output, 'results.json'), JSON.stringify(results, null, 2));
   console.log(JSON.stringify(results, null, 2));
