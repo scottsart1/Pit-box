@@ -73,7 +73,7 @@ def test_render_setup_result_owns_every_name_it_uses():
     a ReferenceError before the first DOM write (reported live, 2026-08-12).
     The function must derive profile from the payload it is given."""
     body = INDEX[INDEX.index("function renderSetupResult") :]
-    body = body[: body.index("\n")]
+    body = re.split(r"\n(?:async )?function \w+\(", body, maxsplit=1)[0]
     assert "const profile=String(j.profile" in body
     assert "renderSetupResult(j)" in INDEX[INDEX.index("async function generateSetup") :][:2700]
 
