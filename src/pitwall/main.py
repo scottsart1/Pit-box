@@ -16,6 +16,8 @@ from .config import settings
 
 log = logging.getLogger(__name__)
 
+NETWORK_DRAIN_TIMEOUT_S = 10.0
+
 
 def local_dashboard_url(host: str, port: int) -> str:
     """Return a browser destination, never the server-only wildcard address."""
@@ -234,6 +236,11 @@ def run() -> None:
         log_level=settings.log_level.lower(),
         # LAN pairing credentials must never appear in raw request-line logs.
         access_log=False,
+        # A disconnected Windows browser can leave a Proactor transport
+        # waiting forever in server.wait_closed(). Bound only the network
+        # drain so Uvicorn still enters lifespan shutdown, where queued laps
+        # and raw captures are drained and finalized without this deadline.
+        timeout_graceful_shutdown=NETWORK_DRAIN_TIMEOUT_S,
         # Never let uvicorn install its own logging. Its default config builds a
         # ColourizedFormatter whose __init__ calls sys.stdout.isatty(), and the
         # shipped build is windowed, so sys.stdout is None: the packaged app
