@@ -1,0 +1,27 @@
+[project]
+name = "yourpitbox-nascar"
+version = "0.1.0"
+description = "An independent NASCAR race workspace, crew chief and practice lab"
+requires-python = ">=3.11,<3.14"
+dependencies = ["fastapi>=0.115,<1", "uvicorn>=0.30,<1", "httpx>=0.28,<1", "pydantic>=2.8,<3", "pillow>=11,<13", "cryptography>=42", "qrcode>=8"]
+
+[project.optional-dependencies]
+windows = ["rapidocr==3.9.2", "onnxruntime==1.30.0"]
+dev = ["pytest>=8", "pytest-asyncio>=0.24", "pyinstaller>=6"]
+
+[project.scripts]
+yourpitbox-nascar = "yourpitbox_nascar.main:run"
+
+[build-system]
+requires = ["setuptools>=70", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+yourpitbox_nascar = ["static/*"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+asyncio_mode = "auto"
