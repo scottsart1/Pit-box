@@ -74,7 +74,7 @@ async def test_reported_traffic_excludes_only_explicit_lap_and_review_preserves_
     review = await tools.get_practice_run_review()
     assert review["lap_notes"][0]["text"] == result["note"]["text"]
     assert review["lap_evidence"][1]["air_temp_c"] == 21
-    assert review["lap_evidence"][1]["traffic_observed"] is True
+    assert review["lap_evidence"][1]["gap_coverage_available"] is True
     assert "reported" in review["note"]
     filtered = await tools.get_lap_observations(reference="laps", lap_numbers=[1])
     assert filtered["lap_notes"] == []
@@ -292,6 +292,49 @@ def test_long_voice_notebook_is_bounded_without_mutating_saved_evidence():
     assert "specific laps" in bounded["retrieval_hint"]
     assert len(payload["lap_notes"]) == 1000
     assert payload["lap_notes"][0]["text"] == "traffic report " * 100
+
+
+@pytest.mark.asyncio
+async def test_reported_traffic_is_not_corroborated_by_clear_air_gap_coverage(stack):
+    _, database, tools = await engineering_stack(stack)
+    await database.save_lap(saved_lap(2, traffic_evidence={
+        "gap_observed": True, "min_gap_ahead_s": 5.0, "close_following_observed": False,
+        "basis": "Measured gap ahead while above 50 km/h",
+    }), [])
+    await tools.record_lap_observation("Stuck behind a slower car", category="traffic", exclude_from_pace=True)
+    review = await tools.get_practice_run_review()
+    lap = review["lap_evidence"][0]
+    assert "traffic_observed" not in lap
+    assert lap["gap_coverage_available"] is True
+    assert lap["measured_traffic_status"] == "no_close_following_flag"
+    assert lap["traffic_evidence"]["gap_coverage_available"] is True
+    assert lap["traffic_evidence"]["close_following_flag"] is False
+    assert lap["traffic_evidence"]["min_gap_ahead_s"] == 5
+    assert "gap_observed" not in lap["traffic_evidence"]
+    traffic = review["runs"][0]["conditions"]["traffic"]
+    assert traffic["gap_observation_laps"] == 1
+    assert traffic["gap_unknown_laps"] == 0
+    assert traffic["qualitative_traffic_report_laps"] == 1
+    assert traffic["measured_close_following_laps"] == 0
+    assert traffic["measured_traffic_status"] == "no_close_following_flag"
+    assert "observed_laps" not in traffic and "unknown_laps" not in traffic
+    scoped = await tools.get_lap_observations(reference="last_lap")
+    assert scoped["lap_evidence"][0]["measured_traffic_status"] == "no_close_following_flag"
+    # Voice naming is an adapter; the recording and UI/API schema are intact.
+    stored = (await tools.engineering.report(session_id(53001)))["laps"][0]
+    assert stored["traffic_observed"] is True
+    assert stored["traffic_evidence"]["gap_observed"] is True
+
+
+@pytest.mark.parametrize("lap,status", [
+    ({"traffic_observed": False}, "unknown"),
+    ({"traffic_observed": True, "learning_exclusions": ["traffic"]}, "close_following_detected"),
+    ({"traffic_observed": True, "learning_exclusions": ["driver_reported_traffic"]}, "no_close_following_flag"),
+])
+def test_voice_traffic_status_distinguishes_measurement_coverage_and_reports(lap, status):
+    result = TelemetryTools._bounded_engineering_payload({"lap": lap})["lap"]
+    assert result["measured_traffic_status"] == status
+    assert "traffic_observed" not in result
 
 
 @pytest.mark.asyncio

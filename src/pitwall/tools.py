@@ -95,10 +95,52 @@ class TelemetryTools:
         return report
 
     @staticmethod
+    def _engineering_traffic_context(value: Any, context: str = "") -> Any:
+        """Name gap coverage separately from measured proximity for narration.
+
+        The saved telemetry/API retains its compatibility field names. A model
+        must never read ``traffic_observed`` as confirmation of an obstruction.
+        """
+        if isinstance(value, list):
+            return [TelemetryTools._engineering_traffic_context(item, context) for item in value]
+        if not isinstance(value, dict):
+            return value
+        aliases = {"traffic_observed": "gap_coverage_available"}
+        if context == "traffic_evidence":
+            aliases.update(gap_observed="gap_coverage_available", close_following_observed="close_following_flag")
+        if context == "traffic":
+            aliases.update(observed_laps="gap_observation_laps", unknown_laps="gap_unknown_laps",
+                           measured_affected_laps="measured_close_following_laps",
+                           reported_laps="qualitative_traffic_report_laps",
+                           close_following_observed_laps="close_following_flag_laps")
+        result = {
+            aliases.get(key, key): TelemetryTools._engineering_traffic_context(item, key)
+            for key, item in value.items()
+        }
+        interpretation = (
+            "Gap coverage means timing data was available, not that traffic interference occurred. "
+            "A close-following flag measures proximity, not obstruction or its time cost. "
+            "Driver/engineer notes are qualitative reports and do not corroborate telemetry. "
+            "No close-following flag does not rule out reported interference."
+        )
+        if "traffic_observed" in value or "traffic_evidence" in value:
+            evidence = value.get("traffic_evidence") or {}
+            coverage = bool(value.get("traffic_observed") or value.get("gap_coverage_available") or evidence.get("gap_observed") or evidence.get("gap_coverage_available"))
+            close = evidence.get("close_following_observed") is True or evidence.get("close_following_flag") is True or "traffic" in (value.get("learning_exclusions") or [])
+            result["measured_traffic_status"] = "close_following_detected" if close else "no_close_following_flag" if coverage else "unknown"
+            result["traffic_interpretation"] = interpretation
+        elif context == "traffic" and "observed_laps" in value:
+            close = bool(value.get("measured_affected_laps") or value.get("close_following_observed_laps"))
+            result["measured_traffic_status"] = "close_following_detected" if close else "no_close_following_flag" if value.get("observed_laps") else "unknown"
+            result["interpretation"] = interpretation
+        return result
+
+    @staticmethod
     def _bounded_engineering_payload(payload: dict[str, Any]) -> dict[str, Any]:
         """Keep long notebooks bounded for model calls; recordings stay intact."""
         import json
 
+        payload = TelemetryTools._engineering_traffic_context(payload)
         if len(json.dumps(payload, ensure_ascii=False, default=str)) <= 64_000:
             return payload
 
