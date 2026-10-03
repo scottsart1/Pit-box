@@ -54,7 +54,7 @@
         <div><strong>Your Pit Box runs beside the game, not inside it.</strong> Keep the app running on your chosen Android device or Windows PC. That device receives telemetry, computes the race data and keeps the recordings. Its microphone captures your questions; its speakers or headset play the engineer's replies.</div>
       </div>
       <h2>Start with the in-app walkthrough</h2>
-      <p>Version 5.3.0 uses GPT-6 Luna and Sol plus updated speech recognition. Realtime radio is an optional switch under Settings → Engineer. It starts a live voice session on your next wake phrase or push-to-talk, closes after 25 seconds idle or 5 minutes, and ends when switched off. It may increase OpenAI API costs. The app also guides you through your API key, game UDP address and port, L3 mapping and Mark's radio. Every step is skippable. Choose <strong>Begin app tour</strong> to explore the features, or reopen either guide from Settings.</p>
+      <p>Version 5.3.1 uses GPT-6 Luna and Sol plus updated speech recognition. Realtime radio is an optional switch under Settings → Engineer. It starts a live voice session on your next wake phrase or push-to-talk, closes after 25 seconds idle or 5 minutes, and ends when switched off. It may increase OpenAI API costs. The app also guides you through your API key, game UDP address and port, L3 mapping and Mark's radio. Every step is skippable. Choose <strong>Begin app tour</strong> to explore the features, or reopen either guide from Settings.</p>
       <p>New installs use proactive calls, all-car recording and full trace detail. Upgrades preserve your choices. Privacy &amp; usage reporting and App updates are at the bottom of Settings.</p>
       <h2>Have these ready</h2>
       <div class="guide-checklist">
@@ -105,7 +105,7 @@
       <p>Future updates to the release app use the same permanent signing identity. Install a verified release update over the release app; do not remove its saved data.</p>
       <p>Before a full-length race, check your microphone, selected speaker or headset, wake phrase and background settings on the device you will use. A short radio check verifies that setup, not every Bluetooth device or power-saving mode.</p>
       <div class="guide-warning"><strong>Keep the Android app visible and the screen awake during live racing.</strong> Screen-off reception is best-effort: Android Doze and manufacturer battery management can suspend network access even while the app's running notification is present. If you choose background use, review the app's battery restrictions in Android Settings and test a full session on your device first. Do not rely on a short packet check as proof of uninterrupted screen-off recording.</div>
-      <p id="android-wireless-note"><strong>Bluetooth stability on Galaxy Tab S11 Ultra (Android 16):</strong> a combined Wi-Fi/Bluetooth disconnect was reproduced with Bluetooth audio connected during a 60 Hz telemetry test. The cause is under investigation; version 5.3.0 does not yet resolve this observed condition. A successful test using the tablet speakers does not verify your Bluetooth headset.</p>
+      <p id="android-wireless-note"><strong>Bluetooth stability on Galaxy Tab S11 Ultra (Android 16):</strong> a combined Wi-Fi/Bluetooth disconnect was reproduced with Bluetooth audio connected during a 60 Hz telemetry test. The cause is under investigation; version 5.3.1 does not yet resolve this observed condition. A successful test using the tablet speakers does not verify your Bluetooth headset.</p>
     </div>
   </section>
 
@@ -295,7 +295,7 @@
 
   <section id="test-engineer" class="guide-help soft">
     <div class="wrap">
-      <div class="eyebrow">Practice and session review · 5.3.0</div>
+      <div class="eyebrow">Practice and session review · 5.3.1</div>
       <h2>Compare the laps you choose</h2>
       <p>Open <strong>Setup Lab → Open Test Engineer</strong>, or <strong>Analysis → Test Engineer</strong>. Choose the current session or a saved session. Automatic runs remain available alongside your own named lap groups.</p>
       <h3>Define Stint A, B and C</h3>
@@ -327,10 +327,12 @@
 
   <section id="setup-scope" class="guide-help soft">
     <div class="wrap">
-      <div class="eyebrow">Setup Lab · 5.1.0</div>
-      <h2>Choose how much to change</h2>
-      <p>Select your circuit, choose a <strong>Change level</strong>, then generate a Race, Quali or Hybrid setup. <strong>Minimum</strong> makes small adjustments to your current balance. <strong>Moderate</strong> rebalances toward the circuit foundation. <strong>Radical</strong> rebuilds from that foundation and your personal evidence.</p>
-      <p>Read the pace review and corner findings alongside the complete settings. A slow lap alone does not prove the setup caused it. Test broader changes in the garage; the recommendation identifies a separate permitted front-wing adjustment for an in-race stop.</p>
+      <div class="eyebrow">Setup Lab · 5.3.1</div>
+      <h2>Start from a sourced circuit setup</h2>
+      <p>Open <strong>Setup Lab</strong>, choose your circuit and conditions, then select <strong>Stable race · Matt212</strong> or <strong>More rotation · Derp</strong>. Both references cover all 24 calendar circuits for <strong>F1 25: 2026 Season Pack</strong>. Choose Race, Quali or Hybrid; qualifying uses separate published values where supplied, while Hybrid uses race values. The source links, review date and adaptations appear beside the settings.</p>
+      <p><strong>Circuit reference</strong> preserves the selected source values. Choose <strong>Personalise for me</strong> to apply your preferences and applicable live feedback: <strong>Minimum</strong> makes small adjustments to your current car, <strong>Moderate</strong> blends toward the reference, and <strong>Radical</strong> starts from it. Personal changes are suggestions to test, not proof of a pace gain. Old aggregate setup scores and universal tyre-temperature rules no longer alter the reference.</p>
+      <p>References target dry conditions. Wet or unsupported circuit/style selections report when no applicable reference is available. For qualifying under parc ferme, check the source's race-wing and brake-pressure guidance before committing. Published setups still need testing with your car, assists and driving style; use <strong>Test this setup</strong> to open Test Engineer and compare matched runs.</p>
+      <p>Enter the settings in the game garage; YPB does not apply them to the game. During a race, only a separately identified permitted front-wing adjustment is offered for a pit stop. Unsupported numerical lap-time gains and tyre-life multipliers are no longer presented as setup predictions.</p>
       <p>For Android connection interruptions, the Connection page now reports OS-observed network losses and severe thermal status. Those readings help distinguish a device/network interruption from missing game telemetry.</p>
     </div>
   </section>

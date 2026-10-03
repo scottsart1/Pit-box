@@ -844,6 +844,9 @@ class SetupRequest(BaseModel):
     profile: str = "hybrid"
     track_id: int | None = None
     change_level: Literal["minimum", "moderate", "radical"] = "minimum"
+    basis: Literal["reference", "personalized"] = "personalized"
+    conditions: Literal["auto", "dry", "wet"] = "auto"
+    reference_style: Literal["stable", "rotation"] = "stable"
 
 
 class ProactiveRequest(BaseModel):
@@ -1359,7 +1362,11 @@ async def realtime_close() -> dict[str, object]:
 
 @app.post("/api/setup/recommend")
 async def setup_recommendation(request: SetupRequest) -> dict[str, object]:
-    result = await setup_advisor.generate(request.profile, request.track_id, request.change_level)
+    result = await setup_advisor.generate(
+        request.profile, request.track_id, request.change_level,
+        basis=request.basis, conditions=request.conditions,
+        reference_style=request.reference_style,
+    )
     if not result.get("available"):
         raise HTTPException(409, result.get("reason", "Setup unavailable"))
     return result

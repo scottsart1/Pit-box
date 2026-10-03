@@ -19,7 +19,9 @@ from tools import replay_demo as replay
 @pytest.mark.asyncio
 async def test_setup_scope_rebuilds_instead_of_multiplying_a_nudge(stack):
     store, _, _, setup, _, _ = stack
-    await store.update(track_id=11, car_setup={"front_wing": 48, "rear_wing": 46, "on_throttle": 90, "fuel_load": 42})
+    await store.update(track_id=11, session_uid=91, connected=True, formula=13,
+                       packet_group_freshness={"1": 1.0}, weather="Clear",
+                       car_setup={"front_wing": 48, "rear_wing": 46, "on_throttle": 90, "fuel_load": 42})
     results = {level: await setup.generate("race", 11, level) for level in ("minimum", "moderate", "radical")}
     assert results["minimum"]["recommended"]["front_wing"] == 48
     assert 20 < results["moderate"]["recommended"]["front_wing"] < 48

@@ -1871,7 +1871,12 @@ class TelemetryTools:
         profile: str = "race",
     ) -> dict[str, Any]:
         state = await self.store.snapshot_analysis()
-        return await self.database.setup_learning_summary(int(state.get("track_id", -1)), profile, 20)
+        data = await self.database.setup_learning_summary(int(state.get("track_id", -1)), profile, 20)
+        return {
+            **data,
+            "qualified_for_recommendation": False,
+            "evidence_limit": "Legacy aggregate records are not matched for game, setup, tyres, fuel and weather. Do not treat their scores as proof of setup gains; use Test Engineer matched comparisons.",
+        }
 
     async def get_consistency_report(self) -> dict[str, Any]:
         return await self.analysis.get_consistency()
@@ -2026,6 +2031,8 @@ class TelemetryTools:
             "run_count": data.get("run_count", 0),
             "best_run": data.get("best_run"),
             "worst_run": data.get("worst_run"),
+            "qualified_for_recommendation": False,
+            "evidence_limit": "Legacy aggregate scores do not isolate a setup effect and do not alter current references. Use Test Engineer matched comparisons before recommending a historical setup.",
         }
 
     async def generate_setup(
@@ -2033,14 +2040,20 @@ class TelemetryTools:
         profile: str = "hybrid",
         track_id: int = -1,
         change_level: str = "minimum",
+        basis: str = "reference",
+        conditions: str = "auto",
+        reference_style: str = "stable",
     ) -> dict[str, Any]:
-        return await self.setup_advisor.generate(profile, None if track_id < 0 else track_id, change_level)
+        return await self.setup_advisor.generate(
+            profile, None if track_id < 0 else track_id, change_level,
+            basis=basis, conditions=conditions, reference_style=reference_style,
+        )
 
     async def get_front_wing_adjustment(self) -> dict[str, Any]:
-        state = await self.store.snapshot_analysis()
-        recommendation = state.get("setup_recommendation", {})
-        if not recommendation:
-            recommendation = await self.setup_advisor.generate("hybrid")
+        # A saved garage reference or earlier session is not a live pit change.
+        recommendation = await self.setup_advisor.generate(
+            "hybrid", basis="personalized", change_level="minimum",
+        )
         return recommendation.get("pit_adjustment", recommendation)
 
     # ----------------------------------------------------------- 4.2 queries
@@ -3121,7 +3134,7 @@ class TelemetryTools:
             ),
             (
                 "get_setup_learning",
-                "Get stored setup-performance evidence for the current track and profile.",
+                "Review legacy setup records for the current track and profile. These unmatched aggregates do not establish setup performance or qualify a new recommendation.",
                 {"profile": {"type": "string", "enum": ["race", "quali", "hybrid"]}},
             ),
             (
@@ -3166,11 +3179,14 @@ class TelemetryTools:
             ),
             (
                 "generate_setup",
-                "Generate a complete setup and pace review. Minimum refines the current car; moderate rebalances it; radical rebuilds from the circuit foundation. Full setups are for the garage.",
+                "Get a sourced F1 2026 circuit setup and pace review. Use reference for a fresh baseline; personalized applies bounded driver preferences and applicable live feedback. State the source, conditions and validation limits; published references are not proof of a personal lap-time gain. With personalized, minimum refines the current car, moderate rebalances it, and radical rebuilds from the circuit reference. Full setups are for the garage; do not imply the game setup was changed.",
                 {
                     "profile": {"type": "string", "enum": ["race", "quali", "hybrid"]},
                     "track_id": {"type": "integer", "minimum": -1, "maximum": 100},
                     "change_level": {"type": "string", "enum": ["minimum", "moderate", "radical"]},
+                    "basis": {"type": "string", "enum": ["reference", "personalized"]},
+                    "conditions": {"type": "string", "enum": ["auto", "dry", "wet"]},
+                    "reference_style": {"type": "string", "enum": ["stable", "rotation"]},
                 },
             ),
             (
@@ -3213,8 +3229,8 @@ class TelemetryTools:
             (
                 "get_setup_correlation",
                 (
-                    "Compare stored setup runs at this track to link setup "
-                    "choices with measured performance. profile: race/quali/hybrid/all."
+                    "Review legacy setup aggregates at this track; their ranking does not isolate "
+                    "a setup effect. Use Test Engineer matched comparisons for evidence. profile: race/quali/hybrid/all."
                 ),
                 {"profile": {"type": "string"}},
             ),

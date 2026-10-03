@@ -1,4 +1,4 @@
-# Your Pit Box 5.3.0 — AI race engineer and driver dashboard
+# Your Pit Box 5.3.1 — AI race engineer and driver dashboard
 
 [Download Windows or Android](https://yourpitbox.com/#download),
 [try the Driver Dashboard](https://your-pit-box-driver-dashboard.sarthakvij123450.chatgpt.site/),
@@ -105,6 +105,32 @@ Only enable `PITWALL_WEB_LAN_ACCESS=true` when a phone/tablet needs the
 dashboard. Bind the web host to `0.0.0.0`, set a long
 `PITWALL_WEB_ACCESS_TOKEN`, and keep it on a trusted LAN. Your Pit Box never opens a
 router or firewall to the public internet automatically.
+
+## What changed in 5.3.1
+
+**Setup Lab** now starts from attributed circuit references for **F1 25:
+2026 Season Pack**, replacing five generic templates. Choose **Stable race ·
+Matt212** or **More rotation · Derp**, then a session goal. Both cover all
+24 calendar circuits; stable references also cover Imola and three reverse
+layouts, and rotation references cover Imola. Qualifying uses separate
+published values where available; Hybrid uses the race reference.
+
+**Circuit reference** keeps the selected source values, including disclosed
+normalizations. **Personalise for me** applies explicit preferences and
+applicable live feedback as bounded test suggestions. Old aggregate setup
+scores no longer alter a new baseline: they cannot establish that different
+tyres, fuel, weather or car versions are comparable. The original recordings
+remain available in Test Engineer. Fixed-temperature pressure adjustments and
+unvalidated setup-to-lap-time or tyre-life multipliers have been removed.
+
+Sources, review date, intended conditions and adaptations appear beside the
+settings. A published reference is not a claim of a fastest setup or a measured
+gain for this driver. Wet or unsupported circuit/style selections explicitly
+report that no applicable reference is available. No dry setup is silently
+substituted for wet conditions. Recommendations do not change the game car;
+enter the values in the garage and compare controlled runs.
+
+See [reference provenance and research](docs/setup-reference-research.md).
 
 ## What changed in 5.3.0
 

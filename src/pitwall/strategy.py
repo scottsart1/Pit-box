@@ -2114,7 +2114,7 @@ class StrategyEngine:
             samples = history_samples
         else:
             rates = [scalar * float(m) for m in effects.get("wheel_wear_multipliers", [1.0] * 4)]
-            source += "+setup_prior"
+            source += "+setup_prior" if effects.get("calibrated") else "+uncalibrated_setup_neutral"
         live = self._live_wheel_wear_samples(state, compound)
         count = min((len(v) for v in live), default=0)
         if count >= 3:

@@ -469,12 +469,24 @@ button:disabled,
 .diagnose-actions { padding-left: 24px; color: var(--text-2); }
 .diagnose-actions li { margin: 8px 0; padding-left: 4px; }
 
+#setup.active { display: grid; grid-template-rows: auto minmax(0, 1fr); overflow: hidden; }
+#setup > .setup-grid { height: auto; min-height: 0; }
+.setup-grid > .panel { min-width: 0; }
+.setup-grid .row { flex-wrap: wrap; }
+.setup-grid .select { min-height: 44px; }
+.setup-fields .row { flex-wrap: nowrap; }
+#setupTitle, #setupReference { overflow-wrap: anywhere; }
+#setupReference summary, #setupRationale summary { min-height: 44px; display: flex; align-items: center; cursor: pointer; }
+.setup-source-links { display: flex; flex-wrap: wrap; column-gap: 12px; margin-top: 8px; }
+.setup-source-links a { display: inline-flex; align-items: center; min-height: 44px; }
+
 @media (min-width: 1400px) {
   .connection-shell { grid-template-columns: minmax(360px, .8fr) minmax(560px, 1.2fr); }
   .connection-page .packet-panel { max-height: 340px; }
 }
 
 @media (max-width: 1024px) {
+  #setup.active { display: block; overflow: auto; }
   .page.active { overflow: auto; }
   .connection-shell { grid-template-columns: 1fr; }
   .connection-hero,

@@ -4,8 +4,8 @@ from copy import deepcopy
 
 import pytest
 
+import pitwall.strategy as strategy_module
 from pitwall.config import settings
-from pitwall.setup_model import setup_effects
 from pitwall.strategy import StrategyEngine
 
 
@@ -86,9 +86,20 @@ def test_actual_compute_extrapolates_known_linear_stint(age, offset):
     assert "_strategy_pace_reference" not in state
 
 
-def test_compute_does_not_charge_current_setup_twice():
+def test_compute_does_not_charge_current_setup_twice(monkeypatch):
+    # Production effects are neutral until calibrated. Inject a hypothetical
+    # calibrated effect so this still detects double-counting if one is added.
+    original_effects = strategy_module.setup_effects
+
+    def hypothetical_effects(setup, track_id):
+        return {
+            **original_effects(setup, track_id),
+            "lap_time_delta_s": 0.5,
+            "calibrated": True,
+        }
+
+    monkeypatch.setattr(strategy_module, "setup_effects", hypothetical_effects)
     setup = {"front_wing": 50, "rear_wing": 50}
-    assert setup_effects(setup, 0)["lap_time_delta_s"] > 0.1
     state, historical = linear_stint(offset=1.25, setup=setup)
     result = StrategyEngine(None, None).compute(state, historical)
 
@@ -121,7 +132,9 @@ def test_reference_reports_quantities_and_runs_once_per_compute(monkeypatch):
     assert "fuel" in " ".join(reference["assumptions"])
 
 
-@pytest.mark.parametrize("mismatch", ["missing_age", "wet", "setup", "timeline", "session", "set_reset"])
+@pytest.mark.parametrize(
+    "mismatch", ["missing_age", "wet", "setup", "timeline", "session", "set_reset"]
+)
 def test_unmatched_context_keeps_labelled_fallback(mismatch):
     state, historical = linear_stint()
     if mismatch == "missing_age":
@@ -170,7 +183,9 @@ def test_prior_compound_does_not_dilute_identified_current_stint():
 def test_duplicate_observation_is_not_three_independent_laps():
     state, historical = linear_stint()
     state["completed_laps"] = [deepcopy(state["completed_laps"][-1]) for _ in range(4)]
-    assert StrategyEngine._pace_reference(state, historical)["age_end_reference"] is False
+    assert (
+        StrategyEngine._pace_reference(state, historical)["age_end_reference"] is False
+    )
 
 
 def test_clear_sky_after_rain_does_not_establish_dry_reference():
@@ -178,14 +193,18 @@ def test_clear_sky_after_rain_does_not_establish_dry_reference():
     for lap in state["completed_laps"][:-3]:
         lap["weather"] = "Heavy rain"
     state["track_temp_c"] = 15
-    assert StrategyEngine._pace_reference(state, historical)["age_end_reference"] is False
+    assert (
+        StrategyEngine._pace_reference(state, historical)["age_end_reference"] is False
+    )
 
 
 def test_new_driver_feedback_is_not_cancelled_by_reference_adjustment():
     state, historical = linear_stint()
     baseline = StrategyEngine._pace_reference(state, historical)
     state["driver_tyre_feedback"] = {
-        "category": "tyres_gone", "compound": "MEDIUM", "lap": 11,
+        "category": "tyres_gone",
+        "compound": "MEDIUM",
+        "lap": 11,
     }
     assert StrategyEngine._pace_reference(state, historical) == baseline
 
@@ -210,29 +229,59 @@ def relative_set_stint(*, compound="MEDIUM", delta_ms=-1000, wear=0):
     state, history = linear_stint()
     state["fitted_tyre_set_idx"] = 0
     state["tyre_sets"] = [
-        {"index": 0, "compound": "MEDIUM", "fitted": True, "available": True,
-         "wear_pct": 10, "lap_delta_ms": 0, "life_span_laps": 30, "usable_life_laps": 40},
-        {"index": 1, "compound": compound, "fitted": False, "available": True,
-         "wear_pct": wear, "lap_delta_ms": delta_ms, "life_span_laps": 30, "usable_life_laps": 40},
+        {
+            "index": 0,
+            "compound": "MEDIUM",
+            "fitted": True,
+            "available": True,
+            "wear_pct": 10,
+            "lap_delta_ms": 0,
+            "life_span_laps": 30,
+            "usable_life_laps": 40,
+        },
+        {
+            "index": 1,
+            "compound": compound,
+            "fitted": False,
+            "available": True,
+            "wear_pct": wear,
+            "lap_delta_ms": delta_ms,
+            "life_span_laps": 30,
+            "usable_life_laps": 40,
+        },
     ]
     history["compounds"][compound] = dict(history["compounds"]["MEDIUM"])
     return state, history
 
 
-@pytest.mark.parametrize("compound,delta_ms,wear,expected", [
-    ("MEDIUM", -1000, 0, [90.1, 90.2, 90.3]),
-    # The generating process knows age five; the model receives no spare age.
-    ("MEDIUM", -500, 5, [90.6, 90.7, 90.8]),
-    ("HARD", -350, 0, [90.75, 90.85, 90.95]),
-    # Initial wear60 costs .088s, already present in the packet's -.412 delta.
-    ("MEDIUM", -412, 60, [90.705, 90.822, 90.939]),
-])
-def test_packet_delta_replaces_initial_set_difference(compound, delta_ms, wear, expected, monkeypatch):
+@pytest.mark.parametrize(
+    "compound,delta_ms,wear,expected",
+    [
+        ("MEDIUM", -1000, 0, [90.1, 90.2, 90.3]),
+        # The generating process knows age five; the model receives no spare age.
+        ("MEDIUM", -500, 5, [90.6, 90.7, 90.8]),
+        ("HARD", -350, 0, [90.75, 90.85, 90.95]),
+        # Initial wear60 costs .088s, already present in the packet's -.412 delta.
+        ("MEDIUM", -412, 60, [90.705, 90.822, 90.939]),
+    ],
+)
+def test_packet_delta_replaces_initial_set_difference(
+    compound, delta_ms, wear, expected, monkeypatch
+):
     monkeypatch.setattr(settings, "strategy_cold_tyre_penalty_s", 0)
     state, history = relative_set_stint(compound=compound, delta_ms=delta_ms, wear=wear)
     engine = StrategyEngine(None, None)
-    model = engine._simulate_stint(state, compound, 3, 0, 0, engine._estimate_base_lap_s(state),
-                                  history, 1.0, state["tyre_sets"][1])
+    model = engine._simulate_stint(
+        state,
+        compound,
+        3,
+        0,
+        0,
+        engine._estimate_base_lap_s(state),
+        history,
+        1.0,
+        state["tyre_sets"][1],
+    )
     assert model["lap_times_s"] == pytest.approx(expected)
     reference = model["set_pace_reference"]
     assert reference["source"] == "game_delta_replaces_initial_model_difference"
@@ -248,26 +297,49 @@ def test_compute_physical_set_replacement_matches_independent_lap_clock(monkeypa
     original = deepcopy(state)
     engine = StrategyEngine(None, None)
     engine.compute(state, history)
-    candidates = [plan for plan in engine._candidate_pool
-                  if plan["tyre_set_indices"] == [1] and plan["stops_remaining"] == 1]
+    candidates = [
+        plan
+        for plan in engine._candidate_pool
+        if plan["tyre_set_indices"] == [1] and plan["stops_remaining"] == 1
+    ]
     assert candidates
     for plan in candidates:
         current, spare = plan["stint_models"]
-        current_laps = [90 + .1 * age for age in range(11, 11 + current["laps"])]
-        spare_laps = [90 + .1 * age + (2 if age == 1 else 1 if age == 2 else 0)
-                      for age in range(1, 1 + spare["laps"])]
+        current_laps = [90 + 0.1 * age for age in range(11, 11 + current["laps"])]
+        spare_laps = [
+            90 + 0.1 * age + (2 if age == 1 else 1 if age == 2 else 0)
+            for age in range(1, 1 + spare["laps"])
+        ]
         assert current["lap_times_s"] == pytest.approx(current_laps)
         assert spare["lap_times_s"] == pytest.approx(spare_laps)
-        assert plan["projected_time_s"] == pytest.approx(sum(current_laps) + sum(spare_laps) + 22.0)
+        assert plan["projected_time_s"] == pytest.approx(
+            sum(current_laps) + sum(spare_laps) + 22.0
+        )
         assert spare["set_age_source"] == "not_reported_for_spare"
-        assert spare["set_pace_reference"]["source"] == "game_delta_replaces_initial_model_difference"
+        assert (
+            spare["set_pace_reference"]["source"]
+            == "game_delta_replaces_initial_model_difference"
+        )
     assert state == original
 
 
-@pytest.mark.parametrize("mismatch", ["age", "missing_fitted", "fitted_compound", "ambiguous_fitted",
-                                      "self_delta", "wet_target", "wet_surface", "unknown_identity"])
+@pytest.mark.parametrize(
+    "mismatch",
+    [
+        "age",
+        "missing_fitted",
+        "fitted_compound",
+        "ambiguous_fitted",
+        "self_delta",
+        "wet_target",
+        "wet_surface",
+        "unknown_identity",
+    ],
+)
 @pytest.mark.parametrize("reported_delta_ms", [-1000, 1500])
-def test_unmatched_set_delta_is_disclosed_without_inventing_absolute_pace(mismatch, reported_delta_ms, monkeypatch):
+def test_unmatched_set_delta_is_disclosed_without_inventing_absolute_pace(
+    mismatch, reported_delta_ms, monkeypatch
+):
     monkeypatch.setattr(settings, "strategy_cold_tyre_penalty_s", 0)
     state, history = relative_set_stint(delta_ms=reported_delta_ms)
     compound = "MEDIUM"
@@ -291,9 +363,28 @@ def test_unmatched_set_delta_is_disclosed_without_inventing_absolute_pace(mismat
         state["tyre_sets"][1]["index"] = None
     engine = StrategyEngine(None, None)
     spare = state["tyre_sets"][1]
-    actual = engine._simulate_stint(state, compound, 3, 0, 0, engine._estimate_base_lap_s(state), history, 1.0, spare)
-    without_delta = engine._simulate_stint(state, compound, 3, 0, 0, engine._estimate_base_lap_s(state), history, 1.0,
-                                          {key: value for key, value in spare.items() if key != "lap_delta_ms"})
+    actual = engine._simulate_stint(
+        state,
+        compound,
+        3,
+        0,
+        0,
+        engine._estimate_base_lap_s(state),
+        history,
+        1.0,
+        spare,
+    )
+    without_delta = engine._simulate_stint(
+        state,
+        compound,
+        3,
+        0,
+        0,
+        engine._estimate_base_lap_s(state),
+        history,
+        1.0,
+        {key: value for key, value in spare.items() if key != "lap_delta_ms"},
+    )
     assert actual["lap_times_s"] == without_delta["lap_times_s"]
     assert actual["set_pace_reference"]["source"] == "model_only"
     assert actual["set_pace_reference"]["reported_delta_s"] == reported_delta_ms / 1000
@@ -304,12 +395,18 @@ def test_packet_relative_set_pace_is_invariant_to_record_order():
     state, history = relative_set_stint(delta_ms=-500, wear=5)
     engine = StrategyEngine(None, None)
     engine.compute(state, history)
-    before = {tuple(plan["box_laps"]): plan["projected_time_s"] for plan in engine._candidate_pool
-              if plan["tyre_set_indices"] == [1]}
+    before = {
+        tuple(plan["box_laps"]): plan["projected_time_s"]
+        for plan in engine._candidate_pool
+        if plan["tyre_set_indices"] == [1]
+    }
     state["tyre_sets"].reverse()
     engine.compute(state, history)
-    after = {tuple(plan["box_laps"]): plan["projected_time_s"] for plan in engine._candidate_pool
-             if plan["tyre_set_indices"] == [1]}
+    after = {
+        tuple(plan["box_laps"]): plan["projected_time_s"]
+        for plan in engine._candidate_pool
+        if plan["tyre_set_indices"] == [1]
+    }
     assert before and before == after
 
 
@@ -322,3 +419,12 @@ def test_fitted_physical_set_does_not_gain_from_a_delta_to_itself(monkeypatch):
     assert current["lap_times_s"] == pytest.approx([91.1, 91.2, 91.3, 91.4, 91.5])
     assert current["set_pace_reference"]["source"] == "model_only"
     assert "fitted set" in current["set_pace_reference"]["reason"]
+
+
+def test_uncalibrated_setup_correction_is_labelled_neutral():
+    _, source, _, effects = StrategyEngine(None, None)._wheel_wear_rates(
+        {}, "MEDIUM", {}, 1.0
+    )
+    assert "uncalibrated_setup_neutral" in source
+    assert "+setup_prior" not in source
+    assert effects["calibrated"] is False

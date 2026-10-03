@@ -8,6 +8,10 @@ async def test_setup_profiles_generate_conservative_changes(stack):
         track_id=10,
         track_name="Spa",
         session_uid=99,
+        connected=True,
+        formula=13,
+        packet_group_freshness={"1": 1.0},
+        weather="Clear",
         car_setup={
             "front_wing": 20,
             "rear_wing": 18,
@@ -39,7 +43,7 @@ async def test_setup_profiles_generate_conservative_changes(stack):
 
 @pytest.mark.asyncio
 async def test_foundational_setup_available_before_live_telemetry(stack):
-    store, _, _, setup, _, _ = stack
+    _, _, _, setup, _, _ = stack
     result = await setup.generate("race", track_id=10)
     assert result["available"] is True
     assert result["source"] == "foundational_pre_weekend"
