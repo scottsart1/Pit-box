@@ -2,7 +2,7 @@
 
 [Download Windows or Android](https://yourpitbox.com/#download),
 [try the Driver Dashboard](https://your-pit-box-driver-dashboard.sarthakvij123450.chatgpt.site/),
-or read the [release verification](docs/release-qa-5.3.0.md).
+or read the [release verification](docs/release-qa-5.3.1.md).
 
 Your Pit Box receives **F1 26** telemetry (UDP format **2026**) from a PS5, runs deterministic
 strategy/corner/setup analysis locally, keeps persistent SQLite history, answers spoken questions,
