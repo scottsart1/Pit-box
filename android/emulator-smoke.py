@@ -30,6 +30,7 @@ ROOT = Path(__file__).resolve().parent.parent
 OUTPUT = ROOT / "android" / "smoke-output"
 BASE = "http://127.0.0.1:18000"
 SERIAL = None
+UI_DUMP_JAR = None
 
 
 def adb(*args: str, check: bool = True) -> subprocess.CompletedProcess:
@@ -199,9 +200,15 @@ class UiProviderUnavailable(RuntimeError):
 
 def ui_tree(label: str) -> ET.Element:
     """Keep each fresh accessibility snapshot; never infer taps from pixels."""
-    result = adb("exec-out", "uiautomator", "dump", "/dev/tty", check=False)
+    if UI_DUMP_JAR:
+        result = adb("exec-out", "env", f"CLASSPATH={UI_DUMP_JAR}", "app_process", "/", "AndroidUiHierarchy", check=False)
+    else:
+        result = adb("exec-out", "uiautomator", "dump", "/dev/tty", check=False)
     output = result.stdout.decode(errors="replace")
     (OUTPUT / f"{label}-dump.txt").write_text(output)
+    if UI_DUMP_JAR and result.returncode != 0:
+        (OUTPUT / f"{label}-dump-error.txt").write_bytes(result.stderr)
+        raise AssertionError("All-window hierarchy helper failed; see retained dump output")
     # uiautomator adds a status line after the XML on several Android images.
     start, end = output.find("<hierarchy"), output.rfind("</hierarchy>")
     if start < 0 or end < start:

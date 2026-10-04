@@ -178,6 +178,47 @@ def test_native_option_rejects_a_clipped_list_row(monkeypatch):
     assert calls == []
 
 
+def test_native_options_ignore_hidden_windows_and_nodes():
+    tree = ET.fromstring('''<hierarchy>
+      <window layer="5"><node class="android.widget.ListView" visible-to-user="false" bounds="[0,0][700,600]">
+        <node text="Melbourne" visible-to-user="false" bounds="[10,20][690,64]"/>
+      </node></window>
+      <window layer="4"><node class="android.widget.ListView" visible-to-user="true" bounds="[100,200][700,600]">
+        <node text="Melbourne" visible-to-user="false" bounds="[110,220][680,264]"/>
+        <node text="Melbourne" visible-to-user="true" bounds="[110,280][680,324]"/>
+      </node></window></hierarchy>''')
+    runtime, calls, _ = ui_runtime([tree])
+    found = qa.NativeUI(runtime).find("visible-option", text="Melbourne", page=False, native_list=True, attempts=1)
+    assert smoke.node_bounds(found) == (110, 280, 680, 324)
+    assert calls == []
+
+
+def test_all_window_dump_preserves_popup_and_underlying_windows(tmp_path, monkeypatch):
+    data = b'''<?xml version="1.0"?><hierarchy display-id="0">
+      <window layer="3"><node class="android.widget.ListView" bounds="[100,200][700,600]">
+        <node text="Melbourne" bounds="[110,220][680,264]"/>
+      </node></window>
+      <window layer="2"><node resource-id="setup" bounds="[0,100][800,744]"/></window>
+    </hierarchy>'''
+    calls = []
+    monkeypatch.setattr(smoke, "OUTPUT", tmp_path)
+    monkeypatch.setattr(smoke, "UI_DUMP_JAR", "/data/local/tmp/test.jar")
+    monkeypatch.setattr(smoke, "adb", lambda *args, **kwargs: calls.append(args) or SimpleNamespace(stdout=data, stderr=b"", returncode=0))
+    tree = smoke.ui_tree("all-windows")
+    assert len(tree.findall("window")) == 2
+    assert tree.find("window/node").get("class") == "android.widget.ListView"
+    assert calls == [("exec-out", "env", "CLASSPATH=/data/local/tmp/test.jar", "app_process", "/", "AndroidUiHierarchy")]
+
+
+def test_all_window_helper_runtime_failure_is_not_a_provider_skip(tmp_path, monkeypatch):
+    monkeypatch.setattr(smoke, "OUTPUT", tmp_path)
+    monkeypatch.setattr(smoke, "UI_DUMP_JAR", "/data/local/tmp/test.jar")
+    monkeypatch.setattr(smoke, "adb", lambda *args, **kwargs: SimpleNamespace(stdout=b"", stderr=b"Constructor failed", returncode=1))
+    with pytest.raises(AssertionError, match="helper failed"):
+        smoke.ui_tree("failed-dump")
+    assert (tmp_path / "failed-dump-dump-error.txt").read_bytes() == b"Constructor failed"
+
+
 def test_native_missing_control_does_not_swipe_a_non_scrolling_page_or_tabs(monkeypatch):
     tree = ET.fromstring('''<hierarchy>
       <node class="android.widget.TabWidget" scrollable="true" text="Workspaces" bounds="[0,100][800,188]"/>
@@ -308,6 +349,7 @@ def test_native_runner_retains_honest_stage_outcomes(tmp_path, monkeypatch, outc
     runtime = SimpleNamespace(ROOT=ROOT, OUTPUT=tmp_path, BASE="http://127.0.0.1:18000",
                               UiProviderUnavailable=smoke.UiProviderUnavailable)
     monkeypatch.setattr(qa, "validate_target", lambda *args: {"package": "com.yourpitbox.app.debug"})
+    monkeypatch.setattr(qa, "prepare_window_dump", lambda *args: None)
 
     def fixture(command, **options):
         Path(command[-1]).write_text(json.dumps({"session_id": "fixture-native"}))

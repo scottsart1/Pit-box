@@ -8,10 +8,14 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
+import shutil
 import subprocess
 import sys
 import time
+import zipfile
+from pathlib import Path
 from urllib.parse import quote
 from urllib.request import urlopen
 
@@ -49,15 +53,16 @@ def page_regions(smoke, tree, *, popup=False):
         # A dump can expose both a native select dialog and its underlying
         # WebView. Scroll the real native list, not the obscured dashboard.
         for node in tree.iter("node"):
-            if node.get("class") == "android.widget.ListView" and (bounds := smoke.node_bounds(node)):
+            if node.get("class") == "android.widget.ListView" and node.get("visible-to-user", "true") == "true" and (bounds := smoke.node_bounds(node)):
                 return bounds, bounds if node.get("scrollable") == "true" else None
     pages = {"live", "driver-dashboard", "strategy", "connection", "analysis", "setup", "settings"}
     for node in tree.iter("node"):
-        if node.get("resource-id") in pages and (bounds := smoke.node_bounds(node)):
+        if node.get("resource-id") in pages and node.get("visible-to-user", "true") == "true" and (bounds := smoke.node_bounds(node)):
             return bounds, bounds if node.get("scrollable") == "true" else None
     # Native select dialogs and DocumentsUI supply their own list viewport,
     # without the dashboard's HTML page node. Exclude any tab strip here too.
     regions = [bounds for node in tree.iter("node") if node.get("scrollable") == "true"
+               and node.get("visible-to-user", "true") == "true"
                and node.get("class") != "android.widget.TabWidget"
                and (bounds := smoke.node_bounds(node))]
     region = max(regions, key=lambda bounds: (bounds[2] - bounds[0]) * (bounds[3] - bounds[1]), default=None)
@@ -80,6 +85,40 @@ def validate_target(smoke, package, version):
     assert health.get("ok") and health.get("version") == version, health
     assert re.search(rf"/{re.escape(package)}/", health.get("database", "")), "HTTP backend is not the debug APK"
     return {"serial": serial, "package": package, "version": version, "apk_version": apk_version, "database": health["database"]}
+
+
+def build_window_dump(root, output):
+    """Compile the read-only shell helper using the same SDK as the APK."""
+    sdk = Path(os.environ.get("ANDROID_HOME") or os.environ.get("ANDROID_SDK_ROOT") or "")
+    platform = sdk / "platforms/android-36/android.jar"
+    tools = sdk / "build-tools/35.0.0"
+    d8 = tools / ("d8.bat" if os.name == "nt" else "d8")
+    javac = shutil.which("javac")
+    if not javac and os.environ.get("JAVA_HOME"):
+        javac = str(Path(os.environ["JAVA_HOME"]) / "bin" / ("javac.exe" if os.name == "nt" else "javac"))
+    assert platform.is_file() and d8.is_file() and javac, "Native hierarchy helper requires Android36 SDK and javac"
+    classes, dex = output / "ui-dump-classes", output / "ui-dump-dex"
+    classes.mkdir(parents=True, exist_ok=True)
+    dex.mkdir(parents=True, exist_ok=True)
+    commands = [
+        [javac, "--release", "17", "-classpath", str(platform), "-d", str(classes), str(root / "android/AndroidUiHierarchy.java")],
+        [str(d8), "--lib", str(platform), "--min-api", "26", "--output", str(dex), str(classes / "AndroidUiHierarchy.class")],
+    ]
+    for index, command in enumerate(commands):
+        result = subprocess.run(command, capture_output=True, timeout=90)
+        (output / f"ui-dump-build-{index}.txt").write_bytes(result.stdout + result.stderr)
+        assert result.returncode == 0, f"Native hierarchy helper compilation failed; see ui-dump-build-{index}.txt"
+    jar = output / "ui-dump.jar"
+    with zipfile.ZipFile(jar, "w") as archive:
+        archive.write(dex / "classes.dex", "classes.dex")
+    return jar
+
+
+def prepare_window_dump(smoke):
+    jar = build_window_dump(smoke.ROOT, smoke.OUTPUT)
+    destination = "/data/local/tmp/ypb-native-ui-dump.jar"
+    smoke.adb("push", str(jar), destination)
+    smoke.UI_DUMP_JAR = destination
 
 
 class NativeUI:
@@ -108,7 +147,8 @@ class NativeUI:
             candidates = tree.iter("node")
             if native_list:
                 popup = next((node for node in tree.iter("node")
-                              if node.get("class") == "android.widget.ListView" and self.smoke.node_bounds(node)), None)
+                              if node.get("class") == "android.widget.ListView" and node.get("visible-to-user", "true") == "true"
+                              and self.smoke.node_bounds(node)), None)
                 # A select can expose its obscured WebView in the same dump.
                 # Never mistake the underlying selected text for a dialog row,
                 # or scroll the dashboard while the native popup is opening.
@@ -118,6 +158,8 @@ class NativeUI:
             for node in candidates:
                 bounds = self.smoke.node_bounds(node)
                 if not matches(node, resource_id=resource_id, text=text) or not bounds:
+                    continue
+                if node.get("visible-to-user", "true") != "true":
                     continue
                 if enabled and node.get("enabled", "true") != "true":
                     continue
@@ -387,6 +429,8 @@ def run(smoke, package, version):
                "status": "running", "stages_passed": [], "physical_device_tested": False}
     try:
         summary["target"] = validate_target(smoke, package, version)
+        prepare_window_dump(smoke)
+        summary["hierarchy_provider"] = "UiAutomation interactive windows on emulator display0"
         fixture_path = smoke.OUTPUT / "native-engineering-fixture.json"
         process = subprocess.run([sys.executable, str(smoke.ROOT / "tools/engineering-telemetry-smoke.py"),
                                   "--base", smoke.BASE, "--host", "127.0.0.1", "--port", "20777",
