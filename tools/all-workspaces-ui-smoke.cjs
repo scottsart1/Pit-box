@@ -225,9 +225,19 @@ const { chromium } = require('playwright');
       });
       await check('library-reset-review', async () => {
         await page.locator('#librarySessionType').selectOption('');
+        const reset = page.waitForResponse(item => {
+          const url = new URL(item.url());
+          return url.pathname === '/api/v1/sessions' && url.searchParams.get('limit') === '50'
+            && !url.searchParams.has('session_type');
+        });
         await page.locator('#libraryFilters button').click();
-        await page.waitForFunction(() => document.querySelectorAll('#libraryRows button').length > 0);
-        const actions = await page.locator('#libraryRows button').evaluateAll(buttons => buttons.map(button => ({
+        assert.equal((await reset).status(), 200);
+        await page.waitForFunction(() => document.getElementById('libraryStatus').textContent.startsWith('Loaded ')
+          && document.querySelectorAll('#libraryRows button').length > 0);
+        await page.locator('#libraryRows button').first().waitFor({ state: 'visible' });
+        // Query and measure in the same browser evaluation: a refresh replaces
+        // row nodes, so handles collected before it finishes can be detached.
+        const actions = await page.evaluate(() => [...document.querySelectorAll('#libraryRows button')].map(button => ({
           label: button.textContent, height: button.getBoundingClientRect().height,
         })));
         assert.ok(actions.length > 0);
