@@ -845,7 +845,9 @@ def test_shared_capabilities_are_separate_from_optional_beta_pairing():
     assert "Neither is needed to receive the game directly" in pairing
     assert "not automatic cloud sync" in pairing
     assert "Very large libraries can still hit archive limits or timeouts" in pairing
-    assert "earlier desktop builds" in INDEX and "not Android screenshots" in INDEX
+    assert "earlier desktop builds" in INDEX
+    assert "Android tablet running 5.3.2" in INDEX
+    assert "img/15-setup-lab-5.3.2-android.png" in INDEX
 
 
 @pytest.mark.parametrize("page_name", build_site.PAGES)
