@@ -28,7 +28,18 @@ def labels(node):
 def matches(node, *, resource_id=None, text=None):
     if resource_id is not None:
         actual = node.get("resource-id", "")
-        return actual == resource_id or actual.rsplit(":id/", 1)[-1] == resource_id
+        if not (actual == resource_id or actual.rsplit(":id/", 1)[-1] == resource_id):
+            return False
+        if text is None:
+            return True
+    if text == "Define my lap groups":
+        # WebView can expose the summary's title and its dynamic count as one
+        # accessible label. Accept only this UI's documented count suffix.
+        pattern = r"Define my lap groups(?:\s+\d+ groups(?: saved| · unsaved edits) · \d+ laps unassigned)?"
+        return any(re.fullmatch(pattern, value, re.IGNORECASE) for value in labels(node))
+    if text == "Lap context and driver reports":
+        pattern = r"Lap context and driver reports(?:\s+\d+ saved notes)?"
+        return any(re.fullmatch(pattern, value, re.IGNORECASE) for value in labels(node))
     return any(value.casefold() == text.casefold() for value in labels(node))
 
 
@@ -124,16 +135,29 @@ def prepare_window_dump(smoke):
 class NativeUI:
     def __init__(self, smoke):
         self.smoke = smoke
+        self.package = getattr(smoke, "PACKAGE", "com.yourpitbox.app.debug")
         self.tree = None
         self.sequence = 0
 
     def snapshot(self, label):
-        self.sequence += 1
         safe_label = re.sub(r"[^A-Za-z0-9_.-]", "-", label)
-        self.tree = self.smoke.ui_tree(f"native-{self.sequence:03d}-{safe_label}")
-        return self.tree
+        deadline = time.monotonic() + 4
+        while True:
+            self.sequence += 1
+            # A complete but empty tree can occur while Android changes
+            # activities or opens a drawer. Capture again before any input.
+            # Crashes, missing XML and parse errors propagate immediately.
+            self.tree = self.smoke.ui_tree(f"native-{self.sequence:03d}-{safe_label}", allow_empty=True)
+            allowed = {self.package, "com.android.documentsui", "com.google.android.documentsui"}
+            if any(labels(node) and node.get("visible-to-user", "true") == "true"
+                   and node.get("package") in allowed
+                   for node in self.tree.iter("node")):
+                return self.tree
+            if time.monotonic() >= deadline:
+                raise AssertionError(f"Accessibility hierarchy remained empty while settling {label}")
+            time.sleep(0.3)
 
-    def find(self, label, *, resource_id=None, text=None, page=True, direction="down", attempts=18, enabled=False, native_list=False):
+    def find(self, label, *, resource_id=None, text=None, page=True, direction="down", attempts=18, enabled=False, native_list=False, within_id=None, class_name=None):
         """Search both ways only within a freshly reported scrollable region.
 
         A populated provider missing an expected control is a failure, not a
@@ -145,6 +169,14 @@ class NativeUI:
             viewport, region = page_regions(self.smoke, tree, popup=not page)
             populated |= any(labels(node) for node in tree.iter("node"))
             candidates = tree.iter("node")
+            if within_id:
+                scope = next((node for node in tree.iter("node")
+                              if matches(node, resource_id=within_id)
+                              and node.get("visible-to-user", "true") == "true"
+                              and self.smoke.node_bounds(node)), None)
+                candidates = scope.iter("node") if scope is not None else ()
+                viewport = self.smoke.node_bounds(scope) if scope is not None else None
+                region = viewport if scope is not None and scope.get("scrollable") == "true" else None
             if native_list:
                 popup = next((node for node in tree.iter("node")
                               if node.get("class") == "android.widget.ListView" and node.get("visible-to-user", "true") == "true"
@@ -159,11 +191,13 @@ class NativeUI:
                 bounds = self.smoke.node_bounds(node)
                 if not matches(node, resource_id=resource_id, text=text) or not bounds:
                     continue
+                if class_name and node.get("class") != class_name:
+                    continue
                 if node.get("visible-to-user", "true") != "true":
                     continue
                 if enabled and node.get("enabled", "true") != "true":
                     continue
-                if (page or native_list) and viewport and not (viewport[0] <= bounds[0] < bounds[2] <= viewport[2]
+                if (page or native_list or within_id) and viewport and not (viewport[0] <= bounds[0] < bounds[2] <= viewport[2]
                                               and viewport[1] <= bounds[1] < bounds[3] <= viewport[3]):
                     continue
                 return node
@@ -171,14 +205,16 @@ class NativeUI:
                 break
             if attempt and region:
                 x1, y1, x2, y2 = region
-                start, end = y1 + (y2 - y1) * 4 // 5, y1 + (y2 - y1) // 5
+                # A short, slow drag avoids inertial flings skipping a whole
+                # note/card between snapshots on high-resolution tablets.
+                start, end = y1 + (y2 - y1) * 13 // 20, y1 + (y2 - y1) * 7 // 20
                 down = direction == "down"
                 if attempt >= attempts // 2:
                     down = not down
                 if not down:
                     start, end = end, start
                 self.smoke.adb("shell", "input", "swipe", str((x1 + x2) // 2), str(start),
-                               str((x1 + x2) // 2), str(end), "250")
+                               str((x1 + x2) // 2), str(end), "500")
             time.sleep(0.3)
         if not populated:
             raise self.smoke.UiProviderUnavailable(f"Empty accessibility provider while finding {label}")
@@ -195,14 +231,14 @@ class NativeUI:
 
     def fill(self, field, value, *, page=True):
         assert re.fullmatch(r"[A-Za-z0-9 ._-]+", value), "Fixture text must be shell-safe ASCII"
-        self.tap(f"fill-{field}", resource_id=field, page=page)
+        self.tap(f"fill-{field}", resource_id=field, class_name="android.widget.EditText", page=page)
         self.smoke.adb("shell", "input", "keycombination", "KEYCODE_CTRL_LEFT", "KEYCODE_A")
         self.smoke.adb("shell", "input", "text", value.replace(" ", "%s"))
         # BACK is only a keyboard dismissal; never accidentally navigate away.
         ime = self.smoke.adb("shell", "dumpsys", "input_method").stdout.decode()
         if re.search(r"mInputShown=true", ime):
             self.smoke.adb("shell", "input", "keyevent", "KEYCODE_BACK")
-        entered = self.find(f"filled-{field}", resource_id=field, page=page)
+        entered = self.find(f"filled-{field}", resource_id=field, class_name="android.widget.EditText", page=page)
         field_label = {"engineeringGroupName": "Group name", "engineeringLapNoteText": "What happened?"}.get(field)
         assert entered_value_matches(entered, value, field_label), f"Native text entry failed for {field}: {labels(entered)}"
 
@@ -377,7 +413,9 @@ def read_saved_report(smoke, filename, expected, *, timeout=20):
     downloaded = b""
     last_error = "File was not created"
     while time.monotonic() < deadline:
-        result = smoke.adb("shell", "cat", f"/sdcard/Download/{filename}", check=False)
+        # exec-out avoids shell PTY newline conversion: exported UTF-8 bytes
+        # must match the API response exactly, including line endings.
+        result = smoke.adb("exec-out", "cat", f"/sdcard/Download/{filename}", check=False)
         if result.returncode == 0:
             downloaded = result.stdout
             if downloaded == expected:
@@ -392,6 +430,24 @@ def read_saved_report(smoke, filename, expected, *, timeout=20):
     raise AssertionError(f"Android report save did not create a readable report in Downloads: {last_error}")
 
 
+def await_documents_ui(ui, *, timeout=10):
+    """Wait only for the known activity launch; broken dump commands still fail."""
+    deadline = time.monotonic() + timeout
+    while True:
+        tree = ui.snapshot("documents-opened")
+        visible = [node for node in tree.iter("node")
+                   if node.get("visible-to-user", "true") == "true" and ui.smoke.node_bounds(node)]
+        documents = any("documentsui" in node.get("package", "").lower() for node in visible)
+        filename = any(node.get("class") == "android.widget.EditText" for node in visible)
+        drawer = any(any(value.casefold() in {"show roots", "show navigation drawer"}
+                         for value in labels(node)) for node in visible)
+        if documents and filename and drawer:
+            return tree
+        if time.monotonic() >= deadline:
+            raise AssertionError("Native export did not expose ready DocumentsUI controls before the transition deadline")
+        time.sleep(0.3)
+
+
 def prove_export(ui, endpoint, group_name, note, session_id):
     smoke = ui.smoke
     resolved = smoke.adb("shell", "cmd", "package", "resolve-activity", "--brief", "-a",
@@ -402,14 +458,13 @@ def prove_export(ui, endpoint, group_name, note, session_id):
     with urlopen(smoke.BASE + endpoint + "/export?format=text", timeout=20) as response:
         expected = response.read()
     ui.tap("export-report", resource_id="engineeringExportText")
-    tree = ui.snapshot("documents-opened")
-    assert any("documentsui" in node.get("package", "").lower() for node in tree.iter("node")), "Native export did not open DocumentsUI"
+    tree = await_documents_ui(ui)
     # Use the drawer's actual accessible label, not a presumed hamburger spot.
     drawer = next((node for node in tree.iter("node") if any(value.casefold() in {
         "show roots", "show navigation drawer"} for value in labels(node)) and smoke.node_bounds(node)), None)
     assert drawer is not None, "DocumentsUI does not expose its destination drawer"
     smoke.tap_node(drawer)
-    ui.tap("downloads", text="Downloads", page=False)
+    ui.tap("downloads", resource_id="android:id/title", text="Downloads", within_id="roots_list", page=False)
     tree = ui.snapshot("documents-destination")
     fields = [node for node in tree.iter("node") if node.get("class") == "android.widget.EditText" and smoke.node_bounds(node)]
     assert len(fields) == 1 and fields[0].get("resource-id"), "DocumentsUI filename field is ambiguous"

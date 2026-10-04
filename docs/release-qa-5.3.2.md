@@ -20,6 +20,8 @@ publication, signed artifacts or completed native acceptance yet.
   and race variants; Race includes Sprint. Phone dashboard clipping is fixed.
 - Very short session recordings register their exact session parent atomically,
   including immediate shutdown and rapid track changes before periodic saves.
+- Field Stints labels count stints correctly; Analysis, Field and trace tabs
+  and Library actions have 44px touch targets.
 
 ## Live diagnostic investigation
 
@@ -74,6 +76,34 @@ ADB still listed no device and the advertised wireless endpoint refused a
 connection. Production testing is authorized and remains limited by connection
 availability. No new production installation or native pass is claimed.
 
+The user subsequently restarted wireless debugging and the Samsung reconnected
+at its newly advertised endpoint. Device model, serial, Android 16 and both
+revision-33 packages were reverified. Production was idle with no connected
+telemetry. A private pre-update snapshot records **151 sessions and 26,155 lap
+rows**, with OpenAI still configured. No synthetic data was sent to production.
+
+The signed private QA revision-34 candidate from Android `37175056672` was
+installed in place under `com.yourpitbox.app.qa`. A hardware-pinned read-only
+accessibility helper supplies actual window/node bounds; it refuses production
+windows. Physical Setup acceptance passed all Stable/Rotation, Race/Quali/Mixed,
+six-group/last-value reachability, optional sources, wet clearing and Test
+Engineer handoff checks. Physical Test Engineer checks exposed a real nested
+lap-list scroll trap which prevented reaching Save groups. The list now allows
+vertical scroll chaining; a browser regression reproduced the failure before
+the fix and passed at all three viewport sizes afterward. The prior Windows
+and Android binaries are superseded by this product change and will be rebuilt.
+Diagnostic continuation on the private older APK verified group persistence,
+reported traffic exclusion and both comparison modes; it is not a clean full
+native acceptance pass. The diagnostic continuation also verified the second
+saved Spa session's -0.600 s comparison without changing B's notes/groups.
+Android DocumentsUI saved the report to Downloads; binary-safe readback exactly
+matched all 6,798 API bytes, SHA-256
+`4984754867cb112be5e5acabd0a08ee000cfb361899a47f7c8a7ab244e55712f`.
+The final APK still requires a fresh uninterrupted native run with the scroll
+fix. Native harness repairs cover settled package-specific trees, scoped drawer
+selection, filename EditText identity and binary-safe export readback; 97
+focused native and Android project tests pass.
+
 External live diagnostics are retained under
 `LOCALAPPDATA/YourPitBoxRelease/5.3.2/live-radio`. No recordings or credentials
 are checked into this repository.
@@ -93,6 +123,38 @@ showed the valid visible dropdown; the corrected locator is regression-tested
 against that geometry. This interrupted native flow is not a feature pass.
 Final native acceptance must use the corrected helper and final source.
 
+Superseded candidate evidence is retained for Windows
+[37174930304](https://github.com/scottsart1/Pit-box/actions/runs/37174930304)
+at `5a7b9c6df92f5d0a953c1a672101cba90e580461`, and Android
+[37175056672](https://github.com/scottsart1/Pit-box/actions/runs/37175056672)
+at `8bed2167dd92d89141c8ccbd1ec97ee2c9790140`. The latter changes only the
+browser test's Library refresh wait. Application, static assets, Android
+project, version and Windows packaging directories are identical between them.
+Earlier intermediate runs were cancelled before promotion as the UI audit
+identified the remaining stint-count and touch-target fixes.
+
+Windows `37174930304` completed successfully: **2,259 passed, one skipped,
+one dependency warning**, in 762.36 seconds. All 11 installed-artifact checks
+passed, including the 25-lap classified race, persistence/readback, finalized
+capture, integrity, restart and uninstall/data retention. Counted telemetry
+sent, received, parsed and recorded **18,604 packets** across 20 cars and 100
+simulated seconds, with zero rejected packets, queue drops or write errors and
+no sampled request timeouts. Health p95/max were 0.157/1.266 seconds; state
+p95/max were 0.234/0.594 seconds. Installed transfer management was verified;
+paired history copy and TLS/QR were not tested on the Windows runner because
+it had no usable private LAN.
+
+The exact downloaded Windows runtime then passed local UDP and browser checks
+for comparisons, groups/notes, Setup and all **72 workspace cases**. It started
+in 8.094 seconds and shut down cleanly in 10.609 seconds with exit code zero.
+Cold verification found both compared sessions' notes intact, the complete
+20-value selected setup intact, and all four clean capture files (7,365 packets)
+present under their own catalog/header session IDs. SQLite integrity and
+foreign-key checks passed; temporary data and owned processes were removed.
+That superseded installer was staged locally and was not publicly promoted:
+35,019,409 bytes, SHA-256
+`f9c3af4dafac1c385be3e368e7060752f86f934f987b0fc31bb73934a5ec7877`.
+
 The next Android candidate [37173645207](https://github.com/scottsart1/Pit-box/actions/runs/37173645207)
 passed **1,973 Python tests** and its earlier browser gates, but stopped in
 engineering acceptance because the fixture queried the catalog before its
@@ -102,6 +164,19 @@ to that run. Its log also exposed a real short-session raw-capture catalog
 registration error; that defect is repaired in the next candidate. The
 corresponding Windows run was cancelled after its full suite/build, before
 artifact promotion, because the source needed that additional repair.
+
+Android `37175056672` passed **1,987 Python tests**, all browser gates and all
+three APK builds. Native testing then showed a visible dropdown which stock
+UIAutomator omitted from its active-window XML. The CI helper now retrieves
+all interactive accessibility windows, preserving tree-derived tap bounds and
+emulator/package guards. Java-to-DEX compilation and **74 focused tests** pass;
+Android `37176479652` subsequently passed 1,990 Python tests and all browser
+checks, but its native summary was only partially tested despite workflow
+success: the dedicated hierarchy process crashed because API 36 expected an
+initialized main Looper. The helper now prepares it and treats incomplete,
+malformed or empty promised XML as a hard failure. That run is not release
+acceptance. The new native runtime run must still complete. The equivalent hardware-pinned
+physical helper has already exercised the complete Setup flow successfully.
 
 The capture repair passed **69 focused tests**, including real UDP immediate
 shutdown, rapid A-to-B-to-A restart, metadata preservation, recovery, deferred
@@ -116,7 +191,9 @@ verifies five matching pairs with the expected **-0.600 s** sector-two gain,
 then switches to Monza and rejects late packets from both retired sessions.
 Focused tests cover session/group ownership, notes and exclusions, mode/track
 mismatch, material layout differences over 15 m, unknown compatibility and
-delayed UI responses. No existing recording is modified by these fixtures.
+delayed UI responses. Game version, car/formula and car performance remain unverified comparison
+limits even when laps can be matched. No existing recording is modified by
+these fixtures.
 
 Local full regression: **2,171 passed, two skipped**, with one stale website
 copy assertion subsequently corrected. The website/release subset then passed
@@ -139,6 +216,10 @@ The same complete UDP/browser acceptance passed again after the short-session
 capture repair, including all 69 workspace cases. Its server log has one
 Windows asyncio connection-reset callback from a closed connection; browser
 pages reported no exceptions or HTTP 5xx and no capture-registration error.
+Final workspace acceptance passed **72 cases** across the same three widths,
+including delayed first-use consent, the corrected stint count, 44px Analysis,
+Field and trace tabs and Library actions. No page exceptions or HTTP 5xx were
+reported. The native helper's popup/viewport cases passed **38 focused tests**.
 
 Drive/Strategy checks passed at three viewports, including retained critical
 warnings and compound evidence. Setup checks passed at three viewports with all

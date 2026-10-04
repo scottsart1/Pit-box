@@ -1248,7 +1248,7 @@ button:disabled,
 .engineering-run:not([open]) { padding-top: 8px; padding-bottom: 8px; }
 .engineering-editor { min-width: 0; overflow-wrap: anywhere; }
 .engineering-editor > summary { font-size: 16px; }
-.engineering-lap-choices { max-height: 400px; overflow-y: auto; overscroll-behavior: contain; border: 1px solid #263542; border-radius: 8px; margin: 12px 0 18px; }
+.engineering-lap-choices { max-height: 400px; overflow-y: auto; overscroll-behavior-x: contain; overscroll-behavior-y: auto; border: 1px solid #263542; border-radius: 8px; margin: 12px 0 18px; }
 .engineering-lap-choice, .engineering-check { display: flex; gap: 12px; align-items: center; min-height: 44px; cursor: pointer; padding: 10px; box-sizing: border-box; }
 .engineering-lap-choice + .engineering-lap-choice { border-top: 1px solid #263542; }
 .engineering-lap-choice:has(input:checked) { background: rgba(73, 209, 125, .08); }

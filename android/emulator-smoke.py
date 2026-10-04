@@ -13,18 +13,23 @@ import base64
 import importlib.util
 import ipaddress
 import json
-from pathlib import Path
 import re
 import socket
 import subprocess
 import sys
 import time
+import xml.etree.ElementTree as ET
+from pathlib import Path
 from urllib.error import URLError
 from urllib.parse import parse_qs, urlsplit
 from urllib.request import Request, urlopen
-import xml.etree.ElementTree as ET
 
-from f1.packets import PacketCarTelemetryData, PacketHeader, PacketLapData, PacketSessionData
+from f1.packets import (
+    PacketCarTelemetryData,
+    PacketHeader,
+    PacketLapData,
+    PacketSessionData,
+)
 
 ROOT = Path(__file__).resolve().parent.parent
 OUTPUT = ROOT / "android" / "smoke-output"
@@ -198,7 +203,7 @@ class UiProviderUnavailable(RuntimeError):
     """The emulator did not expose WebView content to accessibility automation."""
 
 
-def ui_tree(label: str) -> ET.Element:
+def ui_tree(label: str, *, allow_empty: bool = False) -> ET.Element:
     """Keep each fresh accessibility snapshot; never infer taps from pixels."""
     if UI_DUMP_JAR:
         result = adb("exec-out", "env", f"CLASSPATH={UI_DUMP_JAR}", "app_process", "/", "AndroidUiHierarchy", check=False)
@@ -212,10 +217,21 @@ def ui_tree(label: str) -> ET.Element:
     # uiautomator adds a status line after the XML on several Android images.
     start, end = output.find("<hierarchy"), output.rfind("</hierarchy>")
     if start < 0 or end < start:
+        if UI_DUMP_JAR:
+            (OUTPUT / f"{label}-dump-error.txt").write_bytes(result.stderr)
+            raise AssertionError("All-window hierarchy helper failed to emit complete XML; see retained dump output")
         raise UiProviderUnavailable("Android accessibility dump did not contain a UI hierarchy")
     xml = output[start:end + len("</hierarchy>")]
     (OUTPUT / f"{label}-ui.xml").write_text(xml)
-    return ET.fromstring(xml)
+    try:
+        tree = ET.fromstring(xml)
+    except ET.ParseError as error:
+        if UI_DUMP_JAR:
+            raise AssertionError("All-window hierarchy helper emitted malformed XML") from error
+        raise
+    if UI_DUMP_JAR and not allow_empty and tree.find(".//node") is None:
+        raise AssertionError("All-window hierarchy helper emitted no accessibility nodes")
+    return tree
 
 
 def node_bounds(node: ET.Element) -> tuple[int, int, int, int] | None:

@@ -43,6 +43,26 @@ const { chromium } = require('playwright');
       await page.locator('#engineeringSuggestGroups').click();
       await page.waitForFunction(() => document.getElementById('engineeringGroupSelect').options.length === 2);
       assert.equal((await read()).groups.length, 0, 'Suggestions must not save before review.');
+      // Put the bounded picker at its lower boundary and partially in view.
+      // A real wheel from inside it must continue down the parent workspace;
+      // scrolling Save groups into view directly would conceal this trap.
+      const scrollStart = await page.evaluate(() => {
+        const main = document.getElementById('analysis'), choices = document.getElementById('engineeringLapChoices');
+        choices.scrollTop = choices.scrollHeight;
+        main.scrollTop += choices.getBoundingClientRect().top - main.getBoundingClientRect().top - main.clientHeight * 0.7;
+        const box = choices.getBoundingClientRect(), viewport = main.getBoundingClientRect();
+        return { top: main.scrollTop, scrollable: choices.scrollHeight > choices.clientHeight,
+          x: (box.left + box.right) / 2, y: Math.min(box.top + 60, viewport.bottom - 20) };
+      });
+      assert.ok(scrollStart.scrollable, 'The real ten-lap fixture must exercise an overflowing lap picker.');
+      await page.mouse.move(scrollStart.x, scrollStart.y);
+      await page.mouse.wheel(0, 450);
+      await page.waitForFunction(top => document.getElementById('analysis').scrollTop > top + 20, scrollStart.top, { timeout: 4000 });
+      const saveReachable = await page.locator('#engineeringSaveGroups').evaluate(button => {
+        const box = button.getBoundingClientRect(), viewport = document.getElementById('analysis').getBoundingClientRect();
+        return box.top >= viewport.top && box.bottom <= viewport.bottom;
+      });
+      assert.ok(saveReachable, 'Scrolling from the lap picker reaches Save groups above the footer.');
       const name = 'Medium baseline <literal text>';
       await page.locator('#engineeringGroupName').fill(name);
       await submit('#engineeringRefresh', '', 'GET');
@@ -253,7 +273,7 @@ const { chromium } = require('playwright');
         assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth + 1), false);
       }
       assert.deepEqual(errors, []);
-      results.push({ width, height, grouping: 'pass', manualLapSelection: 'pass', draftProtection: 'pass', contextNotes: 'pass', noteCorrection: 'pass', crossSessionGroupsAndNotes: crossSession ? 'pass' : 'not supplied', ...(width === 1280 ? { saveRaces: 'pass' } : {}), export: 'pass', overflow: false });
+      results.push({ width, height, grouping: 'pass', lapListScrollChaining: 'pass', manualLapSelection: 'pass', draftProtection: 'pass', contextNotes: 'pass', noteCorrection: 'pass', crossSessionGroupsAndNotes: crossSession ? 'pass' : 'not supplied', ...(width === 1280 ? { saveRaces: 'pass' } : {}), export: 'pass', overflow: false });
       await context.close();
     }
   } catch (error) {

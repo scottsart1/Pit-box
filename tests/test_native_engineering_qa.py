@@ -68,10 +68,13 @@ def test_native_guard_records_exact_verified_target():
 
 
 def ui_runtime(trees):
+    for snapshot in trees:
+        for node in snapshot.iter("node"):
+            node.attrib.setdefault("package", "com.yourpitbox.app.debug")
     snapshots = iter(trees)
     calls, names = [], []
 
-    def tree(label):
+    def tree(label, *, allow_empty=False):
         names.append(label)
         return next(snapshots)
 
@@ -98,7 +101,7 @@ def test_native_locator_scrolls_clipped_control_and_uses_fresh_bounds(monkeypatc
     monkeypatch.setattr(qa.time, "sleep", lambda _: None)
     found = qa.NativeUI(runtime).find("save", resource_id="engineeringSaveGroups")
     assert smoke.node_bounds(found) == (20, 450, 180, 494)
-    assert calls == [("shell", "input", "swipe", "400", "580", "400", "220", "250")]
+    assert calls == [("shell", "input", "swipe", "400", "490", "400", "310", "500")]
 
 
 def test_native_page_that_fits_is_not_clipped_by_horizontal_workspace_tabs():
@@ -138,7 +141,7 @@ def test_native_popup_scrolls_its_own_list_when_underlying_webview_is_also_expos
     assert qa.page_regions(runtime, tree, popup=True) == ((500, 400, 2000, 1100), (500, 400, 2000, 1100))
     with pytest.raises(AssertionError, match="missing"):
         qa.NativeUI(runtime).find("missing-option", text="Melbourne", page=False, attempts=3, direction="up")
-    assert calls == [("shell", "input", "swipe", "1250", "960", "1250", "540", "250")]
+    assert calls == [("shell", "input", "swipe", "1250", "855", "1250", "645", "500")]
 
 
 def test_native_option_ignores_identical_underlying_selected_text():
@@ -219,6 +222,21 @@ def test_all_window_helper_runtime_failure_is_not_a_provider_skip(tmp_path, monk
     assert (tmp_path / "failed-dump-dump-error.txt").read_bytes() == b"Constructor failed"
 
 
+@pytest.mark.parametrize("data", [
+    b"Killed \n",  # adb exec-out can return zero when Android kills app_process.
+    b"<hierarchy><window>",
+    b"<hierarchy><window></hierarchy>",
+    b"<hierarchy><window/></hierarchy>",
+])
+def test_all_window_helper_missing_or_invalid_xml_is_a_hard_failure(tmp_path, monkeypatch, data):
+    monkeypatch.setattr(smoke, "OUTPUT", tmp_path)
+    monkeypatch.setattr(smoke, "UI_DUMP_JAR", "/data/local/tmp/test.jar")
+    monkeypatch.setattr(smoke, "adb", lambda *args, **kwargs: SimpleNamespace(stdout=data, stderr=b"", returncode=0))
+    with pytest.raises(AssertionError, match="All-window hierarchy helper"):
+        smoke.ui_tree("invalid-dump")
+    assert (tmp_path / "invalid-dump-dump.txt").read_text() == data.decode()
+
+
 def test_native_missing_control_does_not_swipe_a_non_scrolling_page_or_tabs(monkeypatch):
     tree = ET.fromstring('''<hierarchy>
       <node class="android.widget.TabWidget" scrollable="true" text="Workspaces" bounds="[0,100][800,188]"/>
@@ -237,7 +255,8 @@ def test_native_locator_searches_up_then_down_without_inventing_regions(monkeypa
     monkeypatch.setattr(qa.time, "sleep", lambda _: None)
     with pytest.raises(AssertionError, match="Native control missing"):
         qa.NativeUI(runtime).find("absent", text="Unknown button", attempts=6, direction="up")
-    assert calls[0][4] == "220" and calls[-1][4] == "580"
+    assert calls[0][4] == "310" and calls[-1][4] == "490"
+    assert all(abs(int(call[4]) - int(call[6])) <= 180 and int(call[7]) >= 500 for call in calls)
 
 
 def test_populated_provider_missing_control_is_failure_not_limitation(monkeypatch):
@@ -247,20 +266,128 @@ def test_populated_provider_missing_control_is_failure_not_limitation(monkeypatc
         qa.NativeUI(runtime).find("absent", text="Expected", attempts=1)
 
 
-def test_empty_provider_is_explicit_limit():
-    runtime, calls, _ = ui_runtime([ET.fromstring("<hierarchy/>")])
-    with pytest.raises(smoke.UiProviderUnavailable, match="Empty accessibility"):
+def test_empty_provider_after_settling_deadline_is_hard_failure(monkeypatch):
+    runtime, calls, _ = ui_runtime([ET.fromstring("<hierarchy/>")] * 20)
+    clock = [0.0]
+    monkeypatch.setattr(qa.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(qa.time, "sleep", lambda seconds: clock.__setitem__(0, clock[0] + seconds))
+    with pytest.raises(AssertionError, match="remained empty"):
         qa.NativeUI(runtime).find("empty", text="Expected", attempts=1)
+    assert 4 <= clock[0] < 4.5
     assert calls == []
+
+
+def test_snapshot_waits_for_complete_empty_activity_transition_before_input(monkeypatch):
+    settled = tree_with_control("[20,450][180,494]")
+    runtime, calls, names = ui_runtime([ET.fromstring("<hierarchy/>"), settled])
+    monkeypatch.setattr(qa.time, "sleep", lambda _: None)
+    assert qa.NativeUI(runtime).snapshot("documents-opened") is settled
+    assert len(names) == 2 and calls == []
+
+
+def test_snapshot_does_not_treat_system_or_keyboard_labels_as_ready(monkeypatch):
+    transition = ET.fromstring('''<hierarchy>
+      <node package="com.android.systemui" text="Wi-Fi"/>
+      <node package="com.sec.android.app.launcher" text="Home"/>
+      <node package="com.samsung.android.honeyboard" text="Done"/>
+    </hierarchy>''')
+    settled = tree_with_control("[20,450][180,494]")
+    runtime, calls, names = ui_runtime([transition, settled])
+    monkeypatch.setattr(qa.time, "sleep", lambda _: None)
+    assert qa.NativeUI(runtime).snapshot("documents-destination") is settled
+    assert len(names) == 2 and calls == []
+
+
+def test_snapshot_does_not_retry_helper_runtime_fault(monkeypatch):
+    calls = []
+    def failed(label, **options):
+        calls.append((label, options))
+        raise AssertionError("All-window hierarchy helper failed to emit complete XML")
+    runtime = SimpleNamespace(ui_tree=failed)
+    monkeypatch.setattr(qa.time, "sleep", lambda _: pytest.fail("Helper fault must not be retried"))
+    with pytest.raises(AssertionError, match="helper failed"):
+        qa.NativeUI(runtime).snapshot("documents-opened")
+    assert len(calls) == 1
+
+
+def test_downloads_locator_uses_drawer_title_not_duplicate_toolbar_or_file_name():
+    tree = ET.fromstring('''<hierarchy><node text="Downloads" bounds="[10,20][200,60]"/>
+      <node resource-id="android:id/title" text="Downloads" bounds="[10,100][200,140]"/>
+      <node resource-id="com.google.android.documentsui:id/roots_list" bounds="[0,150][500,500]">
+        <node resource-id="android:id/title" text="Recent" bounds="[10,160][300,200]"/>
+        <node resource-id="android:id/title" text="Downloads" bounds="[10,210][300,250]"/>
+      </node></hierarchy>''')
+    runtime, calls, _ = ui_runtime([tree])
+    found = qa.NativeUI(runtime).find("downloads", text="Downloads", resource_id="android:id/title",
+                                       within_id="roots_list", page=False, attempts=1)
+    assert smoke.node_bounds(found) == (10, 210, 300, 250)
+    assert calls == []
+
+
+def test_filename_locator_requires_edit_text_despite_duplicate_android_title_ids():
+    tree = ET.fromstring('''<hierarchy>
+      <node resource-id="android:id/title" class="android.widget.TextView" text="Existing report" bounds="[10,100][500,150]"/>
+      <node resource-id="android:id/title" class="android.widget.EditText" text="New report.txt" bounds="[10,600][500,650]"/>
+    </hierarchy>''')
+    runtime, calls, _ = ui_runtime([tree])
+    found = qa.NativeUI(runtime).find("filename", resource_id="android:id/title",
+                                      class_name="android.widget.EditText", page=False, attempts=1)
+    assert found.get("text") == "New report.txt" and calls == []
+
+
+def test_documents_ready_wait_requires_picker_controls_not_only_its_package(monkeypatch):
+    incomplete = ET.fromstring('<hierarchy><node package="com.google.android.documentsui" text="Loading" bounds="[0,0][800,700]"/></hierarchy>')
+    ready = ET.fromstring('''<hierarchy><node package="com.google.android.documentsui" bounds="[0,0][800,700]">
+      <node content-desc="Show roots" bounds="[0,20][50,70]"/>
+      <node class="android.widget.EditText" bounds="[50,600][600,650]"/>
+    </node></hierarchy>''')
+    snapshots = iter([incomplete, ready])
+    ui = SimpleNamespace(snapshot=lambda label: next(snapshots), smoke=SimpleNamespace(node_bounds=smoke.node_bounds))
+    monkeypatch.setattr(qa.time, "sleep", lambda _: None)
+    assert qa.await_documents_ui(ui) is ready
+
+
+def test_documents_ready_wait_times_out_as_failure(monkeypatch):
+    clock = [0.0]
+    monkeypatch.setattr(qa.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(qa.time, "sleep", lambda seconds: clock.__setitem__(0, clock[0] + seconds))
+    tree = ET.fromstring('<hierarchy><node text="Still in app" bounds="[0,0][800,700]"/></hierarchy>')
+    ui = SimpleNamespace(snapshot=lambda label: tree, smoke=SimpleNamespace(node_bounds=smoke.node_bounds))
+    with pytest.raises(AssertionError, match="transition deadline"):
+        qa.await_documents_ui(ui, timeout=1)
 
 
 def test_android_resource_ids_match_and_evidence_filenames_stay_local():
     node = ET.fromstring('<node resource-id="com.google.android.documentsui:id/title"/>')
     assert qa.matches(node, resource_id="title")
     assert not qa.matches(node, resource_id="subtitle")
-    runtime, _, names = ui_runtime([ET.fromstring("<hierarchy/>")])
+    runtime, _, names = ui_runtime([ET.fromstring('<hierarchy><node text="Save"/></hierarchy>')])
     qa.NativeUI(runtime).snapshot("fill-com.google.android.documentsui:id/title")
     assert "/" not in names[0] and ":" not in names[0]
+
+
+@pytest.mark.parametrize("label,expected", [
+    ("Define my lap groups", True),
+    ("Define my lap groups 0 groups saved · 10 laps unassigned", True),
+    ("Define my lap groups 2 groups saved · 0 laps unassigned", True),
+    ("Define my lap groups 2 groups · unsaved edits · 1 laps unassigned", True),
+    ("Define my lap groups from another session", False),
+    ("Other Define my lap groups 0 groups saved · 10 laps unassigned", False),
+    ("Define my lap groups 2 groups saved · 0 laps unassigned unexpected", False),
+])
+def test_group_summary_matches_only_exact_title_or_documented_count(label, expected):
+    assert bool(qa.matches(ET.Element("node", {"text": label}), text="Define my lap groups")) is expected
+
+
+@pytest.mark.parametrize("label,expected", [
+    ("Lap context and driver reports", True),
+    ("Lap context and driver reports 0 saved notes", True),
+    ("Lap context and driver reports 12 saved notes", True),
+    ("Other Lap context and driver reports 0 saved notes", False),
+    ("Lap context and driver reports 1 saved notes unexpected", False),
+])
+def test_notes_summary_matches_only_exact_title_or_documented_count(label, expected):
+    assert bool(qa.matches(ET.Element("node", {"text": label}), text="Lap context and driver reports")) is expected
 
 
 @pytest.mark.parametrize("attributes,expected", [
@@ -317,15 +444,17 @@ def test_lap_labels_preserve_flashback_timeline_identity():
 
 @pytest.mark.parametrize("first", [b"par", None])
 def test_report_read_waits_through_partial_or_missing_file(tmp_path, monkeypatch, first):
-    expected = b"partial report now complete"
+    expected = b"partial report\nnow complete\n"
     results = iter([SimpleNamespace(returncode=int(first is None), stdout=first or b"", stderr=b"not created yet"),
                     SimpleNamespace(returncode=0, stdout=expected, stderr=b"")])
     clock = [0.0]
     monkeypatch.setattr(qa.time, "monotonic", lambda: clock[0])
     monkeypatch.setattr(qa.time, "sleep", lambda seconds: clock.__setitem__(0, clock[0] + seconds))
-    runtime = SimpleNamespace(OUTPUT=tmp_path, adb=lambda *args, **kwargs: next(results))
+    calls = []
+    runtime = SimpleNamespace(OUTPUT=tmp_path, adb=lambda *args, **kwargs: calls.append(args) or next(results))
     assert qa.read_saved_report(runtime, "fixture.txt", expected, timeout=2) == expected
     assert clock[0] == 0.5
+    assert calls == [("exec-out", "cat", "/sdcard/Download/fixture.txt")] * 2
 
 
 @pytest.mark.parametrize("data,reason", [(b"truncated", "differs"), (b"", "Permission denied")])

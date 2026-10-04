@@ -53,6 +53,10 @@ public final class AndroidUiHierarchy {
         String qemu = (String) Class.forName("android.os.SystemProperties").getMethod("get", String.class)
             .invoke(null, "ro.kernel.qemu");
         if (!"1".equals(qemu)) throw new IllegalStateException("Hierarchy QA requires an emulator");
+        // Unlike an application process, app_process does not prepare this.
+        // API36 AccessibilityInteractionClient creates a Handler on the main
+        // Looper during UiAutomation's connection callback.
+        if (Looper.getMainLooper() == null) Looper.prepareMainLooper();
         HandlerThread thread = new HandlerThread("pitbox-qa-hierarchy");
         thread.start();
         UiAutomation ui = null;
