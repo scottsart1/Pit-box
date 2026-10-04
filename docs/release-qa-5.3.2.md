@@ -231,3 +231,39 @@ separately from browser acceptance.
 
 The prior release remains documented separately in
 [5.3.1 verification](release-qa-5.3.1.md).
+
+
+## Final tablet review follow-up
+
+The physical review reached all seven workspaces and all 21 Settings controls
+without changing Settings. The private QA app retained 4,581 log lines with no
+matched fatal exception, traceback, database-lock or error patterns. This is
+bounded evidence, not proof that no fault can occur later.
+
+Candidate `502ec3edbf38df695fb08cb51584deb3e46bd766` passed Windows
+[37178136743](https://github.com/scottsart1/Pit-box/actions/runs/37178136743):
+2,285 tests passed, one skipped, one warning, plus installed lifecycle and
+counted 20-car telemetry checks. All 18,604 sent packets were received, parsed
+and recorded with zero drops/write errors. The local staging pipeline was
+stopped before retrieval because the subsequent tablet review found another
+product defect; this installer is superseded and was not promoted.
+
+Its Android [37178133058](https://github.com/scottsart1/Pit-box/actions/runs/37178133058)
+passed 2,013 tests, all browser suites and complete native Setup, groups,
+notes, both comparison modes, cross-session B and DocumentsUI export. The
+6,796-byte exported report exactly matched API bytes; the crash log was empty.
+This validates the repaired native harness. The isolated signed QA package was
+installed on the Samsung to verify physical scrolling; production PID 27140
+remained unchanged. This candidate is also superseded by the Drive fix below.
+
+After the fixture changed from Spa to Monza, Drive still displayed the earlier
+green `Hold P2` objective above an unavailable-position message. The objective
+headline/tone now clear on unavailable or failed responses. Objective, race-flow
+and rival requests are scoped to the current session/track/epoch and request;
+old responses and errors cannot restore another session's values. Their cached
+lap/sector keys reset on a session change, including a same-lap transition.
+The targeted suite passed 89 Node tests (21 new Objective/race-flow/rival
+cases) and six Python UI contracts. Browser tests at 1280, 800 and 390px
+reproduced the old headline and delayed replies before the patch, then verified
+the corrected results with no page exceptions. The corrected source still
+needs fresh final builds and artifact validation.
