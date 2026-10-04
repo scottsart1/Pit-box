@@ -267,3 +267,23 @@ cases) and six Python UI contracts. Browser tests at 1280, 800 and 390px
 reproduced the old headline and delayed replies before the patch, then verified
 the corrected results with no page exceptions. The corrected source still
 needs fresh final builds and artifact validation.
+
+The physical `502ec3e` candidate passed Setup, ordinary lap-list scrolling to
+Save groups, persisted custom groups, notes, strict/descriptive comparisons and
+cross-session B. Its export check exposed transient zero-sized accessibility
+page bounds: the harness now waits for valid page geometry before accepting a
+child control. The subsequent Android DocumentsUI export passed, with 6,798
+bytes exactly matching the API report (SHA-256
+`9af40ca347ece3523358c853a5ac6098523fe2cc39fbf8038871d4da8af90a6c`).
+The geometry guard and Android project suites passed 99 focused tests. Final
+artifact acceptance must still repeat the complete flow without interruption.
+
+Windows [37179332829](https://github.com/scottsart1/Pit-box/actions/runs/37179332829)
+stopped before packaging: 2,284 tests passed, one failed and one skipped. The
+failure exposed a clock precision edge: an exact 20-second cooldown could be
+represented as `20.000000000000004` and announced as 21 seconds. Speech now
+normalizes sub-microsecond floating-point noise before rounding upward; genuine
+fractional waits still round up. Deterministic clock and recovery coverage
+reproduced the defect before repair, then 82 provider/radio tests passed.
+Provider suppression remained correct throughout. Both final artifacts need
+rebuilding with this repair; no failed candidate was promoted.

@@ -9,11 +9,13 @@ import httpx
 import pytest
 from openai import AsyncOpenAI
 
+from pitwall import providers
 from pitwall.config import Settings, settings
 from pitwall.providers import (
     OpenAIResponsesProvider,
     ProviderConfigurationError,
     ProviderDeadlineError,
+    ProviderFailure,
     ProviderRequestError,
     ProviderResponseError,
     ProviderResult,
@@ -21,7 +23,11 @@ from pitwall.providers import (
 )
 from pitwall.session_guard import SessionChangedError
 from pitwall.state import StateStore
-from pitwall.voice import BRAIN_FALLBACK_LINE, NativeVoiceController
+from pitwall.voice import (
+    BRAIN_FALLBACK_LINE,
+    NativeVoiceController,
+    _brain_failure_feedback,
+)
 
 
 def function_schema(name):
@@ -217,15 +223,51 @@ async def test_actual_route_deadline_cancels_provider_and_records_precise_cause(
     assert router.status()["recent_failures"][0]["error_type"] == "ProviderDeadlineError"
 
 
+@pytest.mark.parametrize(
+    ("remaining", "spoken_seconds"),
+    [
+        ((20.001 + 20) - 20.001, 20),
+        (20.0, 20),
+        (19.2, 20),
+        (20.2, 21),
+        (20.000001, 21),
+        (0.01, 1),
+        (1e-10, 1),
+    ],
+)
+def test_cooldown_speech_normalizes_clock_precision_but_rounds_up_real_fractions(
+    remaining, spoken_seconds
+):
+    failure = ProviderRequestError([
+        ProviderFailure(
+            "openai", "cooldown", "Service cooldown", attempted=False,
+            retry_after_s=remaining,
+        ),
+    ])
+    assert _brain_failure_feedback(failure) == (
+        "The engineer service is temporarily unavailable. "
+        f"Try again in {spoken_seconds} seconds."
+    )
+
+
 @pytest.mark.asyncio
 async def test_cooldown_does_not_contact_provider_or_request_immediate_repeat(
     monkeypatch, tmp_path
 ):
+    # A same-tick clock can leave a tiny positive remainder above 20 seconds.
+    # Patch this module's clock only, keeping asyncio's deadline clock real.
+    fixed_now = 20.001
+    monkeypatch.setattr(providers, "time", SimpleNamespace(
+        monotonic=lambda: fixed_now,
+        time=providers.time.time,
+        perf_counter=providers.time.perf_counter,
+    ))
     provider = ScriptedProvider([TimeoutError(), TimeoutError(), "Recovered."])
     router = router_with(provider, llm_failure_cooldown_s=20)
     for _ in range(2):
         with pytest.raises(ProviderRequestError):
             await request(router)
+    assert router.circuits["openai"].blocked_until - fixed_now > 20
 
     async def ask(_):
         return (await request(router)).text

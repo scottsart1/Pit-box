@@ -40,7 +40,10 @@ def _brain_failure_feedback(exc: Exception) -> str:
     if not isinstance(exc, ProviderRequestError):
         return BRAIN_FALLBACK_LINE
     if exc.retry_after_s > 0:
-        delay = max(1, math.ceil(exc.retry_after_s))
+        # Monotonic-clock subtraction can leave an exact second a few ulps
+        # above its boundary. Normalize microsecond precision before rounding
+        # up so a 20-second cooldown does not become a spoken 21 seconds.
+        delay = max(1, math.ceil(round(exc.retry_after_s, 6)))
         return f"The engineer service is temporarily unavailable. Try again in {delay} seconds."
     return {
         "deadline": "The engineer took too long to answer. Please try again in a moment.",

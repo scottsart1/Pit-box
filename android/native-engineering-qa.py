@@ -68,7 +68,12 @@ def page_regions(smoke, tree, *, popup=False):
                 return bounds, bounds if node.get("scrollable") == "true" else None
     pages = {"live", "driver-dashboard", "strategy", "connection", "analysis", "setup", "settings"}
     for node in tree.iter("node"):
-        if node.get("resource-id") in pages and node.get("visible-to-user", "true") == "true" and (bounds := smoke.node_bounds(node)):
+        if node.get("resource-id") in pages and node.get("visible-to-user", "true") == "true":
+            bounds = smoke.node_bounds(node)
+            # WebView can briefly expose child geometry while its page root
+            # is zero-sized. Never substitute a nested list for that viewport.
+            if bounds is None:
+                return None, None
             return bounds, bounds if node.get("scrollable") == "true" else None
     # Native select dialogs and DocumentsUI supply their own list viewport,
     # without the dashboard's HTML page node. Exclude any tab strip here too.
@@ -197,8 +202,9 @@ class NativeUI:
                     continue
                 if enabled and node.get("enabled", "true") != "true":
                     continue
-                if (page or native_list or within_id) and viewport and not (viewport[0] <= bounds[0] < bounds[2] <= viewport[2]
-                                              and viewport[1] <= bounds[1] < bounds[3] <= viewport[3]):
+                if (page or native_list or within_id) and (viewport is None or not (
+                        viewport[0] <= bounds[0] < bounds[2] <= viewport[2]
+                        and viewport[1] <= bounds[1] < bounds[3] <= viewport[3])):
                     continue
                 return node
             if attempt == attempts - 1:

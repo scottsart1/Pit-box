@@ -119,6 +119,36 @@ def test_native_page_that_fits_is_not_clipped_by_horizontal_workspace_tabs():
     assert calls == []
 
 
+def test_native_zero_sized_page_waits_before_accepting_or_scrolling_its_children(monkeypatch):
+    def snapshot(page_bounds, button_bounds):
+        return ET.fromstring(f'''<hierarchy>
+          <node resource-id="analysis" visible-to-user="true" scrollable="true" bounds="{page_bounds}">
+            <node scrollable="true" bounds="[70,1169][2891,1848]"/>
+            <node resource-id="engineeringExportText" text="Export text" bounds="{button_bounds}"/>
+          </node></hierarchy>''')
+    invalid = snapshot("[0,0][0,0]", "[248,1736][570,1814]")
+    clipped = snapshot("[0,190][2960,1772]", "[248,1736][570,1814]")
+    settled = snapshot("[0,190][2960,1772]", "[248,1400][570,1478]")
+    runtime, calls, _ = ui_runtime([invalid, clipped, settled])
+    assert qa.page_regions(runtime, invalid) == (None, None)
+    monkeypatch.setattr(qa.time, "sleep", lambda _: None)
+    found = qa.NativeUI(runtime).find("export", resource_id="engineeringExportText")
+    assert smoke.node_bounds(found) == (248, 1400, 570, 1478)
+    # No gesture was inferred from the invalid root/nested-list geometry.
+    assert calls == [("shell", "input", "swipe", "1480", "1218", "1480", "743", "500")]
+
+
+def test_native_page_lookup_never_accepts_an_unbounded_child(monkeypatch):
+    tree = ET.fromstring('''<hierarchy><node resource-id="analysis" bounds="[0,0][0,0]">
+      <node text="Export text" resource-id="engineeringExportText" bounds="[248,1736][570,1814]"/>
+    </node></hierarchy>''')
+    runtime, calls, _ = ui_runtime([tree] * 3)
+    monkeypatch.setattr(qa.time, "sleep", lambda _: None)
+    with pytest.raises(AssertionError, match="Native control missing"):
+        qa.NativeUI(runtime).find("export", resource_id="engineeringExportText", attempts=3)
+    assert calls == []
+
+
 def test_native_popup_uses_its_list_region_not_dashboard_bounds():
     tree = ET.fromstring('''<hierarchy>
       <node class="android.widget.ListView" scrollable="true" bounds="[100,200][700,600]">
