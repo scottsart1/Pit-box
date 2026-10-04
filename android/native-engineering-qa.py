@@ -94,7 +94,7 @@ class NativeUI:
         self.tree = self.smoke.ui_tree(f"native-{self.sequence:03d}-{safe_label}")
         return self.tree
 
-    def find(self, label, *, resource_id=None, text=None, page=True, direction="down", attempts=18, enabled=False):
+    def find(self, label, *, resource_id=None, text=None, page=True, direction="down", attempts=18, enabled=False, native_list=False):
         """Search both ways only within a freshly reported scrollable region.
 
         A populated provider missing an expected control is a failure, not a
@@ -105,13 +105,23 @@ class NativeUI:
             tree = self.snapshot(label)
             viewport, region = page_regions(self.smoke, tree, popup=not page)
             populated |= any(labels(node) for node in tree.iter("node"))
-            for node in tree.iter("node"):
+            candidates = tree.iter("node")
+            if native_list:
+                popup = next((node for node in tree.iter("node")
+                              if node.get("class") == "android.widget.ListView" and self.smoke.node_bounds(node)), None)
+                # A select can expose its obscured WebView in the same dump.
+                # Never mistake the underlying selected text for a dialog row,
+                # or scroll the dashboard while the native popup is opening.
+                candidates = popup.iter("node") if popup is not None else ()
+                viewport = self.smoke.node_bounds(popup) if popup is not None else None
+                region = viewport if popup is not None and popup.get("scrollable") == "true" else None
+            for node in candidates:
                 bounds = self.smoke.node_bounds(node)
                 if not matches(node, resource_id=resource_id, text=text) or not bounds:
                     continue
                 if enabled and node.get("enabled", "true") != "true":
                     continue
-                if page and viewport and not (viewport[0] <= bounds[0] < bounds[2] <= viewport[2]
+                if (page or native_list) and viewport and not (viewport[0] <= bounds[0] < bounds[2] <= viewport[2]
                                               and viewport[1] <= bounds[1] < bounds[3] <= viewport[3]):
                     continue
                 return node
@@ -139,7 +149,7 @@ class NativeUI:
         self.tap(field, resource_id=field, direction="up")
         # HTML selects open real Android dialogs. Their list, not the WebView,
         # supplies the bounds used while locating an off-screen option.
-        self.tap(f"option-{field}", text=option, page=False, direction=direction)
+        self.tap(f"option-{field}", text=option, page=False, direction=direction, native_list=True)
 
     def fill(self, field, value, *, page=True):
         assert re.fullmatch(r"[A-Za-z0-9 ._-]+", value), "Fixture text must be shell-safe ASCII"

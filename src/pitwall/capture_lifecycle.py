@@ -61,6 +61,7 @@ class SessionCaptureCoordinator:
         self._rotations_completed = 0
         self._last_error: str | None = None
         self._deferred_session_id: str | None = None
+        self._deferred_session_context: dict[str, Any] | None = None
 
     @property
     def running(self) -> bool:
@@ -79,7 +80,9 @@ class SessionCaptureCoordinator:
             self._rotation_worker(), name="pitwall-capture-rotation"
         )
 
-    def observe_session(self, session_id: str) -> None:
+    def observe_session(
+        self, session_id: str, session_context: Mapping[str, Any] | None = None
+    ) -> None:
         """Schedule a transition and return immediately to the packet consumer."""
 
         key = str(session_id).strip()
@@ -91,15 +94,26 @@ class SessionCaptureCoordinator:
             # Until the newest identity can be inserted, reject and count
             # packets rather than putting them in a different session's file.
             self._deferred_session_id = key
+            self._deferred_session_context = dict(session_context or {})
             self._rotation_drops += 1
             self.service.pause_admission()
             return
         self._deferred_session_id = None
-        self._schedule(key)
+        self._deferred_session_context = None
+        self._schedule(key, session_context)
 
-    def _schedule(self, key: str) -> None:
+    def _schedule(
+        self, key: str, session_context: Mapping[str, Any] | None = None
+    ) -> None:
         completed = self.service.request_rotation(
-            metadata={**self._base_metadata, "session_id": key}
+            metadata={
+                **self._base_metadata,
+                "session_id": key,
+                # Frozen at the boundary, before a later packet can switch
+                # the live store to another circuit. The catalog can recover
+                # a session which ends before its first periodic/lap write.
+                "session_context": dict(session_context or {}),
+            }
         )
         self._queue.put_nowait((key, completed))
 
@@ -116,8 +130,10 @@ class SessionCaptureCoordinator:
             finally:
                 if self._deferred_session_id is not None and not self._queue.full():
                     deferred = self._deferred_session_id
+                    context = self._deferred_session_context
                     self._deferred_session_id = None
-                    self._schedule(deferred)
+                    self._deferred_session_context = None
+                    self._schedule(deferred, context)
                 self._queue.task_done()
 
     async def _register(self, path: Path, session_id: str | None) -> None:

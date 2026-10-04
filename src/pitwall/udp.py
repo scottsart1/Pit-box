@@ -335,7 +335,7 @@ class F1DatagramProtocol(asyncio.DatagramProtocol):
         capture_service: CaptureService | None = None,
         session_assembler: SessionAssembler | None = None,
         capture_mode: str = "balanced",
-        on_session_key_change: Callable[[str], None] | None = None,
+        on_session_key_change: Callable[[str, dict[str, Any]], None] | None = None,
         on_stint_end: Callable[[dict[str, Any]], Awaitable[Any]] | None = None,
     ) -> None:
         self.store = store
@@ -660,7 +660,22 @@ class F1DatagramProtocol(asyncio.DatagramProtocol):
             self._reset_archive_tracking()
             self._assembler_session_id = current_id
             if current_id is not None and self.on_session_key_change is not None:
-                self.on_session_key_change(current_id)
+                # The live store is updated after archive normalization. Do
+                # not borrow its possibly previous-track metadata here, or
+                # read it later after another queued session has arrived.
+                context: dict[str, Any] = {
+                    "game_session_uid": current.game_session_uid,
+                    "restart_epoch": current.restart_epoch,
+                    "capture_mode": self.capture_mode,
+                }
+                if isinstance(event, SessionEvent):
+                    context.update(
+                        track_id=event.track_id,
+                        layout_signature=event.layout_signature,
+                        raw_session_type_id=event.session_type,
+                        packet_format=event.packet_format,
+                    )
+                self.on_session_key_change(current_id, context)
         if sealed is not None and current_id != sealed:
             self._assembler_sealed_session_id = None
 

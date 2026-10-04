@@ -141,6 +141,43 @@ def test_native_popup_scrolls_its_own_list_when_underlying_webview_is_also_expos
     assert calls == [("shell", "input", "swipe", "1250", "960", "1250", "540", "250")]
 
 
+def test_native_option_ignores_identical_underlying_selected_text():
+    tree = ET.fromstring('''<hierarchy>
+      <node resource-id="setup" scrollable="true" bounds="[0,188][2560,1712]">
+        <node resource-id="setupTrack" text="Melbourne" bounds="[86,518][618,606]"/>
+      </node>
+      <node class="android.widget.ListView" scrollable="true" bounds="[500,400][2000,1100]">
+        <node text="Melbourne" bounds="[510,420][1900,464]"/>
+      </node></hierarchy>''')
+    runtime, calls, _ = ui_runtime([tree])
+    found = qa.NativeUI(runtime).find("track-option", text="Melbourne", page=False, native_list=True, attempts=1)
+    assert smoke.node_bounds(found) == (510, 420, 1900, 464)
+    assert calls == []
+
+
+def test_native_option_waits_for_popup_without_touching_underlying_page(monkeypatch):
+    tree = ET.fromstring('''<hierarchy>
+      <node resource-id="setup" scrollable="true" bounds="[0,188][2560,1712]">
+        <node text="Melbourne" bounds="[86,518][618,606]"/>
+      </node></hierarchy>''')
+    runtime, calls, _ = ui_runtime([tree] * 3)
+    monkeypatch.setattr(qa.time, "sleep", lambda _: None)
+    with pytest.raises(AssertionError, match="missing"):
+        qa.NativeUI(runtime).find("track-option", text="Melbourne", page=False, native_list=True, attempts=3)
+    assert calls == []
+
+
+def test_native_option_rejects_a_clipped_list_row(monkeypatch):
+    tree = ET.fromstring('''<hierarchy>
+      <node class="android.widget.ListView" scrollable="false" bounds="[100,200][700,600]">
+        <node text="Melbourne" bounds="[110,580][680,624]"/>
+      </node></hierarchy>''')
+    runtime, calls, _ = ui_runtime([tree])
+    with pytest.raises(AssertionError, match="missing"):
+        qa.NativeUI(runtime).find("track-option", text="Melbourne", page=False, native_list=True, attempts=1)
+    assert calls == []
+
+
 def test_native_missing_control_does_not_swipe_a_non_scrolling_page_or_tabs(monkeypatch):
     tree = ET.fromstring('''<hierarchy>
       <node class="android.widget.TabWidget" scrollable="true" text="Workspaces" bounds="[0,100][800,188]"/>

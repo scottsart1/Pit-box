@@ -14,6 +14,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
+from f1.packets import SESSIONS as GAME_SESSIONS
 from f1.packets import TRACKS as GAME_TRACKS
 
 from .capture import CaptureScanReport
@@ -1001,6 +1002,9 @@ class SessionCatalog:
             float(report.metadata.get("created_wall_ns", 0)) / 1_000_000_000
         ) or _utc_now()
         with self._connect() as db:
+            session_key = self._ensure_raw_capture_session(
+                db, session_key, report, started_at
+            )
             db.execute(
                 """
                 INSERT INTO raw_captures(
@@ -1035,6 +1039,75 @@ class SessionCatalog:
                 ),
             )
         return capture_id
+
+    @staticmethod
+    def _ensure_raw_capture_session(
+        db: sqlite3.Connection,
+        session_key: str | None,
+        report: CaptureScanReport,
+        started_at: str,
+    ) -> str | None:
+        """Seed a missing parent from this file's frozen identity, atomically.
+
+        A session can rotate or stop before either a lap or the periodic
+        session writer has run. Capture closure is not a race classification,
+        and this fallback must never overwrite a richer existing session.
+        Older files without boundary context retain their existing behavior.
+        """
+        context = report.metadata.get("session_context")
+        if not isinstance(context, dict) or not context:
+            return session_key
+        try:
+            game_uid = int(context["game_session_uid"])
+            restart_epoch = int(context["restart_epoch"])
+        except (KeyError, TypeError, ValueError) as exc:
+            raise ValueError("capture session identity is invalid") from exc
+        if not 0 < game_uid < 1 << 64 or restart_epoch < 0:
+            raise ValueError("capture session identity is invalid")
+        expected_key = session_id(game_uid, restart_epoch)
+        if report.metadata.get("session_id") != expected_key or (
+            session_key is not None and session_key != expected_key
+        ):
+            raise ValueError("capture session identity does not match its parent")
+        raw_type = context.get("raw_session_type_id")
+        raw_type = raw_type if isinstance(raw_type, int) else None
+        raw_track = context.get("track_id")
+        track = raw_track if isinstance(raw_track, int) and raw_track >= 0 else None
+        packet_format = context.get("packet_format")
+        packet_format = (
+            packet_format
+            if isinstance(packet_format, int) and packet_format > 0
+            else None
+        )
+        layout = str(context.get("layout_signature") or "")[:180] or None
+        now = _utc_now()
+        db.execute(
+            """
+            INSERT INTO recorded_sessions(
+                id, legacy_session_uid, game_session_uid, restart_epoch,
+                track_id, track_layout_signature, session_type, raw_session_type_id,
+                mode_profile, started_at, status, packet_format, capture_mode,
+                created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'unknown', ?, 'incomplete', ?, ?, ?, ?)
+            ON CONFLICT(id) DO NOTHING
+            """,
+            (
+                expected_key,
+                _legacy_session_uid(game_uid),
+                str(game_uid),
+                restart_epoch,
+                track,
+                layout,
+                GAME_SESSIONS.get(raw_type, "Unknown"),
+                raw_type,
+                started_at,
+                packet_format,
+                str(context.get("capture_mode") or "balanced")[:80],
+                now,
+                now,
+            ),
+        )
+        return expected_key
 
     async def get_quality(self, key: str) -> dict[str, Any] | None:
         """Return an honest persisted-data quality projection for one session."""

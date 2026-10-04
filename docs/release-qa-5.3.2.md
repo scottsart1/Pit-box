@@ -18,6 +18,8 @@ publication, signed artifacts or completed native acceptance yet.
   run/group selections, notes and exclusions, and guarded asynchronous updates.
 - Library session-family filters include numbered/short practice, qualifying
   and race variants; Race includes Sprint. Phone dashboard clipping is fixed.
+- Very short session recordings register their exact session parent atomically,
+  including immediate shutdown and rapid track changes before periodic saves.
 
 ## Live diagnostic investigation
 
@@ -91,6 +93,24 @@ showed the valid visible dropdown; the corrected locator is regression-tested
 against that geometry. This interrupted native flow is not a feature pass.
 Final native acceptance must use the corrected helper and final source.
 
+The next Android candidate [37173645207](https://github.com/scottsart1/Pit-box/actions/runs/37173645207)
+passed **1,973 Python tests** and its earlier browser gates, but stopped in
+engineering acceptance because the fixture queried the catalog before its
+header-only Monza session was persisted. The fixture now waits for that exact
+UID's saved row, retaining the original assertions. No APK/native pass applies
+to that run. Its log also exposed a real short-session raw-capture catalog
+registration error; that defect is repaired in the next candidate. The
+corresponding Windows run was cancelled after its full suite/build, before
+artifact promotion, because the source needed that additional repair.
+
+The capture repair passed **69 focused tests**, including real UDP immediate
+shutdown, rapid A-to-B-to-A restart, metadata preservation, recovery, deferred
+rotation and transaction rollback. Session identity and observed context are
+frozen at the recording boundary. A missing parent is inserted in the same
+transaction as its raw capture, marked incomplete, and never overwrites an
+existing richer row. When the boundary contains no Session metadata, the
+fallback preserves unknown values rather than copying another circuit's state.
+
 The cross-session UDP fixture records separate Spa Practice 1/2 sessions,
 verifies five matching pairs with the expected **-0.600 s** sector-two gain,
 then switches to Monza and rejects late packets from both retired sessions.
@@ -115,6 +135,10 @@ with no page exceptions or HTTP 5xx responses. Coverage includes recorded-data
 navigation, back/forward, Settings save/reload and padded toggle activation,
 Driver Dashboard controls/persistence and frame geometry, Library filtering,
 Session Review/Field/Test Engineer handoffs, lap playback and cancelling Quit.
+The same complete UDP/browser acceptance passed again after the short-session
+capture repair, including all 69 workspace cases. Its server log has one
+Windows asyncio connection-reset callback from a closed connection; browser
+pages reported no exceptions or HTTP 5xx and no capture-registration error.
 
 Drive/Strategy checks passed at three viewports, including retained critical
 warnings and compound evidence. Setup checks passed at three viewports with all

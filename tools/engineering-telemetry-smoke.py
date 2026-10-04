@@ -242,6 +242,20 @@ def main():
             time.sleep(0.3)
             state = get("/api/state")
             assert state["session_uid"] == current_uid and state["track_id"] == 11
+        # A header-only transition has no completed lap to dual-write its
+        # catalogue row. Wait for the real persistence boundary before a
+        # browser tries to choose this saved session; elapsed time is not proof.
+        deadline = time.monotonic() + 20
+        transition_session = None
+        while time.monotonic() < deadline:
+            sessions = get("/api/v1/sessions?limit=200")["items"]
+            transition_session = next((item for item in sessions
+                                       if str(item.get("game_session_uid")) == str(current_uid)
+                                       and item.get("track_id") == 11), None)
+            if transition_session:
+                break
+            time.sleep(0.25)
+        assert transition_session, "Monza transition did not become a saved session"
         args.output.parent.mkdir(parents=True, exist_ok=True)
         result = {
             "version": health["version"],
@@ -251,6 +265,7 @@ def main():
             "cross_session_id": cross_report["session_id"],
             "cross_runs": cross_runs,
             "cross_comparison": cross_comparison,
+            "transition_session_id": transition_session["id"],
             "pit_debrief": "pass",
             "track_transition": "pass",
             "retired_packet": "pass",

@@ -19,6 +19,11 @@ const { chromium } = require('playwright');
   try {
     for (const [width, height] of [[1280, 800], [800, 1280], [390, 844]]) {
       const context = await browser.newContext({ viewport: { width, height } });
+      await context.addInitScript(() => {
+        window.addEventListener('pitwall:state', event => {
+          if (event.detail?.connected && !event.detail?.game_paused) window.__pitboxQaSawActiveTelemetry = true;
+        });
+      });
       const page = await context.newPage();
       page.setDefaultTimeout(10000);
       const run = { width, height, cases: [], screenshots: [], errors: [], serverErrors: [] };
@@ -31,6 +36,16 @@ const { chromium } = require('playwright');
       });
       const health = await (await context.request.get(`${base}/api/health`)).json();
       assert.match(health.database || '', /source-qa/, 'Workspace checks require a disposable source-QA database.');
+      let delayedFirstPrivacyResponse = false;
+      if (width === 1280) await page.route(`${base}/api/v1/usage`, async route => {
+        if (route.request().method() !== 'GET' || delayedFirstPrivacyResponse) return route.continue();
+        delayedFirstPrivacyResponse = true;
+        const response = await route.fetch();
+        // Reproduce first-use consent arriving after the old 500ms snapshot.
+        // Readiness below waits for UI evidence, not this controlled latency.
+        await new Promise(resolve => setTimeout(resolve, 900));
+        await route.fulfill({ response });
+      });
       const screenshot = async name => {
         const file = `${name}-${width}.png`;
         await page.screenshot({ path: path.join(output, file) });
@@ -47,9 +62,25 @@ const { chromium } = require('playwright');
         persist();
       };
       const settle = async () => {
-        await page.waitForTimeout(500);
-        if (await page.locator('#usagePrompt').isVisible()) await page.locator('#usageNo').click();
-        if (await page.locator('#onboardingDialog').isVisible()) await page.locator('#onboardingClose').click();
+        await page.waitForFunction(() => document.getElementById('bootOverlay')?.classList.contains('done')
+          && document.getElementById('usageToggle')?.disabled === false);
+        if (await page.locator('#usagePrompt').isVisible()) {
+          await page.locator('#usageNo').click();
+          await page.waitForFunction(() => document.getElementById('usagePrompt')?.hidden
+            && document.getElementById('usageToggle')?.disabled === false);
+        }
+        const readiness = await page.waitForFunction(() => {
+          if (document.getElementById('onboardingDialog')?.open) return 'visible';
+          if (['finished', 'skipped'].includes(localStorage.getItem('pitwall.onboarding.v1'))) return 'remembered';
+          if (window.__pitboxQaSawActiveTelemetry) return 'live-session-suppression';
+          return false;
+        });
+        const reason = await readiness.jsonValue();
+        if (reason === 'visible') {
+          await page.locator('#onboardingClose').click();
+          await page.locator('#onboardingDialog').waitFor({ state: 'hidden' });
+        }
+        return { privacyReady: true, onboarding: reason === 'visible' ? 'dismissed' : reason };
       };
       const open = async id => {
         await page.locator(`#tab-${id}`).click();
@@ -57,8 +88,7 @@ const { chromium } = require('playwright');
         await settle();
       };
       await page.goto(base);
-      await page.waitForFunction(() => document.getElementById('bootOverlay')?.classList.contains('done'));
-      await settle();
+      await check('first-use-readiness', async () => ({ ...await settle(), delayedPrivacyResponse: delayedFirstPrivacyResponse }));
       const analysisViews = ['library', 'test-engineer', 'session-review', 'lap-lab', 'field', 'review'];
       for (const id of ['live', 'driver-dashboard', 'strategy', 'connection', 'analysis', 'setup', 'settings', ...analysisViews]) {
         await check(`navigate-${id}`, async () => {
