@@ -1325,9 +1325,10 @@ function renderStints(payload) {
   }
   drivers.forEach((driver) => {
     const card = element("article", "stint-card");
-    card.append(element("h3", "", `${driver.is_player ? "YOU · " : ""}${driver.display_name}`), element("span", "field-help", `${driver.n ?? 0} stored laps · ${driver.availability}`));
-    if (!(driver.stints || []).length) card.append(element("div", "empty", driver.reason || "No observed compound sequence."));
-    (driver.stints || []).forEach((stint) => {
+    const stints = driver.stints || [];
+    card.append(element("h3", "", `${driver.is_player ? "YOU · " : ""}${driver.display_name}`), element("span", "field-help", `${stints.length} stint${stints.length === 1 ? "" : "s"} · ${driver.availability}`));
+    if (!stints.length) card.append(element("div", "empty", driver.reason || "No observed compound sequence."));
+    stints.forEach((stint) => {
       const row = element("div", "stint-row");
       const identity = element("div");
       identity.append(element("strong", "", `Stint ${stint.ordinal} · ${stint.compound}`), element("span", "availability-note", `Laps ${stint.start_lap}–${stint.end_lap} · ${stint.clean_lap_count}/${stint.lap_count} clean`));

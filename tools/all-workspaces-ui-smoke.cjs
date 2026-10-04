@@ -94,6 +94,8 @@ const { chromium } = require('playwright');
         await check(`navigate-${id}`, async () => {
           if (analysisViews.includes(id) && !await page.locator('#analysis').isVisible()) await open('analysis');
           await open(id);
+          const tab = await page.locator(`#tab-${id}`).boundingBox();
+          assert.ok(tab.height >= 44, `${id} navigation has a 44px touch target`);
           await screenshot(id);
           const box = await page.locator(`#${id}`).evaluate(element => ({
             client: element.clientWidth, scroll: element.scrollWidth,
@@ -194,10 +196,17 @@ const { chromium } = require('playwright');
         assert.equal(await page.locator('#field').isVisible(), true);
         assert.equal(await page.locator('#fieldSessionSelect').inputValue(), sessionId);
         for (const view of ['classification', 'pace', 'corners', 'positions', 'stints']) {
+          assert.ok((await page.locator(`#field-tab-${view}`).boundingBox()).height >= 44);
           await page.locator(`#field-tab-${view}`).click();
           await page.locator(`#field-panel-${view}`).waitFor({ state: 'visible' });
           await settle();
         }
+        await page.locator('#fieldStints .stint-card').first().waitFor();
+        const counts = await page.locator('#fieldStints .stint-card').evaluateAll(cards => cards.map(card => ({
+          summary: card.querySelector('.field-help').textContent, stints: card.querySelectorAll('.stint-row').length,
+        })));
+        assert.ok(counts.length > 0);
+        for (const count of counts) assert.ok(count.summary.startsWith(`${count.stints} stint${count.stints === 1 ? '' : 's'} ·`), JSON.stringify(count));
         await screenshot('recorded-field');
         await open('session-review');
         await page.locator('#reviewEngineering').click();
@@ -218,6 +227,11 @@ const { chromium } = require('playwright');
         await page.locator('#librarySessionType').selectOption('');
         await page.locator('#libraryFilters button').click();
         await page.waitForFunction(() => document.querySelectorAll('#libraryRows button').length > 0);
+        const actions = await page.locator('#libraryRows button').evaluateAll(buttons => buttons.map(button => ({
+          label: button.textContent, height: button.getBoundingClientRect().height,
+        })));
+        assert.ok(actions.length > 0);
+        assert.ok(actions.every(action => action.height >= 44), JSON.stringify(actions));
         return { rows: await page.locator('#libraryRows tr').count() };
       });
       await check('lap-playback-controls', async () => {
@@ -227,7 +241,10 @@ const { chromium } = require('playwright');
         const options = await page.locator('#candidateLapSelect option').evaluateAll(elements => elements.map(element => element.value).filter(Boolean));
         await page.locator('#candidateLapSelect').selectOption(options[0]);
         await settle();
-        for (const layer of ['speed', 'throttle', 'brake', 'gear']) await page.locator(`#trace-tab-${layer}`).click();
+        for (const layer of ['speed', 'throttle', 'brake', 'gear']) {
+          assert.ok((await page.locator(`#trace-tab-${layer}`).boundingBox()).height >= 44);
+          await page.locator(`#trace-tab-${layer}`).click();
+        }
         await page.locator('#playbackToggle').click();
         await settle();
         await screenshot('recorded-lap-lab');

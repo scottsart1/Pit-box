@@ -752,7 +752,7 @@ button:disabled,
 
 .workspace-table td { vertical-align: middle; }
 .workspace-table tbody tr[data-selected="true"] { background: #1a2b38; box-shadow: inset 3px 0 var(--accent); }
-.workspace-table .button { min-height: 38px; padding: 6px 10px; }
+.workspace-table .button { min-height: 44px; padding: 6px 10px; }
 .table-actions { display: flex; flex-wrap: wrap; gap: 5px; }
 .session-name { display: block; color: var(--text-1); }
 .session-tags { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px; }
@@ -922,7 +922,7 @@ button:disabled,
 .trace-tab,
 .field-tab {
   flex: 0 0 auto;
-  min-height: 40px;
+  min-height: 44px;
   padding: 7px 11px;
   border: 1px solid var(--border);
   border-radius: 7px;
