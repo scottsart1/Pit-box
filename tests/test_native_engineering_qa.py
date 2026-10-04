@@ -101,6 +101,58 @@ def test_native_locator_scrolls_clipped_control_and_uses_fresh_bounds(monkeypatc
     assert calls == [("shell", "input", "swipe", "400", "580", "400", "220", "250")]
 
 
+def test_native_page_that_fits_is_not_clipped_by_horizontal_workspace_tabs():
+    # Exact geometry from the API-36 tablet CI failure. The dropdown is fully
+    # visible; only the horizontal tab strip has scrollable=true.
+    tree = ET.fromstring('''<hierarchy>
+      <node class="android.widget.TabWidget" scrollable="true" bounds="[0,100][2560,188]"/>
+      <node resource-id="setup" scrollable="false" bounds="[0,188][2560,1712]">
+        <node resource-id="setupTrack" text="Melbourne" bounds="[86,518][618,606]"/>
+      </node></hierarchy>''')
+    runtime, calls, _ = ui_runtime([tree])
+    assert qa.page_regions(runtime, tree) == ((0, 188, 2560, 1712), None)
+    found = qa.NativeUI(runtime).find("setupTrack", resource_id="setupTrack", attempts=1)
+    assert smoke.node_bounds(found) == (86, 518, 618, 606)
+    assert calls == []
+
+
+def test_native_popup_uses_its_list_region_not_dashboard_bounds():
+    tree = ET.fromstring('''<hierarchy>
+      <node class="android.widget.ListView" scrollable="true" bounds="[100,200][700,600]">
+        <node text="Melbourne" bounds="[110,220][680,264]"/>
+      </node></hierarchy>''')
+    runtime, calls, _ = ui_runtime([tree])
+    assert qa.page_regions(runtime, tree) == ((100, 200, 700, 600), (100, 200, 700, 600))
+    assert qa.NativeUI(runtime).find("track-option", text="Melbourne", page=False, attempts=1).get("text") == "Melbourne"
+    assert calls == []
+
+
+def test_native_popup_scrolls_its_own_list_when_underlying_webview_is_also_exposed(monkeypatch):
+    tree = ET.fromstring('''<hierarchy>
+      <node resource-id="setup" scrollable="true" bounds="[0,188][2560,1712]"/>
+      <node class="android.widget.ListView" scrollable="true" bounds="[500,400][2000,1100]">
+        <node text="Monza" bounds="[510,420][1900,464]"/>
+      </node></hierarchy>''')
+    runtime, calls, _ = ui_runtime([tree] * 3)
+    monkeypatch.setattr(qa.time, "sleep", lambda _: None)
+    assert qa.page_regions(runtime, tree, popup=True) == ((500, 400, 2000, 1100), (500, 400, 2000, 1100))
+    with pytest.raises(AssertionError, match="missing"):
+        qa.NativeUI(runtime).find("missing-option", text="Melbourne", page=False, attempts=3, direction="up")
+    assert calls == [("shell", "input", "swipe", "1250", "960", "1250", "540", "250")]
+
+
+def test_native_missing_control_does_not_swipe_a_non_scrolling_page_or_tabs(monkeypatch):
+    tree = ET.fromstring('''<hierarchy>
+      <node class="android.widget.TabWidget" scrollable="true" text="Workspaces" bounds="[0,100][800,188]"/>
+      <node resource-id="setup" text="Setup Lab" scrollable="false" bounds="[0,188][800,700]"/>
+    </hierarchy>''')
+    runtime, calls, _ = ui_runtime([tree] * 4)
+    monkeypatch.setattr(qa.time, "sleep", lambda _: None)
+    with pytest.raises(AssertionError, match="missing"):
+        qa.NativeUI(runtime).find("missing", text="Unavailable control", attempts=4)
+    assert calls == []
+
+
 def test_native_locator_searches_up_then_down_without_inventing_regions(monkeypatch):
     tree = tree_with_control("[20,680][180,724]")
     runtime, calls, _ = ui_runtime([tree] * 6)
@@ -133,6 +185,28 @@ def test_android_resource_ids_match_and_evidence_filenames_stay_local():
     assert "/" not in names[0] and ":" not in names[0]
 
 
+@pytest.mark.parametrize("attributes,expected", [
+    ({"text": "Native manual A"}, True),
+    ({"text": "Native manual A, Group name"}, True),
+    ({"text": "Native manual A, Name", "hint": "Name"}, True),
+    ({"text": "Native manual AB, Group name"}, False),
+    ({"text": "Native manual A, Unexpected text"}, False),
+])
+def test_native_text_entry_accepts_only_exact_values_or_known_label_suffix(attributes, expected):
+    assert qa.entered_value_matches(ET.Element("node", attributes), "Native manual A", "Group name") is expected
+
+
+def test_native_tap_waits_for_enabled_control(monkeypatch):
+    first = tree_with_control("[20,450][180,494]")
+    first.find('.//*[@resource-id="engineeringSaveGroups"]').set("enabled", "false")
+    runtime, calls, _ = ui_runtime([first, tree_with_control("[20,450][180,494]")])
+    tapped = []
+    runtime.tap_node = lambda node: tapped.append(node.get("enabled"))
+    monkeypatch.setattr(qa.time, "sleep", lambda _: None)
+    qa.NativeUI(runtime).tap("save", resource_id="engineeringSaveGroups")
+    assert tapped == ["true"] and calls == []
+
+
 def test_garage_numeric_assertion_checks_label_adjacent_value():
     tree = ET.fromstring('''<hierarchy><node bounds="[0,100][800,700]" scrollable="true">
       <node text="Front wing" bounds="[10,110][150,150]"/><node text="21" bounds="[700,110][740,150]"/>
@@ -160,6 +234,7 @@ def test_export_requires_exact_bytes_and_fixture_membership():
 def test_lap_labels_preserve_flashback_timeline_identity():
     assert qa.lap_label({"lap_num": 3, "timeline_epoch": 0}) == "Lap 3"
     assert qa.lap_label({"lap_num": 3, "timeline_epoch": 1}) == "Lap 3 · timeline 2"
+    assert qa.session_label({"track_name": "Spa", "session_type": "Practice 2", "started_at": "2026-10-04T03:10:20Z"}) == "Spa · Practice 2 · 2026-10-04 03:10:20"
 
 
 @pytest.mark.parametrize("first", [b"par", None])

@@ -82,10 +82,12 @@ def main():
                     env=env,
                     check=True,
                 )
-                session = json.loads(evidence.read_text())["session_id"]
+                fixture = json.loads(evidence.read_text())
+                session = fixture["session_id"]
                 env.update(
                     PITBOX_ENGINEERING_URL=base,
                     PITBOX_ENGINEERING_SESSION=session,
+                    PITBOX_ENGINEERING_CROSS_SESSION=fixture["cross_session_id"],
                     PITBOX_ENGINEERING_EVIDENCE=str(output / "browser"),
                 )
                 subprocess.run(
@@ -102,6 +104,12 @@ def main():
                 )
                 subprocess.run(
                     ["node", "tools/setup-reference-ui-smoke.cjs"],
+                    cwd=ROOT,
+                    env=env,
+                    check=True,
+                )
+                subprocess.run(
+                    ["node", "tools/all-workspaces-ui-smoke.cjs"],
                     cwd=ROOT,
                     env=env,
                     check=True,

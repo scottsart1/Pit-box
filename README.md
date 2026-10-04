@@ -113,6 +113,11 @@ scrolling workspace. Choose Stable or More rotation, then Race or Quali;
 sources, adaptations and live comparisons are available in expandable details.
 Test Engineer remains accessible before and after selecting a setup.
 
+**Test Engineer** compares runs or custom lap groups across saved sessions at
+the same circuit. Choose a separate session for B; each session retains its own
+notes and exclusions. Strict setup comparisons still require comparable laps,
+while stint comparisons describe compound and condition differences.
+
 **Drive and Strategy** lead with the next stop and current tyre condition.
 Detailed forecasts and alternative plans remain available on demand, while
 compound rules, urgent wear, weather and damage warnings stay visible.
@@ -127,7 +132,7 @@ and changing compound cannot expose the previous tyre's live pace fit.
 failures. A blocked provider no longer asks the driver to repeat a question
 while requests are paused. Bounded diagnostic history preserves recent failure
 categories after a successful reply, without retaining driver utterances or
-provider response bodies. The final reasoning round summarizes the tool
+provider response bodies. OpenAI's final reasoning round summarizes the tool
 results already collected instead of discarding them for another tool request.
 
 ## What changed in 5.3.1
@@ -226,7 +231,7 @@ workflow and [verification](docs/release-qa-5.2.0.md) for test results and limit
 
 ## What changed in 5.1.0
 
-- Setup Lab offers Minimum, Moderate and Radical changes, with pace context and circuit-specific evidence.
+- Setup Lab offers Small adjustments, Moderate changes and Start fresh, with pace context and circuit-specific evidence.
 - Whole-request radio routing keeps qualified questions out of simple fact shortcuts; rival pit estimates cover the full field and distinguish observed stops from uncertain forecasts.
 - Compact radio snapshots, a time budget for UDP batches and background lap analysis reduce event-loop work at 60 Hz.
 - Android reports OS network loss events and thermal throttling. Physical Bluetooth/Wi-Fi dropouts still require device evidence.

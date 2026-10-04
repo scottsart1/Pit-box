@@ -5,6 +5,8 @@ let notesDirty = false, notesScope = "", selectedSession = "", pendingSession = 
 let groupDraft = [], groupDirty = false, groupRevision = 0, groupBusy = false;
 let lapNoteDirty = false, lapNoteId = null, lapNoteTargets = null, noteBusy = false, noteRevision = 0;
 let rivalsPending = false, rivalRequest = 0, lastRivalsAt = 0;
+let comparisonReport = null, comparisonReportRequest = 0, comparisonLoading = false;
+let comparisonSessions = [], comparisonSessionsRequest = 0, comparisonCursor = null, comparisonTrack = null;
 const node = (tag, text = "", cls = "") => {
   const result = document.createElement(tag); result.textContent = String(text);
   if (cls) result.className = cls;
@@ -17,6 +19,9 @@ const allLaps = () => report?.laps || (report?.runs || []).flatMap((run) => run.
 const lapLabel = (lap) => `Lap ${lap.lap_num}${Number(lap.timeline_epoch) ? ` · timeline ${Number(lap.timeline_epoch) + 1}` : ""}`;
 const groupLabel = (group) => group.name || `Run ${group.number} · ${group.compound}`;
 const compareItems = () => report?.[$("engineeringCompareSource").value] || [];
+const compareSourceB = () => $("engineeringCompareSourceB").value || $("engineeringCompareSource").value;
+const reportB = () => $("engineeringSessionB").value ? comparisonReport : report;
+const sessionLabel = (session) => `${session.track_name || "Circuit"} · ${session.session_type || "Session"} · ${String(session.started_at || "").slice(0, 19).replace("T", " ") || session.session_id || session.id}`;
 const hasDraft = () => notesDirty || groupDirty || lapNoteDirty;
 const mutationBusy = () => groupBusy || noteBusy || planBusy;
 async function api(path, options = {}) {
@@ -48,6 +53,69 @@ function resetComparison() {
   $("engineeringComparison").replaceChildren(node("p", stint
     ? "Compare the clean laps you selected, including different compounds or setups. Differences in fuel, tyre age, weather and reported context remain visible; this does not isolate what caused a pace change."
     : "The setup test uses the same compound and weather, tyre age within one lap, fuel within 3 kg and track/air temperatures within 3°C. It excludes invalid, pit, flagged, traffic, reported exclusions and incomplete laps.", "muted"));
+}
+function clearComparisonSession() {
+  comparisonReportRequest++; comparisonSessionsRequest++; comparisonReport = null; comparisonLoading = false;
+  comparisonSessions = []; comparisonCursor = null; comparisonTrack = null;
+  $("engineeringSessionB").replaceChildren(new Option("Same session as A", ""));
+  $("engineeringCompareSourceB").value = "";
+  $("engineeringSessionBStatus").textContent = ""; $("engineeringMoreSessions").hidden = true;
+}
+function renderComparisonChoices() {
+  const aItems = compareItems(), bItems = reportB()?.[compareSourceB()] || [];
+  fillOptions("engineeringRunA", aItems, groupLabel); fillOptions("engineeringRunB", bItems, groupLabel);
+  if (reportB()?.session_id === report?.session_id && compareSourceB() === $("engineeringCompareSource").value && bItems.length > 1 && $("engineeringRunA").value === $("engineeringRunB").value) $("engineeringRunB").selectedIndex = 1;
+  $("engineeringCompare").disabled = comparisonLoading || !aItems.length || !bItems.length || (reportB()?.session_id === report?.session_id && $("engineeringRunA").value === $("engineeringRunB").value);
+  $("engineeringSessionB").disabled = !report;
+  $("engineeringRunB").disabled = comparisonLoading || !bItems.length;
+  $("engineeringEditSessionB").hidden = !$("engineeringSessionB").value || !comparisonReport;
+  $("engineeringSessionALabel").textContent = report ? sessionLabel(report) : "Choose a session above.";
+  $("engineeringEditorSession").textContent = report ? `Groups, notes and exports below belong to A: ${sessionLabel(report)}.` : "Choose a session to edit its groups and notes.";
+  const preview = $("engineeringSelectionB"); preview.replaceChildren();
+  if (comparisonLoading) { preview.append(node("p", "Loading B’s runs and notes…", "muted")); return; }
+  if (!bItems.length && reportB()) { preview.append(node("p", compareSourceB() === "groups" ? "No saved lap groups in B. Open that session to define groups, or choose its automatic runs." : "No recorded runs in B.", "muted")); return; }
+  const selected = bItems.find((item) => item.id === $("engineeringRunB").value);
+  if (!selected || !$("engineeringSessionB").value) return;
+  const details = node("details", "", "engineering-evidence");
+  details.append(node("summary", `B evidence · ${selected.summary?.clean_lap_count ?? 0} clean laps`), node("p", sessionLabel(reportB()), "small muted"), node("p", `Included: ${(selected.laps || []).map(lapLabel).join(", ")}`));
+  const notes = new Map((selected.laps || []).flatMap((lap) => lap.context_notes || []).map((note) => [note.id, note]));
+  for (const note of notes.values()) details.append(node("p", `${noteLabel(note)}: ${note.text}`, "small engineering-reported"));
+  for (const [label, text] of [["Objective", selected.notes?.objective], ["Conclusion", selected.notes?.conclusion]]) if (text) details.append(node("p", `${label}: ${text}`));
+  preview.append(details);
+}
+async function loadComparisonSessions(more = false) {
+  const track = report?.track_id;
+  if (!Number.isInteger(track) || track < 0) { $("engineeringSessionBStatus").textContent = "A needs a recorded track identity to find other sessions."; return; }
+  const key = report.session_id, ticket = ++comparisonSessionsRequest, cursor = more ? comparisonCursor : null;
+  $("engineeringMoreSessions").disabled = true;
+  try {
+    const result = await api(`/sessions?limit=200&track_id=${track}${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""}`);
+    if (ticket !== comparisonSessionsRequest || report?.session_id !== key) return;
+    comparisonTrack = track; comparisonCursor = result.next_cursor || null;
+    comparisonSessions = [...(more ? comparisonSessions : []), ...(result.items || [])];
+    const select = $("engineeringSessionB"), previous = select.value;
+    select.replaceChildren(new Option("Same session as A", ""));
+    const added = new Set();
+    for (const session of comparisonSessions) if (session.id !== key && session.track_id === track && !added.has(session.id)) { select.add(new Option(session.display_name ? `${session.display_name} · ${sessionLabel(session)}` : sessionLabel(session), session.id)); added.add(session.id); }
+    if (previous && added.has(previous)) select.value = previous;
+    else if (previous && comparisonReport?.session_id === previous && comparisonReport.track_id === track) { select.add(new Option(sessionLabel(comparisonReport), previous)); select.value = previous; }
+    $("engineeringSessionBStatus").textContent = added.size ? "Only saved sessions at A’s track are listed. Each session keeps its own notes and lap groups." : "No other saved sessions at this track yet.";
+    $("engineeringMoreSessions").hidden = !comparisonCursor;
+  } catch (error) { if (ticket === comparisonSessionsRequest) $("engineeringSessionBStatus").textContent = error.message; }
+  finally { if (ticket === comparisonSessionsRequest) $("engineeringMoreSessions").disabled = false; }
+}
+async function loadComparisonReport() {
+  const id = $("engineeringSessionB").value, key = report?.session_id, ticket = ++comparisonReportRequest;
+  const previousRun = comparisonReport?.session_id === id ? $("engineeringRunB").value : "";
+  comparisonReport = null; comparisonLoading = Boolean(id); resetComparison(); renderComparisonChoices();
+  if (!id || !report) return;
+  try {
+    const result = await api(`/sessions/${encodeURIComponent(id)}/engineering`);
+    if (ticket !== comparisonReportRequest || report?.session_id !== key || $("engineeringSessionB").value !== id) return;
+    if (result.track_id !== report.track_id || !Number.isInteger(result.track_id) || result.track_id < 0) throw new Error("Choose a saved session at the same recorded track as A.");
+    comparisonReport = result;
+  } catch (error) { if (ticket === comparisonReportRequest) $("engineeringComparison").textContent = error.message; }
+  finally { if (ticket === comparisonReportRequest) { comparisonLoading = false; renderComparisonChoices(); if (previousRun && [...$("engineeringRunB").options].some((option) => option.value === previousRun)) { $("engineeringRunB").value = previousRun; renderComparisonChoices(); } } }
 }
 function conditionLines(conditions) {
   if (!conditions) return [];
@@ -91,9 +159,7 @@ function renderCards() {
     output.append(card);
   }
   if (!items.length) output.append(node("p", $("engineeringCompareSource").value === "groups" ? "No saved lap groups yet. Open ‘Define my lap groups’ to select your laps, then save." : "Complete timed laps to build a run. Returning to the pits produces a debrief; leaving starts the next run.", "empty"));
-  fillOptions("engineeringRunA", items, groupLabel); fillOptions("engineeringRunB", items, groupLabel);
-  if (items.length > 1 && $("engineeringRunA").value === $("engineeringRunB").value) $("engineeringRunB").selectedIndex = 1;
-  $("engineeringCompare").disabled = items.length < 2;
+  renderComparisonChoices();
 }
 function groupControls() {
   $("engineeringSaveGroups").disabled = !report || !groupDirty || mutationBusy();
@@ -287,24 +353,29 @@ async function refresh() {
         const select = $("engineeringSession"); if (![...select.options].some((item) => item.value === selectedSession)) select.add(new Option(`${report.track_name} · unsaved edits`, selectedSession));
         select.value = selectedSession; status("The live session changed. Your edits are kept with the previous session; save them before opening the new session."); return;
       }
-      notesDirty = false; groupDirty = false; clearLapNote(); resetComparison();
+      notesDirty = false; groupDirty = false; clearLapNote(); clearComparisonSession(); resetComparison();
     }
     if (report?.session_id === next?.session_id && JSON.stringify([report?.laps, report?.groups, report?.lap_notes]) !== JSON.stringify([next?.laps, next?.groups, next?.lap_notes])) resetComparison();
     report = next; render();
+    if (report && comparisonTrack !== report.track_id) loadComparisonSessions();
     status(result.reason || (report ? `${report.runs.length} automatic runs · ${report.groups?.length || 0} saved lap groups. Choose your groups or compare the automatic runs.` : "No saved laps in this session yet."));
   } catch (error) { if (ticket === request) status(error.message); }
 }
 async function compare() {
   if (!report) return;
-  const ticket = ++comparisonRequest, key = report.session_id;
+  const ticket = ++comparisonRequest, key = report.session_id, bKey = reportB()?.session_id;
   const a = $("engineeringRunA").value, b = $("engineeringRunB").value, source = $("engineeringCompareSource").value, mode = $("engineeringCompareMode").value;
-  if (!a || a === b) { $("engineeringComparison").textContent = "Choose two different runs or groups."; return; }
-  if (source === "groups" && groupDirty) { $("engineeringComparison").textContent = "Save or discard your group edits before comparing, so the result uses the lap selection you can see."; return; }
+  if (!a || !b || !bKey || comparisonLoading || (a === b && key === bKey)) { $("engineeringComparison").textContent = "Choose two different runs or groups."; return; }
+  if ((source === "groups" || (bKey === key && compareSourceB() === "groups")) && groupDirty) { $("engineeringComparison").textContent = "Save or discard your group edits before comparing, so the result uses the lap selection you can see."; return; }
   $("engineeringComparison").textContent = mode === "stint" ? "Reviewing clean laps and recorded context…" : "Matching lap conditions and reviewing context…";
   try {
-    const result = await api(`/sessions/${encodeURIComponent(key)}/engineering/compare`, { method: "POST", body: JSON.stringify({ a, b, source, mode }) });
-    if (ticket !== comparisonRequest || report?.session_id !== key) return;
+    const result = await api(`/sessions/${encodeURIComponent(key)}/engineering/compare`, { method: "POST", body: JSON.stringify({ a, b, source, mode, b_session_id: bKey, b_source: compareSourceB() }) });
+    if (ticket !== comparisonRequest || report?.session_id !== key || reportB()?.session_id !== bKey) return;
     const output = $("engineeringComparison"); output.replaceChildren(node("h3", result.conclusion), node("p", result.delta_definition));
+    for (const side of ["a", "b"]) if (result.selections?.[side]) { const selection = result.selections[side]; output.append(node("p", `${side.toUpperCase()}: ${selection.name} · ${sessionLabel(selection)}`, "small engineering-comparison-origin")); }
+    const testNotes = node("details", "", "engineering-evidence"); testNotes.append(node("summary", "Saved test objectives and conclusions"));
+    for (const side of ["a", "b"]) for (const [scope, notes] of [["selected run/group", result.selections?.[side]?.notes], ["session", result.selections?.[side]?.session_notes]]) for (const field of ["objective", "conclusion"]) if (notes?.[field]) testNotes.append(node("p", `${side.toUpperCase()} · ${scope} ${field}: ${notes[field]}`));
+    if (testNotes.children.length > 1) output.append(testNotes);
     if (result.clean_lap_counts) output.append(node("p", `Clean laps: A ${result.clean_lap_counts.a}, B ${result.clean_lap_counts.b}.`));
     output.append(node("p", `Sector gains/losses: ${(result.sector_deltas_s || []).map((v, i) => `S${i + 1} ${value(v, " s")}`).join(" · ")}`));
     if (result.sector_lap_counts) output.append(node("p", `Complete sector evidence: A ${result.sector_lap_counts.a} laps, B ${result.sector_lap_counts.b} laps.`, "small muted"));
@@ -322,7 +393,17 @@ async function compare() {
       output.append(evidence);
     }
     for (const side of ["a", "b"]) for (const lap of result.excluded?.[side] || []) output.append(node("p", `${side.toUpperCase()} lap ${lap.lap}: ${lap.reasons.join(", ").replaceAll("_", " ")}`, "small muted"));
-    for (const caveat of result.caveats || []) output.append(node("p", caveat, "small muted"));
+    if (result.caveats?.length || result.comparison_compatibility) {
+      const limits = node("details", "", "engineering-evidence engineering-comparison-limits");
+      limits.append(node("summary", result.cross_session ? "Comparison limits · game and car unverified" : "Comparison limits"));
+      const compatibility = result.comparison_compatibility;
+      if (compatibility) {
+        limits.append(node("p", compatibility.track_length_status === "recorded_within_tolerance" ? `Track length: recorded within ${compatibility.track_length_tolerance_m} m.` : "Track length: unavailable for one or both selections.", "small"));
+        for (const side of ["a", "b"]) { const selection = result.selections?.[side]; if (selection) limits.append(node("p", `${side.toUpperCase()} · selected track length ${range(selection.track_length_range_m, " m")} · recording format ${selection.packet_format || "Unavailable"}. Recording format does not identify the game version.`, "small")); }
+      }
+      for (const caveat of result.caveats || []) limits.append(node("p", caveat, "small muted"));
+      output.append(limits);
+    }
   } catch (error) { if (ticket === comparisonRequest) $("engineeringComparison").textContent = error.message; }
 }
 async function saveNotes() {
@@ -345,7 +426,7 @@ function openSession(id) {
   if (hasDraft() || mutationBusy()) {
     pendingSession = id; $("engineeringSession").value = selectedSession; $("engineeringDiscardPrompt").hidden = false; return;
   }
-  selectedSession = id; $("engineeringSession").value = id; request++; report = null; notesScope = ""; notesDirty = false; groupDirty = false; clearLapNote();
+  selectedSession = id; $("engineeringSession").value = id; request++; report = null; notesScope = ""; notesDirty = false; groupDirty = false; clearLapNote(); clearComparisonSession();
   $("engineeringGroupStatus").textContent = ""; $("engineeringLapNoteStatus").textContent = "";
   resetComparison(); render(); refresh();
 }
@@ -370,10 +451,14 @@ $("engineeringDiscardAndOpen").addEventListener("click", () => {
   const next = pendingSession; pendingSession = null; $("engineeringDiscardPrompt").hidden = true;
   notesDirty = false; groupDirty = false; clearLapNote(); if (next !== null) openSession(next);
 });
-$("engineeringRefresh").addEventListener("click", async () => { await loadSessions(); await refresh(); });
+$("engineeringRefresh").addEventListener("click", async () => { await loadSessions(); await refresh(); if (report) { await loadComparisonSessions(); if ($("engineeringSessionB").value) await loadComparisonReport(); } });
 $("engineeringCompare").addEventListener("click", compare);
-for (const id of ["engineeringRunA", "engineeringRunB", "engineeringCompareMode"]) $(id).addEventListener("change", resetComparison);
+for (const id of ["engineeringRunA", "engineeringRunB", "engineeringCompareMode"]) $(id).addEventListener("change", () => { resetComparison(); renderComparisonChoices(); });
 $("engineeringCompareSource").addEventListener("change", () => { renderCards(); resetComparison(); });
+$("engineeringCompareSourceB").addEventListener("change", () => { resetComparison(); renderComparisonChoices(); });
+$("engineeringSessionB").addEventListener("change", loadComparisonReport);
+$("engineeringMoreSessions").addEventListener("click", () => loadComparisonSessions(true));
+$("engineeringEditSessionB").addEventListener("click", () => { const id = $("engineeringSessionB").value; if (id) { const select = $("engineeringSession"); if (![...select.options].some((option) => option.value === id)) select.add(new Option(sessionLabel(comparisonReport), id)); openSession(id); } });
 $("engineeringNotesScope").addEventListener("change", () => {
   if (notesDirty) { $("engineeringNotesScope").value = notesScope; status("Save your test notes before changing their scope."); return; }
   notesScope = $("engineeringNotesScope").value; showNotes();
@@ -401,7 +486,7 @@ $("engineeringCancelLapNote").addEventListener("click", clearLapNote);
 window.addEventListener("beforeunload", (event) => { if (hasDraft()) { event.preventDefault(); event.returnValue = ""; } });
 window.addEventListener("pitwall:pagechange", async (event) => {
   active = event.detail?.page === "test-engineer";
-  if (active) { await loadSessions(); await refresh(); }
+  if (active) { await loadSessions(); await refresh(); if ($("engineeringSessionB").value) await loadComparisonReport(); }
   if (event.detail?.page === "strategy") refreshRivals();
 });
 window.addEventListener("pitwall:engineering-session", (event) => {
@@ -416,7 +501,7 @@ window.addEventListener("pitwall:state", (event) => {
   const key = `${s.session_uid}:${s.restart_epoch}:${s.timeline_epoch}:${s.session_generation}`;
   if (key !== liveKey) {
     liveKey = key; rivalRequest++; $("strategicRivals").textContent = "Finish projections are still building.";
-    if (!$("engineeringSession").value) { request++; resetComparison(); if (active) refresh(); }
+    if (!$("engineeringSession").value) { request++; clearComparisonSession(); resetComparison(); if (!hasDraft() && !mutationBusy()) { report = null; render(); } else renderComparisonChoices(); if (active) refresh(); }
   }
   if (!$("strategy").hidden && Date.now() - lastRivalsAt > 5000) { lastRivalsAt = Date.now(); refreshRivals(); }
 });

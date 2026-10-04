@@ -41,6 +41,7 @@ def main():
         car.fuel = 20
         car.tyre_age = 1
     frame, clock = 1, 1.0
+    practice_type = 1
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 
     def send(packet):
@@ -50,7 +51,7 @@ def main():
         packet = PacketSessionData.from_buffer_copy(
             replay.build_session(clock, frame, 30, cars[0].lap)
         )
-        packet.session_type = 1
+        packet.session_type = practice_type
         packet.track_temperature = 30
         packet.air_temperature = 22
         packet.weather = 0
@@ -74,6 +75,37 @@ def main():
         packet.lap_data[0].delta_to_car_in_front_ms_part = 5000
         send(packet)
 
+    def complete_lap(n, age, pace_ms):
+        nonlocal frame, clock
+        for car in cars:
+            car.lap = n
+            car.tyre_age = age
+            car.last_lap_ms = pace_ms
+            car.fuel = 21 - age
+        for sample in range(121):
+            frame += 1
+            clock += 0.75
+            for i, car in enumerate(cars):
+                car.distance = (
+                    sample / 121 * replay.TRACK_LENGTH + i * 500
+                ) % replay.TRACK_LENGTH
+                car.total_distance = (
+                    (n - 1) * replay.TRACK_LENGTH
+                    + sample / 121 * replay.TRACK_LENGTH
+                    + i * 500
+                )
+            if sample % 40 == 0:
+                session()
+            send(replay.build_car_status(cars, clock, frame))
+            lap_packet()
+            send(replay.build_telemetry(cars, clock, frame))
+            send(replay.build_motion(cars, clock, frame))
+            time.sleep(0.012)
+        # Packet 11 supplies the game's official complete sector splits.
+        cars[0].lap_times.append(pace_ms)
+        cars[0].sectors.append((30000, pace_ms - 60000, 30000))
+        send(replay.build_history(cars[0], clock, frame))
+
     try:
         send(replay.build_participants(cars, clock, frame))
         session()
@@ -86,33 +118,7 @@ def main():
             setup(28 if run == 1 else 30)
             for age in range(1, 6):
                 n = (run - 1) * 5 + age
-                for car in cars:
-                    car.lap = n
-                    car.tyre_age = age
-                    car.last_lap_ms = 90000 if run == 1 else 89700
-                    car.fuel = 21 - age
-                for sample in range(121):
-                    frame += 1
-                    clock += 0.75
-                    for i, car in enumerate(cars):
-                        car.distance = (
-                            sample / 121 * replay.TRACK_LENGTH + i * 500
-                        ) % replay.TRACK_LENGTH
-                        car.total_distance = (
-                            (n - 1) * replay.TRACK_LENGTH
-                            + sample / 121 * replay.TRACK_LENGTH
-                            + i * 500
-                        )
-                    session() if sample % 40 == 0 else None
-                    send(replay.build_car_status(cars, clock, frame))
-                    lap_packet()
-                    send(replay.build_telemetry(cars, clock, frame))
-                    send(replay.build_motion(cars, clock, frame))
-                    time.sleep(0.012)
-                # Packet 11 supplies the game's official complete sector splits.
-                cars[0].lap_times.append(90000 if run == 1 else 89700)
-                cars[0].sectors.append((30000, 30000 if run == 1 else 29700, 30000))
-                send(replay.build_history(cars[0], clock, frame))
+                complete_lap(n, age, 90000 if run == 1 else 89700)
             # Cross the line to finalize the last complete timed lap, then pit.
             frame += 1
             clock += 1
@@ -173,6 +179,47 @@ def main():
         assert comparison["enough_evidence"], comparison
         assert comparison["sector_deltas_s"] == [0, -0.3, 0], comparison
         old_uid = replay.SESSION_UID
+
+        # A separate Practice 2 at the same circuit gives native/browser checks
+        # real persisted comparison data without sharing a session or lap IDs.
+        replay.SESSION_UID += 1
+        practice_type = 2
+        frame, clock = 1, 1.0
+        cars = [replay.Car(i, spec) for i, spec in enumerate(replay.GRID[:2])]
+        for car in cars:
+            car.compound, car.speed, car.fuel, car.tyre_age = "MEDIUM", 200, 20, 1
+        send(replay.build_participants(cars, clock, frame))
+        session()
+        setup(32)
+        send(replay.build_car_status(cars, clock, frame))
+        send(replay.build_car_damage(cars, clock, frame))
+        send(replay.build_telemetry(cars, clock, frame))
+        lap_packet()
+        for age in range(1, 6):
+            complete_lap(age, age, 89400)
+        frame += 1
+        clock += 1
+        cars[0].lap += 1
+        cars[0].distance = 0
+        lap_packet()
+        time.sleep(0.2)
+        send(replay.build_history(cars[0], clock, frame))
+        time.sleep(0.3)
+        cross_report = get("/api/v1/engineering/live")
+        assert cross_report["session_id"] != report["session_id"]
+        cross_runs = [run for run in cross_report["runs"] if run["summary"]["clean_lap_count"] >= 3]
+        assert cross_runs, cross_report
+        request = urllib.request.Request(
+            args.base + f"/api/v1/sessions/{report['session_id']}/engineering/compare",
+            data=json.dumps({"a": candidates[0]["id"], "b": cross_runs[0]["id"],
+                             "b_session_id": cross_report["session_id"]}).encode(),
+            headers={"Content-Type": "application/json"},
+        )
+        cross_comparison = json.load(urllib.request.urlopen(request, timeout=20))
+        assert cross_comparison["enough_evidence"], cross_comparison
+        assert cross_comparison["sector_deltas_s"] == [0, -0.6, 0], cross_comparison
+
+        second_practice_uid = replay.SESSION_UID
         replay.SESSION_UID += 1
         replay.select_circuit("monza")
         clock = 1
@@ -188,18 +235,22 @@ def main():
         assert not state["analysis"].get("last_lap_analyzed"), state["analysis"]
         # A delayed packet from the retired session must not restore Spa.
         current_uid = replay.SESSION_UID
-        replay.SESSION_UID = old_uid
         replay.select_circuit("spa")
-        session()
-        time.sleep(0.3)
-        state = get("/api/state")
-        assert state["session_uid"] == current_uid and state["track_id"] == 11
+        for retired_uid in (old_uid, second_practice_uid):
+            replay.SESSION_UID = retired_uid
+            session()
+            time.sleep(0.3)
+            state = get("/api/state")
+            assert state["session_uid"] == current_uid and state["track_id"] == 11
         args.output.parent.mkdir(parents=True, exist_ok=True)
         result = {
             "version": health["version"],
             "session_id": report["session_id"],
             "runs": report["runs"],
             "comparison": comparison,
+            "cross_session_id": cross_report["session_id"],
+            "cross_runs": cross_runs,
+            "cross_comparison": cross_comparison,
             "pit_debrief": "pass",
             "track_transition": "pass",
             "retired_packet": "pass",

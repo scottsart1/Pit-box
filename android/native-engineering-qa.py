@@ -28,6 +28,42 @@ def matches(node, *, resource_id=None, text=None):
     return any(value.casefold() == text.casefold() for value in labels(node))
 
 
+def entered_value_matches(node, value, field_label=None):
+    # Some WebView controls expose "value, label" as their accessible text.
+    # Match that exact known label, never an arbitrary substring of the value.
+    allowed = {value}
+    for label in (node.get("hint", "").strip(), field_label):
+        if label:
+            allowed.add(f"{value}, {label}")
+    return bool(allowed.intersection(labels(node)))
+
+
+def page_regions(smoke, tree, *, popup=False):
+    """Separate the visible page viewport from a surface which can scroll.
+
+    Android marks the horizontally scrolling workspace tabs as scrollable
+    even when the entire page fits. Those tabs must never clip page controls
+    or receive vertical swipes intended for the page.
+    """
+    if popup:
+        # A dump can expose both a native select dialog and its underlying
+        # WebView. Scroll the real native list, not the obscured dashboard.
+        for node in tree.iter("node"):
+            if node.get("class") == "android.widget.ListView" and (bounds := smoke.node_bounds(node)):
+                return bounds, bounds if node.get("scrollable") == "true" else None
+    pages = {"live", "driver-dashboard", "strategy", "connection", "analysis", "setup", "settings"}
+    for node in tree.iter("node"):
+        if node.get("resource-id") in pages and (bounds := smoke.node_bounds(node)):
+            return bounds, bounds if node.get("scrollable") == "true" else None
+    # Native select dialogs and DocumentsUI supply their own list viewport,
+    # without the dashboard's HTML page node. Exclude any tab strip here too.
+    regions = [bounds for node in tree.iter("node") if node.get("scrollable") == "true"
+               and node.get("class") != "android.widget.TabWidget"
+               and (bounds := smoke.node_bounds(node))]
+    region = max(regions, key=lambda bounds: (bounds[2] - bounds[0]) * (bounds[3] - bounds[1]), default=None)
+    return region, region
+
+
 def validate_target(smoke, package, version):
     """No fixture, tap or text entry is permitted before all guards pass."""
     assert package == "com.yourpitbox.app.debug", "Native QA requires the isolated debug package"
@@ -58,7 +94,7 @@ class NativeUI:
         self.tree = self.smoke.ui_tree(f"native-{self.sequence:03d}-{safe_label}")
         return self.tree
 
-    def find(self, label, *, resource_id=None, text=None, page=True, direction="down", attempts=18):
+    def find(self, label, *, resource_id=None, text=None, page=True, direction="down", attempts=18, enabled=False):
         """Search both ways only within a freshly reported scrollable region.
 
         A populated provider missing an expected control is a failure, not a
@@ -67,14 +103,16 @@ class NativeUI:
         populated = False
         for attempt in range(attempts):
             tree = self.snapshot(label)
-            region = self.smoke.page_scroll_bounds(tree)
+            viewport, region = page_regions(self.smoke, tree, popup=not page)
             populated |= any(labels(node) for node in tree.iter("node"))
             for node in tree.iter("node"):
                 bounds = self.smoke.node_bounds(node)
                 if not matches(node, resource_id=resource_id, text=text) or not bounds:
                     continue
-                if page and region and not (region[0] <= bounds[0] < bounds[2] <= region[2]
-                                            and region[1] <= bounds[1] < bounds[3] <= region[3]):
+                if enabled and node.get("enabled", "true") != "true":
+                    continue
+                if page and viewport and not (viewport[0] <= bounds[0] < bounds[2] <= viewport[2]
+                                              and viewport[1] <= bounds[1] < bounds[3] <= viewport[3]):
                     continue
                 return node
             if attempt == attempts - 1:
@@ -95,7 +133,7 @@ class NativeUI:
         raise AssertionError(f"Native control missing: {resource_id or text!r}; see native-*-{label}-ui.xml")
 
     def tap(self, label, **selector):
-        self.smoke.tap_node(self.find(label, **selector))
+        self.smoke.tap_node(self.find(label, enabled=True, **selector))
 
     def select(self, field, option, *, direction="up"):
         self.tap(field, resource_id=field, direction="up")
@@ -113,7 +151,8 @@ class NativeUI:
         if re.search(r"mInputShown=true", ime):
             self.smoke.adb("shell", "input", "keyevent", "KEYCODE_BACK")
         entered = self.find(f"filled-{field}", resource_id=field, page=page)
-        assert value in labels(entered), f"Native text entry failed for {field}: {labels(entered)}"
+        field_label = {"engineeringGroupName": "Group name", "engineeringLapNoteText": "What happened?"}.get(field)
+        assert entered_value_matches(entered, value, field_label), f"Native text entry failed for {field}: {labels(entered)}"
 
     def field_value(self, label, value):
         """Check a visible garage label and its next textual value in the tree."""
@@ -148,6 +187,9 @@ def prove_setup(ui):
     ui.find("stable-subtitle", text="Race · Dry · Stable")
     ui.field_value("Front wing", 21)
     ui.field_value("Rear wing", 17)
+    for heading in ("Aerodynamics", "Transmission", "Suspension geometry", "Suspension", "Brakes", "Tyre pressures · psi"):
+        ui.find("garage-group", text=heading)
+    ui.field_value("Rear left", 22)
     ui.capture("setup-stable")
     ui.tap("sources", text="Sources & setup details")
     ui.find("source-attribution", text="Melbourne — Matt212 stable race reference")
@@ -239,6 +281,22 @@ def prove_engineering(ui, fixture):
     ui.find("matched-sectors", text="Sector gains/losses: S1 0.000 s · S2 -0.300 s · S3 0.000 s")
     ui.find("comparison-driver-note", text=f"A · Driver report · traffic · excluded from pace: {note}")
     ui.capture("matched-comparison")
+    # B is a second recorded practice at the same track. Its report remains
+    # read-only, while A's custom groups, note and export stay on the first run.
+    cross_id = fixture["cross_session_id"]
+    cross_session = next(item for item in sessions if item["id"] == cross_id)
+    cross_endpoint = f"/api/v1/sessions/{quote(cross_id)}/engineering"
+    cross_before = smoke.get(cross_endpoint)
+    cross_label = session_label(cross_session)
+    if cross_session.get("display_name"):
+        cross_label = f"{cross_session['display_name']} · {cross_label}"
+    ui.select("engineeringSessionB", cross_label)
+    ui.tap("compare-cross-session", text="Compare matched laps")
+    ui.find("cross-session-verdict", text="B was quicker by 0.600 s on the median matched lap.")
+    ui.find("cross-session-sectors", text="Sector gains/losses: S1 0.000 s · S2 -0.600 s · S3 0.000 s")
+    ui.capture("cross-session-comparison")
+    cross_after = smoke.get(cross_endpoint)
+    assert cross_after["groups"] == cross_before["groups"] and cross_after["lap_notes"] == cross_before["lap_notes"], "Comparing changed B's saved groups or notes"
     report = smoke.get(endpoint)
     (smoke.OUTPUT / "native-engineering-report.json").write_text(json.dumps(report, indent=2), encoding="utf-8")
     return endpoint, group_name, note
@@ -247,6 +305,11 @@ def prove_engineering(ui, fixture):
 def lap_label(lap):
     epoch = int(lap.get("timeline_epoch", 0))
     return f"Lap {lap['lap_num']}" + (f" · timeline {epoch + 1}" if epoch else "")
+
+
+def session_label(session):
+    started = str(session.get("started_at", ""))[:19].replace("T", " ")
+    return f"{session.get('track_name') or 'Circuit'} · {session.get('session_type') or 'Session'} · {started or session.get('session_id') or session.get('id')}"
 
 
 def verify_export(data, expected, group_name, note):
@@ -325,9 +388,9 @@ def run(smoke, package, version):
         summary["stages_passed"].append("two-run UDP fixture and retired-session protection")
         ui = NativeUI(smoke)
         prove_setup(ui)
-        summary["stages_passed"].append("native Setup choices, numeric values, attribution, wet clearing and Test Engineer handoff")
+        summary["stages_passed"].append("native Setup choices, all six groups reachable, wing/last tyre values, attribution, wet clearing and Test Engineer handoff")
         endpoint, group, note = prove_engineering(ui, fixture)
-        summary["stages_passed"].append("native suggested draft, exact custom range, save/refresh, reported exclusion and both comparison modes")
+        summary["stages_passed"].append("native suggested draft, exact custom range, save/refresh, reported exclusion, both comparison modes and read-only B from another same-track session")
         summary["system_export"] = prove_export(ui, endpoint, group, note, fixture["session_id"])
         summary["status"] = "passed" if summary["system_export"]["status"] == "passed" else "partially_tested"
         if summary["status"] != "passed":

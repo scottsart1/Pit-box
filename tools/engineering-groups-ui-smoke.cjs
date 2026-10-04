@@ -7,6 +7,7 @@ const { chromium } = require('playwright');
 (async () => {
   const base = process.env.PITBOX_ENGINEERING_URL;
   const session = process.env.PITBOX_ENGINEERING_SESSION;
+  const crossSession = process.env.PITBOX_ENGINEERING_CROSS_SESSION;
   assert.ok(base && session, 'Use engineering-acceptance.py to supply the isolated fixture.');
   const endpoint = `${base}/api/v1/sessions/${encodeURIComponent(session)}/engineering`;
   const output = path.join(process.env.PITBOX_ENGINEERING_EVIDENCE || '.codex-ui-test-data/engineering-ui', 'groups');
@@ -200,8 +201,59 @@ const { chromium } = require('playwright');
         await page.locator('#engineeringContextNotes').getByRole('button', { name: 'Remove note', exact: true }).click();
         await page.getByText('Note removed. Any exclusion from this note has also been removed.', { exact: true }).waitFor();
       }
+      if (crossSession) {
+        const originalA = await read();
+        const bEndpoint = `${base}/api/v1/sessions/${encodeURIComponent(crossSession)}/engineering`;
+        const bResponse = await context.request.get(bEndpoint);
+        assert.equal(bResponse.status(), 200);
+        const bFixture = await bResponse.json();
+        assert.equal(bFixture.track_id, originalA.track_id);
+        assert.equal(bFixture.laps.length, 5, 'Only edit the isolated second-session fixture.');
+        assert.equal((await context.request.put(`${bEndpoint}/groups`, { data: { groups: [] } })).status(), 200);
+        for (const note of bFixture.lap_notes) assert.equal((await context.request.delete(`${bEndpoint}/lap-notes/${note.id}`)).status(), 200);
+        await page.locator('#engineeringSessionB').selectOption(crossSession);
+        await page.locator('#engineeringEditSessionB').click();
+        await page.waitForFunction(id => document.getElementById('engineeringSession').value === id && !document.getElementById('engineeringAddGroup').disabled, crossSession);
+        if (!await page.locator('#engineeringGroupEditor').evaluate(element => element.open)) await page.locator('#engineeringGroupEditor > summary').click();
+        await page.locator('#engineeringAddGroup').click();
+        await page.locator('#engineeringGroupName').fill('Different saved session <B group>');
+        await page.locator('#engineeringGroupFrom').selectOption(bFixture.laps[0].id);
+        await page.locator('#engineeringGroupTo').selectOption(bFixture.laps.at(-1).id);
+        await page.locator('#engineeringApplyRange').click();
+        await Promise.all([page.waitForResponse(response => response.url() === `${bEndpoint}/groups` && response.request().method() === 'PUT'), page.locator('#engineeringSaveGroups').click()]);
+        await page.getByText('Groups saved. They are ready to compare and included in exports.', { exact: true }).waitFor();
+        if (!await page.locator('#engineeringLapNotes').evaluate(element => element.open)) await page.locator('#engineeringLapNotes > summary').click();
+        const notedB = bFixture.runs[0].summary.clean_lap_ids[0];
+        await page.locator('#engineeringNoteFrom').selectOption(notedB);
+        await page.locator('#engineeringNoteTo').selectOption(notedB);
+        await page.locator('#engineeringLapNoteText').fill('B session only: slower car in sector two <reported>');
+        await page.locator('#engineeringNoteCategory').selectOption('traffic');
+        await page.locator('#engineeringNoteExclude').check();
+        await Promise.all([page.waitForResponse(response => response.url() === `${bEndpoint}/lap-notes` && response.request().method() === 'PATCH'), page.locator('#engineeringSaveLapNote').click()]);
+        await page.getByText("Lap note saved. Comparisons and the engineer's review now include this context.", { exact: true }).waitFor();
+        await page.locator('#engineeringSession').selectOption(session);
+        await page.waitForFunction(id => [...document.getElementById('engineeringSessionB').options].some(option => option.value === id), crossSession);
+        await page.locator('#engineeringSessionB').selectOption(crossSession);
+        await page.locator('#engineeringCompareSourceB').selectOption('groups');
+        await page.locator('#engineeringCompareMode').selectOption('stint');
+        await page.locator('#engineeringCompare').click();
+        await page.locator('#engineeringComparison h3').waitFor();
+        const crossText = await page.locator('#engineeringComparison').innerText();
+        assert.ok(crossText.includes('B · Driver report · traffic · excluded from pace: B session only:'), 'B notes retain side, provenance and exclusion.');
+        assert.ok(crossText.includes('Different saved session <B group>') && crossText.includes('Practice 2'));
+        assert.equal((await page.locator('#engineeringContextNotes').innerText()).includes('B session only:'), false, 'A notebook never acquires B notes.');
+        assert.deepEqual(await read(), originalA, 'Opening and comparing B never rewrites A groups, laps or notes.');
+        await page.locator('#engineeringCompareSource').selectOption('runs');
+        await page.locator('#engineeringCompareMode').selectOption('setup');
+        await page.locator('#engineeringCompare').click();
+        await page.getByRole('heading', { name: 'B was quicker by 0.600 s on the median matched lap.', exact: true }).waitFor();
+        assert.equal(await page.locator('#engineeringCompareSourceB').inputValue(), 'groups', 'A automatic run can compare against B custom group.');
+        await page.locator('#engineeringCompareHeading').scrollIntoViewIfNeeded();
+        await page.screenshot({ path: path.join(output, `cross-session-groups-${width}.png`) });
+        assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth + 1), false);
+      }
       assert.deepEqual(errors, []);
-      results.push({ width, height, grouping: 'pass', manualLapSelection: 'pass', draftProtection: 'pass', contextNotes: 'pass', noteCorrection: 'pass', ...(width === 1280 ? { saveRaces: 'pass' } : {}), export: 'pass', overflow: false });
+      results.push({ width, height, grouping: 'pass', manualLapSelection: 'pass', draftProtection: 'pass', contextNotes: 'pass', noteCorrection: 'pass', crossSessionGroupsAndNotes: crossSession ? 'pass' : 'not supplied', ...(width === 1280 ? { saveRaces: 'pass' } : {}), export: 'pass', overflow: false });
       await context.close();
     }
   } catch (error) {

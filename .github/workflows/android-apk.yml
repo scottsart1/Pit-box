@@ -21,6 +21,7 @@ on:
       - tools/engineering*.cjs
       - tools/setup-reference-ui-smoke.cjs
       - tools/driver-focus-ui-smoke.cjs
+      - tools/all-workspaces-ui-smoke.cjs
       - distribution/tests/test_android*.py
       - .github/workflows/android-apk.yml
   workflow_dispatch:

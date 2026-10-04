@@ -339,8 +339,24 @@ MATCH_LIMITS = {
     "minimum_pairs": 3,
 }
 
+# Same material-length tolerance used by telemetry.comparison.classify_compatibility.
+CROSS_SESSION_LENGTH_TOLERANCE_M = 15.0
 
-def compare_runs(a: dict, b: dict) -> dict:
+
+def recorded_track_length(session: dict) -> float | None:
+    """Read only the known live-catalogue signature, not a guessed circuit length."""
+    parts = str(session.get("track_layout_signature") or "").split(":")
+    if (
+        len(parts) != 4
+        or parts[0] != "f1"
+        or number(parts[2]) != session.get("track_id")
+    ):
+        return None
+    length = number(parts[3])
+    return length if length is not None and length > 0 else None
+
+
+def compare_runs(a: dict, b: dict, *, match_session_mode: bool = False) -> dict:
     """One-to-one nearest-condition matching. Positive deltas mean B is slower."""
     from .engineering_groups import conditions_summary, context_notes
 
@@ -356,6 +372,13 @@ def compare_runs(a: dict, b: dict) -> dict:
         eligible[side] = []
         for lap in run["laps"]:
             reasons = exclusions(lap, strict=True)
+            if match_session_mode and str(lap.get("mode_profile") or "").lower() in {
+                "",
+                "unknown",
+                "idle",
+                "none",
+            }:
+                reasons.append("unknown_session_mode")
             if mixed_setup:
                 reasons.append("multiple_setups_in_group")
             if lap.get("id") not in clean_ids and not reasons:
@@ -377,6 +400,11 @@ def compare_runs(a: dict, b: dict) -> dict:
             if (
                 left["compound"] != right["compound"]
                 or left["weather"] != right["weather"]
+                or (
+                    match_session_mode
+                    and str(left.get("mode_profile") or "").lower()
+                    != str(right.get("mode_profile") or "").lower()
+                )
             ):
                 continue
             differences = [
@@ -466,7 +494,10 @@ def compare_runs(a: dict, b: dict) -> dict:
         "b_run": b["number"],
         "pairs": pairs,
         "excluded": rejected,
-        "criteria": MATCH_LIMITS,
+        "criteria": {
+            **MATCH_LIMITS,
+            **({"session_mode": "same recorded mode"} if match_session_mode else {}),
+        },
         "enough_evidence": enough,
         "same_setup": same_setup,
         "median_delta_s": delta,
@@ -557,6 +588,185 @@ class EngineeringService:
     async def report(self, session_id: str) -> dict:
         return await asyncio.to_thread(self._report, session_id)
 
+    async def compare(
+        self,
+        session_id: str,
+        a: str,
+        b: str,
+        *,
+        source: str = "runs",
+        mode: str = "setup",
+        b_session_id: str | None = None,
+        b_source: str | None = None,
+    ) -> dict:
+        return await asyncio.to_thread(
+            self._compare,
+            session_id,
+            a,
+            b,
+            source,
+            mode,
+            b_session_id or session_id,
+            b_source or source,
+        )
+
+    def _compare(
+        self,
+        session_id: str,
+        a: str,
+        b: str,
+        source: str,
+        mode: str,
+        b_session_id: str,
+        b_source: str,
+    ) -> dict:
+        from .engineering_groups import compare_groups
+
+        if source not in {"runs", "groups"} or b_source not in {"runs", "groups"}:
+            raise ValueError(
+                "Choose automatic runs or saved lap groups for each selection."
+            )
+        if mode not in {"setup", "stint"}:
+            raise ValueError("Choose setup or stint comparison.")
+        cross_session = session_id != b_session_id
+        report_a = self._report(session_id)
+        report_b = self._report(b_session_id) if cross_session else report_a
+        if cross_session and (
+            report_a["track_id"] is None
+            or report_b["track_id"] is None
+            or report_a["track_id"] < 0
+            or report_b["track_id"] < 0
+            or report_a["track_id"] != report_b["track_id"]
+        ):
+            raise ValueError(
+                "Cross-session comparisons require the same known track in both recordings."
+            )
+        selected = []
+        selections = {}
+        for side, report, kind, identity in (
+            ("a", report_a, source, a),
+            ("b", report_b, b_source, b),
+        ):
+            item = next((item for item in report[kind] if item["id"] == identity), None)
+            if item is None:
+                raise KeyError(
+                    f"Selection {side.upper()} does not belong to its selected session."
+                )
+            if not item["laps"]:
+                raise ValueError(
+                    "Choose a nonempty recorded run or lap group on each side."
+                )
+            selected.append(item)
+            selections[side] = {
+                key: report[key]
+                for key in (
+                    "session_id",
+                    "track_id",
+                    "track_name",
+                    "session_type",
+                    "mode_profile",
+                    "started_at",
+                    "packet_format",
+                    "track_layout_signature",
+                )
+            }
+            lengths = [
+                value
+                for lap in item["laps"]
+                if (value := number(lap.get("track_length_m"))) is not None
+                and value > 0
+            ]
+            if not lengths and report.get("track_length_m") is not None:
+                lengths = [report["track_length_m"]]
+            selections[side].update(
+                source=kind,
+                id=identity,
+                name=item.get("name") or f"Run {item['number']}",
+                lap_ids=[lap["id"] for lap in item["laps"]],
+                notes=dict(item.get("notes") or {}),
+                session_notes={
+                    key: report["notes"].get(key, "")
+                    for key in ("objective", "conclusion")
+                },
+                track_length_range_m=[min(lengths), max(lengths)] if lengths else None,
+            )
+        if set(selections["a"]["lap_ids"]) & set(selections["b"]["lap_ids"]):
+            raise ValueError("Choose two selections without overlapping recorded laps.")
+        if cross_session:
+            lengths = [
+                value
+                for side in selections.values()
+                for value in side["track_length_range_m"] or []
+            ]
+            if (
+                lengths
+                and max(lengths) - min(lengths) > CROSS_SESSION_LENGTH_TOLERANCE_M
+            ):
+                raise ValueError(
+                    "Recorded track lengths differ by more than 15 metres; these layouts cannot be compared."
+                )
+        result = (
+            compare_runs(*selected, match_session_mode=cross_session)
+            if mode == "setup"
+            else compare_groups(*selected)
+        )
+        result.update(cross_session=cross_session, selections=selections)
+        if cross_session:
+            formats = [selections[side]["packet_format"] for side in ("a", "b")]
+            known_lengths = all(
+                selections[side]["track_length_range_m"] for side in ("a", "b")
+            )
+            result["comparison_compatibility"] = {
+                "same_track_id": True,
+                "track_length_tolerance_m": CROSS_SESSION_LENGTH_TOLERANCE_M,
+                "track_length_status": "recorded_within_tolerance"
+                if known_lengths
+                else "unavailable",
+                "packet_format_status": "unavailable"
+                if not all(formats)
+                else "same"
+                if formats[0] == formats[1]
+                else "different",
+                "game_version": "unverified",
+                "car_formula": "unverified",
+                "car_performance": "unverified",
+            }
+            if not known_lengths:
+                result["caveats"].append(
+                    "Recorded layout length is unavailable for at least one selection; the track ID matches but layout length could not be checked."
+                )
+            if all(formats) and formats[0] != formats[1]:
+                result["caveats"].append(
+                    f"Different UDP packet formats ({formats[0]} and {formats[1]}). Protocol format does not identify the game version or car formula."
+                )
+            modes = {
+                side: sorted(
+                    {
+                        str(lap.get("mode_profile") or "unknown").lower()
+                        for lap in item["laps"]
+                    }
+                )
+                for side, item in zip(("a", "b"), selected)
+            }
+            result["session_modes"] = modes
+            if modes["a"] != modes["b"]:
+                result["caveats"].append(
+                    f"Different session modes: {' / '.join(modes['a'])} versus {' / '.join(modes['b'])}. "
+                    + (
+                        "Setup comparisons require the same recorded mode."
+                        if mode == "setup"
+                        else "These runs are descriptive and their session conditions are not matched."
+                    )
+                )
+            result["caveats"].append(
+                "Different saved sessions on the same track. Recorded conditions and each session's notes are used; "
+                "matching does not establish identical track grip, car performance or game version."
+            )
+            result["caveats"].append(
+                "Game version, car formula and car-performance compatibility were not verified by these recordings."
+            )
+        return result
+
     def _report(self, session_id: str) -> dict:
         from .engineering_groups import (
             apply_lap_notes,
@@ -586,6 +796,8 @@ class EngineeringService:
                 valid=bool(row["valid"]),
                 timeline_epoch=row["timeline_epoch"],
             )
+            context.setdefault("mode_profile", session["mode_profile"])
+            context.setdefault("session_type", session["session_type"])
             for key, column in (
                 ("compound", "tyre_compound"),
                 ("tyre_age_start", "tyre_age_laps"),
@@ -635,8 +847,16 @@ class EngineeringService:
         ]
         return {
             "session_id": session_id,
+            "track_id": session["track_id"],
             "track_name": track,
             "session_type": session["session_type"],
+            "mode_profile": session["mode_profile"],
+            "packet_format": session.get("packet_format") or None,
+            "track_layout_signature": str(session.get("track_layout_signature") or "")[
+                :180
+            ]
+            or None,
+            "track_length_m": recorded_track_length(session),
             "status": session["status"],
             "started_at": session["started_at"],
             "notes": notes,

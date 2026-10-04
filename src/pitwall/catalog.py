@@ -19,6 +19,17 @@ from f1.packets import TRACKS as GAME_TRACKS
 from .capture import CaptureScanReport
 from .trace_store import TraceManifest
 
+_SESSION_TYPE_FILTERS = {
+    "practice": ("practice", "practice 1", "practice 2", "practice 3", "short practice"),
+    "qualifying": (
+        "qualifying", "qualifying 1", "qualifying 2", "qualifying 3",
+        "short qualifying", "one-shot qualifying", "sprint shootout 1",
+        "sprint shootout 2", "sprint shootout 3", "short sprint shootout",
+        "one-shot sprint shoot",
+    ),
+    "race": ("race", "race 2", "race 3", "sprint"),
+}
+
 
 def track_name(track_id: Any) -> str | None:
     """The circuit's name as the game's own track table gives it.
@@ -641,8 +652,14 @@ class SessionCatalog:
             conditions.append("s.track_id=?")
             parameters.append(int(track_id))
         if session_type:
-            conditions.append("LOWER(s.session_type)=LOWER(?)")
-            parameters.append(session_type.strip())
+            # Library selects session families, while callers can still ask
+            # for an exact variant such as Practice 2. Match the protocol's
+            # explicit labels; a broad substring would include unrelated types.
+            selected_type = session_type.strip().lower()
+            variants = _SESSION_TYPE_FILTERS.get(selected_type, (selected_type,))
+            placeholders = ",".join("?" for _ in variants)
+            conditions.append(f"LOWER(TRIM(s.session_type)) IN ({placeholders})")
+            parameters.extend(variants)
         if starred is not None:
             conditions.append("s.starred=?")
             parameters.append(1 if starred else 0)

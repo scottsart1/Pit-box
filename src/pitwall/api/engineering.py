@@ -11,7 +11,6 @@ from pydantic import BaseModel, ConfigDict, Field
 from ..catalog import session_id
 from ..engineering import (
     EngineeringService,
-    compare_runs,
     report_text,
     strategic_rivals,
 )
@@ -24,6 +23,8 @@ class CompareRunsRequest(BaseModel):
     b: str = Field(min_length=1, max_length=180)
     source: Literal["runs", "groups"] = "runs"
     mode: Literal["setup", "stint"] = "setup"
+    b_session_id: str | None = Field(default=None, min_length=1, max_length=180)
+    b_source: Literal["runs", "groups"] | None = None
 
 
 class LapGroup(BaseModel):
@@ -101,21 +102,14 @@ def create_engineering_router(
 
     @router.post("/sessions/{key}/engineering/compare")
     async def compare(key: str, body: CompareRunsRequest) -> dict:
-        if body.a == body.b:
-            raise HTTPException(422, "Choose two different runs.")
-        report = await get_report(key)
-        runs = {run["id"]: run for run in report[body.source]}
-        if body.a not in runs or body.b not in runs:
-            raise HTTPException(404, "Both runs must belong to the selected session.")
-        import asyncio
-
-        from ..engineering_groups import compare_groups
-
-        return await asyncio.to_thread(
-            compare_runs if body.mode == "setup" else compare_groups,
-            runs[body.a],
-            runs[body.b],
-        )
+        try:
+            return await service.compare(key, **body.model_dump())
+        except KeyError as exc:
+            raise HTTPException(
+                404, "Saved session or selection was not found in the selected session."
+            ) from exc
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from exc
 
     @router.post("/sessions/{key}/engineering/groups/suggest")
     async def suggest(key: str, body: SuggestGroupsRequest) -> dict:
