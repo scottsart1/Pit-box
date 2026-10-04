@@ -1,7 +1,10 @@
 # Your Pit Box 5.3.2 release verification
 
-Status: development and verification in progress. This document does not certify
-publication, signed artifacts or completed native acceptance yet.
+Status: final artifacts are published. Production upgrade, saved-history
+reconciliation, served assets and one real text-provider request are verified.
+Production native navigation, Settings reachability and visual review passed.
+Earlier candidate records below are retained as development history, not
+acceptance of the final artifacts.
 
 ## Changes under test
 
@@ -287,3 +290,138 @@ fractional waits still round up. Deterministic clock and recovery coverage
 reproduced the defect before repair, then 82 provider/radio tests passed.
 Provider suppression remained correct throughout. Both final artifacts need
 rebuilding with this repair; no failed candidate was promoted.
+
+## Final packaged candidates
+
+Both final builds use `79333ab6a2e464ef1cb8cd59bc216ccb6876501d`.
+Windows [37180166206](https://github.com/scottsart1/Pit-box/actions/runs/37180166206)
+passed **2,294 tests**, one platform skip and one dependency warning. Its 11
+installed-artifact checks include a 25-lap run, final classification, graceful
+shutdown, restart, database integrity and uninstall preserving data. The
+separate 20-car, 100-second counted test received, parsed and recorded every one
+of **18,604** emitted packets, with zero rejected packets, queue drops, write
+errors or request timeouts. State response p95/max was 0.203/0.360 seconds;
+health response p95/max was 0.204/1.328 seconds.
+
+The downloaded frozen Windows executable also passed Setup, grouping/notes,
+comparisons and all **72 workspace cases** across three viewport sizes. Saved
+groups, notes and setup values survived graceful shutdown; SQLite integrity,
+recording ownership and clean recording footers passed. Its four local capture
+files contained zero packets, so that local run is **not** evidence of nonempty
+raw recording. The local cause is unconfirmed; CI's counted test above supplies
+the packet-write proof. The local disk had less than the normal 2 GiB recording
+threshold; that guard was not changed. CI had no usable private LAN, so its
+transfer management checks do not establish paired TLS/QR history transfer.
+
+Android [37180163462](https://github.com/scottsart1/Pit-box/actions/runs/37180163462)
+passed **2,022 tests**, one dependency warning, all browser suites and full
+native Setup, groups, notes, strict/descriptive and cross-session comparisons.
+DocumentsUI saved a 6,796-byte report exactly matching the API response (SHA-256
+`2c4b8c16da84e5226fcd97ee4f77c7e74b4ebdaa1a2834b6baa754aac01a5312`).
+The crash log was empty, with no unclosed SQLite warnings. The runtime archive
+digest matched GitHub's artifact digest. Both production and QA APKs were then
+signed with the existing release certificate and verified for package identity,
+signature and 16 KiB alignment.
+
+Physical final-candidate inspection found that installing successive private QA
+APKs with the same version name/code retains the previously extracted dashboard.
+Both final APKs embed the exact committed dashboard; the initial QA HTTP server
+still served an earlier candidate's dashboard. Those same-revision physical
+checks therefore do not certify the final dashboard. The isolated synthetic QA
+data was reset and all 29 static files plus the dashboard route matched the
+final APK exactly before final physical acceptance. Production's 5.3.1 revision 33 to 5.3.2 revision 34 upgrade changes
+the extraction stamp and must independently verify its served assets afterward.
+
+The fresh Samsung QA installation passed Setup references and all 20 values,
+optional source disclosure, wet clearing and handoff, custom lap groups, saved
+traffic exclusions, strict/descriptive comparisons and cross-session B. The
+same-session result was -0.300 s and the cross-session result -0.600 s. Android
+Downloads saved all 6,796 report bytes exactly (SHA-256
+`174eef1f36443c1052ea393fbfad3ec3df360d3b390f0a54b8c483aa4835e75b`).
+The actual Monza view cleared the prior objective. All seven workspaces and all
+21 Settings labels were reachable, with Settings unchanged. Independent visual
+review of 13 settled screenshots found no material clipping or access blocker.
+Physical coverage was assembled after harness retries for a transient Samsung
+keyboard-only accessibility tree and an already-open details section; it is
+not represented as one uninterrupted fresh run. The final CI emulator flow did
+complete uninterrupted. Production received no synthetic telemetry.
+
+Final artifacts:
+
+| Platform | File | Bytes | SHA-256 |
+| --- | --- | ---: | --- |
+| Windows | `PitWall-Setup.exe` | 35,012,692 | `6893890d90799b167ef6fb8e1c61c2518afbc0a023871a67fff627c74e5b14bc` |
+| Android | `YourPitBox-5.3.2-android.34.apk` | 73,161,097 | `41f5cb7ffc8eff59893bb8098fbc6561be32fc30fed02ad005ebb9782afc5107` |
+
+## Production upgrade and history preservation
+
+The Samsung production package was upgraded in place from 5.3.1 revision 33 to
+**5.3.2 revision 34**, using the signed APK from Android `37180163462` at source
+`79333ab6a2e464ef1cb8cd59bc216ccb6876501d`. The earlier backend completed its
+dashboard-requested shutdown before installation. The installed APK digest
+matches the final Android artifact above. All **30 served routes** (29 static
+files and the dashboard) then matched the signed APK's bytes, including the
+session-response guards. No synthetic telemetry was sent to production.
+
+The before/after comparison retained all **151 session IDs and 26,155 complete
+lap rows**, including each row's session scope and duplicate multiplicity.
+Canonical per-session multisets, the compatibility lap dictionary and provider
+readiness matched. The strict metadata comparison detected three changed fields
+across two sessions; these were retained and reconciled rather than ignored:
+
+- A zero-lap idle recording became incomplete and received an end timestamp.
+  The startup log records one stale session recovery at that exact timestamp.
+- A completed practice's reported storage grew by **29,380,496 bytes**, exactly
+  matching its sole finalized raw capture: **188,595 packets**, clean closure
+  and no recovery flag. Its 98 lap rows and trace metadata were unchanged, all
+  98 trace manifests remained ready, and its status remained complete.
+
+All other session metadata, except normal `updated_at` refreshes, was unchanged.
+The original snapshots and strict assertions were preserved. This verifies the
+exported history and the explained lifecycle changes; it does not claim a
+byte-for-byte comparison of every database table and raw file. The private
+`production-history-metadata-audit.json` records the exact differences and
+receipt digests, and the upgrade receipt records
+`passed_with_explained_lifecycle_metadata_changes`.
+
+One real production engineer **text** request returned HTTP 200 in **15.313
+seconds** with the answer “No fresh live telemetry. The current track and lap
+are unavailable.” The app was disconnected with lap zero, and the reply did
+not reuse an earlier circuit. OpenAI diagnostics retained zero failures, no
+cooldown and no recent failure entries; Settings were unchanged. This check
+does not test the microphone, speech recognition, speech playback or Realtime,
+and does not establish the cause or resolution of the earlier intermittent
+radio failures.
+
+The final production package also passed native navigation across all **seven
+workspaces**. All **21 Settings labels** were reached in three inspection/scroll
+iterations, then the app returned to Drive. Settings and provider readiness
+remained unchanged; no credentials were edited, and this navigation check
+triggered no voice, exports, synthetic telemetry or lifecycle changes. Optional
+onboarding was dismissed with Skip setup before the checks. This verifies page
+access and label reachability, not every action or live driving behavior.
+Independent review of all eight retained screenshots found no material clipping,
+stale-context contradiction or readability blocker. The production Setup image
+shows its empty state; reference values were exercised separately in QA. The
+Driver Dashboard identifies its simulated sample race. A scan of the retained
+production process log found no traceback, fatal exception, application-not-
+responding or SQLite corruption/locking signatures; this bounded log check does
+not establish behavior outside the recorded interval.
+
+## Public distribution verification
+
+The release Worker deployment is
+`a6a3a6b7-ca3b-4fcf-b402-5f0cd964439f`. The website deployment from `fcacbeb` is
+[a322b018.pitwall-2k7.pages.dev](https://a322b018.pitwall-2k7.pages.dev).
+Both production download responses were read in full and matched the final
+Windows and Android sizes and SHA-256 digests above. The installer endpoint
+also reported that no download code was required.
+
+All **19 public website routes** passed comparison with the built site,
+including the guide, download flow, Driver Dashboard and new Setup screenshot.
+HTML comparisons accounted for Cloudflare's email-address transformation.
+All **six update checks** passed: Windows and Android installations at 5.3.0
+and 5.3.1 were offered 5.3.2, while 5.3.2 installations reported no newer
+release. Update metadata matched the published artifact sizes and digests.
+Private `production-downloads.json`, `production-site.json` and
+`production-updates.json` receipts retain these results.
