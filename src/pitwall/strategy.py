@@ -1035,9 +1035,11 @@ class StrategyEngine:
 
     @staticmethod
     def _live_wear_samples(state: dict[str, Any], compound: str) -> list[float]:
-        return [max(rates) for lap in StrategyEngine._valid_laps(state)[-12:]
+        # Each compound retains its own recent sample. A long hard run must
+        # not erase the medium evidence from earlier in the same practice.
+        return [max(rates) for lap in StrategyEngine._valid_laps(state)
                 if str(lap.get("compound", "")).upper() == compound
-                and (rates := wear_deltas(lap))]
+                and (rates := wear_deltas(lap))][-12:]
 
     @staticmethod
     def _driver_wear_factor(
@@ -1202,6 +1204,58 @@ class StrategyEngine:
             source = "live_fuel_corrected_fit" if weight == 1 else "blended_live_pace+" + source
             samples = live_samples
         return apply_feedback(value, source, samples)
+
+    def _compound_evidence(
+        self,
+        state: dict[str, Any],
+        historical: dict[str, Any],
+        style_factor: float,
+        selected_compounds: Sequence[str],
+    ) -> dict[str, Any]:
+        """Explain retained laps separately from the evidence each model uses.
+
+        A low-confidence plan can still have useful medium and hard history.
+        Inferred compounds and unavailable pace fits must not imply that all
+        recorded practice has disappeared, or manufacture observed samples.
+        """
+        history_models = historical.get("compounds", {}) or {}
+        live_models = (state.get("analysis", {}).get("deg_model", {}) or {}).get("compounds", {})
+        recorded = historical.get("recorded_laps_by_compound", {}) or {}
+        eligible_live = self._valid_laps(state)
+        names = set(history_models) | set(live_models) | set(recorded) | set(selected_compounds)
+        names.update(str(lap.get("compound", "")).upper() for lap in eligible_live)
+        result: dict[str, Any] = {}
+        for name in sorted(names & {"SOFT", "MEDIUM", "HARD", "INTER", "WET"}):
+            prior, live = history_models.get(name, {}), live_models.get(name, {})
+            live_laps = [lap for lap in eligible_live if str(lap.get("compound", "")).upper() == name]
+            history_count = int(prior.get("laps_observed", 0) or 0)
+            rates, wear_source, wear_samples, _ = self._wheel_wear_rates(state, name, historical, style_factor)
+            deg, pace_source, pace_samples = self._deg_for(state, name, historical)
+            pace_excluded: dict[str, int] = {}
+            for reasons in (prior.get("pace_excluded_laps", {}), live.get("excluded_laps", {})):
+                for reason, count in (reasons or {}).items():
+                    pace_excluded[reason] = pace_excluded.get(reason, 0) + int(count)
+            wear_excluded = dict(prior.get("wear_excluded_laps", {}) or {})
+            missing_live_wear = sum(wear_deltas(lap) is None for lap in live_laps)
+            if missing_live_wear:
+                reason = "missing_or_invalid_wear_increment"
+                wear_excluded[reason] = wear_excluded.get(reason, 0) + missing_live_wear
+            result[name] = {
+                "laps_observed": history_count + len(live_laps),
+                "historical_laps_observed": history_count,
+                "live_laps_observed": len(live_laps),
+                "historical_laps_recorded": recorded.get(name),
+                "wear_sample_size": wear_samples,
+                "pace_sample_size": pace_samples,
+                "wear_source": wear_source,
+                "pace_source": pace_source,
+                "wear_per_lap_pct": round(max(rates), 3),
+                "deg_s_per_lap": round(deg, 4),
+                "pace_excluded_laps": pace_excluded,
+                "wear_excluded_laps": wear_excluded,
+                "inferred_from": prior.get("inferred_from", []),
+            }
+        return result
 
     @staticmethod
     def _pit_entry_status(state: dict[str, Any]) -> str:
@@ -2081,9 +2135,9 @@ class StrategyEngine:
     def _live_wheel_wear_samples(
         state: dict[str, Any], compound: str
     ) -> list[list[float]]:
-        deltas = [rates for lap in StrategyEngine._valid_laps(state)[-12:]
+        deltas = [rates for lap in StrategyEngine._valid_laps(state)
                   if str(lap.get("compound", "")).upper() == compound
-                  and (rates := wear_deltas(lap))]
+                  and (rates := wear_deltas(lap))][-12:]
         return [[row[i] for row in deltas] for i in range(4)]
 
     def _wheel_wear_rates(
@@ -4058,6 +4112,14 @@ class StrategyEngine:
             "points_profile": "sprint" if mode == "sprint" else "race",
             "evidence_samples": evidence_samples,
             "confidence_basis": "Least-supported tyre stint in the selected plan; requires both wear and pace evidence.",
+            # Stability can keep another freshly evaluated plan. Include its
+            # compounds too so an untested held stint remains visible rather
+            # than inheriting the raw winner's narrower evidence list.
+            "compounds": self._compound_evidence(
+                state, historical, style_factor,
+                [compound for plan in self._candidate_pool for compound in plan.get("compounds", [])],
+            ),
+            "history_compatibility_basis": historical.get("compatibility_basis"),
             "learning_policy": "Practice and race laps; time trials, qualifying, pit laps and recorded neutralisations excluded.",
             "learning_excluded_laps": historical.get("excluded_laps", {}),
             "pace_learning_excluded_laps": {

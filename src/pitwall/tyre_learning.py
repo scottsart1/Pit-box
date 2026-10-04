@@ -79,6 +79,10 @@ def stint_pace_model(laps: list[dict[str, Any]]) -> dict[str, Any]:
     """
     runs: list[list[tuple[float, float]]] = []
     excluded_laps: dict[str, int] = {}
+
+    def exclude(reason: str, count: int = 1) -> None:
+        excluded_laps[reason] = excluded_laps.get(reason, 0) + count
+
     previous: dict[str, Any] | None = None
     previous_key: tuple[Any, ...] | None = None
     for lap in sorted(
@@ -110,7 +114,8 @@ def stint_pace_model(laps: list[dict[str, Any]]) -> dict[str, Any]:
         if new_run:
             runs.append([])
         previous, previous_key = lap, key
-        if exclusion_reason(lap):
+        if reason := exclusion_reason(lap):
+            exclude(reason)
             previous = None
             continue
         # Lap time alone cannot distinguish tyre degradation from a surface
@@ -122,16 +127,21 @@ def stint_pace_model(laps: list[dict[str, Any]]) -> dict[str, Any]:
         if str(lap.get("weather") or "").strip().lower() in {
             "light rain", "heavy rain", "storm",
         }:
-            reason = "unresolved_wet_conditions"
-            excluded_laps[reason] = excluded_laps.get(reason, 0) + 1
+            exclude("unresolved_wet_conditions")
             previous = None
             continue
         # Standing starts and cold out-laps do not measure degradation.
+        if finite(lap.get("tyre_age_end")) is None:
+            exclude("missing_tyre_age")
+            previous = None
+            continue
         if age <= 1:
+            exclude("warmup_lap")
             continue
         start = finite(lap.get("fuel_start_kg"))
         end = finite(lap.get("fuel_end_kg"))
         if start is None or end is None or not start >= end > 0:
+            exclude("missing_or_invalid_fuel")
             previous = None
             continue
         time_s = float(lap["lap_time_ms"]) / 1000
@@ -140,7 +150,10 @@ def stint_pace_model(laps: list[dict[str, Any]]) -> dict[str, Any]:
 
     slopes, errors, counts, spans, spreads = [], [], [], [], []
     for points in runs:
+        if not points:
+            continue
         if len(points) < 3 or points[-1][0] - points[0][0] < 2:
+            exclude("insufficient_stint_span", len(points))
             continue
         pairs = [
             (y2 - y1) / (x2 - x1)
@@ -152,7 +165,11 @@ def stint_pace_model(laps: list[dict[str, Any]]) -> dict[str, Any]:
         intercept = median([y - slope * x for x, y in points])
         error = float(median([abs(y - (intercept + slope * x)) for x, y in points]))
         spread = float(median([abs(v - slope) for v in pairs]))
-        if not -0.1 <= slope <= 1.5 or error > 1.0 or spread > 0.30:
+        if not -0.1 <= slope <= 1.5:
+            exclude("implausible_pace_slope", len(points))
+            continue
+        if error > 1.0 or spread > 0.30:
+            exclude("inconsistent_stint_pace", len(points))
             continue
         slopes.append(slope)
         errors.append(error)
@@ -160,6 +177,7 @@ def stint_pace_model(laps: list[dict[str, Any]]) -> dict[str, Any]:
         counts.append(len(points))
         spans.append(points[-1][0] - points[0][0])
     return {
+        "laps_observed": len(laps),
         "sample_size": sum(counts),
         "stint_count": len(slopes),
         "age_span_laps": max(spans, default=0),

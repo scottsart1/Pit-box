@@ -1719,8 +1719,17 @@ class PitWallDatabase:
 
         from .tyre_learning import exclusion_reason, stint_pace_model, wear_deltas
 
+        recorded_counts: dict[str, int] = {}
         try:
             with self._connect() as db:
+                recorded_counts = {
+                    str(row["compound"] or "UNKNOWN").upper(): int(row["lap_count"])
+                    for row in db.execute(
+                        """SELECT compound, COUNT(*) AS lap_count FROM laps
+                           WHERE track_id=? AND session_uid != ? GROUP BY compound""",
+                        (track_id, _session_uid_to_sqlite(context.get("session_uid", 0) or 0)),
+                    )
+                }
                 rows = db.execute(
                     """
                     SELECT l.session_uid, l.lap_num, l.session_type, l.valid, l.pit_status,
@@ -1788,12 +1797,17 @@ class PitWallDatabase:
             "track_id": track_id, "compounds": {},
             "model": "personal_stint_learning_v2",
             "excluded_laps": excluded,
+            "recorded_laps_by_compound": recorded_counts,
+            "recorded_laps_basis": "Saved player laps at this track, excluding the active session; includes laps ineligible for learning.",
+            "evidence_window_limit": limit,
+            "compatibility_basis": "Track-matched personal history; legacy records do not establish matching car formula or game version.",
             "session_policy": "practice_and_race_only; current_session_uses_live_model",
         }
         for compound, laps in grouped.items():
             wear_rates: list[float] = []
             max_wear_rates: list[float] = []
             wheel_wear_rates: list[list[float]] = [[], [], [], []]
+            wear_excluded_laps: dict[str, int] = {}
             features: list[list[float]] = []
             wear_targets: list[float] = []
             for lap in laps:
@@ -1803,6 +1817,9 @@ class PitWallDatabase:
                     max_wear_rates.append(max(deltas))
                     for index, delta in enumerate(deltas):
                         wheel_wear_rates[index].append(delta)
+                else:
+                    reason = "missing_or_invalid_wear_increment"
+                    wear_excluded_laps[reason] = wear_excluded_laps.get(reason, 0) + 1
                 mode = str(lap.get("mode_profile") or "")
                 setup = lap.get("setup") or {}
                 fuel = (float(lap.get("fuel_start_kg") or 0.0) + float(lap.get("fuel_end_kg") or 0.0)) / 2.0
@@ -1847,6 +1864,7 @@ class PitWallDatabase:
                 "slope_spread_s_per_lap": pace["slope_spread_s_per_lap"],
                 "fuel_correction_s_per_kg": pace["fuel_correction_s_per_kg"],
                 "wear_sample_size": len(wear_rates),
+                "wear_excluded_laps": wear_excluded_laps,
                 "wear_per_lap_pct": round(float(median(wear_rates)), 3) if wear_rates else None,
                 "max_wear_per_lap_pct": round(float(median(max_wear_rates)), 3) if max_wear_rates else None,
                 "wheel_wear_per_lap_pct": [round(float(median(values)), 3) if values else None for values in wheel_wear_rates],

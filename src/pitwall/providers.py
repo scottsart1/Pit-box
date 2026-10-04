@@ -4,6 +4,7 @@ import asyncio
 import json
 import re
 import time
+from collections import deque
 from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable, Protocol
 
@@ -38,6 +39,33 @@ class ProviderDeadlineError(ProviderError):
 
 class ProviderRateLimitError(ProviderError):
     """Raised when an opt-in diagnostic is invoked too frequently."""
+
+
+@dataclass(frozen=True, slots=True)
+class ProviderFailure:
+    """One failed or skipped provider, without discarding its recovery context."""
+
+    provider: str
+    kind: str
+    message: str
+    attempted: bool = True
+    retry_after_s: float = 0.0
+
+
+class ProviderRequestError(ProviderError):
+    """All selected providers failed; retain why instead of implying lost audio."""
+
+    def __init__(self, failures: list[ProviderFailure]) -> None:
+        self.failures = tuple(failures)
+        attempted = [failure for failure in failures if failure.attempted]
+        waiting = [failure for failure in failures if failure.kind == "cooldown"]
+        self.failure = (attempted or waiting or failures)[-1] if failures else None
+        self.kind = self.failure.kind if self.failure else "unknown"
+        self.retry_after_s = self.failure.retry_after_s if self.failure else 0.0
+        super().__init__(
+            "No LLM provider completed the request. "
+            + " | ".join(f"{failure.provider}: {failure.message}" for failure in failures)
+        )
 
 
 _DELIBERATION_MARKERS = re.compile(
@@ -178,6 +206,42 @@ def _provider_error_code(exc: BaseException) -> str:
         if isinstance(candidate, str):
             return candidate.strip().lower()
     return ""
+
+
+def _provider_failure_kind(exc: BaseException) -> str:
+    """Stable recovery categories; never classify by arbitrary error prose."""
+    code = _provider_error_code(exc)
+    status = getattr(exc, "status_code", None)
+    name = type(exc).__name__
+    if code in {
+        "insufficient_quota", "billing_hard_limit_reached", "credit_balance_insufficient",
+    } or status == 402:
+        return "quota"
+    if code in {"invalid_api_key", "account_deactivated"} or status in {401, 403} or name in {
+        "AuthenticationError", "PermissionDeniedError",
+    }:
+        return "authentication"
+    if isinstance(exc, ProviderConfigurationError):
+        return "configuration"
+    if isinstance(exc, ProviderDeadlineError):
+        return "deadline"
+    if isinstance(exc, (TimeoutError, httpx.TimeoutException)) or name == "APITimeoutError":
+        return "timeout"
+    if status == 429 or name == "RateLimitError":
+        return "rate_limit"
+    if isinstance(status, int) and status >= 500:
+        return "service"
+    if name == "APIConnectionError" or isinstance(exc, httpx.TransportError):
+        return "connection"
+    if status in {400, 404, 422} or name in {
+        "BadRequestError", "NotFoundError", "UnprocessableEntityError",
+    }:
+        return "request"
+    if isinstance(exc, ProviderTruncationError):
+        return "truncation"
+    if isinstance(exc, ProviderResponseError):
+        return "response"
+    return "unknown"
 
 
 def _is_health_failure(exc: BaseException) -> bool:
@@ -341,6 +405,10 @@ class OpenAIResponsesProvider:
     ) -> ProviderResult:
         if self.client is None:
             raise ProviderConfigurationError("OpenAI API key is not configured.")
+        if tools and max_rounds < 2:
+            raise ProviderConfigurationError(
+                "Tool-enabled OpenAI requests need at least two rounds to return their results."
+            )
 
         model = self.model_for(route)
         started = time.perf_counter()
@@ -349,6 +417,11 @@ class OpenAIResponsesProvider:
         total_usage: dict[str, int] = {}
 
         for round_index in range(max_rounds):
+            # Reserve the last existing request for an answer. Previously a
+            # final-round tool call was executed, then its output discarded
+            # when the loop ended: even successful tools became a radio error.
+            # This adds neither a request nor time to the router's deadline.
+            final_synthesis = bool(tools) and round_index == max_rounds - 1
             if effort in {"high", "xhigh", "max"}:
                 base_budget = self.config.openai_deep_max_output_tokens
                 retry_budget = self.config.openai_deep_retry_max_output_tokens
@@ -379,6 +452,13 @@ class OpenAIResponsesProvider:
                 }
                 if model.startswith(("gpt-5", "gpt-6")):
                     request["reasoning"] = {"effort": effort}
+                if final_synthesis:
+                    request["tool_choice"] = "none"
+                    request["instructions"] += (
+                        "\nGive the final radio answer now using only the evidence already supplied. "
+                        "State what remains unknown if that evidence is insufficient. "
+                        "Do not invent missing values or claim an action without a successful tool result."
+                    )
 
                 response = await self.client.responses.create(**request)
                 _merge_usage(total_usage, _usage_dict(getattr(response, "usage", None)))
@@ -396,6 +476,10 @@ class OpenAIResponsesProvider:
                 for item in response.output
                 if getattr(item, "type", None) == "function_call"
             ]
+            if calls and final_synthesis:
+                raise ProviderResponseError(
+                    "OpenAI requested another tool after the final answer was required."
+                )
             if not calls:
                 text = _final_answer_only(response.output_text or "")
                 if not text:
@@ -1165,6 +1249,7 @@ class _CircuitState:
     failures: int = 0
     blocked_until: float = 0.0
     last_error: str = ""
+    last_failure_kind: str = ""
 
 
 class ProviderRouter:
@@ -1191,6 +1276,9 @@ class ProviderRouter:
         self.last_result: ProviderResult | None = None
         self.last_shakedown: dict[str, Any] | None = None
         self._last_compare_at = 0.0
+        # Retain diagnostic facts across a successful retry. No utterance,
+        # prompt, response body or credentials belong in this status history.
+        self.recent_failures: deque[dict[str, Any]] = deque(maxlen=8)
 
     def rebind_clients(self) -> None:
         """Re-read credentials after an API key change, and forgive the circuit.
@@ -1247,7 +1335,7 @@ class ProviderRouter:
         max_rounds: int,
         provider: str | None = None,
     ) -> ProviderResult:
-        errors: list[str] = []
+        errors: list[ProviderFailure] = []
         tool_cache: dict[str, dict[str, Any]] = {}
         tool_locks: dict[str, asyncio.Lock] = {}
 
@@ -1273,14 +1361,20 @@ class ProviderRouter:
             circuit = self.circuits[name]
             now = time.monotonic()
             if not implementation.available:
-                errors.append(f"{name}: credentials not configured")
+                errors.append(ProviderFailure(
+                    name, "configuration", "credentials not configured", attempted=False,
+                ))
                 continue
             if circuit.blocked_until > now:
-                errors.append(f"{name}: temporarily cooling down after an API failure")
+                errors.append(ProviderFailure(
+                    name, "cooldown", "temporarily cooling down after an API failure",
+                    attempted=False, retry_after_s=circuit.blocked_until - now,
+                ))
                 continue
             try:
+                timeout_scope = asyncio.timeout(deadline)
                 try:
-                    async with asyncio.timeout(deadline):
+                    async with timeout_scope:
                         result = await implementation.generate(
                             prompt=prompt,
                             instructions=instructions,
@@ -1291,6 +1385,8 @@ class ProviderRouter:
                             max_rounds=max_rounds,
                         )
                 except TimeoutError as exc:
+                    if not timeout_scope.expired():
+                        raise
                     raise ProviderDeadlineError(
                         f"{name} exceeded the {deadline:.0f}-second {route} deadline."
                     ) from exc
@@ -1298,6 +1394,7 @@ class ProviderRouter:
                 circuit.failures = 0
                 circuit.blocked_until = 0.0
                 circuit.last_error = ""
+                circuit.last_failure_kind = ""
                 self.last_result = result
                 return result
             except Exception as exc:
@@ -1308,11 +1405,27 @@ class ProviderRouter:
                             time.monotonic() + self.config.llm_failure_cooldown_s
                         )
                 circuit.last_error = f"{type(exc).__name__}: {exc}"
-                errors.append(f"{name}: {circuit.last_error}")
+                circuit.last_failure_kind = _provider_failure_kind(exc)
+                retry_after = max(0.0, circuit.blocked_until - time.monotonic())
+                errors.append(ProviderFailure(
+                    name, circuit.last_failure_kind, circuit.last_error,
+                    retry_after_s=retry_after,
+                ))
+                code = _provider_error_code(exc)
+                status = getattr(exc, "status_code", None)
+                self.recent_failures.append({
+                    "provider": name,
+                    "route": route,
+                    "kind": circuit.last_failure_kind,
+                    "error_type": type(exc).__name__,
+                    "status_code": status if isinstance(status, int) else None,
+                    "error_code": code if re.fullmatch(r"[a-z0-9_-]{1,80}", code) else "",
+                    "occurred_at": time.time(),
+                    "latency_ms": round((time.monotonic() - now) * 1000, 1),
+                    "retry_after_s": round(retry_after, 1),
+                })
 
-        raise ProviderError(
-            "No LLM provider completed the request. " + " | ".join(errors)
-        )
+        raise ProviderRequestError(errors)
 
     async def compare(
         self,
@@ -1538,6 +1651,7 @@ class ProviderRouter:
             "deep_deadline_s": self.config.llm_deep_deadline_s,
             "compare_enabled": self.config.llm_compare_enabled,
             "last_shakedown": self.last_shakedown,
+            "recent_failures": [dict(failure) for failure in self.recent_failures],
             "providers": {
                 name: {
                     "configured": provider.available,
@@ -1547,6 +1661,7 @@ class ProviderRouter:
                         max(0.0, self.circuits[name].blocked_until - time.monotonic()), 1
                     ),
                     "last_error": self.circuits[name].last_error,
+                    "last_failure_kind": self.circuits[name].last_failure_kind,
                 }
                 for name, provider in self.providers.items()
             },

@@ -132,6 +132,12 @@ race without two different dry compounds unless a wet tyre has been used. Under 
 virtual safety car or red flag, use the strategy tool's neutralisation state rather than ordinary
 green-flag pit loss.
 
+A missing live tyre fit does not mean no saved practice data. Use get_tyre_condition and
+get_pit_strategy to acknowledge each compound's recorded, eligible and fitted evidence, then explain
+the specific remaining limit. Low plan confidence can come from one untested stint even with good
+medium/hard data. Keep inferred models distinct from measured tests; do not claim legacy history
+matches the car, formula or conditions when compatibility is unknown.
+
 In 2026-regulation sessions the overtaking aid is called Manual Override, not DRS.
 In qualifying, compare best lap times, theoretical best and the target; do not volunteer race gaps.
 For practice reviews, call get_practice_run_review and read the recorded notes and measured air/track

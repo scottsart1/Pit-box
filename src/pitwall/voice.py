@@ -6,6 +6,7 @@ import json
 import logging
 import math
 import time
+import traceback
 import wave
 from collections import deque
 from pathlib import Path
@@ -16,7 +17,12 @@ import numpy as np
 from .audio import AudioService
 from .brain import EngineerBrain
 from .config import settings
-from .engineering_context import lap_note_context, lap_note_origin, lap_note_task_context
+from .engineering_context import (
+    lap_note_context,
+    lap_note_origin,
+    lap_note_task_context,
+)
+from .providers import ProviderRequestError
 from .realtime import RealtimeRadio
 from .session_guard import SessionChangedError, session_scoped
 from .state import StateStore
@@ -27,6 +33,28 @@ log = logging.getLogger(__name__)
 # acknowledgement. TTS is a separate, faster API call than the failed model
 # request, so it usually still works when the model call has timed out.
 BRAIN_FALLBACK_LINE = "Sorry, the radio dropped that one — go again."
+
+
+def _brain_failure_feedback(exc: Exception) -> str:
+    """Explain provider recovery without suggesting an unheard driver call."""
+    if not isinstance(exc, ProviderRequestError):
+        return BRAIN_FALLBACK_LINE
+    if exc.retry_after_s > 0:
+        delay = max(1, math.ceil(exc.retry_after_s))
+        return f"The engineer service is temporarily unavailable. Try again in {delay} seconds."
+    return {
+        "deadline": "The engineer took too long to answer. Please try again in a moment.",
+        "timeout": "The engineer service timed out. Please try again in a moment.",
+        "connection": "I couldn't reach the engineer service. Please try again in a moment.",
+        "service": "The engineer service is unavailable. Please try again in a moment.",
+        "rate_limit": "The engineer service is busy. Please wait a moment before trying again.",
+        "authentication": "The engineer service denied access. Check Connection when you're ready.",
+        "configuration": "The engineer provider needs a key in Connection before I can answer that.",
+        "quota": "The engineer account has reached its usage or billing limit. Check it when you're ready.",
+        "request": "The engineer service rejected that request. The dashboard has the error details.",
+        "truncation": "I couldn't finish that answer. Please try again.",
+        "response": "The engineer service returned no usable answer. Please try again.",
+    }.get(exc.kind, "The engineer couldn't complete that request. The dashboard has the error details.")
 
 # Shown when a voice feature is used while no OpenAI key exists. Reasoning may
 # run on any configured provider, but STT/TTS and the realtime radio are
@@ -73,6 +101,7 @@ class NativeVoiceController:
         self._pending_clips: deque[tuple[np.ndarray, dict | None]] = deque(
             maxlen=max(1, settings.voice_clip_queue_size)
         )
+        self._command_failures: deque[dict[str, Any]] = deque(maxlen=8)
         self._ack_prepare_task: asyncio.Task[None] | None = None
         self._persisted_wake_enabled: bool | None = None
         self._wake_config_source = ".env/default"
@@ -171,6 +200,13 @@ class NativeVoiceController:
     @property
     def realtime_active(self) -> bool:
         return bool(self.realtime is not None and self.realtime.is_open)
+
+    def failure_status(self) -> list[dict[str, Any]]:
+        """Recent diagnostic metadata survives later successful radio calls."""
+        return [
+            {**failure, "where": [dict(frame) for frame in failure["where"]]}
+            for failure in self._command_failures
+        ]
 
     @property
     def busy_reason(self) -> str:
@@ -1121,7 +1157,10 @@ class NativeVoiceController:
         ack_kind = "standby" if route == "deep" else "copy"
         snapshot = await self.store.snapshot_live()
         latency = dict(snapshot.get("radio_latency", {}))
-        latency.update({"route": route, "ack": ack_kind, "stage": "processing"})
+        latency.update({
+            "route": route, "ack": ack_kind, "stage": "processing",
+            "error_kind": "", "retry_after_s": 0.0,
+        })
         await self.store.update(
             engineer_status="thinking",
             radio_indicator="processing",
@@ -1153,10 +1192,24 @@ class NativeVoiceController:
             # broken radio and they will keep waiting instead of re-asking, so
             # say what happened out loud. Seen in real races when the model
             # call exceeded its route deadline mid-stint.
-            log.warning("Engineer could not answer the %s command: %s", source, exc)
+            log.warning("Engineer could not answer the %s command (%s): %s", source, type(exc).__name__, exc)
             snapshot = await self.store.snapshot_live()
             failed = dict(snapshot.get("radio_latency", {}))
             failed["stage"] = "error"
+            failed["error_kind"] = exc.kind if isinstance(exc, ProviderRequestError) else "unexpected"
+            failed["retry_after_s"] = round(exc.retry_after_s, 1) if isinstance(exc, ProviderRequestError) else 0.0
+            self._command_failures.append({
+                "occurred_at": time.time(),
+                "source": source,
+                "route": route,
+                "kind": failed["error_kind"],
+                "error_type": type(exc).__name__,
+                "retry_after_s": failed["retry_after_s"],
+                "where": [
+                    {"file": Path(frame.filename).name, "function": frame.name, "line": frame.lineno}
+                    for frame in traceback.extract_tb(exc.__traceback__)[-3:]
+                ],
+            })
             await self.store.update(
                 last_error=f"Engineer error: {exc}",
                 engineer_status="error",
@@ -1164,7 +1217,7 @@ class NativeVoiceController:
                 radio_latency=failed,
             )
             with contextlib.suppress(Exception):
-                await self.speak_text(BRAIN_FALLBACK_LINE)
+                await self.speak_text(_brain_failure_feedback(exc))
             return
         finally:
             for task in (ack_task, brain_task):

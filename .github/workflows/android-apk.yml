@@ -20,6 +20,7 @@ on:
       - tools/engineering*.py
       - tools/engineering*.cjs
       - tools/setup-reference-ui-smoke.cjs
+      - tools/driver-focus-ui-smoke.cjs
       - distribution/tests/test_android*.py
       - .github/workflows/android-apk.yml
   workflow_dispatch:
@@ -66,7 +67,7 @@ jobs:
           NODE_PATH="$RUNNER_TEMP/pitbox-ui/node_modules" node tools/onboarding-ui-smoke.cjs
           NODE_PATH="$RUNNER_TEMP/pitbox-ui/node_modules" node tools/analysis-ui-smoke.cjs
       - name: Driver dashboard and tyre insight regressions
-        run: node --test tests/driver_dashboard.test.mjs tests/drive_degradation.test.mjs
+        run: node --test tests/*.test.mjs
       - name: Strategy scrolling in real Chromium at phone, tablet and desktop sizes
         run: |
           npm install --prefix "$RUNNER_TEMP/pitbox-browser" --no-save playwright@1.58.2
@@ -74,6 +75,8 @@ jobs:
           NODE_PATH="$RUNNER_TEMP/pitbox-browser/node_modules" node tools/strategy-layout-smoke.cjs
       - name: Analysis touch scrolling and unobstructed playback controls
         run: NODE_PATH="$RUNNER_TEMP/pitbox-browser/node_modules" node tools/analysis-layout-smoke.cjs
+      - name: Driver decisions and critical warnings at phone, tablet and desktop sizes
+        run: NODE_PATH="$RUNNER_TEMP/pitbox-browser/node_modules" PITBOX_DRIVER_FOCUS_EVIDENCE="$RUNNER_TEMP/driver-focus" node tools/driver-focus-ui-smoke.cjs
       - name: Test Engineer and sourced Setup Lab browser acceptance
         run: NODE_PATH="$RUNNER_TEMP/pitbox-browser/node_modules" python tools/engineering-acceptance.py --output "$RUNNER_TEMP/engineering-acceptance"
       - name: Retain Test Engineer browser and telemetry evidence
@@ -81,7 +84,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: engineering-acceptance-${{ github.run_id }}
-          path: ${{ runner.temp }}/engineering-acceptance/
+          path: |
+            ${{ runner.temp }}/engineering-acceptance/
+            ${{ runner.temp }}/driver-focus/
           if-no-files-found: ignore
           retention-days: 7
       - name: Optional usage ingestion and owner report checks (local fixtures only)

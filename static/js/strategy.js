@@ -54,6 +54,7 @@ function post(path, body) {
 
 function evidenceSource(source) {
   const text = String(source || "");
+  if (!text) return "source unavailable";
   let label = text.startsWith("blended_live") ? "live laps blended with prior evidence"
     : text.startsWith("live_") ? "live laps"
     : text.includes("condition_adjusted") ? "history adjusted for conditions"
@@ -62,6 +63,43 @@ function evidenceSource(source) {
     : "track estimate";
   if (text.includes("driver_feedback")) label += ", including your tyre report";
   return label;
+}
+
+function planEvidence(s) {
+  const st = s.strategy || {}, rec = st.recommended || {}, model = st.model_summary || {};
+  const count = value => typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : null;
+  const describe = (label, evidence) => {
+    const observed = count(evidence.laps_observed);
+    const saved = count(evidence.historical_laps_recorded);
+    const wear = count(evidence.wear_sample_size), pace = count(evidence.pace_sample_size ?? evidence.deg_sample_size);
+    const reasons = {
+      warmup_lap: "warm-up laps", missing_or_invalid_fuel: "missing or invalid fuel readings",
+      insufficient_stint_span: "too few consecutive comparable laps", inconsistent_stint_pace: "inconsistent pace",
+      implausible_pace_slope: "pace trend outside the valid range", unresolved_wet_conditions: "unresolved wet conditions",
+      invalid_lap: "invalid laps", pit_lap: "pit laps", neutralised_lap: "neutralised laps",
+      missing_tyre_age: "missing tyre age", tyre_reset_or_missing_laps: "tyre reset or missing laps",
+    };
+    const exclusions = Object.entries(evidence.pace_excluded_laps || {}).filter(([, value]) => count(value) > 0)
+      .map(([reason, value]) => `${reasons[reason] || reason.replaceAll("_", " ")} (${value})`);
+    return `${label}: ${observed === null ? "" : `${observed} eligible laps; `}`
+      + (saved === null ? "" : `saved history ${saved} laps; `)
+      + `wear from ${evidenceSource(evidence.wear_source)}${wear === null ? "" : ` (${wear} samples)`}; `
+      + `pace from ${evidenceSource(evidence.pace_source ?? evidence.deg_source)}${pace === null ? "" : ` (${pace} laps)`}.`
+      + (exclusions.length ? ` Pace exclusions: ${exclusions.join(", ")}.` : "");
+  };
+  const compounds = model.compounds && typeof model.compounds === "object" ? Object.entries(model.compounds) : [];
+  const evidence = compounds.filter(([, value]) => value && typeof value === "object")
+    .map(([compound, value]) => describe(String(compound).toUpperCase(), value));
+  if (!evidence.length) {
+    for (const [index, stint] of (rec.stint_models || []).entries()) {
+      if (!stint || typeof stint !== "object") continue;
+      const compound = stint.compound || rec.compounds?.[index] || "unknown tyre";
+      evidence.push(describe(`Stint ${index + 1} · ${compound}`, stint));
+    }
+  }
+  return evidence.length
+    ? ["Plan confidence covers every planned stint. An untested tyre or unconfirmed spare can keep it low.", ...evidence].join("\n")
+    : "Tyre evidence details are not available for this plan.";
 }
 
 function canAdopt(plan) {
@@ -99,7 +137,7 @@ function renderCall(s) {
   const chip = byId("stratConfidence");
   if (st.available) {
     const confidence = String(st.confidence || "low");
-    chip.textContent = `Confidence ${confidence} · pit loss ${st.pit_loss_s ?? "—"}s`;
+    chip.textContent = `Plan confidence: ${confidence}`;
     chip.dataset.state =
       confidence === "high" ? "healthy" : confidence === "medium" ? "neutral" : "warning";
   } else {
@@ -108,12 +146,17 @@ function renderCall(s) {
       : "Waiting for telemetry";
     chip.dataset.state = "neutral";
   }
-  byId("stratInstruction").textContent =
-    rec.instruction || st.reason || "Waiting for a session.";
-  byId("stratWhy").textContent = rec.rationale || rec.tyre_reason || "";
-  byId("stratChange").textContent = rec.change_condition
-    ? `Changes if: ${rec.change_condition}`
-    : "";
+  const intent = s.strategy_intent || {};
+  byId("stratInstruction").textContent = intent.active && intent.direction === "stay_out"
+    ? `Running the ${String(intent.intent || "plan").replaceAll("_", " ")} — staying out`
+    : rec.instruction || st.reason || "Waiting for a session.";
+  // The classic Drive script supplies the same current-tyre summary to both views.
+  const tyres = typeof globalThis.tyreStintInsight === "function"
+    ? globalThis.tyreStintInsight(s)
+    : { headline: "Tyre data unavailable", stop: "", warning: "", tone: "muted" };
+  byId("stratWhy").textContent = [tyres.headline, tyres.stop].filter(Boolean).join(" · ");
+  byId("stratChange").textContent = tyres.warning;
+  byId("stratChange").className = "small " + tyres.tone;
   const mc = rec.monte_carlo || {};
   const finish = finishDisplay(rec);
   byId("stratMeta").textContent = st.available
@@ -121,10 +164,19 @@ function renderCall(s) {
       ? `${finish.message} · rejoin P${rec.projected_rejoin_position ?? "—"} · P75 ${mc.p75_s ?? rec.risk_adjusted_time_s ?? "—"}s · uncertainty ${mc.uncertainty_s ?? "—"}s${mc.calibrated !== true ? " · forecast range is not yet calibrated" : ""}`
       : finish.message
     : "";
-  const model = st.model_summary || {};
-  byId("stratLearning").textContent = st.available
-    ? `Least-tested stint: ${model.evidence_samples ?? 0} supporting laps. Final stint: ${model.selected_stint_wear_per_lap_pct ?? "—"}% wear/lap from ${evidenceSource(model.selected_stint_wear_source)}; ${model.selected_stint_deg_s_per_lap ?? "—"}s degradation/lap from ${evidenceSource(model.selected_stint_deg_source)}.`
-    : "";
+  const notices = [];
+  if (s.connected === false || s.telemetry_stale === true) notices.push("Live telemetry unavailable; this is the last plan.");
+  if (st.available && !finish.supported) notices.push(finish.message);
+  else if (st.available && finish.conditional) notices.push("Confirm spare tyres before adopting this plan.");
+  const neutral = st.neutralisation || {};
+  if (neutral.phase && neutral.phase !== "green") {
+    notices.push(`${String(neutral.phase).replaceAll("_", " ")} · pit entry ${neutral.pit_entry_status || "unknown"}${neutral.track_position_warning ? ` · ${neutral.track_position_warning}` : ""}`);
+  }
+  byId("stratNotice").textContent = notices.join(" ");
+  byId("stratReasoning").textContent = [rec.rationale, rec.tyre_reason,
+    rec.change_condition ? `Changes if: ${rec.change_condition}` : "",
+    st.available ? `Pit loss estimate: ${st.pit_loss_s ?? "—"}s.` : ""].filter(Boolean).join(" ");
+  byId("stratLearning").textContent = st.available ? planEvidence(s) : "";
   const rule = st.observed_compound_rule || st.compound_rule || {};
   const ruleNode = byId("stratRule");
   ruleNode.textContent = rule.applies
@@ -559,7 +611,7 @@ async function runWhatIf(event) {
     const delta = Number(outcome.delta_to_best_s ?? 0);
     const deltaText = delta > 0 ? `+${delta.toFixed(1)}s slower than` : delta < 0 ? `${Math.abs(delta).toFixed(1)}s quicker than` : "level with";
     const legality = outcome.compound_rule?.compliant === false ? " Breaks the two-compound rule." : "";
-    result.textContent = `${outcome.scenario}: ${deltaText} the recommended plan (risk-adjusted). Finishes at ${outcome.projected_finish_wear_pct}% wear · ${outcome.feasible ? "feasible" : "not feasible"}.${legality}`;
+    result.textContent = `${outcome.scenario}: ${deltaText} the recommended plan (estimate). ${outcome.feasible ? "Tyres are expected to cover the stint." : "Tyres may not cover this stint."}${legality}`;
     result.dataset.tone = outcome.feasible ? "success" : "error";
   } catch (error) {
     result.textContent = String(error.message || error);

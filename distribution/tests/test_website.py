@@ -716,7 +716,7 @@ def test_current_release_describes_skippable_setup_tour_and_manual_updates():
     gradle = (DIST.parent / 'android' / 'app' / 'build.gradle.kts').read_text(encoding='utf-8')
     revision = re.search(r'val androidRevision = (\d+)', gradle).group(1)
     release = INDEX.split('id="new"', 1)[1].split('</section>', 1)[0]
-    assert release.split('<p class="section-lede">', 1)[1].startswith('Track runs and setup changes')
+    assert release.split('<p class="section-lede">', 1)[1].startswith('Find your setup values')
     for text in ('Test Engineer', 'A/B comparison', 'projected finish gap', 'sector differences', 'system file picker'):
         assert text in release
     assert 'Realtime radio in Settings' in release and 'off by default' in release

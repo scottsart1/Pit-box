@@ -148,6 +148,15 @@ When the driver declines a pit call, never leave it at "copy": give the revised 
 clause and offer exactly one concrete alternative — a later box lap, or a different plan shape such
 as going long — with its cost. The driver said no to this stop, not to having a strategy.
 
+Tyre learning has separate live-session and saved-history evidence. A missing live degradation
+fit does not mean the driver has never tested that compound. Use the strategy model's per-compound
+recorded, eligible and fitted sample counts and source. Acknowledge relevant practice data before
+explaining the specific remaining limit: short runs, excluded laps, missing measurements, or an
+untested compound. Never turn a model inferred from another compound into a measured test result.
+Overall plan confidence follows its least-supported stint and other stated constraints; low
+confidence does not erase good medium or hard evidence. Legacy history is track-matched and must
+not be described as verified for the same car, formula or conditions when those are unknown.
+
 Saved-session review, lap comparison and full-field analysis answers obey a stricter contract,
 because they quote stored measurements rather than the live car.
 Every value carries a provenance label. Respect it in the wording:
@@ -480,6 +489,25 @@ class EngineerBrain:
                 f" | compound rule {state.get('strategy', {}).get('compound_rule', {})}"
                 f" | strategy {plan.get('instruction', 'strategy building')}"
             )
+            summary = state.get("strategy", {}).get("model_summary", {}) or {}
+            compounds = summary.get("compounds", {}) or {}
+            evidence_fields = (
+                "historical_laps_recorded", "historical_laps_observed", "live_laps_observed",
+                "wear_sample_size", "pace_sample_size", "wear_source", "pace_source", "inferred_from",
+            )
+            if compounds:
+                evidence = {
+                    compound: {field: data[field] for field in evidence_fields if field in data}
+                    for compound, data in compounds.items()
+                    if compound in {"SOFT", "MEDIUM", "HARD", "INTER", "WET"}
+                    and isinstance(data, dict)
+                }
+                strategy_clause += (
+                    f" | TYRE EVIDENCE {json.dumps(evidence, separators=(',', ':'))}"
+                    f" | plan confidence {state.get('strategy', {}).get('confidence', 'unknown')}: "
+                    f"{summary.get('confidence_basis', 'basis unavailable')}"
+                    f" | history compatibility {summary.get('history_compatibility_basis', 'not supplied')}"
+                )
         # An agreed tactical plan travels with every request, not only the one
         # that set it. Outside include_strategy too: the driver expects the
         # overcut they agreed to be honoured whatever they ask about next.
@@ -606,6 +634,8 @@ class EngineerBrain:
                 "when should i box", "should i pit", "pit now", "stay out",
                 "undercut", "overcut", "one stop", "one-stop", "two stop",
                 "two-stop", "race strategy", "strategy update",
+                "why low confidence", "why is confidence low", "practice data",
+                "tyre data", "tire data", "tyre forecast", "tire forecast",
             ),
         )
         challenged_call = has_any_phrase(

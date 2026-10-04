@@ -1603,6 +1603,14 @@ class TelemetryTools:
             spoken_delta = round(front_temp - rear_temp, 1)
             spoken_label = "C"
         deg = state.get("analysis", {}).get("deg_model", {})
+        live_fit_matches = not deg.get("current_compound") or str(
+            deg["current_compound"]
+        ).upper() == str(tyre.get("compound", "UNKNOWN")).upper()
+        strategy = state.get("strategy", {}) or {}
+        model_summary = strategy.get("model_summary", {}) or {}
+        compound_evidence = (model_summary.get("compounds", {}) or {}).get(
+            str(tyre.get("compound", "UNKNOWN")).upper(), {}
+        )
         return {
             "compound": tyre["compound"],
             "age_laps": tyre["age_laps"],
@@ -1616,8 +1624,15 @@ class TelemetryTools:
             "inner_temps_c": temps if detail else None,
             "front_to_rear_temp_delta_c": round(front_temp - rear_temp, 1),
             "blisters": tyre.get("blisters", []),
-            "deg_s_per_lap": deg.get("current_slope_s_per_lap"),
-            "projected_cliff_lap": deg.get("projected_cliff_lap"),
+            "deg_s_per_lap": deg.get("current_slope_s_per_lap") if live_fit_matches else None,
+            "deg_scope": "Current-session clean-lap fit; missing does not mean no saved practice data.",
+            "strategy_deg_s_per_lap": compound_evidence.get("deg_s_per_lap"),
+            "strategy_deg_source": compound_evidence.get("pace_source"),
+            "compound_evidence": compound_evidence,
+            "strategy_confidence": strategy.get("confidence"),
+            "strategy_confidence_basis": model_summary.get("confidence_basis"),
+            "history_compatibility_basis": model_summary.get("history_compatibility_basis"),
+            "projected_cliff_lap": deg.get("projected_cliff_lap") if live_fit_matches else None,
         }
 
     async def get_fuel_state(self) -> dict[str, Any]:

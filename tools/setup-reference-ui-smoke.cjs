@@ -24,10 +24,25 @@ const { chromium } = require('playwright');
       lastPage = page; currentWidth = width;
       page.on('pageerror', error => errors.push(error.message));
       await page.goto(base);
+      await page.waitForFunction(() => {
+        const overlay = document.getElementById('bootOverlay');
+        return !overlay || getComputedStyle(overlay).opacity === '0';
+      });
       const decline = page.getByRole('button', { name: 'No thanks', exact: true });
       if (await decline.isVisible()) await decline.click();
       await page.locator('#onboardingDialog').waitFor({ state: 'visible', timeout: 3000 }).catch(() => {});
       if (await page.locator('#onboardingDialog').isVisible()) await page.locator('#onboardingClose').click();
+      const footerSize = await page.locator('.bottom').evaluate(el => ({ height: el.getBoundingClientRect().height, overflow: el.scrollWidth > el.clientWidth + 1 }));
+      assert.deepEqual(footerSize, { height: 44, overflow: false }, 'The shared status strip stays on one 44px line.');
+      assert.equal(await page.locator('.bottom .footer-status').count(), 2);
+      assert.ok((await page.locator('.bottom .footer-link').boundingBox()).height >= 44);
+      await page.locator('.bottom .footer-link').click();
+      await page.locator('#connection').waitFor({ state: 'visible' });
+      assert.equal(await page.locator('#liveDiagnostics').evaluate(el => el.open), false);
+      await page.locator('#liveDiagnostics > summary').click();
+      for (const id of ['wakeFooter', 'ptt', 'rate', 'queue', 'llmFooter']) {
+        assert.equal(await page.locator(`#liveDiagnostics #${id}`).isVisible(), true);
+      }
       await page.getByRole('tab', { name: 'SETUP LAB', exact: true }).click();
       await page.locator('#setupTrack option[value="0"]').waitFor({ state: 'attached' });
       await page.locator('#setupTrack').selectOption('0');
@@ -35,6 +50,9 @@ const { chromium } = require('playwright');
       await page.locator('#setupConditions').selectOption('dry');
       await page.locator('#setupReferenceStyle').selectOption('stable');
       assert.equal(await page.locator('#setupChangeLevel').isDisabled(), true);
+      assert.equal(await page.locator('#setupPersonalization').isVisible(), false, 'Preferences stay out of the baseline flow.');
+      assert.deepEqual(await page.locator('#setupReferenceStyle option').allTextContents(), ['Stable', 'More rotation']);
+      await page.screenshot({ path: path.join(output, `choices-${width}.png`) });
 
       const generate = async (profile, expectedStatus = 200) => {
         const [response] = await Promise.all([
@@ -50,10 +68,16 @@ const { chromium } = require('playwright');
           assert.equal(data.profile, profile);
           assert.ok(data.baseline_reference.sources.some(source => source.url.startsWith('https://')));
           assert.ok(await page.locator('#setupReference a[href^="https://"]').count());
-          const displayed = await page.locator('#recommendedSetup .row').evaluateAll(rows => Object.fromEntries(rows.map(row => [row.querySelector('span').textContent, row.querySelector('b').textContent])));
+          const displayed = await page.locator('#recommendedSetup .row').evaluateAll(rows => Object.fromEntries(rows.map(row => [row.dataset.field, row.querySelector('b').textContent])));
           for (const [field, value] of Object.entries(data.recommended)) {
-            assert.equal(Number(displayed[field.replaceAll('_', ' ')]), Number(value), `Displayed ${field} must match API.`);
+            assert.equal(Number(displayed[field]), Number(value), `Displayed ${field} must match API.`);
           }
+          assert.equal(await page.locator('#recommendedSetup .setup-value-group').count(), 6);
+          assert.equal(await page.locator('#recommendedSetup .row').count(), 20);
+          assert.equal(await page.locator('#setupReference').evaluate(el => el.open), false, 'Sources are optional, collapsed supporting detail.');
+          assert.equal(await page.locator('#setupReferenceContent').isVisible(), false);
+          assert.equal(await page.locator(`.setupProfile[data-profile="${profile}"]`).getAttribute('aria-pressed'), 'true');
+          assert.equal(await page.locator('#setupPit').isVisible(), false, 'Do not show an irrelevant next-stop panel for a garage baseline.');
           assert.equal(data.setup_effects.calibrated, false);
           assert.equal(data.pit_adjustment.available, false, 'Garage reference is not a live wing instruction.');
         } else {
@@ -69,8 +93,24 @@ const { chromium } = require('playwright');
       const stable = await generate('race');
       assert.equal(stable.recommended.front_wing, 21);
       assert.equal(stable.recommended.rear_wing, 17);
+      if (width <= 600) {
+        const resultTop = await page.locator('#recommendedSetup').evaluate(el => el.getBoundingClientRect().top);
+        const sheetBottom = await page.locator('#setup').evaluate(el => el.getBoundingClientRect().bottom);
+        assert.ok(resultTop + 120 < sheetBottom, 'Loading on a phone brings the first garage settings into view.');
+      }
       await page.locator('#setupTitle').scrollIntoViewIfNeeded();
       await page.screenshot({ path: path.join(output, `stable-${width}.png`) });
+      await page.locator('#recommendedSetup [data-field="rear_left_tyre_pressure"]').scrollIntoViewIfNeeded();
+      await page.screenshot({ path: path.join(output, `settings-bottom-${width}.png`) });
+      await page.locator('#setupReference > summary').click();
+      assert.equal(await page.locator('#setupReferenceContent').isVisible(), true);
+      assert.ok(await page.locator('#setupReferenceContent a[href^="https://"]').first().isVisible());
+      assert.match(await page.locator('#setupReferenceContent').innerText(), /Matt212/);
+      await page.locator('#setupReference > summary').click();
+      await page.locator('#setupTest a').click();
+      await page.locator('#test-engineer').waitFor({ state: 'visible' });
+      await page.getByRole('tab', { name: 'SETUP LAB', exact: true }).click();
+      assert.equal(await page.locator('#recommendedSetup .row').count(), 20, 'Comparing runs must preserve the loaded setup.');
       await page.locator('#setupReferenceStyle').selectOption('rotation');
       const race = await generate('race');
       assert.equal(race.recommended.front_wing, 42);
@@ -84,6 +124,9 @@ const { chromium } = require('playwright');
       assert.match(JSON.stringify(quali.baseline_reference), /parc.?ferm/i);
       await page.locator('#setupTitle').scrollIntoViewIfNeeded();
       await page.screenshot({ path: path.join(output, `rotation-quali-${width}.png`) });
+      const mixed = await generate('hybrid');
+      assert.deepEqual(mixed.recommended, race.recommended, 'Mixed uses the race baseline when no separate mixed reference is published.');
+      assert.match(await page.locator('#setupSubtitle').innerText(), /^Mixed ·/);
 
       // Reopening Setup Lab must not silently switch back to the live circuit.
       await page.getByRole('tab', { name: 'DRIVE', exact: true }).click();
@@ -117,12 +160,16 @@ const { chromium } = require('playwright');
       await page.locator('#setupTrack').selectOption('0');
       await page.locator('#setupBasis').selectOption('personalized');
       assert.equal(await page.locator('#setupChangeLevel').isDisabled(), false);
+      assert.equal(await page.locator('#setupPersonalization').isVisible(), true);
       await page.locator('#setupChangeLevel').selectOption('radical');
+      await page.locator('#setupPersonalization').scrollIntoViewIfNeeded();
+      await page.screenshot({ path: path.join(output, `personalise-${width}.png`) });
       await page.locator('#setupBasis').selectOption('reference');
       assert.equal(await page.locator('#setupChangeLevel').isDisabled(), true);
 
       await page.locator('#setupConditions').selectOption('wet');
       await generate('race', 409);
+      await page.locator('#setupRationale').scrollIntoViewIfNeeded();
       await page.screenshot({ path: path.join(output, `wet-unavailable-${width}.png`) });
       await page.locator('#setupConditions').selectOption('dry');
       const fresh = await generate('race');
@@ -132,8 +179,16 @@ const { chromium } = require('playwright');
         assert.equal(response.status(), 422, 'Invalid selector must fail API validation.');
       }
       assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth + 1), false, `Horizontal overflow at ${width}.`);
+      const layoutIssues = await page.locator('#setup').evaluate(root => {
+        const visible = element => element.getClientRects().length > 0;
+        const controls = [...root.querySelectorAll('button, select, summary, a')].filter(visible);
+        const smallTargets = controls.filter(el => el.getBoundingClientRect().height < 43.5).map(el => el.id || el.textContent.trim());
+        const overflowing = [...root.querySelectorAll('.setup-value-group, .setup-builder, .setup-sheet')].filter(visible).filter(el => el.scrollWidth > el.clientWidth + 1).map(el => el.className);
+        return { smallTargets, overflowing };
+      });
+      assert.deepEqual(layoutIssues, { smallTargets: [], overflowing: [] }, 'Garage controls and values fit at this viewport.');
       assert.deepEqual(errors, []);
-      results.push({ width, height, stable: 'pass', rotation_race_quali: 'pass', source_links: 'pass', exact_display_values: 'pass', unsupported_wet_clears: 'pass', selection_navigation: 'pass', delayed_selection_preserved: 'pass', personal_controls: 'pass', invalid_api_selectors: 'pass', overflow: false });
+      results.push({ width, height, compact_status_footer: 'pass', connection_diagnostics: 'pass', stable: 'pass', rotation_race_quali: 'pass', optional_source_details: 'pass', grouped_exact_display_values: 'pass', test_engineer_handoff: 'pass', unsupported_wet_clears: 'pass', selection_navigation: 'pass', delayed_selection_preserved: 'pass', personal_controls: 'pass', touch_targets: 'pass', invalid_api_selectors: 'pass', overflow: false });
       await context.close(); lastPage = null;
     }
   } catch (error) {

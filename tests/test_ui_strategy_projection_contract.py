@@ -62,6 +62,7 @@ for (const change of JSON.parse(process.argv[2])) {
   action.listeners.click();
   await new Promise(resolve => setTimeout(resolve, 0));
   snapshots.push({meta: nodes.stratMeta.textContent,
+    confidence: nodes.stratConfidence.textContent, learning: nodes.stratLearning.textContent,
     rule: nodes.stratRule.textContent,
     position: row.children[3].textContent, points: row.children[4].textContent,
     verdict: row.children[7].textContent, disabled: action.disabled,
@@ -157,3 +158,51 @@ def test_existing_snapshots_without_observed_rule_keep_the_compound_display():
         "compound_rule": {"applies": False, "wet_waiver": True},
     })[0]
     assert "waived by wet/inter running" in result["rule"]
+
+
+def test_low_plan_confidence_does_not_discard_known_compound_evidence():
+    result = rendered_sequence([{}], strategy_extra={"model_summary": {"compounds": {
+        "MEDIUM": {"laps_observed": 5, "wear_sample_size": 4, "pace_sample_size": 5,
+                   "wear_source": "personal_track_history", "pace_source": "personal_track_history"},
+        "HARD": {"laps_observed": 6, "wear_sample_size": 5, "pace_sample_size": 6,
+                 "wear_source": "personal_track_history", "pace_source": "personal_track_history"},
+        "SOFT": {"laps_observed": 0, "wear_sample_size": 0, "pace_sample_size": 0,
+                 "wear_source": "inferred_from_medium_hard", "pace_source": "inferred_from_medium_hard"},
+    }}})[0]
+    assert result["confidence"] == "Plan confidence: low"
+    assert "MEDIUM: 5 eligible laps" in result["learning"]
+    assert "HARD: 6 eligible laps" in result["learning"]
+    assert "your past runs" in result["learning"]
+    assert "estimated from other compounds" in result["learning"]
+    assert "An untested tyre or unconfirmed spare can keep it low" in result["learning"]
+    assert "no data" not in result["learning"].lower()
+
+
+def test_missing_evidence_counts_do_not_become_zero_or_a_track_default():
+    result = rendered_sequence([{}])[0]
+    assert "details are not available" in result["learning"]
+    assert "0" not in result["learning"]
+    assert "track estimate" not in result["learning"]
+
+
+def test_older_plan_can_explain_its_stint_sources_without_global_compound_counts():
+    result = rendered_sequence([{"stint_models": [{
+        "compound": "MEDIUM", "wear_sample_size": 5, "deg_sample_size": 4,
+        "wear_source": "live_lap_wear", "deg_source": "personal_track_history",
+    }]}])[0]
+    assert "Stint 1 · MEDIUM: wear from live laps (5 samples)" in result["learning"]
+    assert "pace from your past runs (4 laps)" in result["learning"]
+    assert "eligible laps" not in result["learning"]
+
+
+def test_wear_evidence_survives_a_rejected_pace_fit_with_a_specific_explanation():
+    result = rendered_sequence([{}], strategy_extra={"model_summary": {"compounds": {
+        "MEDIUM": {"laps_observed": 5, "historical_laps_recorded": 9, "wear_sample_size": 4, "pace_sample_size": 0,
+                   "wear_source": "personal_track_history", "pace_source": "track_default",
+                   "pace_excluded_laps": {"warmup_lap": 1, "inconsistent_stint_pace": 4}},
+    }}})[0]
+    assert "MEDIUM: 5 eligible laps" in result["learning"]
+    assert "saved history 9 laps" in result["learning"]
+    assert "wear from your past runs (4 samples)" in result["learning"]
+    assert "pace from track estimate (0 laps)" in result["learning"]
+    assert "warm-up laps (1), inconsistent pace (4)" in result["learning"]

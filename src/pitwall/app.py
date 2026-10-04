@@ -985,6 +985,7 @@ async def health() -> dict[str, object]:
         "wake_last_reason": snapshot["wake_last_reason"],
         "radio_indicator": snapshot["radio_indicator"],
         "radio_latency": snapshot["radio_latency"],
+        "radio_failures": voice.failure_status() if voice is not None else [],
         "proactive": snapshot["proactive"],
         "database": str(database.path),
         "last_error": snapshot["last_error"],

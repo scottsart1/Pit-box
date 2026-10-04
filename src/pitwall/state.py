@@ -651,6 +651,9 @@ class StateStore:
                 self.state.radio_log.clear()
                 self.state.briefings.clear()
                 self.state.analysis.clear()
+                # New questions after a rewind must not quote the abandoned
+                # branch's stop call or live tyre evidence while recomputing.
+                self.state.strategy.clear()
                 self.state.run_serial += 1
                 changed = True
             if changed:

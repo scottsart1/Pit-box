@@ -74,7 +74,10 @@ def test_render_setup_result_owns_every_name_it_uses():
     The function must derive profile from the payload it is given."""
     body = INDEX[INDEX.index("function renderSetupResult") :]
     body = re.split(r"\n(?:async )?function \w+\(", body, maxsplit=1)[0]
-    assert "const profile=String(j.profile" in body
+    # Labels may be mapped to driver-facing names (for example hybrid → Mixed).
+    # Guard the local payload dependency, not its formatting operation. The
+    # browser acceptance exercises race, quali and hybrid through the real API.
+    assert re.search(r"\bconst\s+profile\s*=[^;\n]*\bj\.profile\b", body)
     assert "renderSetupResult(j)" in INDEX[INDEX.index("async function generateSetup") :][:2700]
 
 

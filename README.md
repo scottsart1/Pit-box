@@ -1,8 +1,8 @@
-# Your Pit Box 5.3.1 — AI race engineer and driver dashboard
+# Your Pit Box 5.3.2 — AI race engineer and driver dashboard
 
 [Download Windows or Android](https://yourpitbox.com/#download),
 [try the Driver Dashboard](https://your-pit-box-driver-dashboard.sarthakvij123450.chatgpt.site/),
-or read the [release verification](docs/release-qa-5.3.1.md).
+or read the [release verification](docs/release-qa-5.3.2.md).
 
 Your Pit Box receives **F1 26** telemetry (UDP format **2026**) from a PS5, runs deterministic
 strategy/corner/setup analysis locally, keeps persistent SQLite history, answers spoken questions,
@@ -105,6 +105,30 @@ Only enable `PITWALL_WEB_LAN_ACCESS=true` when a phone/tablet needs the
 dashboard. Bind the web host to `0.0.0.0`, set a long
 `PITWALL_WEB_ACCESS_TOKEN`, and keep it on a trusted LAN. Your Pit Box never opens a
 router or firewall to the public internet automatically.
+
+## What changed in 5.3.2
+
+**Setup Lab** puts the controls alongside a grouped setup sheet, with a single
+scrolling workspace. Choose Stable or More rotation, then Race or Quali;
+sources, adaptations and live comparisons are available in expandable details.
+Test Engineer remains accessible before and after selecting a setup.
+
+**Drive and Strategy** lead with the next stop and current tyre condition.
+Detailed forecasts and alternative plans remain available on demand, while
+compound rules, urgent wear, weather and damage warnings stay visible.
+
+**Tyre evidence** retains earlier compound samples when a later stint grows
+longer. Strategy details and radio context distinguish saved laps, eligible
+samples and inferred compounds, so a low-confidence race plan does not imply
+that your medium or hard practice data is missing. Rewinds clear cached plans,
+and changing compound cannot expose the previous tyre's live pace fit.
+
+**Radio recovery** distinguishes timeouts, provider cooldowns and configuration
+failures. A blocked provider no longer asks the driver to repeat a question
+while requests are paused. Bounded diagnostic history preserves recent failure
+categories after a successful reply, without retaining driver utterances or
+provider response bodies. The final reasoning round summarizes the tool
+results already collected instead of discarding them for another tool request.
 
 ## What changed in 5.3.1
 

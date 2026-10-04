@@ -10,12 +10,14 @@ from __future__ import annotations
 
 import argparse
 import base64
+import importlib.util
 import ipaddress
 import json
 from pathlib import Path
 import re
 import socket
 import subprocess
+import sys
 import time
 from urllib.error import URLError
 from urllib.parse import parse_qs, urlsplit
@@ -27,10 +29,12 @@ from f1.packets import PacketCarTelemetryData, PacketHeader, PacketLapData, Pack
 ROOT = Path(__file__).resolve().parent.parent
 OUTPUT = ROOT / "android" / "smoke-output"
 BASE = "http://127.0.0.1:18000"
+SERIAL = None
 
 
 def adb(*args: str, check: bool = True) -> subprocess.CompletedProcess:
-    return subprocess.run(["adb", *args], check=check, capture_output=True, timeout=45)
+    target = ["-s", SERIAL] if SERIAL else []
+    return subprocess.run(["adb", *target, *args], check=check, capture_output=True, timeout=45)
 
 
 def get(path: str, *, timeout: float = 5):
@@ -483,10 +487,17 @@ def capture(package: str):
 
 
 def main():
+    global SERIAL
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--apk", default="android/app/build/outputs/apk/debug/app-debug.apk")
     parser.add_argument("--package", default="com.yourpitbox.app.debug")
     args = parser.parse_args()
+    # Pin the one selected emulator before any install, setting or input. An
+    # attached tablet must never become an accidental smoke-test target.
+    SERIAL = adb("get-serialno").stdout.decode().strip()
+    assert re.fullmatch(r"emulator-\d+", SERIAL), "Smoke checks require an emulator serial"
+    assert adb("shell", "getprop", "ro.kernel.qemu").stdout.strip() == b"1", "Smoke checks refuse physical devices"
+    assert args.package == "com.yourpitbox.app.debug", "Smoke checks require the isolated debug package"
     OUTPUT.mkdir(parents=True, exist_ok=True)
     expected_version = re.search(r'__version__ = "([^"]+)"', (ROOT / "src/pitwall/__init__.py").read_text()).group(1)
     adb("install", "-r", "-g", str(ROOT / args.apk))
@@ -519,6 +530,10 @@ def main():
         adb("shell", "am", "start", "-W", "-n", f"{args.package}/com.yourpitbox.app.MainActivity")
         ui_passed = prove_transfer_ui()
         prove_fullscreen("foreground-return", swipe=True)
+        native_spec = importlib.util.spec_from_file_location("native_engineering_qa", ROOT / "android/native-engineering-qa.py")
+        native_qa = importlib.util.module_from_spec(native_spec)
+        native_spec.loader.exec_module(native_qa)
+        native_qa.run(sys.modules[__name__], args.package, expected_version)
         prove_sqlite_lifecycle(args.package, "final")
         print("PASS: APK startup, exact engine version, UDP parsing/background reception, stationary trace stability, transfer TLS/QR management, and identity across listener/process restart.")
         print("PASS: Status/navigation bars hidden after launch, process restart and foreground return; edge swipe reveals transient bars which hide again.")

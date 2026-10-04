@@ -128,7 +128,7 @@ def test_strategy_row_span_and_sticky_scroll_are_desktop_only() -> None:
     for scope, values in sticky_rules:
         assert scope == (tall_desktop,), "Short and narrow screens must use normal page scrolling"
         assert values["position"] == "sticky"
-        assert values["max-height"] == "calc(100dvh - 152px)", "Account for the app shell"
+        assert values["max-height"] == "calc(100dvh - 162px)", "Reserve header50 + tabs44 + footer44 + margins24"
     for scope, values in rail_rules:
         if values.get("overflow") in {"auto", "scroll"} or values.get("max-height", "none") != "none":
             assert scope == (tall_desktop,), "Do not trap mobile scrolling inside the rail"
