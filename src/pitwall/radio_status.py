@@ -35,6 +35,8 @@ def strategy_overview(state: dict[str, Any], instruction: Callable[..., str]) ->
     if state.get("mode_profile") in {"practice", "qualifying", "time_trial"}:
         return "This is not a race session; there is no live race pit plan to read."
     if not plan:
+        if not state.get("connected") and not state.get("game_paused"):
+            return "Telemetry is stale; I cannot safely issue a new pit call until the feed reconnects."
         return "The current race plan is still building; no confirmed pit schedule yet."
     epoch = plan.get("session_epoch")
     if epoch is not None and list(epoch) != [int(state.get(k, 0) or 0) for k in ("session_uid", "restart_epoch", "timeline_epoch")]:
@@ -91,7 +93,7 @@ def closing_target(text: str, state: dict[str, Any]) -> str | None:
     if re.fullmatch(r"(?:please )?(?:at what (?:pace|rate)|how (?:fast|quickly)|how much(?: per lap)?)(?: please)?", text):
         recent = [entry for entry in state.get("radio_log", []) if entry.get("role") == "engineer"]
         prior = words(str(recent[-1].get("text", ""))) if recent else ""
-        if not re.search(r"\b(?:closing|catching|gaining|pulling away)\b", prior):
+        if not re.search(r"\b(?:closing|catching|gaining|gained|pulling away)\b", prior):
             return None
         rivals = match_drivers(state.get("drivers", []), prior)
         if len(rivals) == 1:
