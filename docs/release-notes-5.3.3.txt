@@ -1,0 +1,5 @@
+Current-strategy questions now read the dashboard's remaining pit plan and confidence without waiting on AI reasoning. Deeper what-if questions still use the analysis tools.
+
+Closing-rate answers include measured gap changes and last-lap pace differences. Short follow-ups use current numbers, and obsolete queued closing alerts are discarded.
+
+Install this update after your current driving session. Saved sessions and settings are retained.
