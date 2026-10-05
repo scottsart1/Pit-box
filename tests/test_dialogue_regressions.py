@@ -306,8 +306,8 @@ async def test_a_rundown_request_is_never_answered_with_a_bare_pit_call(stack):
 
     "could you please give me a rundown of the overall strategy" and "can you
     run down of the pit strategy" were both answered with a bare "Box this
-    lap for softs." A request for the whole picture goes to the model, which
-    inspects the ranked plans; a plain status ping stays deterministic.
+    lap for softs." A local overview must cover the whole remaining plan,
+    including its uncertainty, rather than regressing to that bare pit call.
     """
     _store, brain = await _brain_with_field(stack)
     for rundown in (
@@ -316,7 +316,9 @@ async def test_a_rundown_request_is_never_answered_with_a_bare_pit_call(stack):
         "give me the full race strategy",
         "walk me through the whole strategy",
     ):
-        assert await brain._fast_answer(rundown) is None, rundown
+        answer = await brain._fast_answer(rundown)
+        assert answer is not None, rundown
+        assert "1 stop remaining" in answer and "finish" in answer and "confidence" in answer, rundown
 
     # A plain status ping keeps the fast deterministic answer.
     answer = await brain._fast_answer("any strategy updates")

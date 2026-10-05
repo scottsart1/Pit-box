@@ -743,7 +743,8 @@ class ProactiveEngineer:
         for driver in state.get("drivers", []):
             idx = int(driver.get("car_idx", -1))
             gap = driver.get("gap_to_player_s")
-            if idx == player_idx or gap is None:
+            if idx == player_idx or gap is None or driver.get("pit_lane_timer_active") or driver.get("pit_status"):
+                self._rival_gap_history.pop(idx, None)
                 continue
             gap = float(gap)
             previous = self._rival_gap_history.get(idx)
@@ -758,6 +759,8 @@ class ProactiveEngineer:
             if elapsed < 8.0:
                 continue
             self._rival_gap_history[idx] = (gap, now)
+            if elapsed > 20 or prev_gap <= 0:
+                continue
             # gap_to_player_s is negative for a car ahead and positive for a car
             # behind; a closing car behind has a shrinking positive gap.
             behind = gap > 0
@@ -767,12 +770,22 @@ class ProactiveEngineer:
                     "rival_pace",
                     {
                         "driver": driver.get("name"),
+                        "car_idx": idx,
                         "gap_to_player_s": round(gap, 2),
                         "closing": True,
+                        "gap_change_s": round(abs(gap) - abs(prev_gap), 2),
+                        "window_s": round(elapsed, 1),
                     },
                     cooldown_s=30.0,
                     expires_s=35.0,
                 )
+            else:
+                # An old closing alert must not survive a later steady or
+                # opening window while waiting for a safe speaking moment.
+                self.pending = deque((event for event in self.pending if not (
+                    event.get("type") == "rival_pace"
+                    and event.get("payload", {}).get("car_idx") == idx
+                )), maxlen=24)
 
     @staticmethod
     def _player(state: dict[str, Any]) -> dict[str, Any] | None:
@@ -836,6 +849,17 @@ class ProactiveEngineer:
         if ProactiveEngineer._player_out_of_race(state):
             return False
         kind = event.get("type")
+        if kind == "rival_pace" and "car_idx" in event.get("payload", {}):
+            payload = event["payload"]
+            rival = next((driver for driver in state.get("drivers", [])
+                          if driver.get("car_idx") == payload["car_idx"]), None)
+            gap = (rival or {}).get("gap_to_player_s")
+            return bool(
+                rival and rival.get("name") == payload.get("driver")
+                and not rival.get("pit_lane_timer_active") and not rival.get("pit_status")
+                and gap is not None and 0 < float(gap) <= 3
+                and float(gap) <= float(payload.get("gap_to_player_s", 0)) + 0.15
+            )
         if kind == "race_control":
             return state.get("race_control_phase") != "green" or event.get("payload", {}).get("to") == "green"
         if kind == "weather_crossover":
@@ -1880,10 +1904,15 @@ class ProactiveEngineer:
                 "assessing whether to continue."
             )
         if kind == "rival_pace":
+            change, window = payload.get("gap_change_s"), payload.get("window_s")
+            evidence = (
+                f", gained {abs(float(change)):.1f} seconds over {float(window):.0f} seconds"
+                if change is not None and window else " and closing"
+            )
             return (
                 f"{payload.get('driver', 'Car behind')} is catching, "
-                f"{abs(float(payload.get('gap_to_player_s', 0.0))):.1f} seconds back "
-                "and closing. Protect the tyres you will need to defend."
+                f"{abs(float(payload.get('gap_to_player_s', 0.0))):.1f} seconds back"
+                f"{evidence}."
             )
         if kind == "pace_roast":
             return ProactiveEngineer.roast_text(payload)
@@ -1957,7 +1986,9 @@ class ProactiveEngineer:
         model failure means an unsolicited call is never lost to a timeout.
         """
         fallback = self._fallback_text(event, state)
-        if not settings.proactive_narration_enabled:
+        if not settings.proactive_narration_enabled or event.get("type") == "rival_pace":
+            # Keep the measured rate in this time-sensitive call. A stylistic
+            # model pass used to drop it and could outlive the closing window.
             return fallback
         if event.get("flash"):
             # See FLASH_EVENTS: for these the template is the better answer,

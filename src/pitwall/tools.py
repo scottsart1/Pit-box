@@ -597,6 +597,8 @@ class TelemetryTools:
         }
 
     async def get_gap(self, target: str = "ahead") -> dict[str, Any]:
+        from .radio_status import gap_evidence
+
         state = await self.store.snapshot_analysis()
         match = self._resolve_driver(state, target)
         if not match or match.get("gap_to_player_s") is None:
@@ -610,6 +612,9 @@ class TelemetryTools:
             "last_lap": fmt_ms(match.get("last_lap_ms", 0)),
             "tyre": match.get("tyre_compound"),
             "tyre_age": match.get("tyre_age"),
+            "telemetry_stale": not state.get("connected") and not state.get("game_paused"),
+            "paused": bool(state.get("game_paused")),
+            **gap_evidence(state, match),
         }
 
 

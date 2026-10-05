@@ -10,6 +10,7 @@ from .config import settings
 from .database import PitWallDatabase
 from .engineering_context import lap_note_context
 from .identity import match_drivers
+from .radio_status import closing_target, closing_report, strategy_overview_request, strategy_overview
 from .intent import (
     extract_compounds,
     extract_lap,
@@ -565,6 +566,8 @@ class EngineerBrain:
     def classify_request(utterance: str) -> str:
         """Return fast, normal, or deep for acknowledgement/routing."""
         text = " ".join(utterance.lower().split())
+        if strategy_overview_request(utterance):
+            return "fast"
         if any(term in text for term in _DEEP_TERMS) or len(text.split()) >= 32:
             return "deep"
 
@@ -1262,6 +1265,9 @@ class EngineerBrain:
         if any(has_phrase(text, pattern) for pattern in _INCIDENT_PATTERNS):
             return True
 
+        if strategy_overview_request(utterance) or closing_target(utterance, state):
+            return False
+
         # Counts and forecasts precede named-rival lap-history and pit-call
         # shortcuts. A previous lap mentioned in a forecast is still context.
         if has_any_phrase(text, ("how many pit", "how many stops", "another stop", "another pit", "stop again", "pit again", "stops left", "stops remaining")):
@@ -1678,6 +1684,12 @@ class EngineerBrain:
         if self._defers_to_model(state, utterance):
             return None
 
+        if strategy_overview_request(utterance):
+            return strategy_overview(state, self._spoken_strategy_instruction)
+        rival_target = closing_target(utterance, state)
+        if rival_target:
+            return closing_report(await self.tools.get_gap(rival_target))
+
         # Historical and pre-session planning remain available while live UDP is absent.
         asks_hard_history = (
             has_phrase(text, "hard")
@@ -1926,9 +1938,7 @@ class EngineerBrain:
 
         if has_any_phrase(text, ("gap behind", "car behind")):
             result = await self.tools.get_gap("behind")
-            if result.get("available"):
-                return f"{result['driver']} behind, {float(result['gap_s']):.1f} seconds. Last lap {result.get('last_lap') or 'unavailable'}."
-            return "No reliable gap to the car behind right now."
+            return closing_report(result)
 
         # Each of these requires the question to be *about* the subject. A bare
         # keyword match anywhere in the sentence turned every question that

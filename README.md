@@ -1,8 +1,8 @@
-# Your Pit Box 5.3.2 — AI race engineer and driver dashboard
+# Your Pit Box 5.3.3 — AI race engineer and driver dashboard
 
 [Download Windows or Android](https://yourpitbox.com/#download),
 [try the Driver Dashboard](https://your-pit-box-driver-dashboard.sarthakvij123450.chatgpt.site/),
-or read the [release verification](docs/release-qa-5.3.2.md).
+or read the [release verification](docs/release-qa-5.3.3.md).
 
 Your Pit Box receives **F1 26** telemetry (UDP format **2026**) from a PS5, runs deterministic
 strategy/corner/setup analysis locally, keeps persistent SQLite history, answers spoken questions,
@@ -105,6 +105,18 @@ Only enable `PITWALL_WEB_LAN_ACCESS=true` when a phone/tablet needs the
 dashboard. Bind the web host to `0.0.0.0`, set a long
 `PITWALL_WEB_ACCESS_TOKEN`, and keep it on a trusted LAN. Your Pit Box never opens a
 router or firewall to the public internet automatically.
+
+## What changed in 5.3.3
+
+Current-strategy questions read the dashboard's complete remaining pit plan
+locally, including its confidence, without waiting on the reasoning provider.
+Deeper comparisons and what-if requests still use the analysis tools.
+
+Closing-rate answers report the measured gap change and the dashboard's
+last-lap pace difference separately. Short follow-ups resolve the named rival
+from the recent call, then read current numbers. Closing alerts retain their
+measured rate and are discarded when the rival is no longer closing or pits.
+Session changes, disconnected telemetry and pit-plan holds remain guarded.
 
 ## What changed in 5.3.2
 
