@@ -460,7 +460,8 @@ async def test_history_packet_immediately_backfills_saved_player_lap(stack) -> N
     from pitwall.udp import F1DatagramProtocol
 
     session_uid = 2**63 + 19
-    await store.update(session_uid=session_uid, player_car_index=0)
+    await store.update(session_uid=session_uid, player_car_index=0, track_id=10,
+                       track_name="Spa", session_type="Race")
     await database.save_lap(
         {
             "session_uid": session_uid,
@@ -477,7 +478,7 @@ async def test_history_packet_immediately_backfills_saved_player_lap(stack) -> N
         [],
     )
     protocol = F1DatagramProtocol(
-        store, on_player_lap_history=database.backfill_lap_sectors
+        store, on_player_lap_history=database.reconcile_player_lap_history
     )
     lap = SimpleNamespace(
         lap_time_in_ms=95_000,

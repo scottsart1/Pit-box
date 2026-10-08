@@ -38,7 +38,7 @@ const strategyModule = fs.readFileSync(path.join(root, 'static/js/strategy.js'),
           body: html.replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, '') });
         const file = path.resolve(root, '.' + url.pathname);
         if (!file.startsWith(path.join(root, 'static') + path.sep) || !fs.existsSync(file)) return route.abort();
-        return route.fulfill({ path: file });
+        return route.fulfill({ path: file, ...(file.endsWith('.mjs') ? {contentType:'text/javascript'} : {}) });
       });
       await page.goto('http://pitbox.test/');
       await page.evaluate(() => document.getElementById('bootOverlay')?.remove());
@@ -68,7 +68,7 @@ const strategyModule = fs.readFileSync(path.join(root, 'static/js/strategy.js'),
       }
       // Car availability uses an explicit 101000ms renderer clock below, so
       // these observed packet timestamps are one second old, not wall time.
-      const current = { connected: true, packet_group_freshness: { '1': 100, '6': 100, '7': 100, '10': 100 },
+      const current = { connected: true, session_identity: '9038043921811877951:0:0:0', packet_group_freshness: { '1': 100, '6': 100, '7': 100, '10': 100 },
         tyre: { compound: 'MEDIUM', age_laps: 4, wear: [10, 12, 9, 11], inner_temps_c: [94, 95, 93, 94] },
         fuel_laps_delta: 1.2, ers_pct: 67, speed_kph: 200, gear: 5, weather: 'Clear', rain_next_15_pct: 0,
         weather_forecast: [{ time_offset_min: 15, rain_pct: 0 }] };
@@ -104,7 +104,7 @@ const strategyModule = fs.readFileSync(path.join(root, 'static/js/strategy.js'),
         race_control_phase: 'red_flag', current_lap: 12, total_laps: 20,
         strategy_intent: { active: true, direction: 'stay_out', intent: 'overcut' },
         strategy: { available: true, confidence: 'medium', recommended: { instruction: 'BOX NOW for HARD', box_lap: 12 },
-          red_flag_restart: { active: true, instruction: 'Fit fresh HARD during suspension for the restart.',
+          red_flag_restart: { active: true, session_identity: current.session_identity, instruction: 'Fit fresh HARD during suspension for the restart.',
             primary: { compound: 'HARD', instruction: 'Fit fresh HARD during suspension; run to the finish.' },
             alternative: { compound: 'MEDIUM', instruction: 'Fit fresh MEDIUM during suspension; stop lap 17 for SOFT.' },
             alternative_reason: 'Medium warms up faster; another stop is needed.' } } };
@@ -128,6 +128,32 @@ const strategyModule = fs.readFileSync(path.join(root, 'static/js/strategy.js'),
       await page.locator('#stratPlansHeading').locator('xpath=../..').screenshot({ path: path.join(output, `restart-options-${width}-${deviceScaleFactor}x.png`) });
       assert.deepEqual(errors, []);
       results.push({ width, deviceScaleFactor, scenario: 'red-flag-restart', errors });
+      const suspended = {...red, connected: false, telemetry_stale: true};
+      await page.evaluate(state => {renderStrategy38(state);strategyQA.renderCall(state);strategyQA.renderPlans(state);}, suspended);
+      assert.match(await page.locator('#stratInstruction').textContent(), /Last confirmed · provisional:.*HARD/);
+      assert.match(await page.locator('#stratChange').textContent(), /Alternative:.*MEDIUM/);
+      assert.match(await page.locator('#stratNotice').textContent(), /Confirm the suspension, tyre sets and track conditions/);
+      assert.equal(await page.locator('#stratPlanCount').textContent(), '2 provisional restart options');
+      assert.equal(await page.locator('#stratPlanRows button').count(), 0);
+      await page.locator('#stratInstruction').locator('xpath=..').screenshot({path:path.join(output,`restart-provisional-strategy-${width}-${deviceScaleFactor}x.png`)});
+      await page.evaluate(()=>{document.getElementById('strategy').hidden=true;const live=document.getElementById('carCard').closest('main');live.hidden=false;live.classList.add('active');});
+      assert.match(await page.locator('#strategyMain').textContent(), /Last confirmed · provisional:.*HARD/);
+      await page.locator('#strategyCard').screenshot({path:path.join(output,`restart-provisional-drive-${width}-${deviceScaleFactor}x.png`)});
+      results.push({width,deviceScaleFactor,scenario:'provisional-drive-strategy',errors});
+      await page.setContent('<link rel="stylesheet" href="/static/driver-dashboard/dashboard.css"><main id="qaDashboard"></main>');
+      await page.addScriptTag({type:'module',content:"import {normalizeState} from '/static/driver-dashboard/model.mjs'; import {renderDashboard} from '/static/driver-dashboard/render.mjs'; import {cleanPreferences} from '/static/driver-dashboard/display.mjs'; window.renderSuspension=state=>document.getElementById('qaDashboard').innerHTML=renderDashboard('cockpit',normalizeState(state),cleanPreferences(null));"});
+      await page.waitForFunction(()=>window.renderSuspension);
+      await page.evaluate(state=>renderSuspension(state),suspended);
+      assert.match(await page.locator('#qaDashboard').textContent(),/PROVISIONAL RESTART TYRES.*HARD.*Alternative:.*MEDIUM/);
+      assert.doesNotMatch(await page.locator('#qaDashboard').textContent(),/BOX NOW|Waiting for telemetry|NEXT PIT STOP/);
+      assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth+1),false);
+      await page.screenshot({path:path.join(output,`restart-provisional-dashboard-${width}-${deviceScaleFactor}x.png`)});
+      await page.evaluate(state=>renderSuspension({...state,session_identity:'9038043921811877952:0:0:0'}),suspended);
+      assert.doesNotMatch(await page.locator('#qaDashboard').textContent(),/PROVISIONAL RESTART TYRES|Fit fresh HARD|Alternative:.*MEDIUM/);
+      await page.evaluate(state=>renderSuspension({...state,race_control_phase:'green',red_flag_active:false}),suspended);
+      assert.doesNotMatch(await page.locator('#qaDashboard').textContent(),/PROVISIONAL RESTART TYRES|Fit fresh HARD/);
+      assert.deepEqual(errors,[]);
+      results.push({width,deviceScaleFactor,scenario:'provisional-dashboard-and-clearing',errors});
       await context.close();
     }
   } finally {

@@ -12,6 +12,7 @@ from f1.packets import (
     PacketLapData,
     PacketParticipantsData,
     PacketSessionData,
+    PacketSessionHistoryData,
 )
 
 from pitwall.database import PitWallDatabase
@@ -25,6 +26,67 @@ from pitwall.udp import F1DatagramProtocol
 class _Transport(asyncio.DatagramTransport):
     def get_extra_info(self, name: str, default=None):  # type: ignore[no-untyped-def]
         return ("127.0.0.1", 20_777) if name == "sockname" else default
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("known_identity", [False, True])
+async def test_history_packet_bytes_preserve_field_identity_without_player_rows(tmp_path, known_identity):
+    database = PitWallDatabase(tmp_path / "history.sqlite3")
+    await database.initialize()
+    archive = FullFieldArchiveService(database.path, TraceStore(tmp_path / "traces"))
+    archive.set_trace_scope({0})
+    await archive.start()
+    assembler = SessionAssembler(batch_sink=archive.submit, invalidation_sink=archive.submit)
+    contexts = []
+
+    def submit(context, rows):
+        contexts.append(context)
+        return archive.submit_history(context, rows)
+
+    protocol = F1DatagramProtocol(StateStore(), session_assembler=assembler,
+                                  on_player_lap_history=database.reconcile_player_lap_history,
+                                  on_field_lap_history=submit)
+    protocol.connection_made(_Transport())
+    session = PacketSessionData()
+    session.header = _header(1, 1, 0.1, uid=(1 << 63) + 147)
+    session.track_id = 12
+    session.track_length = 5000
+    protocol.datagram_received(bytes(session), ("127.0.0.1", 50000))
+    if known_identity:
+        participants = PacketParticipantsData()
+        participants.header = _header(4, 2, 0.2, uid=(1 << 63) + 147)
+        participants.num_active_cars = 2
+        participants.participants[0].name = b"PLAYER"
+        participants.participants[1].name = b"RIVAL"
+        participants.participants[1].driver_id = 77
+        participants.participants[1].race_number = 9
+        protocol.datagram_received(bytes(participants), ("127.0.0.1", 50000))
+    history = PacketSessionHistoryData()
+    history.header = _header(11, 3, 0.3, uid=(1 << 63) + 147)
+    history.car_idx = 1
+    history.num_laps = 3
+    for index, row in enumerate(history.lap_history_data[:3]):
+        row.lap_time_in_ms = 90000 + index * 1000
+        row.sector1_time_ms_part = 30000 + index * 1000
+        row.sector2_time_ms_part = row.sector3_time_ms_part = 30000
+        row.lap_valid_bit_flags = 15 if index != 1 else 14
+    protocol.datagram_received(bytes(history), ("127.0.0.1", 50000))
+    await protocol.drain_before_close()
+    await archive.stop()
+    assert archive.snapshot().write_errors == 0
+    assert not await database.recent_laps(12, 100)
+    with sqlite3.connect(database.path) as db:
+        rows = db.execute("SELECT l.lap_number,l.lap_time_ms,l.valid,c.car_index,c.is_player,"
+                          "c.identity_revision FROM recorded_laps l JOIN session_cars c ON c.id=l.session_car_id "
+                          "ORDER BY l.lap_number").fetchall()
+    if known_identity:
+        assert [row[:5] for row in rows] == [(1,90000,1,1,0),(2,91000,0,1,0),(3,92000,1,1,0)]
+        assert len(contexts) == 1 and contexts[0]["history_complete"] is True
+        assert contexts[0]["identity_revision"] == assembler.identity_registry.current(1).identity_revision
+        assert contexts[0]["session_uid"] == (1 << 63) + 147
+        assert archive.snapshot().history_laps_reconciled == 3
+    else:
+        assert not contexts and not rows
 
 
 def _header(

@@ -185,11 +185,26 @@ class AnalysisEngine:
             return state.get("analysis", {})
         # Analysis can outlast a history packet. Read the current completed-lap
         # splits after persistence so an early packet is not permanently lost.
-        await self.database.backfill_lap_sectors(
-            int(lap["session_uid"]), state.get("completed_laps", []),
-            restart_epoch=int(lap.get("restart_epoch", 0)),
-            timeline_epoch=int(lap.get("timeline_epoch", 0)),
-        )
+        player = next((driver for driver in state.get("drivers", [])
+                       if driver.get("car_idx") == state.get("player_car_index")), {})
+        reported_history = player.get("lap_history", []) or [
+            {**row, "lap_ms": row["lap_time_ms"]} for row in state.get("completed_laps", [])
+            if row.get("timing_source") == "session_history"
+        ]
+        await self.database.reconcile_player_lap_history(state, reported_history)
+        official = next((row for row in state.get("completed_laps", [])
+                         if row.get("lap_num") == lap["lap_num"] and row.get("timing_source") == "session_history"), {})
+        if official:
+            lap.update({key: official[key] for key in (
+                "lap_time_ms", "s1_ms", "s2_ms", "s3_ms", "valid", "valid_flags",
+            ) if key in official})
+        # Saving can discover history which arrived after analysis started.
+        # Publish its corrected total and sectors with the measured analysis.
+        corrected_time = int(lap.get("lap_time_ms", 0))
+        lap_summary.update(lap_time_ms=corrected_time, lap_time=fmt_ms(corrected_time), valid=bool(lap.get("valid")))
+        lap_summary["timing_fields"].update({key: lap[key] for key in ("s1_ms", "s2_ms", "s3_ms") if key in lap})
+        if pb and pb.get("lap_time_ms") and corrected_time:
+            lap_summary["delta_to_pb_s"] = round((corrected_time - int(pb["lap_time_ms"])) / 1000, 3)
         deg = self.compute_degradation(state)
         fuel = self.compute_fuel_model(state)
         target = self.compute_target(state)

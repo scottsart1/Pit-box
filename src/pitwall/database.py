@@ -14,7 +14,9 @@ from pathlib import Path
 from typing import Any
 
 from .catalog import SessionCatalog
+from .lap_history import authoritative_timing
 from .migrations import LATEST_SCHEMA_VERSION, MIGRATIONS
+from .session_guard import session_key
 
 log = logging.getLogger(__name__)
 
@@ -67,6 +69,7 @@ class PitWallDatabase:
         self.last_backup_path: Path | None = None
         self.schema_version = 0
         self.catalog = SessionCatalog(path)
+        self._player_history_signature: tuple[Any, ...] | None = None
 
     async def initialize(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -769,8 +772,15 @@ class PitWallDatabase:
         self,
         lap: dict[str, Any],
         corner_metrics: list[dict[str, Any]],
-    ) -> int:
+    ) -> int | None:
+        # Packet 11 may have corrected this lap while analysis was running.
+        # Apply its exact canonical identity before touching the legacy row.
+        lap.update(self.catalog.apply_authoritative_player_timing(lap))
         with self._connect() as db:
+            if self._newer_player_epoch_exists(db, lap):
+                # The compatibility table has no epoch column. Preserve the
+                # newer branch and write this old observation only to catalog.
+                return None
             db.execute(
                 """
                 INSERT INTO laps(
@@ -856,6 +866,101 @@ class PitWallDatabase:
             if row is None:
                 raise RuntimeError("saved lap could not be read back")
             return int(row["id"])
+
+    @staticmethod
+    def _newer_player_epoch_exists(db: sqlite3.Connection, context: dict[str, Any]) -> bool:
+        latest = db.execute(
+            "SELECT s.restart_epoch,r.timeline_epoch FROM recorded_laps r "
+            "JOIN session_cars c ON c.id=r.session_car_id JOIN recorded_sessions s ON s.id=c.session_id "
+            "WHERE s.game_session_uid=? AND c.is_player=1 AND c.car_index=? "
+            "ORDER BY s.restart_epoch DESC,r.timeline_epoch DESC LIMIT 1",
+            (str(context["session_uid"]), int(context.get("player_car_index", 0) or 0)),
+        ).fetchone()
+        return bool(latest and (int(latest["restart_epoch"]), int(latest["timeline_epoch"])) > (
+            int(context.get("restart_epoch", 0) or 0), int(context.get("timeline_epoch", 0) or 0)))
+
+    async def reconcile_player_lap_history(
+        self, context: dict[str, Any], history: list[dict[str, Any]],
+    ) -> int:
+        """Repair complete authoritative timings, without fabricating telemetry."""
+        if not int(context.get("session_uid", 0) or 0):
+            return 0
+        signature = (session_key(context), int(context.get("player_car_index", 0) or 0),
+                     int(context.get("identity_revision", 0) or 0), bool(context.get("history_complete")),
+                     tuple(tuple(row.get(key) for key in ("lap_num", "lap_ms", "s1_ms", "s2_ms",
+                                                         "s3_ms", "valid_flags", "compound")) for row in history))
+        async with self._lock:
+            if signature == self._player_history_signature:
+                return 0
+            await self.catalog.reconcile_player_history(context, history)
+            # Always examine canonical authority, even if the previous attempt
+            # committed it but failed before the legacy compatibility repair.
+            changed = await asyncio.to_thread(self._reconcile_player_history_sync, context, history)
+            # Only successful writes qualify: a interrupted legacy repair must
+            # retry on the next identical packet, including after app restart.
+            self._player_history_signature = signature
+            return changed
+
+    def _reconcile_player_history_sync(
+        self, context: dict[str, Any], history: list[dict[str, Any]],
+    ) -> int:
+        wanted = {int(row["lap_num"]): timing for row in history
+                  if (timing := authoritative_timing(row))}
+        if not wanted:
+            return 0
+        uid = int(context["session_uid"])
+        with self._connect() as db:
+            if self._newer_player_epoch_exists(db, context):
+                return 0
+            rows = db.execute(
+                "SELECT r.id,r.lap_number,r.engineering_json FROM recorded_laps r "
+                "JOIN session_cars c ON c.id=r.session_car_id JOIN recorded_sessions s ON s.id=c.session_id "
+                "WHERE s.game_session_uid=? AND s.restart_epoch=? AND c.is_player=1 AND c.car_index=? "
+                "AND c.identity_revision=? AND r.timeline_epoch<=? AND (r.invalid_reason_mask & 2)=0 "
+                "ORDER BY r.timeline_epoch DESC",
+                (str(uid), int(context.get("restart_epoch", 0) or 0), int(context.get("player_car_index", 0) or 0),
+                 int(context.get("identity_revision", 0) or 0), int(context.get("timeline_epoch", 0) or 0)),
+            ).fetchall()
+            seen, updated = set(), 0
+            for recorded in rows:
+                number = int(recorded["lap_number"])
+                if number not in wanted or number in seen:
+                    continue
+                seen.add(number)
+                frozen = json.loads(recorded["engineering_json"] or "{}")
+                authority = frozen.get("history_authority", {})
+                if not all(authority.get(name) == value for name, value in wanted[number].items()):
+                    continue
+                previous = db.execute("SELECT * FROM laps WHERE session_uid=? AND lap_num=?",
+                                      (_session_uid_to_sqlite(uid), number)).fetchone()
+                timing = wanted[number]
+                if previous:
+                    exclusions = list(dict.fromkeys([
+                        *json.loads(previous["learning_exclusions_json"] or "[]"),
+                        *frozen.get("learning_exclusions", []),
+                    ]))
+                    values = (timing["lap_time_ms"], int(timing["valid"]), timing["s1_ms"], timing["s2_ms"], timing["s3_ms"])
+                    if values != tuple(previous[key] for key in ("lap_time_ms", "valid", "s1_ms", "s2_ms", "s3_ms")) or exclusions != json.loads(previous["learning_exclusions_json"] or "[]"):
+                        db.execute("UPDATE laps SET lap_time_ms=?,valid=?,s1_ms=?,s2_ms=?,s3_ms=?,learning_exclusions_json=? WHERE id=?",
+                                   (*values, json.dumps(exclusions), previous["id"]))
+                        updated += 1
+                    legacy_id = int(previous["id"])
+                else:
+                    cursor = db.execute(
+                        "INSERT INTO laps(session_uid,track_id,track_name,session_type,lap_num,lap_time_ms,valid,compound,"
+                        "mode_profile,s1_ms,s2_ms,s3_ms,trace_json,setup_json,wear_start_json,wear_end_json,temps_end_json,"
+                        "created_at,learning_exclusions_json) VALUES(?,?,?,?,?,?,?,?,?,?,?,?, '[]','{}','[]','[]','[]',?,?)",
+                        (_session_uid_to_sqlite(uid), int(context.get("track_id", -1)), str(context.get("track_name", "Unknown")),
+                         str(context.get("session_type", "Unknown")), number, timing["lap_time_ms"], int(timing["valid"]),
+                         str(frozen.get("compound") or "UNKNOWN"), str(context.get("mode_profile", "")),
+                         timing["s1_ms"], timing["s2_ms"], timing["s3_ms"], time.time(),
+                         json.dumps(frozen.get("learning_exclusions", ["missing_telemetry"]))),
+                    )
+                    legacy_id = int(cursor.lastrowid)
+                    updated += 1
+                db.execute("UPDATE recorded_laps SET legacy_lap_id=? WHERE id=? AND legacy_lap_id IS NULL",
+                           (legacy_id, recorded["id"]))
+            return updated
 
     @staticmethod
     def _write_corner_rows_sync(

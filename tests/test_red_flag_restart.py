@@ -1,5 +1,6 @@
 """Suspension tyre advice from real packet types through the radio pipeline."""
 
+import json
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -7,6 +8,8 @@ import pytest
 from f1.packets import PacketCarStatusData, PacketEventData, PacketSessionData
 
 from pitwall.proactive import ProactiveEngineer
+from pitwall.state import StateStore
+from pitwall.strategy import StrategyEngine
 from pitwall.udp import F1DatagramProtocol
 
 
@@ -61,6 +64,7 @@ async def test_rdfl_paused_radio_has_primary_and_distinct_alternative_once(stack
     await engineer._detect(await store.snapshot_radio())
     state = await store.snapshot_radio()
     advice = state["strategy"]["red_flag_restart"]
+    assert advice["session_identity"] == state["session_identity"]
     assert advice["primary"]["compound"] != advice["alternative"]["compound"]
     assert advice["primary"]["inventory_confirmed"]
     assert state["strategy"]["recommended"]["action"] == "red_flag_tyre_change"
@@ -83,6 +87,34 @@ async def test_rdfl_paused_radio_has_primary_and_distinct_alternative_once(stack
     resumed = await strategy.get_plan()
     assert "red_flag_restart" not in resumed
     assert resumed["neutralisation"]["phase"] == "green"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("boundary", ["session_uid", "restart_epoch", "timeline_epoch", "session_generation"])
+async def test_restart_advice_identity_survives_json_without_64_bit_rounding(boundary):
+    store = StateStore()
+    uid = (1 << 63) + 123
+    assert float(uid) == float(uid + 1)  # JavaScript numbers cannot distinguish these.
+    await store.update(session_uid=uid, current_lap=5)
+    before = await store.snapshot_live()
+    best = {"feasible": True, "legal": True, "box_laps": [], "compounds": ["HARD"],
+            "stint_models": [{"starting_wear_pct": 12}], "projected_finish_wear_pct": 35}
+
+    def advice(state):
+        return StrategyEngine._red_flag_restart_advice(state, best, [best], lambda _: 0, 5, "known")
+
+    retained = advice(before)
+    assert retained["session_identity"] == before["session_identity"] == f"{uid}:0:0:0"
+    await store.update(**{boundary: uid + 1 if boundary == "session_uid" else 1})
+    after = await store.snapshot_live()
+    decoded = json.loads(json.dumps({"before": before, "after": after, "retained": retained}), parse_int=float)
+    assert decoded["retained"]["session_identity"] == decoded["before"]["session_identity"]
+    assert decoded["retained"]["session_identity"] != decoded["after"]["session_identity"]
+    if boundary == "session_uid":
+        assert decoded["before"]["session_uid"] == decoded["after"]["session_uid"]
+    assert advice(after)["session_identity"] == after["session_identity"]
+    for snapshot in (store.snapshot, store.snapshot_analysis, store.snapshot_radio):
+        assert (await snapshot())["session_identity"] == after["session_identity"]
 
 
 @pytest.mark.asyncio

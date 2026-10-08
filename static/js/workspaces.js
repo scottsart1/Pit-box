@@ -257,6 +257,23 @@ async function loadSessions({ append = false, quiet = false } = {}) {
   }
 }
 
+function lapRecordingQuality(lap, sampleCoverage = null) {
+  const fraction = value => typeof value === "number" && Number.isFinite(value) && value >= 0 && value <= 1 ? value : null;
+  let context = {};
+  try {
+    const parsed = typeof lap?.engineering_json === "string" ? JSON.parse(lap.engineering_json) : lap?.engineering_json;
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) context = parsed;
+  } catch { /* Malformed optional context cannot establish recording quality. */ }
+  const canonical = fraction(lap?.coverage_ratio), samples = fraction(sampleCoverage);
+  const mismatch = context.telemetry_timing_mismatch === true;
+  const coverage = mismatch ? 0 : canonical === null ? null : samples === null ? canonical : Math.min(canonical, samples);
+  const warning = mismatch
+    ? "Official lap timing was corrected from session history; the retained trace does not reliably cover that timing. Partial recording: measurements describe only recorded samples."
+    : coverage === null ? "Whole-lap recording coverage is unavailable; measurements describe only recorded samples."
+    : coverage < 1 || context.trace_incomplete === true ? "Partial recording: measurements describe only recorded samples. Missing values are unavailable." : "";
+  return { coverage, warning, label: mismatch ? "Lap coverage unverified" : coverage === null ? "Lap coverage unavailable" : `${formatPercent(coverage)} recorded lap coverage` };
+}
+
 async function loadStorageStatus() {
   // The storage API existed since 4.2 with no consumer; the Library table
   // showed per-session sizes while the overall budget stayed invisible.
@@ -560,7 +577,8 @@ async function selectCandidateLap(lapId) {
         state.mapTraces = { candidate: trace, reference: null };
         configurePlayback();
         renderComparison();
-        setNotice("lapLabStatus", trace.axis?.values?.length ? "Lap playback ready. A reference is optional." : "No recorded samples are available for this lap.", trace.axis?.values?.length ? "success" : "");
+        const quality = lapRecordingQuality(state.laps.find(lap => lap.id === lapId), trace.coverage);
+        setNotice("lapLabStatus", trace.axis?.values?.length ? `Lap playback ready. A reference is optional.${quality.warning ? ` ${quality.warning}` : ""}` : "No recorded samples are available for this lap.", trace.axis?.values?.length ? (quality.warning ? "warning" : "success") : "");
       }
     } catch (error) {
       if (state.lapRequest !== request || state.comparisonTrace) return;
@@ -641,8 +659,10 @@ async function analyzeLapAlone() {
       }
       rows.appendChild(row);
     }
-    const partial = Object.values(payload.metric_coverage || {}).some(value => Number(value) < 1);
-    setNotice("lapLabStatus", `Single-lap analysis ready · ${(payload.segments || []).length} segments.${partial ? " Partial recording; missing values are unavailable." : ""}`, "success");
+    const quality = lapRecordingQuality({ ...state.laps.find(lap => lap.id === lapId), coverage_ratio: payload.coverage_ratio });
+    const partial = Object.values(payload.metric_coverage || {}).some(value => typeof value !== "number" || !Number.isFinite(value) || value < 1);
+    const warning = quality.warning || (partial ? "Partial recording: missing values are unavailable." : "");
+    setNotice("lapLabStatus", `Single-lap analysis ready · ${(payload.segments || []).length} segments.${warning ? ` ${warning}` : ""}`, warning ? "warning" : "success");
   } catch (error) {
     if (state.lapRequest !== request) return;
     setNotice("lapLabStatus", formatError(error), "error");
@@ -742,8 +762,9 @@ function renderComparison() {
     byId("comparisonDelta").textContent = "Unavailable";
     byId("comparisonDelta").className = "";
     byId("comparisonSign").textContent = standalone ? "Choose a reference for a lap delta." : "Positive means the candidate arrived later.";
-    byId("traceCoverage").textContent = standalone ? `${formatPercent(state.lapTrace.coverage)} recorded coverage` : "Coverage unavailable";
-    byId("traceCoverage").dataset.state = standalone ? (Number(state.lapTrace.coverage) >= 0.9 ? "healthy" : "warning") : "neutral";
+    const quality = lapRecordingQuality(state.laps.find(lap => lap.id === state.candidateLapId), state.lapTrace?.coverage);
+    byId("traceCoverage").textContent = standalone ? quality.label : "Coverage unavailable";
+    byId("traceCoverage").dataset.state = standalone ? (quality.warning ? "warning" : "healthy") : "neutral";
     badge.textContent = standalone ? "Single-lap playback" : "Compatibility unavailable";
     badge.dataset.state = "neutral";
     clear(byId("segmentRail"));

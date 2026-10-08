@@ -3,6 +3,7 @@ from copy import deepcopy
 import pytest
 
 from pitwall.strategy import StrategyEngine
+from pitwall.state import DriverState
 
 
 def scenario():
@@ -69,3 +70,56 @@ def test_one_position_or_missing_gap_trend_cannot_support_quality():
     result = StrategyEngine.defence_assessment(state)
     assert result["defence_quality_score_out_of_10"] is None
     assert result["defence_laps_sustainable"] is None
+
+
+@pytest.mark.parametrize("change,trend,description", [
+    (.191, "pulling_away", "growing"),
+    (-.191, "being_caught", "shrinking"),
+    (0, "holding_station", "stable"),
+    (.02, "holding_station", "stable"),
+])
+def test_defence_gap_direction_is_explicit_and_uses_gap_change_sign(change, trend, description):
+    state = scenario()
+    state["drivers"][1]["gap_history"] = [
+        {"lap": 4, "gap_s": 2.0}, {"lap": 6, "gap_s": 2.0 + 2 * change},
+    ]
+    result = StrategyEngine.defence_assessment(state)
+    assert result["gap_change_s_per_lap"] == change
+    assert result["closing_rate_s_per_lap"] == change
+    assert result["gap_trend"] == trend
+    assert description in result["gap_trend_description"]
+    assert result["interpretation"].startswith(result["gap_trend_description"])
+
+
+def test_defence_without_gap_or_history_cannot_claim_contact_or_a_trend():
+    state = scenario()
+    state["drivers"][1]["gap_history"] = []
+    result = StrategyEngine.defence_assessment(state)
+    assert result["gap_trend"] == "unknown"
+    assert result["gap_change_s_per_lap"] is None
+    assert result["defence_laps_sustainable"] is None
+    state["drivers"][1]["gap_to_player_s"] = None
+    assert StrategyEngine.defence_assessment(state)["available"] is False
+
+
+@pytest.mark.asyncio
+async def test_named_defence_assesses_selected_following_car_not_nearest(stack):
+    store, _, _, _, _, tools = stack
+    await store.mark_packet(2026, 26, 42, packet_id=2)
+    await store.mark_packet(2026, 26, 42, packet_id=7)
+    await store.update(player_position=6, current_lap=7, total_laps=15)
+    def seed(state):
+        state.drivers[0] = DriverState(car_idx=0, position=6, active=True, is_player=True)
+        state.drivers[1] = DriverState(car_idx=1, position=7, active=True, name="Nearest", gap_to_player_s=2,
+            gap_history=[{"lap": 4, "gap_s": 1}, {"lap": 6, "gap_s": 2}])
+        state.drivers[2] = DriverState(car_idx=2, position=8, active=True, name="Named rival", gap_to_player_s=3,
+            gap_history=[{"lap": 4, "gap_s": 4}, {"lap": 6, "gap_s": 3}])
+        state.drivers[3] = DriverState(car_idx=3, position=5, active=True, name="Ahead", gap_to_player_s=-2)
+    await store.mutate(seed)
+    result = await tools.get_defence_plan("Named rival")
+    assert result["driver"] == result["assessment"]["pursuer"] == "Named rival"
+    assert result["assessment"]["gap_trend"] == "being_caught"
+    assert result["assessment"]["gap_change_s_per_lap"] == -.5
+    assert (await tools.get_defence_plan("behind"))["assessment"]["gap_trend"] == "pulling_away"
+    assert (await tools.get_defence_plan("ahead"))["available"] is False
+    assert (await tools.get_attack_plan("ahead"))["available"] is True

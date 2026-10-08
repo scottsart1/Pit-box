@@ -28,6 +28,11 @@ def session_key(state: Any) -> tuple[int, int, int, int]:
     )
 
 
+def session_identity(state: Any) -> str:
+    """Exact browser-safe identity, including 64-bit UIDs and reset epochs."""
+    return ":".join(str(part) for part in session_key(state))
+
+
 def session_scoped(*, discarded: Any = None, raise_on_change: bool = True):
     """Race a request against the store's boundary signal, including playback.
 

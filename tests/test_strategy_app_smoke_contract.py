@@ -84,6 +84,21 @@ def test_in_flight_archive_batch_cannot_pass_when_queue_depth_is_zero():
         replay.settle({}, timeout=3)
 
 
+def test_in_flight_history_update_cannot_pass_using_number_of_reconciled_laps():
+    replay = ReplayObservation([{}], [{'submitted': 12, 'history_updates_processed': 1,
+                                      'history_laps_reconciled': 31}])
+    with pytest.raises(RuntimeError, match='archive has queued or in-flight work'):
+        replay.settle({}, timeout=3)
+
+
+def test_processed_noop_and_discarded_old_epoch_history_complete_work_accounting():
+    replay = ReplayObservation([{}], [{'submitted': 12, 'history_updates_processed': 1,
+                                      'history_updates_discarded': 1, 'history_laps_reconciled': 0}])
+    summary = {}
+    replay.settle(summary)
+    assert summary['race_completion_verified'] is True
+
+
 @pytest.mark.parametrize('failure', ['queue_drops', 'write_errors', 'invalidation_queue_drops'])
 def test_lost_archive_work_fails_instead_of_being_reported_as_settled(failure):
     replay = ReplayObservation([{}], [{failure: 1}])

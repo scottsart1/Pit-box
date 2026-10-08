@@ -758,12 +758,14 @@ function tyreDegradationInsight(s){
 /* Suspension tyre choices are separate from normal pit-lane calls. */
 function redFlagRestartDisplay(s){
   if(!(s.red_flag_active||s.race_control_phase==='red_flag'||s.fia_flag==='red'))return null;
-  const restart=s.strategy?.red_flag_restart||{};
   const stale=s.connected===false||s.telemetry_stale===true;
-  return {primary:stale?null:restart.primary,alternative:stale?null:restart.alternative,
-    instruction:stale?'Telemetry unavailable. Confirm race control and restart tyres in game.':restart.primary?.instruction||restart.instruction||'Session suspended. Prepare fresh restart tyres while stopped; checking available sets.',
-    alternativeReason:stale?'':restart.alternative_reason||'',
-    notice:stale?'Last received red flag; current race status unavailable.':'Follow the game’s suspension instructions. Select restart tyres while stopped.',
+  const candidate=s.strategy?.red_flag_restart||{};
+  const sameSession=typeof candidate.session_identity==='string'&&candidate.session_identity.length>0&&candidate.session_identity===s.session_identity;
+  const restart=candidate.active===true&&(sameSession||(!stale&&candidate.session_identity==null))?candidate:{};
+  return {primary:restart.primary,alternative:restart.alternative,
+    instruction:(stale?'Last confirmed · provisional: ':'')+(restart.primary?.instruction||restart.instruction||(stale?'No recorded restart plan. Confirm restart tyres in game.':'Session suspended. Prepare fresh restart tyres while stopped; checking available sets.')),
+    alternativeReason:restart.alternative_reason||'',
+    notice:stale?'Live telemetry unavailable. Confirm the suspension, tyre sets and track conditions in game before using this plan.':'Follow the game’s suspension instructions. Select restart tyres while stopped.',
     stale};
 }
 /* Current tyres and the next stop, not the wear of a different final stint. */
@@ -899,17 +901,17 @@ function renderStrategy38(s){
   if(restart){
     $('strategyMain').textContent=restart.instruction;
     $('strategyReason').textContent=restart.notice;
-    $('strategyWarning').textContent=restart.stale?'Live telemetry unavailable':'Restart plan';
+    $('strategyWarning').textContent=restart.stale?'Provisional restart plan · last received data':'Restart plan';
     $('strategyWarning').className='small warn';
     $('strategyTyreReason').textContent=restart.primary?.instruction||'';
     $('strategyMeta').textContent=restart.stale?'':`Plan confidence: ${st.confidence||'low'}`;
     $('strategyRationale').textContent=restart.alternativeReason;
     $('strategyChange').textContent=restart.alternative?`Alternative: ${restart.alternative.instruction}`:'';
-    $('neutralisation').textContent='Session suspended · restart tyre selection';
+    $('neutralisation').textContent=restart.stale?'Last confirmed red flag · restart tyre selection':'Session suspended · restart tyre selection';
     $('strategyIntent').style.display='none';
     $('strategyHold').style.display='none';
     $('strategyCard').className='card';
-    $('stintClock').textContent='Session suspended';
+    $('stintClock').textContent=restart.stale?'Last confirmed suspension':'Session suspended';
     $('strategyPlans').innerHTML=[['Primary',restart.primary],['Alternative',restart.alternative]].filter(([,p])=>p).map(([label,p])=>`<div class="strategy-plan"><b>${label} · ${esc(p.compound)}</b><div class="small muted">${esc(p.instruction)}</div></div>`).join('');
     return;
   }

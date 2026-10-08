@@ -97,6 +97,7 @@ async def test_history_arriving_during_analysis_retains_official_sectors(
             [
                 {
                     "lap_num": 1,
+                    "lap_ms": 90100,
                     "s1_ms": 30000,
                     "s2_ms": 30000,
                     "s3_ms": 30100,

@@ -1976,6 +1976,8 @@ class TelemetryTools:
         target = self._resolve_driver(state, driver)
         if not target or target.get("gap_to_player_s") is None:
             return {"available": False, "reason": "Target driver or live gap is unavailable."}
+        if int(target.get("position", 0) or 0) <= int(state.get("player_position", 0) or 0):
+            return {"available": False, "reason": "The selected driver is not classified behind you."}
         gap = abs(float(target.get("gap_to_player_s", 0.0)))
         assist_name = "Overtake Mode" if state.get("regulations_2026") else "DRS"
         aid_freshness = self.packet_freshness(state, 16 if state.get("regulations_2026") else 7)
@@ -1987,7 +1989,7 @@ class TelemetryTools:
             recommendation = "Do not compromise your line yet; build a clean exit and manage tyres."
         elif state.get("ers_pct", 0) < 20:
             recommendation = "Use positioning rather than battery; harvest where the rival cannot pass."
-        assessment = self.strategy.defence_assessment(state)
+        assessment = self.strategy.defence_assessment(state, pursuer=target)
         return {
             "available": True,
             "field_freshness": {"timing_battery": freshness, "overtaking_aid": aid_freshness},

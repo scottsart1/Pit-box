@@ -10,6 +10,7 @@ import sqlite3
 from collections import deque
 from collections.abc import Iterator
 from contextlib import closing, contextmanager
+from copy import deepcopy
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -17,7 +18,7 @@ from typing import Any, TypeAlias
 
 from f1.packets import SESSIONS
 
-from .catalog import lap_id
+from .catalog import SessionCatalog, lap_id, session_id
 from .session_assembler import BranchInvalidation, FinalizedLapBatch
 from .trace_store import TraceStore
 
@@ -28,7 +29,13 @@ SESSION_TYPE_LABELS = {int(type_id): label for type_id, label in SESSIONS.items(
 
 log = logging.getLogger(__name__)
 
-ArchiveItem: TypeAlias = FinalizedLapBatch | BranchInvalidation
+@dataclass(frozen=True, slots=True)
+class FieldHistoryUpdate:
+    context: dict[str, Any]
+    history: list[dict[str, Any]]
+
+
+ArchiveItem: TypeAlias = FinalizedLapBatch | BranchInvalidation | FieldHistoryUpdate
 
 
 @dataclass(frozen=True, slots=True)
@@ -50,6 +57,9 @@ class FullFieldArchiveSnapshot:
     invalidation_queue_drops: int
     reconciliation_required: bool
     out_of_scope_batches_skipped: int = 0
+    history_laps_reconciled: int = 0
+    history_updates_processed: int = 0
+    history_updates_discarded: int = 0
 
 
 def cars_in_trace_scope(state: dict[str, Any]) -> set[int] | None:
@@ -108,6 +118,7 @@ class FullFieldArchiveService:
     ) -> None:
         self.database_path = Path(database_path)
         self.trace_store = trace_store
+        self.catalog = SessionCatalog(self.database_path)
         self.queue: asyncio.Queue[ArchiveItem] = asyncio.Queue(
             maxsize=max(1, int(queue_size))
         )
@@ -133,6 +144,10 @@ class FullFieldArchiveService:
         # narrows it. Never inferred here: the service cannot see positions.
         self._scope: set[int] | None = None
         self._out_of_scope_skipped = 0
+        self._history_laps_reconciled = 0
+        self._history_updates_processed = 0
+        self._history_updates_discarded = 0
+        self._replacement_epochs: dict[str, int] = {}
 
     def set_trace_scope(self, indices: set[int] | None) -> None:
         """Restrict full-trace archiving to these car indices (None = all)."""
@@ -170,6 +185,11 @@ class FullFieldArchiveService:
         if not self.running:
             return False
         if isinstance(item, BranchInvalidation):
+            self._replacement_epochs[item.session.id] = max(
+                item.replacement_timeline_epoch, self._replacement_epochs.get(item.session.id, 0)
+            )
+            if len(self._replacement_epochs) > 128:
+                self._replacement_epochs.pop(next(iter(self._replacement_epochs)))
             for batch_id in item.affected_batch_ids:
                 if batch_id in self._invalidated_batch_ids:
                     continue
@@ -198,6 +218,10 @@ class FullFieldArchiveService:
         self._queue_high_water = max(self._queue_high_water, self.queue.qsize())
         return True
 
+    def submit_history(self, context: dict[str, Any], history: list[dict[str, Any]]) -> bool:
+        """Keep all-car timing even when full traces are outside capture scope."""
+        return self.submit(FieldHistoryUpdate(deepcopy(context), deepcopy(history)))
+
     async def _worker(self) -> None:
         while True:
             source = "invalidation"
@@ -213,6 +237,14 @@ class FullFieldArchiveService:
                 if isinstance(item, BranchInvalidation):
                     await asyncio.to_thread(self._persist_invalidation, item)
                     self._invalidations += 1
+                elif isinstance(item, FieldHistoryUpdate):
+                    key = session_id(item.context["session_uid"], int(item.context.get("restart_epoch", 0) or 0))
+                    if int(item.context.get("timeline_epoch", 0) or 0) >= self._replacement_epochs.get(key, 0):
+                        reconciled = await self.catalog.reconcile_field_history(item.context, item.history)
+                        self._history_laps_reconciled += len(reconciled)
+                        self._history_updates_processed += 1
+                    else:
+                        self._history_updates_discarded += 1
                 else:
                     await asyncio.to_thread(self._persist_batch, item)
                     self._persisted_laps += 1
@@ -336,6 +368,34 @@ class FullFieldArchiveService:
                 identity.confidence,
             ),
         )
+        existing = db.execute(
+            "SELECT engineering_json, invalid_reason_mask FROM recorded_laps WHERE id=?", (resolved_lap_id,),
+        ).fetchone()
+        recorded = json.loads(existing["engineering_json"] or "{}") if existing else {}
+        frozen = {**context, "session_uid": int(batch.session.game_session_uid),
+                  "restart_epoch": batch.session.restart_epoch, "timeline_epoch": batch.timeline_epoch,
+                  "player_car_index": identity.car_index, "identity_revision": identity.identity_revision,
+                  "lap_num": batch.lap_number, "lap_time_ms": batch.lap_time_ms,
+                  "valid": batch.valid is not False and batch.complete}
+        frozen = SessionCatalog._merge_authoritative_timing(frozen, recorded)
+        if recorded.get("context_observed") is False and not frozen.get("telemetry_timing_mismatch"):
+            # Packet11 may arrive before the matching observed lap batch. Only
+            # measured whole-lap coverage can replace the timing-only marker;
+            # a nonempty fragment is not evidence of a complete recording.
+            length = float(context.get("track_length_m", 0) or 0)
+            distances = [float(sample["lap_distance_m"]) for group in batch.groups for sample in group.samples
+                         if isinstance(sample.get("lap_distance_m"), (int, float))]
+            span = min(1.0, max(0.0, (max(distances) - min(distances)) / length)) if length > 0 and distances else 0.0
+            frozen["trace_coverage"] = min(span, batch.coverage_ratio)
+            if batch.complete and span >= .9:
+                frozen["context_observed"] = True
+                frozen["trace_incomplete"] = False
+                frozen["learning_exclusions"] = [value for value in frozen.get("learning_exclusions", []) if value != "missing_telemetry"]
+            else:
+                frozen["trace_incomplete"] = True
+        invalid_mask = int(existing["invalid_reason_mask"] or 0) & ~1 if existing else 0
+        valid = bool(frozen["valid"]) and not (invalid_mask & 2)
+        coverage = float(frozen.get("trace_coverage", batch.coverage_ratio))
         db.execute(
             """
             INSERT INTO recorded_laps(
@@ -348,6 +408,12 @@ class FullFieldArchiveService:
                 lap_time_ms=COALESCE(excluded.lap_time_ms, recorded_laps.lap_time_ms),
                 valid=excluded.valid,
                 invalid_reason_mask=excluded.invalid_reason_mask,
+                tyre_compound=COALESCE(excluded.tyre_compound, recorded_laps.tyre_compound),
+                tyre_age_laps=COALESCE(excluded.tyre_age_laps, recorded_laps.tyre_age_laps),
+                fuel_start_kg=COALESCE(excluded.fuel_start_kg, recorded_laps.fuel_start_kg),
+                weather_class=COALESCE(excluded.weather_class, recorded_laps.weather_class),
+                pit_context=excluded.pit_context,
+                flag_context=excluded.flag_context,
                 coverage_ratio=MAX(recorded_laps.coverage_ratio,
                                    excluded.coverage_ratio),
                 quality_score=MAX(recorded_laps.quality_score,
@@ -358,20 +424,24 @@ class FullFieldArchiveService:
                 identity.id,
                 batch.lap_number,
                 batch.timeline_epoch,
-                batch.lap_time_ms,
-                1 if batch.valid is not False and batch.complete else 0,
-                0 if batch.valid is not False else 1,
+                frozen["lap_time_ms"],
+                int(valid),
+                invalid_mask | (0 if valid else 1),
                 context.get("tyre_compound"),
                 context.get("tyre_age_laps"),
                 context.get("fuel_start_kg", context.get("fuel_kg")),
                 context.get("weather_class"),
                 1 if context.get("pit_context") else 0,
                 1 if context.get("flag_context") else 0,
-                batch.coverage_ratio,
+                coverage,
                 batch.quality_score,
                 now,
             ),
         )
+        db.execute("UPDATE recorded_laps SET engineering_json=? WHERE id=?",
+                   (json.dumps(frozen, allow_nan=False), resolved_lap_id))
+        if frozen.get("telemetry_timing_mismatch"):
+            db.execute("UPDATE recorded_laps SET coverage_ratio=0, quality_score=MIN(quality_score,0.2) WHERE id=?", (resolved_lap_id,))
 
     def _persist_batch(self, batch: FinalizedLapBatch) -> None:
         if batch.batch_id in self._invalidated_batch_ids:
@@ -613,6 +683,9 @@ class FullFieldArchiveService:
             self._invalidation_queue_drops,
             self._reconciliation_required,
             self._out_of_scope_skipped,
+            self._history_laps_reconciled,
+            self._history_updates_processed,
+            self._history_updates_discarded,
         )
 
 

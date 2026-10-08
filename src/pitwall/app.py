@@ -400,11 +400,9 @@ async def _persist_stint_debrief(snapshot: dict[str, object]) -> None:
         log.warning("Stint debrief unavailable: %s", exc)
 
 
-async def _backfill_player_sectors(uid: int, history: list[dict]) -> None:
-    snapshot = await store.peek("session_uid", "restart_epoch", "timeline_epoch")
-    if int(snapshot["session_uid"]) == uid:
-        await database.backfill_lap_sectors(uid, history, restart_epoch=int(snapshot["restart_epoch"]),
-                                           timeline_epoch=int(snapshot["timeline_epoch"]))
+async def _reconcile_player_history(context: dict, history: list[dict]) -> None:
+    if await store.matches_session(context):
+        await database.reconcile_player_lap_history(context, history)
 
 
 def _create_udp_protocol() -> F1DatagramProtocol:
@@ -413,7 +411,7 @@ def _create_udp_protocol() -> F1DatagramProtocol:
     return F1DatagramProtocol(
         store,
         voice.on_button_status if voice is not None else None,
-        on_player_lap_history=_backfill_player_sectors,
+        on_player_lap_history=_reconcile_player_history,
         on_final_classification=_persist_finished_session,
         on_qualifying_lap=_persist_qualifying_lap,
         packet_health=packet_health,
@@ -422,6 +420,7 @@ def _create_udp_protocol() -> F1DatagramProtocol:
         capture_mode=settings.capture_mode,
         on_session_key_change=capture_coordinator.observe_session,
         on_stint_end=_persist_stint_debrief,
+        on_field_lap_history=full_field_archive.submit_history,
     )
 
 

@@ -55,7 +55,9 @@ function post(path, body) {
 function redFlagRestart(s) {
   if (!(s.red_flag_active || s.race_control_phase === "red_flag" || s.fia_flag === "red")) return null;
   const stale = s.connected === false || s.telemetry_stale === true;
-  return { ...(stale ? {} : s.strategy?.red_flag_restart), stale };
+  const plan = s.strategy?.red_flag_restart || {};
+  const sameSession = typeof plan.session_identity === "string" && plan.session_identity.length > 0 && plan.session_identity === s.session_identity;
+  return { ...(plan.active === true && (sameSession || (!stale && plan.session_identity == null)) ? plan : {}), stale };
 }
 
 function evidenceSource(source) {
@@ -195,14 +197,13 @@ function renderCall(s) {
   byId("stratHold").hidden = !hold.active;
   const restart = redFlagRestart(s);
   if (restart) {
-    byId("stratInstruction").textContent = restart.stale
-      ? "Telemetry unavailable. Confirm race control and restart tyres in game."
-      : restart.primary?.instruction || restart.instruction || "Session suspended. Prepare fresh restart tyres while stopped; checking available sets.";
-    byId("stratWhy").textContent = restart.primary ? "Primary restart strategy" : "";
+    byId("stratInstruction").textContent = (restart.stale ? "Last confirmed · provisional: " : "")
+      + (restart.primary?.instruction || restart.instruction || (restart.stale ? "No recorded restart plan. Confirm restart tyres in game." : "Session suspended. Prepare fresh restart tyres while stopped; checking available sets."));
+    byId("stratWhy").textContent = restart.primary ? restart.stale ? "Provisional primary restart strategy" : "Primary restart strategy" : "";
     byId("stratChange").textContent = restart.alternative ? `Alternative: ${restart.alternative.instruction}` : "";
     byId("stratChange").className = "small warn";
     byId("stratNotice").textContent = restart.stale
-      ? "Last received red flag; current race status unavailable."
+      ? "Live telemetry unavailable. Confirm the suspension, tyre sets and track conditions in game before using this plan."
       : "Follow the game’s suspension instructions. Select restart tyres while stopped.";
     byId("stratMeta").textContent = "";
     byId("stratReasoning").textContent = restart.alternative_reason || "";
@@ -267,7 +268,7 @@ function renderPlans(s) {
   if (restart) {
     view.planSignature = "red-flag";
     const choices = [["Primary", restart.primary], ["Alternative", restart.alternative]].filter(([, plan]) => plan);
-    byId("stratPlanCount").textContent = `${choices.length} restart option${choices.length === 1 ? "" : "s"}`;
+    byId("stratPlanCount").textContent = `${choices.length}${restart.stale ? " provisional" : ""} restart option${choices.length === 1 ? "" : "s"}`;
     const body = byId("stratPlanRows");
     body.replaceChildren();
     for (const [label, plan] of choices.length ? choices : [["Restart tyres", null]]) {

@@ -18,6 +18,7 @@ from f1.packets import SESSIONS as GAME_SESSIONS
 from f1.packets import TRACKS as GAME_TRACKS
 
 from .capture import CaptureScanReport
+from .lap_history import authoritative_timing
 from .trace_store import TraceManifest
 
 _SESSION_TYPE_FILTERS = {
@@ -358,6 +359,166 @@ class SessionCatalog:
                 self._record_player_lap_sync, lap, legacy_lap_id
             )
 
+    @staticmethod
+    def _player_lap_key(lap: dict[str, Any]) -> str:
+        car_key = session_car_id(
+            session_id(lap["session_uid"], int(lap.get("restart_epoch", 0) or 0)),
+            int(lap.get("player_car_index", 0) or 0),
+            int(lap.get("identity_revision", 0) or 0),
+        )
+        return lap_id(car_key, int(lap["lap_num"]), int(lap.get("timeline_epoch", 0) or 0))
+
+    @staticmethod
+    def _merge_authoritative_timing(lap: dict[str, Any], recorded: dict[str, Any]) -> dict[str, Any]:
+        """A delayed analysis result cannot undo the game's lap history."""
+        authority = recorded.get("history_authority") or {}
+        if recorded.get("timing_source") != "session_history" or not authority:
+            return lap
+        merged = {**recorded, **lap}
+        previous_ms = int(lap.get("lap_time_ms", 0) or 0)
+        corrected_ms = int(authority["lap_time_ms"])
+        mismatch = bool(recorded.get("telemetry_timing_mismatch")) or bool(
+            previous_ms > 0 and abs(previous_ms - corrected_ms) > 100
+        )
+        merged.update({key: authority[key] for key in (
+            "lap_time_ms", "s1_ms", "s2_ms", "s3_ms", "valid_flags", "valid",
+        )})
+        merged["timing_source"] = "session_history"
+        merged["history_authority"] = dict(authority)
+        if mismatch:
+            merged["telemetry_timing_mismatch"] = True
+            merged["trace_incomplete"] = True
+            merged["trace_coverage"] = 0.0
+            exclusions = list(merged.get("learning_exclusions", []) or [])
+            if "history_timing_mismatch" not in exclusions:
+                exclusions.append("history_timing_mismatch")
+            merged["learning_exclusions"] = exclusions
+        return merged
+
+    def apply_authoritative_player_timing(self, lap: dict[str, Any]) -> dict[str, Any]:
+        """Merge canonical timing before a legacy write, using exact identity."""
+        with self._connect() as db:
+            row = db.execute("SELECT engineering_json FROM recorded_laps WHERE id=?",
+                             (self._player_lap_key(lap),)).fetchone()
+        recorded = json.loads(row["engineering_json"] or "{}") if row else {}
+        return self._merge_authoritative_timing(dict(lap), recorded)
+
+    async def reconcile_player_history(
+        self, state: dict[str, Any], history: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        async with self._lock:
+            return await asyncio.to_thread(self._reconcile_player_history_sync, state, history)
+
+    async def reconcile_field_history(
+        self, context: dict[str, Any], history: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        """Timing authority uses the same canonical identity for every car."""
+        return await self.reconcile_player_history({**context, "history_is_player": False}, history)
+
+    def _reconcile_player_history_sync(
+        self, state: dict[str, Any], history: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        session_key = self._upsert_live_session_sync(state)
+        car_index = int(state.get("player_car_index", 0) or 0)
+        revision = int(state.get("identity_revision", 0) or 0)
+        car_key = session_car_id(session_key, car_index, revision)
+        epoch = int(state.get("timeline_epoch", 0) or 0)
+        reconciled = []
+        with self._connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            if db.execute("SELECT 1 FROM recorded_laps WHERE session_car_id=? AND timeline_epoch>? LIMIT 1",
+                          (car_key, epoch)).fetchone():
+                return []  # A queued history packet from an abandoned branch.
+
+            def invalidate(keys: list[str]) -> None:
+                if not keys:
+                    return
+                marks = ",".join("?" for _ in keys)
+                db.execute(f"UPDATE recorded_laps SET valid=0,invalid_reason_mask=(invalid_reason_mask | 2) WHERE id IN ({marks})", keys)
+                db.execute(f"UPDATE comparisons SET state='stale' WHERE candidate_lap_id IN ({marks}) OR reference_key IN ({marks})", [*keys, *keys])
+
+            if state.get("history_complete"):
+                completed = [int(row["lap_num"]) for row in history if authoritative_timing(row)]
+                if completed:
+                    abandoned = db.execute(
+                        "SELECT id FROM recorded_laps WHERE session_car_id=? AND timeline_epoch<? AND lap_number>? "
+                        "AND (invalid_reason_mask & 2)=0", (car_key, epoch, max(completed)),
+                    ).fetchall()
+                    invalidate([str(row["id"]) for row in abandoned])
+            for source in history:
+                timing = authoritative_timing(source)
+                if not timing:
+                    continue
+                number = int(source["lap_num"])
+                # A flashback creates a new branch only from its rewind point.
+                # Earlier valid laps keep their original canonical identities.
+                row = db.execute(
+                    "SELECT * FROM recorded_laps WHERE session_car_id=? AND lap_number=? "
+                    "AND timeline_epoch<=? AND (invalid_reason_mask & 2)=0 "
+                    "ORDER BY timeline_epoch DESC LIMIT 1", (car_key, number, epoch),
+                ).fetchone()
+                if row and int(row["timeline_epoch"]) < epoch:
+                    previous = json.loads(row["engineering_json"] or "{}")
+                    authority = previous.get("history_authority") or {}
+                    if authority and any(authority.get(name) != value for name, value in timing.items()):
+                        # A changed completed lap on the replacement timeline
+                        # belongs to that branch; old trace provenance is kept.
+                        invalidate([str(row["id"])])
+                        row = None
+                identity = {key: state.get(key) for key in (
+                    "session_uid", "restart_epoch", "track_id", "track_name", "track_length_m",
+                    "session_type", "mode_profile", "packet_format", "total_laps",
+                ) if state.get(key) is not None}
+                identity.update(player_car_index=car_index, identity_revision=revision,
+                                timeline_epoch=int(row["timeline_epoch"]) if row else epoch, lap_num=number)
+                if row:
+                    context = json.loads(row["engineering_json"] or "{}")
+                    previous_authority = context.get("history_authority", {})
+                    if context.get("timing_source") == "session_history" and all(
+                        previous_authority.get(name) == value for name, value in timing.items()
+                    ) and (int(row["lap_time_ms"] or 0) == timing["lap_time_ms"]
+                           and bool(row["valid"]) == timing["valid"]
+                           and bool(int(row["invalid_reason_mask"] or 0) & 1) == (not timing["valid"])):
+                        continue
+                    context = {**identity, **context}
+                    context.setdefault("lap_time_ms", int(row["lap_time_ms"] or 0))
+                    context.setdefault("compound", row["tyre_compound"])
+                    context.setdefault("tyre_age_end", row["tyre_age_laps"])
+                    key = str(row["id"])
+                else:
+                    context = {**identity, "compound": "UNKNOWN", "context_observed": False,
+                               "trace_coverage": 0.0, "learning_exclusions": ["missing_telemetry"]}
+                    key = lap_id(car_key, number, epoch)
+                    if db.execute("SELECT 1 FROM recorded_laps WHERE id=?", (key,)).fetchone():
+                        # Never resurrect an invalidated row in its old branch.
+                        continue
+                authority = {**timing, "session_uid": int(state["session_uid"]),
+                             "restart_epoch": int(state.get("restart_epoch", 0) or 0),
+                             "timeline_epoch": identity["timeline_epoch"]}
+                authoritative = {**context, "timing_source": "session_history", "history_authority": authority}
+                merged = self._merge_authoritative_timing(context, authoritative)
+                if row:
+                    # Keep trace manifests, setup, weather, tyre/fuel samples and
+                    # all other observation fields. History supplies timing only.
+                    db.execute(
+                        "UPDATE recorded_laps SET lap_time_ms=?, valid=?, invalid_reason_mask=?, engineering_json=? WHERE id=?",
+                        (timing["lap_time_ms"], int(timing["valid"]),
+                         (int(row["invalid_reason_mask"] or 0) & ~1) | int(not timing["valid"]),
+                         json.dumps(merged, allow_nan=False), key),
+                    )
+                    if merged.get("telemetry_timing_mismatch"):
+                        db.execute("UPDATE recorded_laps SET coverage_ratio=0, quality_score=MIN(quality_score,0.2) WHERE id=?", (key,))
+                else:
+                    db.execute(
+                        "INSERT INTO recorded_laps(id,session_car_id,lap_number,timeline_epoch,lap_time_ms,"
+                        "valid,invalid_reason_mask,tyre_compound,coverage_ratio,quality_score,created_at,engineering_json) "
+                        "VALUES(?,?,?,?,?,?,?,'UNKNOWN',0,0.2,?,?)",
+                        (key, car_key, number, epoch, timing["lap_time_ms"], int(timing["valid"]),
+                         int(not timing["valid"]), _utc_now(), json.dumps(merged, allow_nan=False)),
+                    )
+                reconciled.append(merged)
+        return reconciled
+
     def _record_player_lap_sync(
         self,
         lap: dict[str, Any],
@@ -369,9 +530,17 @@ class SessionCatalog:
         car_key = session_car_id(session_key, car_index, identity_revision)
         timeline_epoch = int(lap.get("timeline_epoch", 0) or 0)
         key = lap_id(car_key, int(lap["lap_num"]), timeline_epoch)
-        trace = lap.get("trace") or []
-        coverage = 1.0 if trace else 0.0
         with self._connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            existing = db.execute("SELECT engineering_json, invalid_reason_mask FROM recorded_laps WHERE id=?", (key,)).fetchone()
+            if existing:
+                lap = self._merge_authoritative_timing(lap, json.loads(existing["engineering_json"] or "{}"))
+                if lap.get("timing_source") == "session_history":
+                    lap = {**lap, "invalid_reason_mask": (int(existing["invalid_reason_mask"] or 0) & ~1) | int(not lap["valid"])}
+                if int(existing["invalid_reason_mask"] or 0) & 2:
+                    lap = {**lap, "valid": False, "invalid_reason_mask": int(lap.get("invalid_reason_mask", 0) or 0) | 2}
+            trace = lap.get("trace") or []
+            coverage = float(lap.get("trace_coverage", 1.0 if trace else 0.0) or 0.0)
             db.execute(
                 """
                 INSERT INTO recorded_laps(
@@ -426,6 +595,8 @@ class SessionCatalog:
             context = {name: value for name, value in lap.items() if name != "trace"}
             db.execute("UPDATE recorded_laps SET engineering_json=? WHERE id=?",
                        (json.dumps(context, allow_nan=False), key))
+            if lap.get("telemetry_timing_mismatch"):
+                db.execute("UPDATE recorded_laps SET coverage_ratio=0, quality_score=MIN(quality_score,0.2) WHERE id=?", (key,))
         return key
 
     async def upsert_live_session(self, state: dict[str, Any]) -> str | None:
@@ -439,7 +610,8 @@ class SessionCatalog:
         restart_epoch = int(state.get("restart_epoch", 0) or 0)
         key = session_id(game_uid, restart_epoch)
         car_index = int(state.get("player_car_index", 0) or 0)
-        car_key = session_car_id(key, car_index, 0)
+        identity_revision = int(state.get("identity_revision", 0) or 0)
+        car_key = session_car_id(key, car_index, identity_revision)
         now = _utc_now()
         classification = state.get("final_classification") or {}
         finished = int(classification.get("position", 0) or 0) > 0
@@ -517,7 +689,7 @@ class SessionCatalog:
                     display_name, anonymized_name, race_number, team_id,
                     is_ai, is_player, first_frame, last_frame, change_reason,
                     identity_confidence
-                ) VALUES (?, ?, ?, 0, ?, ?, ?, ?, ?, ?, 1, ?, ?,
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
                           'live_observation', ?)
                 ON CONFLICT(id) DO UPDATE SET
                     driver_id=COALESCE(excluded.driver_id, session_cars.driver_id),
@@ -534,12 +706,14 @@ class SessionCatalog:
                     car_key,
                     key,
                     car_index,
+                    identity_revision,
                     participant.get("driver_id"),
                     display_name,
                     f"Driver {car_index + 1:02d}",
                     participant.get("race_number"),
                     participant.get("team_id"),
                     1 if participant.get("ai_controlled") else 0,
+                    int(bool(state.get("history_is_player", True))),
                     int(state.get("frame_identifier", 0) or 0),
                     int(state.get("frame_identifier", 0) or 0),
                     0.95 if participant else 0.6,

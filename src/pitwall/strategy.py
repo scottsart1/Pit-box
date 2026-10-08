@@ -17,6 +17,7 @@ from . import rain
 from .config import settings
 from .database import PitWallDatabase
 from .race_plan import plan_matches, remaining_plan
+from .session_guard import session_identity
 from .setup_model import setup_effects
 from .state import StateStore
 from .tyre_inventory import TyreInventory
@@ -2003,14 +2004,16 @@ class StrategyEngine:
         }
 
     @staticmethod
-    def defence_assessment(state: dict[str, Any]) -> dict[str, Any]:
+    def defence_assessment(
+        state: dict[str, Any], pursuer: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         position = int(state.get("player_position", 0) or 0)
         remaining = max(
             0,
             int(state.get("total_laps", 0) or 0)
             - max(1, int(state.get("current_lap", 0) or 0)) + 1,
         )
-        pursuer = next(
+        pursuer = pursuer if pursuer is not None else next(
             (
                 driver
                 for driver in state.get("drivers", [])
@@ -2018,11 +2021,14 @@ class StrategyEngine:
             ),
             None,
         )
-        if position <= 0 or pursuer is None:
+        if position <= 0 or pursuer is None or int(pursuer.get("position", 0) or 0) <= position:
             return {
                 "available": False,
-                "reason": "No classified car directly behind to assess.",
+                "reason": "No classified following car to assess.",
             }
+        observed_gap = finite(pursuer.get("gap_to_player_s"))
+        if observed_gap is None:
+            return {"available": False, "reason": "The following car's gap is unavailable."}
         history = [
             item
             for item in (pursuer.get("gap_history") or [])
@@ -2041,7 +2047,18 @@ class StrategyEngine:
                 closing_rate = (
                     abs(float(last["gap_s"])) - abs(float(first["gap_s"]))
                 ) / laps
-        gap = abs(float(pursuer.get("gap_to_player_s", 0.0) or 0.0))
+        gap = abs(observed_gap)
+        gap_trend = (
+            "unknown" if closing_rate is None else
+            "being_caught" if closing_rate <= -0.05 else
+            "pulling_away" if closing_rate >= 0.05 else "holding_station"
+        )
+        trend_description = {
+            "unknown": "There is not enough recorded gap history to establish a trend.",
+            "being_caught": "The gap to the following car is shrinking; the player is being caught.",
+            "pulling_away": "The gap to the following car is growing; the player is pulling away.",
+            "holding_station": "The recorded gap is approximately stable; the cars are holding station.",
+        }[gap_trend]
         sustainable = (
             round(gap / abs(closing_rate), 1)
             if closing_rate is not None and closing_rate < -0.05 and gap > 0
@@ -2113,6 +2130,11 @@ class StrategyEngine:
             "closing_rate_s_per_lap": (
                 round(float(closing_rate), 3) if closing_rate is not None else None
             ),
+            "gap_change_s_per_lap": (
+                round(float(closing_rate), 3) if closing_rate is not None else None
+            ),
+            "gap_trend": gap_trend,
+            "gap_trend_description": trend_description,
             "defence_laps_sustainable": sustainable,
             "overtaking_difficulty": round(difficulty, 2),
             "passing_zone_count": zones,
@@ -2132,7 +2154,9 @@ class StrategyEngine:
                 "medium" if quality_evidence and len(history) >= 3 else "low"
             ),
             "interpretation": (
-                "A negative closing rate means the car behind is catching. The "
+                trend_description + " Positive gap change means the player is pulling away; "
+                "negative means the following car is catching. The legacy closing_rate_s_per_lap "
+                "field has this same gap-change sign. This is the recorded trend, not a guarantee of future pace. The "
                 "quality score requires observed position retention, corner comparisons and gap trend; "
                 "missing observations are unknown, not zero loss. Pass probability is an uncalibrated planning heuristic."
             ),
@@ -4368,6 +4392,7 @@ class StrategyEngine:
         )
         return {
             "active": True, "tyre_change_available": True,
+            "session_identity": session_identity(state),
             "laps_remaining": remaining, "inventory_status": inventory_status,
             "primary": primary, "alternative": alternative,
             "alternative_reason": alternative_reason, "instruction": instruction,

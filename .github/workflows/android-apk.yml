@@ -15,6 +15,7 @@ on:
       - tools/drive-trace-ui-smoke.cjs
       - tools/onboarding-ui-smoke.cjs
       - tools/onboarding-persistence-ui-smoke.cjs
+      - tools/lap-lab-layout-ui-smoke.cjs
       - tools/strategy-layout-smoke.cjs
       - tools/analysis-ui-smoke.cjs
       - tools/analysis-layout-smoke.cjs
@@ -82,6 +83,8 @@ jobs:
         run: NODE_PATH="$RUNNER_TEMP/pitbox-browser/node_modules" PITBOX_DRIVER_FOCUS_EVIDENCE="$RUNNER_TEMP/driver-focus" node tools/driver-focus-ui-smoke.cjs
       - name: Native onboarding completion survives dashboard port changes
         run: NODE_PATH="$RUNNER_TEMP/pitbox-browser/node_modules" node tools/onboarding-persistence-ui-smoke.cjs
+      - name: Recorded Lap Lab comparisons fit phone and tablet widths
+        run: NODE_PATH="$RUNNER_TEMP/pitbox-browser/node_modules" node tools/lap-lab-layout-ui-smoke.cjs
       - name: Pace chart size and readability at phone and tablet sizes
         run: NODE_PATH="$RUNNER_TEMP/pitbox-browser/node_modules" PITBOX_PACE_EVIDENCE="$RUNNER_TEMP/pace-spark" node tools/pace-spark-ui-smoke.cjs
       - name: Test Engineer and sourced Setup Lab browser acceptance

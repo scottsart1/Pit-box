@@ -11,6 +11,9 @@
 - Clearing a driver strategy override immediately restores automatic planning.
 - Strategy narration uses smaller tool responses and has a grounded fallback
   when model narration exceeds its deadline.
+- Strategy answers retain their uncertainty and refresh when the primary or
+  alternative plan changes while the engineer is responding.
+- Rival gap trends explicitly distinguish pulling away from being caught.
 
 ## Dashboard and reliability
 
@@ -21,6 +24,14 @@
 - Sharper, correctly sized pace charts on phones and tablets.
 - Android speech drains normally and stops promptly when interrupted.
 - Rebuilt Android dashboards refresh reliably without replacing saved data.
+- Android walkthrough completion survives dashboard port changes.
+- Provisional restart choices remain visible during confirmed suspension
+  telemetry gaps, with the last confirmed status clearly labelled.
+- Recorded lap and sector times are reconciled with the game's session
+  history across the whole field, including laps missed during suspension.
+  Missing or inconsistent telemetry remains excluded from setup learning.
+- Populated Lap Lab and History fit phone screens, and partial recordings
+  clearly show their limits when reviewing traces and single-lap analysis.
 - Proactive settings apply at startup; delayed telemetry retains its arrival
   time instead of appearing newly received.
 

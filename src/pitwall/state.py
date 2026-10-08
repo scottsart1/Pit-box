@@ -11,6 +11,8 @@ from dataclasses import asdict, dataclass, field, fields, is_dataclass
 from typing import Any, Literal
 
 from .config import settings
+from .lap_history import authoritative_timing
+from .session_guard import session_identity
 
 WHEEL_LABELS = ("FL", "FR", "RL", "RR")
 SnapshotProfile = Literal["full", "analysis", "live", "radio"]
@@ -799,6 +801,7 @@ class StateStore:
             else:
                 data[name] = copy.deepcopy(value)
 
+        data["session_identity"] = session_identity(self.state)
         data["telemetry_stale"] = not data["connected"] and bool(data["last_packet_at"])
         data["wheel_labels"] = list(WHEEL_LABELS)
         if profile == "live":
@@ -1184,6 +1187,7 @@ class StateStore:
             self._mark_learning_context_locked()
             if old_lap and new_lap > old_lap and state.traces:
                 start = state.current_lap_started or {}
+                gap = new_lap > old_lap + 1
                 distances = [point.get("d", 0) for point in state.traces]
                 coverage = (max(distances) - min(distances)) / max(1, state.track_length_m)
                 completed = {
@@ -1199,7 +1203,9 @@ class StateStore:
                     "session_type": state.session_type,
                     "mode_profile": state.mode_profile,
                     "lap_num": old_lap,
-                    "lap_time_ms": int(last_lap_ms or state.last_lap_ms),
+                    # Last-lap time belongs to new_lap - 1, not the last lap
+                    # we saw before a telemetry gap. History repairs that lap.
+                    "lap_time_ms": 0 if gap else int(last_lap_ms or state.last_lap_ms),
                     "valid": not bool(state.current_lap_invalid),
                     "compound": state.tyre.compound,
                     "run_serial": int(start.get("run_serial", state.run_serial)),
@@ -1211,7 +1217,8 @@ class StateStore:
                         "basis": "Measured gap ahead while above 50 km/h; this does not establish all traffic interference.",
                     },
                     "context_observed": all(str(packet) in state.packet_group_freshness for packet in (2, 5, 6, 7)),
-                    "trace_coverage": round(min(1.0, max(0.0, coverage)), 3),
+                    "trace_coverage": 0.0 if gap else round(min(1.0, max(0.0, coverage)), 3),
+                    "trace_incomplete": gap,
                     "tyre_age_end": state.tyre.age_laps,
                     "tyre_age_start": int(
                         start.get("tyre_age", max(0, state.tyre.age_laps - 1))
@@ -1231,7 +1238,7 @@ class StateStore:
                     "position": position,
                     "pit_status": pit_status,
                     "pit_lane_time_ms": pit_lane_time_ms,
-                    "learning_exclusions": list(start.get("learning_exclusions", [])),
+                    "learning_exclusions": list(start.get("learning_exclusions", [])) + (["telemetry_gap"] if gap else []),
                     # The catalogue's flag context, which decides whether Lap
                     # Lab treats a comparison as like for like. The player's
                     # laps never carried it, so a lap slowed for a yellow was
@@ -1247,6 +1254,12 @@ class StateStore:
                     "trace": copy.deepcopy(state.traces),
                     "created_at": time.time(),
                 }
+                if gap:
+                    completed["context_observed"] = False
+                if 0 <= state.player_car_index < len(state.drivers):
+                    observed = next((row for row in state.drivers[state.player_car_index].lap_history
+                                     if row.get("lap_num") == old_lap), {})
+                    completed.update(authoritative_timing(observed))
                 summary = {
                     key: copy.deepcopy(value)
                     for key, value in completed.items()
@@ -1298,27 +1311,44 @@ class StateStore:
             for lap in reversed(self.state.completed_laps):
                 if int(lap.get("lap_num", -1)) == int(lap_num):
                     update = copy.deepcopy(values)
+                    if lap.get("timing_source") == "session_history":
+                        for key in ("lap_time_ms", "s1_ms", "s2_ms", "s3_ms", "valid", "valid_flags"):
+                            update.pop(key, None)
                     for key in ("s1_ms", "s2_ms", "s3_ms"):
                         if not update.get(key) and lap.get(key):
                             update.pop(key, None)
                     lap.update(update)
                     break
 
-    async def merge_player_lap_history(self, history: list[dict[str, Any]]) -> None:
+    async def merge_player_lap_history(
+        self, history: list[dict[str, Any]], expected: dict[str, Any] | None = None,
+    ) -> None:
         async with self._lock:
-            by_lap = {item.get("lap_num"): item for item in history}
-            for lap in self.state.completed_laps:
-                source = by_lap.get(lap.get("lap_num"))
-                if source:
-                    lap.update(
-                        {
-                            "s1_ms": source.get("s1_ms", 0),
-                            "s2_ms": source.get("s2_ms", 0),
-                            "s3_ms": source.get("s3_ms", 0),
-                            "valid_flags": source.get("valid_flags", 0),
-                            "valid": bool(source.get("valid_flags", 0) & 1),
-                        }
-                    )
+            from .session_guard import session_key
+            if expected is not None and session_key(self.state) != session_key(expected):
+                return
+            by_lap = {lap["lap_num"]: lap for lap in self.state.completed_laps}
+            for source in history:
+                timing = authoritative_timing(source)
+                if not timing:
+                    continue
+                lap_num = int(source["lap_num"])
+                lap = by_lap.get(lap_num)
+                if lap is None:
+                    lap = {key: copy.deepcopy(getattr(self.state, key)) for key in (
+                        "session_uid", "restart_epoch", "timeline_epoch", "session_generation",
+                        "player_car_index", "track_id", "track_name", "session_type", "mode_profile")}
+                    lap.update(lap_num=lap_num, compound=source.get("compound", "UNKNOWN"),
+                               context_observed=False, trace_coverage=0.0, trace_incomplete=True,
+                               learning_exclusions=["missing_telemetry"], created_at=time.time())
+                    by_lap[lap_num] = lap
+                elif lap.get("lap_time_ms", 0) > 0 and abs(lap["lap_time_ms"] - timing["lap_time_ms"]) > 100:
+                    lap.update(telemetry_timing_mismatch=True, trace_incomplete=True,
+                               trace_coverage=0.0, context_observed=False)
+                    lap["learning_exclusions"] = list(dict.fromkeys([
+                        *lap.get("learning_exclusions", []), "history_timing_mismatch"]))
+                lap.update(timing)
+            self.state.completed_laps = [by_lap[key] for key in sorted(by_lap)][-100:]
 
     async def append_radio(self, role: str, text: str, *, expected: dict[str, Any] | None = None) -> bool:
         async with self._lock:

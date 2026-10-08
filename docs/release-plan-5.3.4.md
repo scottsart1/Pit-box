@@ -58,6 +58,8 @@ and the existing screenshot's 5.3.2 provenance remain historical facts.
    before and after any authorized in-place upgrade. Keep the existing 4 KB
    page-size and Bluetooth limitations unless new evidence supports changing
    them. ZIP alignment alone does not establish 16 KB ELF compatibility.
+   Complete the signed production tablet upgrade and preservation comparison
+   before uploading public artifacts or announcing the update.
 
 The local Android release identity is under
 `%LOCALAPPDATA%/YourPitBoxRelease/signing/`, alias `pitbox-release`, certificate

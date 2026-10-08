@@ -245,6 +245,10 @@ button:disabled,
    the chosen scope could not be read. */
 #review .row,
 #review .controls { flex-wrap: wrap; }
+#review .review-grid > .panel { min-width: 0; }
+/* Event payloads have long unbroken JSON tokens. Keep their full text readable
+   inside the panel instead of letting one event widen the entire history. */
+#historyEvents .card { overflow-wrap: anywhere; }
 #historyScope { flex: 0 0 auto; min-width: 7.5rem; }
 .inline-notice:empty { display: none; }
 
@@ -852,7 +856,16 @@ button:disabled,
 }
 
 .comparison-delta output { font-size: 1.5rem; font-weight: 900; }
-.comparison-header > .state-chip { grid-column: 1 / -1; justify-self: start; }
+.comparison-header > .state-chip {
+  grid-column: 1 / -1;
+  justify-self: start;
+  min-width: 0;
+  max-width: 100%;
+  /* Recorded compatibility reasons are sentences, unlike short status tags.
+     Let them wrap so the grid never grows beyond a phone's viewport. */
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
 
 .playback-pane { grid-column: 1; }
 .instrument-pane { grid-column: 2; }

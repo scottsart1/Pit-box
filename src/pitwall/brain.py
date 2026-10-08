@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import re
 import time
+from copy import deepcopy
 from typing import Any
 
 from . import rain
@@ -453,6 +454,25 @@ def _limit_radio_sentences(text: str, route: str, verbosity: str) -> str:
 
 
 class EngineerBrain:
+    @staticmethod
+    def qualify_strategy_text(text: str, plan: dict[str, Any] | None) -> str:
+        """Keep authoritative model uncertainty outside the narration cap."""
+        if not plan or not (plan.get("recommended") or plan.get("red_flag_restart", {}).get("active")):
+            return text
+        confidence = str(plan.get("confidence") or "unknown").lower()
+        if confidence not in {"low", "unknown"}:
+            return text
+        evidence = plan.get("model_summary", {}) or {}
+        sources = [evidence.get("selected_stint_wear_source", ""), evidence.get("selected_stint_deg_source", "")]
+        used = set(plan.get("recommended", {}).get("compounds", []) or [])
+        for compound in used:
+            model = (evidence.get("compounds", {}) or {}).get(compound, {})
+            sources.extend((model.get("wear_source", ""), model.get("pace_source", "")))
+        basis = "; tyre estimates include track defaults" if any("track_default" in str(value) for value in sources) else ""
+        confidence_text = "confidence low" if confidence == "low" else "confidence unreported"
+        qualifier = f"Provisional strategy ({confidence_text}{basis}); "
+        return text if text.startswith(qualifier) else qualifier + text
+
     def __init__(
         self,
         store: StateStore,
@@ -597,10 +617,13 @@ class EngineerBrain:
         """A failed narration must not hide an independently computed plan."""
         state = await self.store.snapshot_analysis()
         plan = await self.tools.get_pit_strategy()
-        prefix = "Engineer analysis timed out; "
+        return self._complete_strategy_answer(plan, state, "Engineer analysis timed out; ")
+
+    def _complete_strategy_answer(self, plan: dict[str, Any], state: dict[str, Any], prefix: str) -> str:
+        """Describe one frozen, authoritative complete plan without reranking."""
         restart = plan.get("red_flag_restart", {})
         if restart.get("active") and restart.get("instruction"):
-            return prefix + str(restart["instruction"])
+            return self.qualify_strategy_text(prefix + str(restart["instruction"]), plan)
         recommended = plan.get("recommended", {})
         current_lap = int(state.get("current_lap", 0) or 0)
 
@@ -630,7 +653,41 @@ class EngineerBrain:
             response += "; confirm spare sets in the tyre menu"
         if not fresh["current"]:
             response += "; live telemetry must confirm this before a new pit call"
-        return response + "."
+        return self.qualify_strategy_text(response + ".", plan)
+
+    @staticmethod
+    def _material_plan_identity(plan: dict[str, Any] | None) -> tuple[Any, ...] | None:
+        recommended = (plan or {}).get("recommended", {})
+        if not recommended:
+            return None
+        def identity(candidate: dict[str, Any]) -> tuple[Any, ...]:
+            return (
+                tuple(candidate.get("box_laps", []) or []),
+                tuple(candidate.get("compounds", []) or []),
+                candidate.get("box_lap"), candidate.get("fit_compound"),
+                candidate.get("action"), candidate.get("feasible"), candidate.get("legal"),
+            )
+        primary = identity(recommended)
+        alternative = next((identity(candidate) for candidate in (plan or {}).get("plans", [])
+                            if candidate.get("feasible") and candidate.get("legal")
+                            and identity(candidate)[:2] != primary[:2]), None)
+        return primary, alternative
+
+    @classmethod
+    def _requests_current_strategy_plan(cls, state: dict[str, Any], utterance: str) -> bool:
+        text = normalize_text(utterance)
+        if not cls._is_strategy_request(utterance) or has_negation(text) or match_drivers(state.get("drivers", []), utterance):
+            return False
+        if has_any_phrase(text, (
+            "what if", "if we", "could we", "would", "why", "compare", "versus", "instead",
+            "historical", "history", "previous", "earlier", "rival", "car ahead", "car behind",
+            "clear", "cancel", "override", "should", "how many",
+        )):
+            return False
+        return has_any_phrase(text, (
+            "full", "complete", "current", "remaining", "best strategy", "best alternative",
+            "restart strategy", "race strategy", "pit strategy", "pit plan", "rundown",
+        ))
 
     @staticmethod
     def classify_request(utterance: str) -> str:
@@ -1797,7 +1854,7 @@ class EngineerBrain:
             strategy = await self.tools.get_pit_strategy()
             restart = strategy.get("red_flag_restart", {})
             if restart.get("active") and restart.get("instruction"):
-                return str(restart["instruction"]).rstrip(".").replace(". ", "; ") + "."
+                return self.qualify_strategy_text(str(restart["instruction"]).rstrip(".").replace(". ", "; ") + ".", strategy)
 
         # Explicit driver commands are handled above, because they are exact by
         # construction. Everything past this point is keyword lookup over the
@@ -1984,7 +2041,7 @@ class EngineerBrain:
                     # The normal radio cap must not cut off the alternative or
                     # inventory caveat. Keep the complete frozen advice in one
                     # utterance, including when the driver chose terse mode.
-                    return str(restart["instruction"]).rstrip(".").replace(". ", "; ") + "."
+                    return self.qualify_strategy_text(str(restart["instruction"]).rstrip(".").replace(". ", "; ") + ".", strategy)
             recommended = strategy.get("recommended", {})
             if telemetry_stale and not recommended:
                 return "Telemetry is stale; I cannot safely issue a new pit call until the feed reconnects."
@@ -2024,9 +2081,9 @@ class EngineerBrain:
                 warning = str(override_meta.get("warning") or "")
                 detail = warning or reason
                 if detail:
-                    return f"{prefix}{instruction} {detail} Confidence {confidence}."
-                return f"{prefix}{instruction} Confidence {confidence}; the call is provisional."
-            return prefix + (f"No change — {instruction}" if previous == signature else instruction)
+                    return self.qualify_strategy_text(f"{prefix}{instruction} {detail} Confidence {confidence}.", strategy)
+                return self.qualify_strategy_text(f"{prefix}{instruction} Confidence {confidence}; the call is provisional.", strategy)
+            return self.qualify_strategy_text(prefix + (f"No change — {instruction}" if previous == signature else instruction), strategy)
 
         asks_balance = has_any_phrase(text, ("differential", "diff setting", "brake bias"))
         rear_problem = has_any_phrase(text, ("rear sliding", "rear slide", "rear standing", "oversteer", "wheelspin", "traction"))
@@ -2258,10 +2315,24 @@ class EngineerBrain:
         provider: str | None = None,
         tools: list[dict[str, Any]] | None = None,
         enforce_radio_limit: bool = True,
+        strategy_context: dict[str, Any] | None = None,
+        refresh_current_strategy: bool = False,
     ) -> str:
         prompt = prompt.strip()
         if not prompt:
             raise RuntimeError("The engineer request contained no user prompt.")
+
+        # This context belongs to this generation, not to concurrent proactive
+        # or driver requests. The actual tool result supersedes header facts.
+        used_strategy = deepcopy(strategy_context)
+        guard_origin = await self.store.snapshot_analysis() if refresh_current_strategy else None
+
+        async def execute_tool(name: str, arguments: dict[str, Any]) -> Any:
+            nonlocal used_strategy
+            result = await self.tools.call(name, arguments)
+            if strategy_context is not None and name == "get_pit_strategy" and isinstance(result, dict):
+                used_strategy = deepcopy(result)
+            return result
 
         try:
             result = await self.router.generate(
@@ -2272,7 +2343,7 @@ class EngineerBrain:
                 tools=(
                     self.tools.schemas_for_route(route) if tools is None else tools
                 ),
-                execute_tool=self.tools.call,
+                execute_tool=execute_tool,
                 max_rounds=max_rounds,
                 provider=provider,
             )
@@ -2285,6 +2356,18 @@ class EngineerBrain:
             result.text = _limit_radio_sentences(
                 result.text, route, str(live_state.get("radio_verbosity", settings.radio_verbosity))
             )
+        if guard_origin is not None:
+            latest_state = await self.store.snapshot_analysis()
+            if not await self.store.matches_session(guard_origin):
+                raise SessionChangedError("Session changed; the previous strategy response was discarded.")
+            latest_plan = latest_state.get("strategy", {})
+            if self._material_plan_identity(used_strategy) != self._material_plan_identity(latest_plan):
+                result.text = self._complete_strategy_answer(latest_plan, latest_state, "Telemetry updated while checking; ")
+                used_strategy = latest_plan
+                result.provider = "local"
+                result.model = "strategy-refresh-guard"
+        if strategy_context is not None:
+            result.text = self.qualify_strategy_text(result.text, used_strategy)
         self.last_provider_result = result
         await self.store.update(
             llm_provider=result.provider,
@@ -2429,6 +2512,8 @@ class EngineerBrain:
                 ),
                 max_rounds=4 if route == "deep" else 3,
                 route=route,
+                strategy_context=state.get("strategy", {}) if include_strategy else None,
+                refresh_current_strategy=self._requests_current_strategy_plan(state, utterance),
             )
         except (ProviderDeadlineError, ProviderRequestError) as exc:
             deadline = isinstance(exc, ProviderDeadlineError) or exc.kind == "deadline"

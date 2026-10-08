@@ -1738,7 +1738,7 @@ class ProactiveEngineer:
                 advice = restart.get("instruction") or (
                     "Tyres can be changed during the suspension. Check the available sets for the restart."
                 )
-                return "Red flag, red flag. " + str(advice)
+                return "Red flag, red flag. " + EngineerBrain.qualify_strategy_text(str(advice), state.get("strategy", {}))
             # Lead with the flag: it is the only part that is always true and
             # always urgent, and this template is now spoken verbatim for FLASH
             # calls rather than being reworded by the model. Advice is appended

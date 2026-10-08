@@ -326,7 +326,7 @@ class F1DatagramProtocol(asyncio.DatagramProtocol):
         on_button_status: Callable[[int], None] | None = None,
         queue_capacity: int = 2048,
         on_player_lap_history: (
-            Callable[[int, list[dict[str, Any]]], Awaitable[Any]] | None
+            Callable[[dict[str, Any], list[dict[str, Any]]], Awaitable[Any]] | None
         ) = None,
         on_final_classification: Callable[[], Awaitable[Any]] | None = None,
         on_qualifying_lap: Callable[[], Awaitable[Any]] | None = None,
@@ -337,10 +337,12 @@ class F1DatagramProtocol(asyncio.DatagramProtocol):
         capture_mode: str = "balanced",
         on_session_key_change: Callable[[str, dict[str, Any]], None] | None = None,
         on_stint_end: Callable[[dict[str, Any]], Awaitable[Any]] | None = None,
+        on_field_lap_history: Callable[[dict[str, Any], list[dict[str, Any]]], Any] | None = None,
     ) -> None:
         self.store = store
         self.on_button_status = on_button_status
         self.on_player_lap_history = on_player_lap_history
+        self.on_field_lap_history = on_field_lap_history
         self.on_final_classification = on_final_classification
         self.on_qualifying_lap = on_qualifying_lap
         self.packet_health = packet_health
@@ -1976,6 +1978,8 @@ class F1DatagramProtocol(asyncio.DatagramProtocol):
             )
             start_lap = end_lap + 1
 
+        context = {}
+
         def apply(state):  # type: ignore[no-untyped-def]
             driver = state.drivers[index]
             driver.lap_history = history[-100:]
@@ -1987,17 +1991,39 @@ class F1DatagramProtocol(asyncio.DatagramProtocol):
                 if item["lap_ms"] > 0 and (item["valid_flags"] & 1)
             ]
             driver.best_lap_ms = min(valid) if valid else 0
+            context.update({key: getattr(state, key) for key in (
+                "session_uid", "restart_epoch", "timeline_epoch", "session_generation",
+                "track_id", "track_name", "track_length_m", "session_type", "mode_profile",
+                "packet_format", "frame_identifier", "total_laps")})
+            context["player_car_index"] = index
+            context["history_complete"] = True
+            context["current_lap"] = driver.current_lap
+            context["drivers"] = [{key: getattr(driver, key) for key in (
+                "car_idx", "name", "driver_id", "race_number", "team_id", "ai_controlled")}]
 
         await self.store.mutate(apply)
-        snapshot = await self.store.peek("session_uid")
         packet_player_index = int(getattr(packet.header, "player_car_index", 255))
+        assembler = self.session_assembler
+        archive_session = assembler.session if assembler is not None else None
+        archive_identity = assembler.identity_registry.current(index) if archive_session is not None else None
+        matching_archive = bool(archive_session is not None and archive_identity is not None
+                                and archive_session.game_session_uid == str(context["session_uid"]))
+        for row in history:
+            row["compound"] = next((stint["compound"] for stint in stints
+                                    if stint["start_lap"] <= row["lap_num"] <= stint["end_lap"]), "UNKNOWN")
         if index == packet_player_index and 0 <= packet_player_index < 24:
             await self.store.update(player_car_index=packet_player_index)
-            await self.store.merge_player_lap_history(history)
+            if matching_archive:
+                context["identity_revision"] = archive_identity.identity_revision
+            await self.store.merge_player_lap_history(history, expected=context)
             if self.on_player_lap_history:
-                await self.on_player_lap_history(
-                    int(snapshot.get("session_uid", 0)), history
-                )
+                await self.on_player_lap_history(context, history)
+        elif self.on_field_lap_history and matching_archive:
+            self.on_field_lap_history({**context, "restart_epoch": archive_session.restart_epoch,
+                                      "timeline_epoch": assembler.timeline_epoch,
+                                      "identity_revision": archive_identity.identity_revision,
+                                      "history_is_player": False,
+                                      "history_identity": archive_identity.as_record()}, history)
 
     async def handle_PacketCarSetupData(self, packet: Any) -> None:
         player_index = _packet_player_index(packet, packet.car_setup_data)

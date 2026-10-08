@@ -12,7 +12,7 @@ when a repair or a corrected harness is rerun.
 | Browser behavior | Entire JavaScript suite; real browser workspace, layout, scrolling, setup, engineering, chart and stale-state checks at phone, tablet and desktop sizes. |
 | Windows artifact | The exact installer passes installation, frozen startup, UDP ingestion, completed-race persistence, restart, integrity and uninstall/data-retention tests on a disposable runner. Counted reception and responsiveness pass separately. |
 | Android artifact | Existing signing identity, correct application ID/version/ABIs, embedded source and asset identity, native screen/input/export checks and data preservation. |
-| Historical race | Every packet from a complete, checksum-verified tablet capture is emitted with recorded timing. Count received versus sent, retain failures/timeouts, require an independently decoded final result, drain archive work, inspect all player laps and restart persistence. |
+| Historical race | Every packet from a complete, checksum-verified tablet capture is emitted with recorded timing. Count received versus sent, retain failures/timeouts, require an independently decoded final result, drain archive work, match every completed lap and sector time across the whole field against original session-history packets, then verify restart persistence. |
 | Race control | Actual recorded red flag, suspension telemetry gap, same-compound fresh set and lights-out restart are inspected. Ordinary SC/VSC must not imply free suspension tyre changes. |
 | Engineer correctness | Execute the command matrix through the real API. Retain requests, before/after state, provider results and mutations. Verify each numerical or causal claim; a deterministic fallback is identified separately from successful AI generation. |
 | Missing/stale data | Withhold individual packet families while other groups arrive, pause, disconnect and switch session identity. Old values must not become new facts or instructions. |
@@ -29,6 +29,13 @@ race time, with two pit stops, 25 points and no time penalty. These are decoded
 directly from the original capture before the replay; they are not inferred
 from the application's output. Private raw data and driver identifiers are
 retained outside the repository.
+
+The final session-history packets also contain 624 completed laps across 22
+cars: two cars complete two laps each, and the other 20 complete 31. Every lap
+has all three sector times. The final gate compares canonical stored lap times,
+sector times and validity for this complete set, including the player's legacy
+history export. Missing telemetry must remain excluded from telemetry learning
+even when the game supplies an authoritative completed lap time.
 
 This expectation is for a complete playback gate. The earlier 49-second
 historical segment is useful targeted evidence and does not satisfy it.
@@ -52,6 +59,19 @@ historical segment is useful targeted evidence and does not satisfy it.
 - Empty forecasts became a numeric zero in a session summary, and a new 2026
   session without packet 16 used legacy DRS terminology. Test missing forecast
   horizons and never-received aid flags independently of socket connectivity.
+- The complete historical replay exposed a missing player lap after the
+  red-flag gap and the following lap's time assigned to the preceding trace.
+  Sector-only history updates could leave a contradictory saved row. Require
+  authoritative timing reconciliation and a complete replay on the repair.
+- Actual narration inverted a positive gap change to the car behind and
+  omitted strategy uncertainty. A separate response retained an old stop lap
+  after the recommendation changed during model generation. Verify direction,
+  confidence, primary and alternative plans against the returned evidence.
+- Populated Lap Lab compatibility text overflowed a phone viewport. Test real
+  recorded options and long reasons in addition to empty-page navigation.
+- Restart choices disappeared from the dashboard during a confirmed red-flag
+  telemetry gap. Retain explicitly provisional same-session choices, without
+  displaying old car readings as live or carrying choices into a new session.
 
 ## Intermediate regression evidence
 
