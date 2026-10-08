@@ -1700,7 +1700,7 @@ class F1DatagramProtocol(asyncio.DatagramProtocol):
     async def handle_PacketCarTelemetry2Data(self, packet: Any) -> None:
         player_index = _packet_player_index(packet, packet.car_telemetry2_data)
 
-        # 2026 Manual Override state for every car, so a rival's boost can be
+        # 2026 Overtake Mode state for every car, so a rival's boost can be
         # seen rather than guessed.
         overrides = [
             (bool(entry.overtake_active), bool(entry.overtake_available))

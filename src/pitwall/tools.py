@@ -5,10 +5,13 @@ import time
 from statistics import median
 from typing import TYPE_CHECKING, Any
 
+from f1.packets import TRACKS
+
 from .analysis import AnalysisEngine, fmt_ms, theil_sen
 from .config import settings
 from .database import PitWallDatabase
 from .identity import display_name, match_drivers
+from .intent import normalize_text
 from .setup_advisor import SetupAdvisor
 from .state import StateStore
 from .strategy import StrategyEngine
@@ -2035,11 +2038,20 @@ class TelemetryTools:
 
     async def get_personal_history(self, track: str = "current") -> dict[str, Any]:
         state = await self.store.snapshot_analysis()
-        track_id = int(state.get("track_id", -1))
+        requested = normalize_text(str(track))
+        if requested in {"", "current", "current track", "this track"}:
+            track_id = int(state.get("track_id", -1))
+        else:
+            track_id = next((int(key) for key, name in TRACKS.items()
+                             if requested in {normalize_text(name), str(key)}), -1)
+        if track_id not in TRACKS:
+            return {"available": False, "reason": "Track not recognized; use an exact circuit name or track ID."}
         review = await self.database.track_review(track_id, 30)
         personal_best = await self.database.get_personal_best(track_id)
         return {
-            "track": state.get("track_name") if track == "current" else track,
+            "available": bool(personal_best or review.get("laps")),
+            "track": TRACKS[track_id],
+            "track_id": track_id,
             "personal_best": fmt_ms(personal_best.get("lap_time_ms", 0))
             if personal_best
             else None,
