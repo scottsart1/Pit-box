@@ -370,10 +370,17 @@ class SessionCatalog:
 
     @staticmethod
     def history_replacement_epoch(db: sqlite3.Connection, session_key: str) -> int:
-        """The durable branch barrier also exists before replacement laps do."""
+        """The branch barrier belongs to the current retained recording.
+
+        Deleting a recording preserves its audit trail. Re-importing the same
+        game UID starts a new recording, so earlier flashbacks must not reject
+        its initial laps. Audit IDs define the boundary even when timestamps
+        are equal, while surviving-session barriers remain durable.
+        """
         rows = db.execute(
-            "SELECT detail_json FROM audit_events WHERE event_type='timeline_invalidated' AND subject_id=?",
-            (session_key,),
+            "SELECT detail_json FROM audit_events WHERE event_type='timeline_invalidated' AND subject_id=? "
+            "AND id>COALESCE((SELECT MAX(id) FROM audit_events WHERE event_type='session_deleted' AND subject_id=?),0)",
+            (session_key, session_key),
         ).fetchall()
         return max((int(json.loads(row["detail_json"]).get("replacement_timeline_epoch", 0))
                     for row in rows), default=0)
@@ -1624,6 +1631,10 @@ class SessionCatalog:
             )
         legacy_counts: dict[str, int] = {}
         legacy_uid = session["legacy_session_uid"]
+        shared_legacy_owners = [str(row["id"]) for row in db.execute(
+            "SELECT id FROM recorded_sessions WHERE legacy_session_uid=? AND id<>? ORDER BY id",
+            (legacy_uid, key),
+        ).fetchall()] if legacy_uid is not None else []
         if legacy_uid is not None:
             existing_tables = {
                 str(row[0])
@@ -1639,6 +1650,12 @@ class SessionCatalog:
                             (legacy_uid,),
                         ).fetchone()[0]
                     )
+        retained_legacy = dict(legacy_counts) if shared_legacy_owners else {}
+        if shared_legacy_owners:
+            # Legacy rows have no restart-epoch identity. Another canonical
+            # recording may still own them, so deleting one owner must retain
+            # them. Include ownership in the preview fingerprint as well.
+            legacy_counts = {table: 0 for table in legacy_counts}
         return {
             "status": str(session["status"]),
             "starred": bool(session["starred"]),
@@ -1653,6 +1670,8 @@ class SessionCatalog:
                 "legacy": legacy_counts,
             },
             "artifacts": artifacts,
+            "retained_shared_legacy_tables": retained_legacy,
+            "retained_shared_legacy_session_ids": shared_legacy_owners,
             "total_artifact_bytes": sum(
                 int(item["byte_count"]) for item in artifacts
             ),
@@ -1782,7 +1801,7 @@ class SessionCatalog:
                 legacy_uid = db.execute(
                     "SELECT legacy_session_uid FROM recorded_sessions WHERE id=?", (key,)
                 ).fetchone()[0]
-                if legacy_uid is not None:
+                if legacy_uid is not None and not impact["retained_shared_legacy_session_ids"]:
                     existing_tables = {
                         str(row[0])
                         for row in db.execute(
@@ -1810,6 +1829,8 @@ class SessionCatalog:
                         json.dumps(
                             {
                                 "records": impact["records"],
+                                "retained_shared_legacy_tables": impact["retained_shared_legacy_tables"],
+                                "retained_shared_legacy_session_ids": impact["retained_shared_legacy_session_ids"],
                                 "artifact_count": len(impact["artifacts"]),
                                 "missing_artifacts": missing,
                             },

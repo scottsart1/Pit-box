@@ -28,6 +28,9 @@ authorized checks use a copied tablet capture and configured AI providers.
 | Historical timing | A suspension gap lost a player lap and assigned a later lap's time to an earlier trace; field rows retained rounded or incomplete sector values. | Complete game history reconciles official lap times, sectors and validity for every car. Missing or inconsistent telemetry stays excluded from learning. |
 | History queue | A full tablet run saturated the archive queue with unchanged history packets. | Duplicate snapshots coalesce while completed laps, sector corrections, validity changes and failed writes remain eligible. |
 | Flashbacks | Timing-only laps lacked trace frames for invalidation, and old queued work could restore abandoned history. | A durable branch barrier and per-car complete replacement histories revalidate retained laps and invalidate abandoned future laps, including an empty replacement history. |
+| Re-recording deleted sessions | An old flashback audit survived deletion and silently blocked new laps when the same game session was recorded again. | Ordered deletion boundaries separate recordings while retaining the audit trail and protecting surviving sessions from late writes. Restarted worker caches follow the same boundary. |
+| Archive accounting | Rejected old-branch batches increased the persisted-lap count even though no lap or trace was saved. | Discarded batches have a separate counter; completed-work accounting includes them without claiming persistence. |
+| Shared restart history | Deleting one restart erased legacy history still shared by another restart of the same game session. | Shared rows remain until their last canonical owner is deleted; the preview and confirmation explain what is retained. |
 | Session best | An actual late-race answer treated the recent 20-lap window as the whole session. | Best-lap answers use complete available history and state coverage limits explicitly. |
 | Rival gaps | Actual narration reversed the meaning of a positive gap change to the car behind. | Tool evidence and answers distinguish pulling away from being caught. |
 | Changing strategy | A response could retain an old stop while a new plan was selected during generation. | Completed narration is checked against the current primary and alternative plans; material changes get a freshly grounded response. |
@@ -108,6 +111,15 @@ packets revived old position and timing readings during suspension. The updated
 views check their own packet families. The automatic red-flag announcement was
 present in the received recording and saved delivery log; the early observation
 had preceded speech completion, so no missing-announcement defect is claimed.
+
+That failed run also reported 59 persisted lap batches and 108 processed history
+updates despite having no saved canonical or legacy laps. Local reproduction
+confirmed that retained flashback audits from an earlier deleted recording
+blocked the reused session identity, while skipped batches were counted as
+persisted. The repair passed 80 focused persistence tests, including fresh and
+reused database/worker objects, subsequent flashbacks, shared restart ownership,
+and accurate discard accounting. A complete counted replay on the repair is
+still required.
 
 ## Limits and environment
 

@@ -79,6 +79,37 @@ async function harness(overrides = {}) {
   return { w, id, calls, contexts, timers, api: w.pitwallWorkspaces, close: () => dom.window.close() };
 }
 
+for (const owners of [[], ['restart-one'], ['restart-one', 'restart-two']]) {
+  test(`Deletion confirmation describes retained history for ${owners.length} other recordings and respects cancellation`, async () => {
+    const preview = { confirmation_token: 'exact-preview-token', impact: {
+      records: { laps: 2, comparisons: 1 }, artifacts: [{ relative_path: 'trace.bin' }],
+      retained_shared_legacy_session_ids: owners,
+      retained_shared_legacy_tables: owners.length ? { radio_messages: 3, laps: 1 } : {},
+    } };
+    const h = await harness({ '/api/v1/sessions/s1': (_url, options, route) => options.method === 'DELETE'
+      ? response(options.headers?.['X-Pitwall-Delete-Token'] ? { deleted: true } : preview)
+      : route(_url, options) });
+    try {
+      let prompt;
+      h.w.confirm = message => { prompt = message; return false; };
+      h.id('tab-analysis').click(); await settle();
+      const remove = () => [...h.id('libraryRows').querySelectorAll('button')].find(button => button.textContent === 'Delete').click();
+      remove(); await settle();
+      assert.match(prompt, /This removes 2 laps, 1 comparisons, and 1 linked files/);
+      if (owners.length) assert.ok(prompt.includes(`Shared history will be kept for ${owners.length} other recording${owners.length === 1 ? '' : 's'}.`));
+      else assert.doesNotMatch(prompt, /Shared history/);
+      assert.equal(h.id('libraryStatus').textContent, 'Deletion cancelled.');
+      assert.equal(h.calls.filter(call => call.options.headers?.['X-Pitwall-Delete-Token']).length, 0);
+      h.w.confirm = () => true;
+      remove(); await settle();
+      const mutations = h.calls.filter(call => call.options.headers?.['X-Pitwall-Delete-Token']);
+      assert.equal(mutations.length, 1);
+      assert.equal(mutations[0].options.headers['X-Pitwall-Delete-Token'], preview.confirmation_token);
+      assert.equal(h.id('libraryStatus').dataset.tone, 'success');
+    } finally { h.close(); }
+  });
+}
+
 test('Review row opens single-lap playback, controls and solo analysis without Compare', async () => {
   const h = await harness();
   try {

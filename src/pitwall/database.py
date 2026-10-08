@@ -74,6 +74,10 @@ class PitWallDatabase:
     async def initialize(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         await asyncio.to_thread(self._initialize_sync)
+        # The same database object can survive an ASGI lifespan restart after
+        # recorded sessions were deleted. Repeated packets must then be able
+        # to rebuild both stores instead of hitting the previous run's cache.
+        self._player_history_signature = None
 
     @contextmanager
     def _migration_file_lock_sync(

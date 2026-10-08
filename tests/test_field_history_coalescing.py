@@ -34,7 +34,8 @@ def assert_settled(archive):
     snapshot = archive.snapshot()
     assert snapshot.queue_depth == snapshot.queue_drops == snapshot.write_errors == 0
     assert snapshot.submitted == (snapshot.persisted_laps + snapshot.invalidations
-                                  + snapshot.history_updates_processed + snapshot.history_updates_discarded)
+                                  + snapshot.history_updates_processed + snapshot.history_updates_discarded
+                                  + snapshot.lap_batches_discarded)
 
 
 @pytest.mark.asyncio

@@ -325,7 +325,10 @@ async function deleteSession(session) {
     const records = preview.impact?.records || {};
     const artifacts = preview.impact?.artifacts || [];
     const summary = `${records.laps ?? 0} laps, ${records.comparisons ?? 0} comparisons, and ${artifacts.length} linked files`;
-    if (!window.confirm(`Delete “${sessionLabel(session)}”?\n\nThis removes ${summary}. The operation is irreversible.`)) {
+    const sharedOwners = preview.impact?.retained_shared_legacy_session_ids || [];
+    const retainsHistory = sharedOwners.length > 0 && Object.values(preview.impact?.retained_shared_legacy_tables || {}).some(count => Number(count) > 0);
+    const retained = retainsHistory ? `\n\nShared history will be kept for ${sharedOwners.length} other recording${sharedOwners.length === 1 ? "" : "s"}.` : "";
+    if (!window.confirm(`Delete “${sessionLabel(session)}”?\n\nThis removes ${summary}. The operation is irreversible.${retained}`)) {
       setNotice("libraryStatus", "Deletion cancelled.");
       return;
     }

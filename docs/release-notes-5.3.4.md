@@ -48,6 +48,12 @@
   timing corrections and failed writes remain eligible for processing.
 - Flashback recovery revalidates timing-only laps against each car's replacement
   history and prevents abandoned timeline writes from returning after restart.
+- A deleted session can be recorded again without inheriting its former
+  flashback state.
+- Deleting one restart preserves history shared by another; the confirmation
+  explains retained records, and the last owner's deletion cleans them up.
+- Archive diagnostics distinguish persisted laps from discarded old-branch
+  work instead of counting skipped writes as saved laps.
 - Populated Lap Lab and History fit phone screens, and partial recordings
   clearly show their limits when reviewing traces and single-lap analysis.
 - Proactive settings apply at startup; delayed telemetry retains its arrival

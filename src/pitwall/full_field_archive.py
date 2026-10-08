@@ -65,6 +65,7 @@ class FullFieldArchiveSnapshot:
     history_updates_discarded: int = 0
     history_updates_coalesced: int = 0
     history_empty_skipped: int = 0
+    lap_batches_discarded: int = 0
 
 
 def cars_in_trace_scope(state: dict[str, Any]) -> set[int] | None:
@@ -154,12 +155,14 @@ class FullFieldArchiveService:
         self._history_updates_discarded = 0
         self._history_updates_coalesced = 0
         self._history_empty_skipped = 0
+        self._lap_batches_discarded = 0
         # Pending entries include the in-flight write. Keep their order: A, B,
         # then A is a real correction, even if the first A already succeeded.
         # Pending memory is bounded by the archive queue plus its worker.
         self._history_pending: dict[tuple[Any, ...], deque[tuple[int, str]]] = {}
         self._history_succeeded: OrderedDict[tuple[Any, ...], str] = OrderedDict()
         self._replacement_epochs: dict[str, int] = {}
+        self._replacement_audit_ids: dict[str, int] = {}
 
     def set_trace_scope(self, indices: set[int] | None) -> None:
         """Restrict full-trace archiving to these car indices (None = all)."""
@@ -172,6 +175,10 @@ class FullFieldArchiveService:
     async def start(self) -> None:
         if self.running:
             return
+        # ASGI lifespan restart can replace the assembler while retaining this
+        # service object. Only an explicit later deletion starts a fresh
+        # recording for an existing session key; surviving branch guards stay.
+        await asyncio.to_thread(self._reset_deleted_recording_caches)
         self._state = "running"
         self._last_error = None
         self._task = asyncio.create_task(
@@ -206,7 +213,9 @@ class FullFieldArchiveService:
                 item.replacement_timeline_epoch, self._replacement_epochs.get(item.session.id, 0)
             )
             if len(self._replacement_epochs) > 128:
-                self._replacement_epochs.pop(next(iter(self._replacement_epochs)))
+                evicted = next(iter(self._replacement_epochs))
+                self._replacement_epochs.pop(evicted)
+                self._replacement_audit_ids.pop(evicted, None)
             for batch_id in item.affected_batch_ids:
                 if batch_id in self._invalidated_batch_ids:
                     continue
@@ -308,11 +317,12 @@ class FullFieldArchiveService:
             history_succeeded = False
             try:
                 if isinstance(item, BranchInvalidation):
-                    await asyncio.to_thread(self._persist_invalidation, item)
+                    audit_id = await asyncio.to_thread(self._persist_invalidation, item)
+                    if item.session.id in self._replacement_epochs:
+                        self._replacement_audit_ids[item.session.id] = audit_id
                     self._invalidations += 1
                 elif isinstance(item, FieldHistoryUpdate):
-                    key = session_id(item.context["session_uid"], int(item.context.get("restart_epoch", 0) or 0))
-                    if int(item.context.get("timeline_epoch", 0) or 0) >= self._replacement_epochs.get(key, 0):
+                    if await asyncio.to_thread(self._history_is_current, item):
                         reconciled = await self.catalog.reconcile_field_history(item.context, item.history)
                         self._history_laps_reconciled += len(reconciled)
                         self._history_updates_processed += 1
@@ -320,8 +330,10 @@ class FullFieldArchiveService:
                     else:
                         self._history_updates_discarded += 1
                 else:
-                    await asyncio.to_thread(self._persist_batch, item)
-                    self._persisted_laps += 1
+                    if await asyncio.to_thread(self._persist_batch, item):
+                        self._persisted_laps += 1
+                    else:
+                        self._lap_batches_discarded += 1
             except asyncio.CancelledError:
                 raise
             except Exception as exc:  # noqa: BLE001 - isolate optional field archive
@@ -519,14 +531,38 @@ class FullFieldArchiveService:
         if frozen.get("telemetry_timing_mismatch"):
             db.execute("UPDATE recorded_laps SET coverage_ratio=0, quality_score=MIN(quality_score,0.2) WHERE id=?", (resolved_lap_id,))
 
-    def _persist_batch(self, batch: FinalizedLapBatch) -> None:
+    def _history_is_current(self, item: FieldHistoryUpdate) -> bool:
+        key = session_id(item.context["session_uid"], int(item.context.get("restart_epoch", 0) or 0))
+        epoch = int(item.context.get("timeline_epoch", 0) or 0)
+        if epoch < self._replacement_epochs.get(key, 0):
+            return False
+        with self._connect() as db:
+            return epoch >= SessionCatalog.history_replacement_epoch(db, key)
+
+    def _reset_deleted_recording_caches(self) -> None:
+        with self._connect() as db:
+            for key, audit_id in list(self._replacement_audit_ids.items()):
+                deleted = db.execute(
+                    "SELECT MAX(id) FROM audit_events WHERE event_type='session_deleted' AND subject_id=?", (key,),
+                ).fetchone()[0]
+                if deleted is not None and int(deleted) > audit_id:
+                    self._replacement_epochs.pop(key, None)
+                    self._replacement_audit_ids.pop(key, None)
+        # Stopping drains/cancels every queued item. Epoch guards retain all
+        # surviving invalidations; these secondary caches need not outlive the
+        # worker and must not suppress a re-import after deletion.
+        self._invalidated_batch_ids.clear()
+        self._invalidated_batch_order.clear()
+        self._history_succeeded.clear()
+
+    def _persist_batch(self, batch: FinalizedLapBatch) -> bool:
         if batch.batch_id in self._invalidated_batch_ids:
-            return
+            return False
         if batch.timeline_epoch < self._replacement_epochs.get(batch.session.id, 0):
-            return
+            return False
         with self._connect() as db:
             if batch.timeline_epoch < SessionCatalog.history_replacement_epoch(db, batch.session.id):
-                return
+                return False
         resolved_lap_id = lap_id(
             batch.identity.id, batch.lap_number, batch.timeline_epoch
         )
@@ -540,7 +576,7 @@ class FullFieldArchiveService:
             db.commit()
 
         if existing is not None and existing["trace_manifest_id"]:
-            return
+            return True
 
         manifest_id = "tm_" + hashlib.sha256(batch.batch_id.encode()).hexdigest()[:24]
         try:
@@ -658,7 +694,9 @@ class FullFieldArchiveService:
             self.trace_store.discard_unregistered_manifest(manifest_id)
             raise
 
-    def _persist_invalidation(self, invalidation: BranchInvalidation) -> None:
+        return True
+
+    def _persist_invalidation(self, invalidation: BranchInvalidation) -> int:
         # Branch evidence is more important than pretending the old normalized
         # lap stayed valid. Raw capture remains untouched and replayable.
         with self._connect() as db:
@@ -700,7 +738,7 @@ class FullFieldArchiveService:
                 db, invalidation.session.id, invalidation.invalidated_timeline_epoch,
                 invalidation.replacement_timeline_epoch,
             )
-            db.execute(
+            audit = db.execute(
                 """
                 INSERT INTO audit_events(event_type, subject_id, detail_json, created_at)
                 VALUES ('timeline_invalidated', ?, ?, ?)
@@ -711,6 +749,8 @@ class FullFieldArchiveService:
                     self._now(),
                 ),
             )
+            audit_id = int(audit.lastrowid)
+        return audit_id
 
     async def stop(self, *, drain_timeout_s: float = 10.0) -> None:
         task = self._task
@@ -776,6 +816,7 @@ class FullFieldArchiveService:
             self._history_updates_discarded,
             self._history_updates_coalesced,
             self._history_empty_skipped,
+            self._lap_batches_discarded,
         )
 
 

@@ -68,7 +68,7 @@ def settle_replay(get, summary, expected=None, *, timeout_s=60.0,
             raise RuntimeError('Archive lost or failed work; a complete persisted replay is not verified')
         elif (archive.get('queue_depth') != 0 or archive.get('invalidation_queue_depth') != 0
               or archive.get('submitted') != sum(archive.get(key, 0) for key in (
-                  'persisted_laps', 'invalidations', 'history_updates_processed', 'history_updates_discarded',
+                  'persisted_laps', 'invalidations', 'history_updates_processed', 'history_updates_discarded', 'lap_batches_discarded',
               ))):
             # Queue depth excludes a batch currently being written. Account
             # for every accepted batch before allowing app shutdown.

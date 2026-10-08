@@ -106,6 +106,15 @@ historical segment is useful targeted evidence and does not satisfy it.
   triggering an unnecessary local replacement that omitted its change
   condition. Verify equivalent action normalization and preserve the current
   authoritative change condition in both generated and refreshed full plans.
+- A failed replay reported 59 persisted lap batches and 108 processed history
+  updates but saved no canonical or legacy laps. A previous recording's
+  flashback audit survived deletion and blocked the reused session identity;
+  rejected batches also inflated the persisted count. Verify ordered deletion
+  boundaries, fresh and reused worker lifecycles, continued rejection of old
+  branches, and separate discarded-work accounting before another full race.
+- Deleting one restart erased legacy history shared by a surviving restart.
+  Verify both deletion orders, truthful retained-history previews, rejection of
+  previews whose ownership changed, and cleanup only after the last owner.
 
 ## Intermediate regression evidence
 

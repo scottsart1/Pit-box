@@ -99,6 +99,13 @@ def test_processed_noop_and_discarded_old_epoch_history_complete_work_accounting
     assert summary['race_completion_verified'] is True
 
 
+def test_discarded_old_branch_batch_completes_work_without_claiming_persistence():
+    replay = ReplayObservation([{}], [{'submitted': 12, 'lap_batches_discarded': 2}])
+    summary = {}
+    replay.settle(summary)
+    assert summary['race_completion_verified'] is True
+
+
 @pytest.mark.parametrize('failure', ['queue_drops', 'write_errors', 'invalidation_queue_drops'])
 def test_lost_archive_work_fails_instead_of_being_reported_as_settled(failure):
     replay = ReplayObservation([{}], [{failure: 1}])
