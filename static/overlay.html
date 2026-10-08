@@ -12,10 +12,11 @@
 body{background:transparent}
 body.solid{background:#070b0f}
 .wrap{position:fixed;left:12px;top:12px;display:flex;flex-direction:column;gap:8px;
-  max-width:340px}
+  width:min(340px,calc(100vw - 24px));max-height:calc(100vh - 24px);overflow:auto}
 .card{background:rgba(9,14,20,.82);border:1px solid #26414f;border-radius:10px;
   padding:10px 12px;backdrop-filter:blur(2px)}
 .row{display:flex;justify-content:space-between;align-items:baseline;gap:12px}
+.row[hidden]{display:none}
 .pos{font-size:34px;font-weight:900;line-height:1}
 .label{font-size:10px;letter-spacing:.14em;color:#8fa4b7;text-transform:uppercase}
 .big{font-size:20px;font-weight:800}
@@ -27,11 +28,15 @@ body.solid{background:#070b0f}
 .radio{font-size:13px;color:#9fd0ff;line-height:1.35;font-style:italic}
 .muted{color:#8fa4b7}
 .hidden{display:none}
+.status,.notice{font-size:11px;line-height:1.4;color:#8fa4b7}
+.status{margin-bottom:6px}.notice:not(:empty){margin-top:6px}
+.instr,.radio,.notice{overflow-wrap:anywhere}
 </style>
 </head>
 <body>
 <div class="wrap">
   <div class="card">
+    <div id="status" class="status" role="status">Telemetry unavailable</div>
     <div class="row">
       <div><div class="label">Pos</div><div class="pos" id="pos">—</div></div>
       <div style="text-align:right">
@@ -48,70 +53,104 @@ body.solid{background:#070b0f}
   <div class="card" id="stratCard">
     <div class="label">Strategy</div>
     <div class="instr" id="strat">Building…</div>
-    <div class="row"><span class="label">Finish / wear / deg</span><span class="tyre" id="stratMeta">—</span></div>
+    <div class="instr notice" id="alternative"></div>
+    <div class="notice" id="strategyNotice"></div>
+    <div class="row" id="strategyProjection"><span class="label">Finish / wear / deg</span><span class="tyre" id="stratMeta">—</span></div>
   </div>
   <div class="card" id="radioCard">
     <div class="label">Last radio</div>
     <div class="radio" id="radio">—</div>
   </div>
 </div>
-<script>
+<script type="module">
+import { normalizeState, finite, positive } from '/static/driver-dashboard/model.mjs';
 if (new URLSearchParams(location.search).get("bg") === "1") document.body.classList.add("solid");
 
 function fmtDelta(v){
-  if (v === null || v === undefined) return "—";
+  if (finite(v) === null) return "—";
   const s = (v >= 0 ? "+" : "") + Number(v).toFixed(2);
   return s;
 }
 
-function render(state){
-  const pos = state.player_position || 0;
+function render(state, {ageMs = 0, now = Date.now(), transportLost = false} = {}){
+  const group = id => {
+    const time = finite(state.packet_group_freshness?.[id]);
+    return time !== null && now / 1000 - time >= -5 && now / 1000 - time < 5;
+  };
+  const suspension = !!(state.red_flag_active || state.race_control_phase === 'red_flag' || state.fia_flag === 'red');
+  // Reuse the dashboard's exact-session restart and missing-data contract.
+  // Old flag packets also make suspension advice provisional, even if some
+  // unrelated packets continue to keep the socket active.
+  const snapshot = transportLost || (suspension && (!group('1') || !group('7')))
+    ? {...state, connected: false} : state;
+  const data = normalizeState(snapshot, {ageMs, now});
+  const finished = positive(state.final_classification?.position);
+  const live = data.fresh && finished === null;
+  const lap = live && group('2'), status = live && group('7'), damage = live && group('10');
+  const pos = finished ?? (lap ? data.position : null);
   document.getElementById("pos").textContent = pos ? "P" + pos : "—";
+  document.getElementById('status').textContent = finished !== null ? `Session complete · P${finished}`
+    : data.provisionalRestart ? 'Last confirmed · provisional'
+    : !data.fresh ? 'Telemetry unavailable'
+    : suspension ? 'Red flag · session suspended'
+    : lap && status && damage ? 'Live telemetry' : 'Some current readings unavailable';
 
-  const delta = state.live_delta_s;
+  const delta = lap ? data.delta : null;
   const el = document.getElementById("delta");
   el.textContent = fmtDelta(delta);
   el.classList.toggle("pos-good", typeof delta === "number" && delta < 0);
   el.classList.toggle("pos-bad", typeof delta === "number" && delta > 0);
 
-  const tyre = state.tyre || {};
   document.getElementById("tyre").textContent =
-    (tyre.compound || "—") + (tyre.age_laps != null ? " · " + tyre.age_laps + " laps" : "");
+    status ? data.compound + (data.tyreAge !== null ? " · " + data.tyreAge + " laps" : "") : '—';
   document.getElementById("wear").textContent =
-    Array.isArray(tyre.wear) ? tyre.wear.map(w => Math.round(w) + "%").join(" ") : "—";
+    damage ? data.wear.map(w => w === null ? '—' : Math.round(w) + "%").join(" ") : "—";
 
-  const fuel = state.fuel_laps_delta;
+  const fuel = status ? data.fuelMargin : null;
   document.getElementById("fuel").textContent =
     typeof fuel === "number" ? (fuel >= 0 ? "+" : "") + fuel.toFixed(1) + " laps" : "—";
 
-  const rec = (state.strategy && state.strategy.recommended) || {};
-  document.getElementById("strat").textContent = rec.instruction || "Building…";
+  const usablePlan = live && group('1') && group('2') && status && state.strategy?.available;
+  document.getElementById("strat").textContent = finished !== null ? 'Session complete. Review recorded laps in Analysis.'
+    : data.suspended ? data.plan : usablePlan ? data.plan : 'Current strategy unavailable';
+  document.getElementById('alternative').textContent = data.suspended && data.restartAlternative
+    ? 'Alternative: ' + data.restartAlternative : '';
+  document.getElementById('strategyNotice').textContent = data.provisionalRestart
+    ? 'Live telemetry unavailable. Confirm the suspension, tyre sets and track conditions in game before using this plan.'
+    : data.suspended ? 'Follow the game’s suspension instructions. Select restart tyres while stopped.' : '';
+  const showProjection = !!usablePlan && !data.suspended;
+  document.getElementById('strategyProjection').hidden = !showProjection;
+  const rec = showProjection ? state.strategy.recommended || {} : {};
   const slope = state.analysis && state.analysis.deg_model && state.analysis.deg_model.current_slope_s_per_lap;
   const hold = state.strategy_hold && state.strategy_hold.active;
-  document.getElementById("stratMeta").textContent = hold
+  document.getElementById("stratMeta").textContent = !showProjection ? '—' : hold
     ? "DRIVER HOLD"
     : "P" + (rec.projected_finish_position || "—") + " / " +
-      (rec.projected_finish_wear_pct == null ? "—" : Math.round(rec.projected_finish_wear_pct) + "%") + " / " +
-      (slope == null ? "—" : "+" + Number(slope).toFixed(2) + "s/L");
-
-  const log = state.radio_log || [];
-  let last = "";
-  for (let i = log.length - 1; i >= 0; i--) {
-    if (log[i].role === "engineer") { last = log[i].text; break; }
-  }
-  document.getElementById("radio").textContent = last || "—";
+      (finite(rec.projected_finish_wear_pct) === null ? "—" : Math.round(rec.projected_finish_wear_pct) + "%") + " / " +
+      (finite(slope) === null ? "—" : fmtDelta(slope) + "s/L");
+  // Historical BOX calls must not look actionable during suspension/finish.
+  document.getElementById("radio").textContent = live && !suspension ? data.radio || '—' : '—';
 }
 
+let snapshot = {}, receivedAt = 0, messageVersion = 0, transportLost = true;
+function paint(){render(snapshot, {ageMs: receivedAt ? Date.now() - receivedAt : Infinity, transportLost});}
+function accept(state){snapshot = state && typeof state === 'object' ? state : {}; receivedAt = Date.now(); transportLost = false; paint();}
+function disconnect(){messageVersion++; transportLost = true; paint();}
 function connect(){
   const ws = new WebSocket((location.protocol === "https:" ? "wss://" : "ws://") + location.host + "/ws");
-  ws.onmessage = (ev) => { try { render(JSON.parse(ev.data)); } catch (e) {} };
-  ws.onclose = () => setTimeout(connect, 1000);
+  ws.onmessage = (ev) => { try { const state = JSON.parse(ev.data); messageVersion++; accept(state); } catch (e) {} };
+  ws.onerror = disconnect;
+  ws.onclose = () => {disconnect(); setTimeout(connect, 1000);};
 }
 // Paint once from the REST snapshot before the first socket frame arrives.
 // The overlay is a second-screen/OBS surface: waiting for a push meant it sat
 // blank on load, and stayed blank indefinitely if the socket was blocked.
-fetch("/api/state").then(r => r.json()).then(render).catch(() => {});
+const initialVersion = messageVersion;
+fetch("/api/state").then(r => {if (!r.ok) throw new Error('State unavailable'); return r.json();})
+  .then(state => {if (messageVersion === initialVersion) accept(state);}).catch(() => {});
 connect();
+// A silently stalled socket must expire too; REST is only the initial paint.
+setInterval(paint, 500);
 </script>
 </body>
 </html>

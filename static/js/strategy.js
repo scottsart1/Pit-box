@@ -806,9 +806,11 @@ async function loadDecisionLog() {
   try {
     const history = await api("/api/history?scope=current_session&limit=80");
     const snapshots = (history.strategies || []).slice().reverse();
-    const signature = snapshots
-      .map((x) => `${x.lap_num}:${x.recommended?.instruction || ""}`)
-      .join(";");
+    const signature = JSON.stringify(snapshots.map((snap) => [
+      snap.id, snap.lap_num, snap.race_control_phase, snap.model?.confidence,
+      snap.recommended?.instruction, snap.recommended?.box_laps, snap.recommended?.compounds,
+      snap.recommended?.projected_finish_position, snap.recommended?.driver_override,
+    ]));
     if (signature === view.logSignature) return;
     view.logSignature = signature;
     host.replaceChildren();
@@ -828,8 +830,25 @@ async function loadDecisionLog() {
       const lap = document.createElement("span");
       lap.className = "lap";
       lap.textContent = `Lap ${snap.lap_num ?? "—"}`;
-      const text = document.createElement("span");
+      const text = document.createElement("div");
       text.textContent = instruction;
+      const recommendation = snap.recommended || {};
+      const details = [];
+      if ((recommendation.box_laps || []).length > 1) {
+        const stops = recommendation.box_laps.map((lap, index) =>
+          `lap ${lap} ${recommendation.compounds?.[index + 1] || "compound unavailable"}`);
+        details.push(`Full plan: ${stops.join(", then ")}`);
+      }
+      const projected = recommendation.projected_finish_position;
+      if (Number.isInteger(projected) && projected > 0) {
+        details.push(`Estimated finish P${projected}`);
+      }
+      if (details.length) {
+        const detail = document.createElement("div");
+        detail.className = "small";
+        detail.textContent = details.join(" · ");
+        text.appendChild(detail);
+      }
       const context = document.createElement("span");
       context.className = "context";
       context.textContent = `${snap.race_control_phase || "green"} · ${snap.model?.confidence || "—"}`;
@@ -887,4 +906,4 @@ if (HAS_DOM) {
   });
 }
 
-export { planKey, describeEvidence, renderCall, renderPlans, COMPOUND_COLORS };
+export { planKey, describeEvidence, renderCall, renderPlans, loadDecisionLog, COMPOUND_COLORS };

@@ -24,6 +24,7 @@ on:
       - tools/setup-reference-ui-smoke.cjs
       - tools/driver-focus-ui-smoke.cjs
       - tools/pace-spark-ui-smoke.cjs
+      - tools/overlay-ui-smoke.cjs
       - tools/all-workspaces-ui-smoke.cjs
       - distribution/tests/test_android*.py
       - .github/workflows/android-apk.yml
@@ -87,6 +88,8 @@ jobs:
         run: NODE_PATH="$RUNNER_TEMP/pitbox-browser/node_modules" node tools/lap-lab-layout-ui-smoke.cjs
       - name: Pace chart size and readability at phone and tablet sizes
         run: NODE_PATH="$RUNNER_TEMP/pitbox-browser/node_modules" PITBOX_PACE_EVIDENCE="$RUNNER_TEMP/pace-spark" node tools/pace-spark-ui-smoke.cjs
+      - name: Overlay freshness, restart advice and confirmed race finish
+        run: NODE_PATH="$RUNNER_TEMP/pitbox-browser/node_modules" PITBOX_OVERLAY_EVIDENCE="$RUNNER_TEMP/overlay" node tools/overlay-ui-smoke.cjs
       - name: Test Engineer and sourced Setup Lab browser acceptance
         run: NODE_PATH="$RUNNER_TEMP/pitbox-browser/node_modules" python tools/engineering-acceptance.py --output "$RUNNER_TEMP/engineering-acceptance"
       - name: Retain Test Engineer browser and telemetry evidence
@@ -98,6 +101,7 @@ jobs:
             ${{ runner.temp }}/engineering-acceptance/
             ${{ runner.temp }}/driver-focus/
             ${{ runner.temp }}/pace-spark/
+            ${{ runner.temp }}/overlay/
           if-no-files-found: ignore
           retention-days: 7
       - name: Optional usage ingestion and owner report checks (local fixtures only)

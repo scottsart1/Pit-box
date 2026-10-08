@@ -33,6 +33,10 @@
 - Android walkthrough completion survives dashboard port changes.
 - Provisional restart choices remain visible during confirmed suspension
   telemetry gaps, with the last confirmed status clearly labelled.
+- The compact overlay distinguishes live, unavailable, suspended and completed
+  sessions, retaining provisional restart choices without stale car readings.
+- The strategy decision log shows estimated finishes and complete multi-stop
+  schedules so changes behind repeated-looking calls are visible.
 - Recorded lap and sector times are reconciled with the game's session
   history across the whole field, including laps missed during suspension.
   Missing or inconsistent telemetry remains excluded from setup learning.

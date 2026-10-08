@@ -25,6 +25,16 @@ authorized checks use a copied tablet capture and configured AI providers.
 | Proactive startup | The state default could override disabled saved/environment settings. | Effective settings are applied before scheduling; disabling cancels queued calls and skips unnecessary planning. |
 | Strategy narration | A real deep-model request exceeded its deadline and returned an HTTP error. | Repeated simulation arrays are removed from model tool payloads; a typed deadline can return a grounded, explicitly limited plan summary while retaining failure diagnostics. |
 | Drive readings | Missing or disconnected car measurements appeared as plausible zeros or retained values. | Missing/stale families show unavailable values; genuine measured zeros and reverse gear remain meaningful. |
+| Historical timing | A suspension gap lost a player lap and assigned a later lap's time to an earlier trace; field rows retained rounded or incomplete sector values. | Complete game history reconciles official lap times, sectors and validity for every car. Missing or inconsistent telemetry stays excluded from learning. |
+| History queue | A full tablet run saturated the archive queue with unchanged history packets. | Duplicate snapshots coalesce while completed laps, sector corrections, validity changes and failed writes remain eligible. |
+| Flashbacks | Timing-only laps lacked trace frames for invalidation, and old queued work could restore abandoned history. | A durable branch barrier and per-car complete replacement histories revalidate retained laps and invalidate abandoned future laps, including an empty replacement history. |
+| Session best | An actual late-race answer treated the recent 20-lap window as the whole session. | Best-lap answers use complete available history and state coverage limits explicitly. |
+| Rival gaps | Actual narration reversed the meaning of a positive gap change to the car behind. | Tool evidence and answers distinguish pulling away from being caught. |
+| Changing strategy | A response could retain an old stop while a new plan was selected during generation. | Completed narration is checked against the current primary and alternative plans; material changes get a freshly grounded response. |
+| Completed race | Final results were rejected as stale while current pit questions and dashboards still offered racing instructions. | Confirmed classification remains available after telemetry ends; current pit advice and active controls switch to completed-session behavior. A new session clears the result. |
+| A/B interpretation | Numerical comparisons needed clearer sample and comparability context. | Sector bars and lap-time distributions show accepted and excluded laps, consistency, signed deltas and limits on cross-session conclusions. |
+| Compact overlay | The OBS/second-screen overlay retained raw car values and actionable pit calls after a transport loss or confirmed finish. | Each reading checks its packet family; suspension choices are explicitly provisional during gaps, and confirmed results clear car readings and racing instructions. Silent socket stalls expire and delayed initial responses cannot replace newer data. |
+| Decision log | Distinct estimated finishes produced several identical-looking entries, and updates to hidden plan details did not refresh the log. | Each entry exposes its estimated finish and complete multi-stop schedule; changes to projections, later stops and confidence refresh the displayed evidence. |
 
 ## Verification evidence
 
@@ -72,6 +82,23 @@ Final combined regression, final APK, live response and release evidence are
 recorded below when complete. Local raw evidence is under
 `.codex-ui-test-data/review-2026-10-08-*`; private driver data remains outside
 the repository.
+
+## Full-race failures retained during review
+
+The first complete paced tablet attempt did not pass reception or saved-history
+comparison. Its saved raw capture contains 475,534 datagrams. Comparing payload
+multisets against the 477,184-packet source found 1,654 source payloads absent and
+four extra payloads; identical repeated datagrams cannot be individually
+distinguished by this comparison. A cluster of 1,610 missing payloads spans
+source seconds 3,140.363–3,155.913 and coincides with loss of wireless debugging.
+This locates the interruption; it does not establish whether wireless loss,
+sender scheduling or receiver scheduling caused it.
+
+The next candidate replay was stopped after archive queue loss was observed.
+It recorded 505 rejected archive admissions. Accepted work drained without
+write errors. The failed recording, responses and counters were retained before
+removing only that generated debug session for a clean rerun. These runs remain
+failed observations; focused repair tests do not turn them into full-race passes.
 
 ## Limits and environment
 

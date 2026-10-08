@@ -95,6 +95,9 @@ historical segment is useful targeted evidence and does not satisfy it.
   durable timeline barrier, per-car replacement history (including a complete
   empty history), preservation of retained laps, and rejection of late writes
   from abandoned branches after restart.
+- The compact overlay lacked the main dashboards' freshness and confirmed-finish
+  behavior. Verify independent packet families, stale suspension plans, socket
+  close and silent expiry, delayed REST responses, and new-session clearing.
 
 ## Intermediate regression evidence
 
