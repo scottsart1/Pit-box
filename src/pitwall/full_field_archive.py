@@ -7,7 +7,7 @@ import hashlib
 import json
 import logging
 import sqlite3
-from collections import deque
+from collections import OrderedDict, deque
 from collections.abc import Iterator
 from contextlib import closing, contextmanager
 from copy import deepcopy
@@ -19,6 +19,7 @@ from typing import Any, TypeAlias
 from f1.packets import SESSIONS
 
 from .catalog import SessionCatalog, lap_id, session_id
+from .lap_history import authoritative_timing
 from .session_assembler import BranchInvalidation, FinalizedLapBatch
 from .trace_store import TraceStore
 
@@ -33,6 +34,8 @@ log = logging.getLogger(__name__)
 class FieldHistoryUpdate:
     context: dict[str, Any]
     history: list[dict[str, Any]]
+    identity_key: tuple[Any, ...] = ()
+    fingerprint: str = ""
 
 
 ArchiveItem: TypeAlias = FinalizedLapBatch | BranchInvalidation | FieldHistoryUpdate
@@ -60,6 +63,8 @@ class FullFieldArchiveSnapshot:
     history_laps_reconciled: int = 0
     history_updates_processed: int = 0
     history_updates_discarded: int = 0
+    history_updates_coalesced: int = 0
+    history_empty_skipped: int = 0
 
 
 def cars_in_trace_scope(state: dict[str, Any]) -> set[int] | None:
@@ -147,6 +152,13 @@ class FullFieldArchiveService:
         self._history_laps_reconciled = 0
         self._history_updates_processed = 0
         self._history_updates_discarded = 0
+        self._history_updates_coalesced = 0
+        self._history_empty_skipped = 0
+        # Pending entries include the in-flight write. Keep their order: A, B,
+        # then A is a real correction, even if the first A already succeeded.
+        # Pending memory is bounded by the archive queue plus its worker.
+        self._history_pending: dict[tuple[Any, ...], deque[tuple[int, str]]] = {}
+        self._history_succeeded: OrderedDict[tuple[Any, ...], str] = OrderedDict()
         self._replacement_epochs: dict[str, int] = {}
 
     def set_trace_scope(self, indices: set[int] | None) -> None:
@@ -184,6 +196,11 @@ class FullFieldArchiveService:
                 return False
         if not self.running:
             return False
+        if isinstance(item, FieldHistoryUpdate):
+            prepared = self._prepare_history(item)
+            if prepared is None:
+                return False
+            item = prepared
         if isinstance(item, BranchInvalidation):
             self._replacement_epochs[item.session.id] = max(
                 item.replacement_timeline_epoch, self._replacement_epochs.get(item.session.id, 0)
@@ -215,12 +232,67 @@ class FullFieldArchiveService:
             self._queue_drops += 1
             return False
         self._submitted += 1
+        if isinstance(item, FieldHistoryUpdate):
+            self._history_pending.setdefault(item.identity_key, deque()).append((id(item), item.fingerprint))
         self._queue_high_water = max(self._queue_high_water, self.queue.qsize())
         return True
 
     def submit_history(self, context: dict[str, Any], history: list[dict[str, Any]]) -> bool:
         """Keep all-car timing even when full traces are outside capture scope."""
-        return self.submit(FieldHistoryUpdate(deepcopy(context), deepcopy(history)))
+        return self.submit(FieldHistoryUpdate(context, history))
+
+    def _prepare_history(self, item: FieldHistoryUpdate) -> FieldHistoryUpdate | None:
+        completed = [(row, authoritative_timing(row)) for row in item.history]
+        unusable = [{name: int(row.get(name, 0) or 0) for name in (
+            "lap_num", "lap_ms", "s1_ms", "s2_ms", "s3_ms", "valid_flags")}
+            for row, timing in completed if not timing and int(row.get("lap_ms", 0) or 0) > 0]
+        completed = [(row, timing) for row, timing in completed if timing]
+        # One complete empty snapshot can prove there are no retained laps
+        # after a rewind. Repeats coalesce just like nonempty history; an
+        # incomplete empty observation has no authority to change the archive.
+        if not completed and not item.context.get("history_complete"):
+            self._history_empty_skipped += 1
+            return None
+        context = item.context
+        key = (str(context["session_uid"]), *(int(context.get(name, 0) or 0) for name in (
+            "restart_epoch", "timeline_epoch", "player_car_index", "identity_revision", "session_generation")))
+        # Packet frame/time and identity.last_frame advance even when every
+        # completed lap is unchanged. They are not new timing authority.
+        stable_context = {name: value for name, value in context.items() if name not in {
+            "frame_identifier", "overall_frame_identifier", "session_time_s", "history_updated_at"}}
+        if isinstance(stable_context.get("history_identity"), dict):
+            stable_context["history_identity"] = {
+                name: value for name, value in stable_context["history_identity"].items() if name != "last_frame"}
+        fingerprint = hashlib.sha256(json.dumps(
+            [stable_context, [{"lap_num": int(row["lap_num"]), **timing} for row, timing in completed], unusable],
+            sort_keys=True, separators=(",", ":"), allow_nan=False,
+        ).encode()).hexdigest()
+        pending = self._history_pending.get(key)
+        latest = pending[-1][1] if pending else self._history_succeeded.get(key)
+        if latest == fingerprint:
+            self._history_updates_coalesced += 1
+            return None
+        # Preserve raw coverage evidence for reconciliation. A malformed
+        # positive lap is not interchangeable with zero completed laps.
+        return FieldHistoryUpdate(deepcopy(context), deepcopy(item.history), key, fingerprint)
+
+    def _finish_history(self, item: FieldHistoryUpdate, *, succeeded: bool) -> None:
+        pending = self._history_pending.get(item.identity_key)
+        if pending:
+            # Normal completion is FIFO; shutdown may drop queued entries
+            # before cancelling the in-flight item, so release this item only.
+            pending.remove((id(item), item.fingerprint))
+            if not pending:
+                self._history_pending.pop(item.identity_key, None)
+        if succeeded:
+            self._history_succeeded[item.identity_key] = item.fingerprint
+            self._history_succeeded.move_to_end(item.identity_key)
+            while len(self._history_succeeded) > 128:
+                self._history_succeeded.popitem(last=False)
+        else:
+            # A failed/cancelled write must never suppress the next identical
+            # packet. Nor may an abandoned timeline become a successful cache.
+            self._history_succeeded.pop(item.identity_key, None)
 
     async def _worker(self) -> None:
         while True:
@@ -233,6 +305,7 @@ class FullFieldArchiveService:
                     item = await asyncio.wait_for(self.queue.get(), timeout=0.05)
                 except TimeoutError:
                     continue
+            history_succeeded = False
             try:
                 if isinstance(item, BranchInvalidation):
                     await asyncio.to_thread(self._persist_invalidation, item)
@@ -243,6 +316,7 @@ class FullFieldArchiveService:
                         reconciled = await self.catalog.reconcile_field_history(item.context, item.history)
                         self._history_laps_reconciled += len(reconciled)
                         self._history_updates_processed += 1
+                        history_succeeded = True
                     else:
                         self._history_updates_discarded += 1
                 else:
@@ -255,6 +329,8 @@ class FullFieldArchiveService:
                 self._last_error = f"{type(exc).__name__}: {exc}"
                 log.warning("Full-field lap archive deferred: %s", exc)
             finally:
+                if isinstance(item, FieldHistoryUpdate):
+                    self._finish_history(item, succeeded=history_succeeded)
                 if source == "invalidation":
                     self._invalidation_queue.task_done()
                 else:
@@ -446,6 +522,11 @@ class FullFieldArchiveService:
     def _persist_batch(self, batch: FinalizedLapBatch) -> None:
         if batch.batch_id in self._invalidated_batch_ids:
             return
+        if batch.timeline_epoch < self._replacement_epochs.get(batch.session.id, 0):
+            return
+        with self._connect() as db:
+            if batch.timeline_epoch < SessionCatalog.history_replacement_epoch(db, batch.session.id):
+                return
         resolved_lap_id = lap_id(
             batch.identity.id, batch.lap_number, batch.timeline_epoch
         )
@@ -581,6 +662,7 @@ class FullFieldArchiveService:
         # Branch evidence is more important than pretending the old normalized
         # lap stayed valid. Raw capture remains untouched and replayable.
         with self._connect() as db:
+            db.execute("BEGIN IMMEDIATE")
             affected_rows = db.execute(
                 """
                 SELECT DISTINCT lap_id
@@ -614,6 +696,10 @@ class FullFieldArchiveService:
                     """,
                     [*affected_laps, *affected_laps],
                 )
+            SessionCatalog.defer_timing_only_laps(
+                db, invalidation.session.id, invalidation.invalidated_timeline_epoch,
+                invalidation.replacement_timeline_epoch,
+            )
             db.execute(
                 """
                 INSERT INTO audit_events(event_type, subject_id, detail_json, created_at)
@@ -651,9 +737,11 @@ class FullFieldArchiveService:
                 self._reconciliation_required = True
             while True:
                 try:
-                    self.queue.get_nowait()
+                    dropped = self.queue.get_nowait()
                 except asyncio.QueueEmpty:
                     break
+                if isinstance(dropped, FieldHistoryUpdate):
+                    self._finish_history(dropped, succeeded=False)
                 self.queue.task_done()
                 self._queue_drops += 1
         task.cancel()
@@ -686,6 +774,8 @@ class FullFieldArchiveService:
             self._history_laps_reconciled,
             self._history_updates_processed,
             self._history_updates_discarded,
+            self._history_updates_coalesced,
+            self._history_empty_skipped,
         )
 
 

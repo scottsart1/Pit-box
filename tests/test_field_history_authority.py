@@ -134,3 +134,29 @@ async def test_history_first_is_enriched_only_by_measured_complete_matching_trac
     assert ("missing_telemetry" in frozen["learning_exclusions"]) is not full
     assert row[1] == (1 if full else .1)
     assert frozen["s1_ms"] == 70123 and frozen["lap_time_ms"] == 203881
+
+
+@pytest.mark.asyncio
+async def test_old_field_batch_after_worker_restart_cannot_revalidate_pending_history(tmp_path):
+    db = PitWallDatabase(tmp_path / "laps.sqlite3")
+    await db.initialize()
+    traces = TraceStore(tmp_path / "traces")
+    batch = fixture_batch(full=True, lap_ms=203881)
+    archive = FullFieldArchiveService(db.path, traces)
+    await archive.start()
+    assert archive.submit_history(context(batch), history())
+    await archive.queue.join()
+    # The live packet does not identify the rewind lap for every other car.
+    assert archive.submit(BranchInvalidation(batch.session, 0, 1, 1, .1, None, (), "test rewind"))
+    await archive.stop()
+    restarted = FullFieldArchiveService(db.path, traces)
+    await restarted.start()
+    assert restarted.submit(batch)
+    await restarted.stop()
+    with sqlite3.connect(db.path) as connection:
+        rows = connection.execute("SELECT valid,trace_manifest_id,engineering_json FROM recorded_laps ORDER BY lap_number").fetchall()
+        assert len(rows) == 2
+        assert all(row[0] == 0 and row[1] is None for row in rows)
+        assert all(json.loads(row[2])["history_revalidation_required_epoch"] == 1 for row in rows)
+        assert connection.execute("SELECT COUNT(*) FROM trace_manifests").fetchone()[0] == 0
+    assert restarted.snapshot().write_errors == 0

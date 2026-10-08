@@ -36,6 +36,10 @@
 - Recorded lap and sector times are reconciled with the game's session
   history across the whole field, including laps missed during suspension.
   Missing or inconsistent telemetry remains excluded from setup learning.
+- Repeated history packets are coalesced to keep the archive queue responsive;
+  timing corrections and failed writes remain eligible for processing.
+- Flashback recovery revalidates timing-only laps against each car's replacement
+  history and prevents abandoned timeline writes from returning after restart.
 - Populated Lap Lab and History fit phone screens, and partial recordings
   clearly show their limits when reviewing traces and single-lap analysis.
 - Proactive settings apply at startup; delayed telemetry retains its arrival

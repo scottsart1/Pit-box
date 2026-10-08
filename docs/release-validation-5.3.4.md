@@ -87,6 +87,14 @@ historical segment is useful targeted evidence and does not satisfy it.
 - Capture validation originally consumed the replay clock before the first
   packet, causing a catch-up burst. Both the release replay harness and the
   standalone capture command start their clocks after initialization.
+- The following tablet run overflowed the archive queue by repeatedly writing
+  unchanged whole-field history. It was stopped after 505 archive queue drops;
+  the accepted queue then drained without write errors. Require bounded
+  coalescing, correction and retry tests, followed by another complete race.
+- Timing-only laps lacked trace frames for flashback invalidation. Verify a
+  durable timeline barrier, per-car replacement history (including a complete
+  empty history), preservation of retained laps, and rejection of late writes
+  from abandoned branches after restart.
 
 ## Intermediate regression evidence
 

@@ -369,6 +369,47 @@ class SessionCatalog:
         return lap_id(car_key, int(lap["lap_num"]), int(lap.get("timeline_epoch", 0) or 0))
 
     @staticmethod
+    def history_replacement_epoch(db: sqlite3.Connection, session_key: str) -> int:
+        """The durable branch barrier also exists before replacement laps do."""
+        rows = db.execute(
+            "SELECT detail_json FROM audit_events WHERE event_type='timeline_invalidated' AND subject_id=?",
+            (session_key,),
+        ).fetchall()
+        return max((int(json.loads(row["detail_json"]).get("replacement_timeline_epoch", 0))
+                    for row in rows), default=0)
+
+    @staticmethod
+    def defer_timing_only_laps(db: sqlite3.Connection, session_key: str,
+                              invalidated_epoch: int, replacement_epoch: int) -> None:
+        """Frame-only flashbacks cannot locate historical laps without traces.
+
+        Keep their times and identities, but do not report them as confirmed
+        active laps until a complete per-car history establishes its prefix.
+        A lap number from another car is not a safe field-wide rewind point.
+        """
+        rows = db.execute(
+            "SELECT r.id,r.legacy_lap_id,r.engineering_json FROM recorded_laps r "
+            "JOIN session_cars c ON c.id=r.session_car_id WHERE c.session_id=? "
+            "AND r.timeline_epoch<=? AND (r.invalid_reason_mask & 2)=0 "
+            "AND r.trace_manifest_id IS NULL AND NOT EXISTS "
+            "(SELECT 1 FROM full_field_lap_batches b WHERE b.lap_id=r.id)",
+            (session_key, invalidated_epoch),
+        ).fetchall()
+        for row in rows:
+            context = json.loads(row["engineering_json"] or "{}")
+            if context.get("timing_source") != "session_history":
+                continue
+            context["history_revalidation_required_epoch"] = max(
+                replacement_epoch, int(context.get("history_revalidation_required_epoch", 0)))
+            context["valid"] = False
+            db.execute("UPDATE recorded_laps SET valid=0,engineering_json=? WHERE id=?",
+                       (json.dumps(context, allow_nan=False), row["id"]))
+            if row["legacy_lap_id"] is not None:
+                db.execute("UPDATE laps SET valid=0 WHERE id=?", (row["legacy_lap_id"],))
+            db.execute("UPDATE comparisons SET state='stale' WHERE candidate_lap_id=? OR reference_key=?",
+                       (row["id"], row["id"]))
+
+    @staticmethod
     def _merge_authoritative_timing(lap: dict[str, Any], recorded: dict[str, Any]) -> dict[str, Any]:
         """A delayed analysis result cannot undo the game's lap history."""
         authority = recorded.get("history_authority") or {}
@@ -385,6 +426,9 @@ class SessionCatalog:
         )})
         merged["timing_source"] = "session_history"
         merged["history_authority"] = dict(authority)
+        if int(recorded.get("history_revalidation_required_epoch", 0)) > int(lap.get("timeline_epoch", 0) or 0):
+            merged["history_revalidation_required_epoch"] = recorded["history_revalidation_required_epoch"]
+            merged["valid"] = False
         if mismatch:
             merged["telemetry_timing_mismatch"] = True
             merged["trace_incomplete"] = True
@@ -426,6 +470,8 @@ class SessionCatalog:
         reconciled = []
         with self._connect() as db:
             db.execute("BEGIN IMMEDIATE")
+            if self.history_replacement_epoch(db, session_key) > epoch:
+                return []
             if db.execute("SELECT 1 FROM recorded_laps WHERE session_car_id=? AND timeline_epoch>? LIMIT 1",
                           (car_key, epoch)).fetchone():
                 return []  # A queued history packet from an abandoned branch.
@@ -434,15 +480,20 @@ class SessionCatalog:
                 if not keys:
                     return
                 marks = ",".join("?" for _ in keys)
+                db.execute(f"UPDATE laps SET valid=0 WHERE id IN (SELECT legacy_lap_id FROM recorded_laps WHERE id IN ({marks}))", keys)
                 db.execute(f"UPDATE recorded_laps SET valid=0,invalid_reason_mask=(invalid_reason_mask | 2) WHERE id IN ({marks})", keys)
                 db.execute(f"UPDATE comparisons SET state='stale' WHERE candidate_lap_id IN ({marks}) OR reference_key IN ({marks})", [*keys, *keys])
 
             if state.get("history_complete"):
                 completed = [int(row["lap_num"]) for row in history if authoritative_timing(row)]
-                if completed:
+                # A positive completed time with malformed/missing sectors is
+                # unknown evidence, not proof that the car has no prior laps.
+                unknown_completed = any(int(row.get("lap_ms", 0) or 0) > 0 and not authoritative_timing(row)
+                                        for row in history)
+                if not unknown_completed:
                     abandoned = db.execute(
                         "SELECT id FROM recorded_laps WHERE session_car_id=? AND timeline_epoch<? AND lap_number>? "
-                        "AND (invalid_reason_mask & 2)=0", (car_key, epoch, max(completed)),
+                        "AND (invalid_reason_mask & 2)=0", (car_key, epoch, max(completed, default=0)),
                     ).fetchall()
                     invalidate([str(row["id"]) for row in abandoned])
             for source in history:
@@ -473,14 +524,17 @@ class SessionCatalog:
                                 timeline_epoch=int(row["timeline_epoch"]) if row else epoch, lap_num=number)
                 if row:
                     context = json.loads(row["engineering_json"] or "{}")
+                    pending_epoch = int(context.get("history_revalidation_required_epoch", 0))
                     previous_authority = context.get("history_authority", {})
-                    if context.get("timing_source") == "session_history" and all(
+                    if not pending_epoch and context.get("timing_source") == "session_history" and all(
                         previous_authority.get(name) == value for name, value in timing.items()
                     ) and (int(row["lap_time_ms"] or 0) == timing["lap_time_ms"]
                            and bool(row["valid"]) == timing["valid"]
                            and bool(int(row["invalid_reason_mask"] or 0) & 1) == (not timing["valid"])):
                         continue
                     context = {**identity, **context}
+                    if pending_epoch and epoch >= pending_epoch and state.get("history_complete"):
+                        context.pop("history_revalidation_required_epoch", None)
                     context.setdefault("lap_time_ms", int(row["lap_time_ms"] or 0))
                     context.setdefault("compound", row["tyre_compound"])
                     context.setdefault("tyre_age_end", row["tyre_age_laps"])
@@ -502,7 +556,7 @@ class SessionCatalog:
                     # all other observation fields. History supplies timing only.
                     db.execute(
                         "UPDATE recorded_laps SET lap_time_ms=?, valid=?, invalid_reason_mask=?, engineering_json=? WHERE id=?",
-                        (timing["lap_time_ms"], int(timing["valid"]),
+                        (timing["lap_time_ms"], int(merged["valid"]),
                          (int(row["invalid_reason_mask"] or 0) & ~1) | int(not timing["valid"]),
                          json.dumps(merged, allow_nan=False), key),
                     )
@@ -532,6 +586,8 @@ class SessionCatalog:
         key = lap_id(car_key, int(lap["lap_num"]), timeline_epoch)
         with self._connect() as db:
             db.execute("BEGIN IMMEDIATE")
+            if self.history_replacement_epoch(db, session_key) > timeline_epoch:
+                return key
             existing = db.execute("SELECT engineering_json, invalid_reason_mask FROM recorded_laps WHERE id=?", (key,)).fetchone()
             if existing:
                 lap = self._merge_authoritative_timing(lap, json.loads(existing["engineering_json"] or "{}"))
