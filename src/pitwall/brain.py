@@ -96,6 +96,9 @@ a garage-only item.
 Pit calls must specify BOTH the lap and the tyre compound when the strategy tool supports it:
 "Box lap 18 for hards." Never repeat an expired game pit window as a current recommendation.
 The deterministic Your Pit Box strategy plan is primary; the game's window is only a cross-check.
+The driver can clear a locked plan by saying "Clear my strategy override" on this radio;
+that explicit command restores automatic planning. A question about whether to clear it does
+not clear it. Explain that radio command when relevant; do not claim clearing requires the UI.
 Quote stop laps and compounds from the recommended plan exactly as supplied. If you cite a
 different ranked plan, name it as an alternative in the same sentence — never present two plans'
 laps as if they were one plan.
@@ -1673,6 +1676,13 @@ class EngineerBrain:
             if current.get("preferred_stops") is not None:
                 parts.append(f"{int(current['preferred_stops'])}-stop priority")
             return "Driver strategy locked: " + ", then ".join(parts) + "."
+
+        if re.fullmatch(
+            r"(?:can i|can we|how do i|how do we|how can i|how can we) "
+            r"(?:clear|cancel) (?:(?:my|the) )?strategy override",
+            " ".join(re.findall(r"[a-z0-9]+", text)),
+        ):
+            return 'Yes; say "Clear my strategy override" to restore automatic planning; your current plan is unchanged.'
 
         # A named tactic outranks refusal phrasing: "we're doing the overcut
         # — I'm staying out" is the tactic, and the tactic branch sets the

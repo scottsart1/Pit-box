@@ -230,6 +230,7 @@ def test_negated_cancellation_never_clears_driver_plan(command):
     "Is rain expected, and should I switch to intermediates now?",
     "It looks wet; should we switch to intermediates now?",
     "Can I clear my strategy override?",
+    "How do I clear my strategy override?",
     "Should we clear the strategy override?",
 ])
 async def test_strategy_question_never_commits_or_clears_an_override(stack, monkeypatch, command):
@@ -242,7 +243,11 @@ async def test_strategy_question_never_commits_or_clears_an_override(stack, monk
 
     monkeypatch.setattr(brain, "_run", advice)
     answer = await brain.ask(command)
-    assert "current plan remains unchanged" in answer
+    if command.startswith(("Can I", "How do I")):
+        assert 'say "Clear my strategy override"' in answer
+        assert "current plan is unchanged" in answer
+    else:
+        assert "current plan remains unchanged" in answer
     assert (await store.snapshot_analysis())["strategy_override"] == before
 
 
