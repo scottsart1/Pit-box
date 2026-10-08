@@ -408,7 +408,13 @@ class TelemetryTools:
         participant identity table. The previous substring match on the packet
         surname meant "Max" and "car 1" never resolved at all.
         """
-        query = driver.strip().lower()
+        query = normalize_text(driver)
+        query = {
+            "car ahead": "ahead", "the car ahead": "ahead", "driver ahead": "ahead",
+            "car in front": "ahead", "the car in front": "ahead",
+            "car behind": "behind", "the car behind": "behind", "driver behind": "behind",
+            "following car": "behind", "the following car": "behind",
+        }.get(query, query)
         player_position = int(state.get("player_position", 0))
         if query in {"me", "myself", "player", "my car", "i", "mine"}:
             player_index = int(state.get("player_car_index", 0))
@@ -3260,17 +3266,18 @@ class TelemetryTools:
             (
                 "get_attack_plan",
                 "Build a live attack plan against a rival using gap, tyres, energy deployment, overtaking assistance and driving evidence.",
-                {"driver": {"type": "string"}},
+                {"driver": {"type": "string", "description": "Use ahead for the next classified car, behind for the following car, or a driver name/position such as P5."}},
             ),
             (
                 "get_defence_plan",
                 (
                     "Build and quantify a live defence plan using measured closing "
                     "rate, sustainable defence laps, track overtaking difficulty, "
-                    "passing-zone count, position retention and a deterministic "
-                    "defence-quality score out of ten. Use for 'rate my defending'."
+                    "passing-zone count and observed position/corner evidence. "
+                    "Quality is unknown unless quality_evidence_available is true; "
+                    "any supported score is a heuristic, not proof of skill. Use for 'rate my defending'."
                 ),
-                {"driver": {"type": "string"}},
+                {"driver": {"type": "string", "description": "Use behind for the next classified car behind the player, or a driver name/position such as P7."}},
             ),
             (
                 "get_setup_learning",
