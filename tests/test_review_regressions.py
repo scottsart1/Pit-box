@@ -222,6 +222,7 @@ async def test_restricted_rival_boost_is_unknown_not_absent(stack):
     store, _database, _s, _su, _a, tools = stack
 
     def apply(state):
+        state.connected = True
         state.player_position = 2
         state.player_car_index = 0
         for index, restricted in ((0, False), (1, True)):

@@ -26,6 +26,9 @@ android/
 `src/pitwall` is used as-is; nothing is copied or forked. The dashboard
 (`static/`) is bundled as assets and extracted to the app's storage on first
 start, and `PITWALL_STATIC_DIR` tells the backend where it landed.
+The extraction is refreshed after every APK install, including a rebuilt APK
+with the same version number. Saved settings and session history are retained;
+ordinary launches reuse the already extracted dashboard.
 
 ## Native dependencies
 

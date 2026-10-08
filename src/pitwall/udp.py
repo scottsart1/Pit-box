@@ -591,6 +591,8 @@ class F1DatagramProtocol(asyncio.DatagramProtocol):
             int(getattr(header, "frame_identifier", 0)),
             int(getattr(header, "overall_frame_identifier", 0)),
             getattr(header, "session_time", None),
+            received_monotonic=(received.received_monotonic_ns / 1e9 if received else None),
+            received_wall=(received.received_wall_ns / 1e9 if received else None),
         )
         name = packet.__class__.__name__
         if self.session_assembler is not None:
@@ -1251,6 +1253,8 @@ class F1DatagramProtocol(asyncio.DatagramProtocol):
             "session_mode_override",
             "strategy",
             "red_flag_active",
+            "red_flag_suspension_observed",
+            "speed_kph",
             "race_control_phase",
         )
         raw_session_type_id = int(packet.session_type)
@@ -1339,6 +1343,10 @@ class F1DatagramProtocol(asyncio.DatagramProtocol):
             red_flag_count=int(packet.num_red_flag_periods),
             race_control_phase=race_control_phase,
             game_paused=bool(packet.game_paused),
+            red_flag_suspension_observed=(
+                red_flag_active and ((bool(packet.game_paused) and int(snapshot.get("speed_kph", 0)) <= 5)
+                                     or bool(snapshot.get("red_flag_suspension_observed")))
+            ),
             sector2_start_m=float(packet.sector2_lap_distance_start),
             sector3_start_m=float(packet.sector3_lap_distance_start),
             marshal_zones=marshal_zones,
@@ -2175,6 +2183,10 @@ class F1DatagramProtocol(asyncio.DatagramProtocol):
             }
 
             def apply_safety_car(state):  # type: ignore[no-untyped-def]
+                # Captured SCAR(none, resume) precedes the long red-flag menu
+                # gap. Wait for lights out or an actual SC deployment.
+                if state.red_flag_active and (safety_name in {"none", "unknown"} or event_type_id != 0):
+                    return
                 state.last_safety_car_event_type = event_type_id
                 state.race_control_changed_at = time.time()
                 if event_type_id == 0 and safety_name not in {"none", "unknown"}:
@@ -2184,6 +2196,7 @@ class F1DatagramProtocol(asyncio.DatagramProtocol):
                     # and announce a neutralisation that is not happening.
                     state.safety_car = safety_name
                     state.red_flag_active = False
+                    state.red_flag_suspension_observed = False
                     state.race_control_phase = (
                         "safety_car"
                         if safety_name == "full"
@@ -2208,7 +2221,10 @@ class F1DatagramProtocol(asyncio.DatagramProtocol):
             payload = {"active": True}
 
             def apply_red_flag(state):  # type: ignore[no-untyped-def]
+                if state.red_flag_active:
+                    return
                 state.red_flag_active = True
+                state.red_flag_suspension_observed = bool(state.game_paused and state.speed_kph <= 5)
                 state.race_control_phase = "red_flag"
                 state.race_control_changed_at = time.time()
                 state.safety_car = "none"
@@ -2231,6 +2247,7 @@ class F1DatagramProtocol(asyncio.DatagramProtocol):
 
             def clear_suspension(state):  # type: ignore[no-untyped-def]
                 state.red_flag_active = False
+                state.red_flag_suspension_observed = False
                 state.race_control_phase = (
                     "safety_car"
                     if state.safety_car == "full"

@@ -8,7 +8,6 @@ import android.app.Service;
 import android.content.Context;
 import android.content.Intent;
 import android.content.pm.ServiceInfo;
-import android.content.res.AssetManager;
 import android.net.wifi.WifiManager;
 import android.os.Build;
 import android.os.IBinder;
@@ -23,8 +22,6 @@ import com.chaquo.python.Python;
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
-import java.io.InputStream;
-import java.io.OutputStream;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -196,77 +193,23 @@ public class PitBoxService extends Service {
 
     /**
      * Copies the dashboard out of the APK's assets so the backend can serve it
-     * from a real directory. Re-copied whenever the app version changes, so an
-     * update never serves last release's JavaScript against this release's
-     * backend.
+     * from a real directory. Refresh on every APK install, including a rebuilt
+     * candidate with the same version, so JavaScript matches the backend.
      */
     private File installDashboard(File files) throws IOException {
-        File target = new File(files, "static");
-        File stamp = new File(files, "static.version");
-        String version = installedVersion();
-        if (target.isDirectory() && stamp.exists()) {
-            String installed = readAll(stamp);
-            if (version.equals(installed)) return target;
-        }
-        deleteTree(target);
-        copyAssetTree(getAssets(), "static", target);
-        try (FileOutputStream out = new FileOutputStream(stamp)) {
-            out.write(version.getBytes("UTF-8"));
-        }
-        return target;
+        return DashboardAssets.install(files, installedVersion(), new DashboardAssets.Source() {
+            public String[] list(String path) throws IOException { return getAssets().list(path); }
+            public java.io.InputStream open(String path) throws IOException { return getAssets().open(path); }
+        });
     }
 
     private String installedVersion() {
         try {
             android.content.pm.PackageInfo info = getPackageManager().getPackageInfo(getPackageName(), 0);
             long code = Build.VERSION.SDK_INT >= Build.VERSION_CODES.P ? info.getLongVersionCode() : info.versionCode;
-            return info.versionName + "/" + code;
+            return DashboardAssets.installationStamp(info.versionName, code, info.lastUpdateTime);
         } catch (android.content.pm.PackageManager.NameNotFoundException error) {
             return "unknown";
-        }
-    }
-
-    private static void copyAssetTree(AssetManager assets, String path, File into) throws IOException {
-        String[] children = assets.list(path);
-        if (children == null || children.length == 0) {
-            copyAssetFile(assets, path, into);
-            return;
-        }
-        if (!into.isDirectory() && !into.mkdirs()) {
-            throw new IOException("Could not create " + into);
-        }
-        for (String child : children) {
-            copyAssetTree(assets, path + "/" + child, new File(into, child));
-        }
-    }
-
-    private static void copyAssetFile(AssetManager assets, String path, File into) throws IOException {
-        File parent = into.getParentFile();
-        if (parent != null && !parent.isDirectory() && !parent.mkdirs()) {
-            throw new IOException("Could not create " + parent);
-        }
-        try (InputStream in = assets.open(path); OutputStream out = new FileOutputStream(into)) {
-            byte[] buffer = new byte[64 * 1024];
-            int read;
-            while ((read = in.read(buffer)) != -1) out.write(buffer, 0, read);
-        }
-    }
-
-    private static void deleteTree(File file) {
-        File[] children = file.listFiles();
-        if (children != null) for (File child : children) deleteTree(child);
-        //noinspection ResultOfMethodCallIgnored
-        file.delete();
-    }
-
-    private static String readAll(File file) throws IOException {
-        // InputStream.readAllBytes needs API 33; this runs down to API 24.
-        try (InputStream in = new java.io.FileInputStream(file);
-             java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream()) {
-            byte[] buffer = new byte[4096];
-            int read;
-            while ((read = in.read(buffer)) != -1) out.write(buffer, 0, read);
-            return out.toString("UTF-8");
         }
     }
 

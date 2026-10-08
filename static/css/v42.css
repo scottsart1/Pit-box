@@ -604,6 +604,8 @@ button:disabled,
   .controls > * { flex: 1 1 140px; }
   .bottom { min-height: 44px; }
   .canvas { height: auto; aspect-ratio: 16 / 6; }
+  /* The pace strip is a compact sparkline, not a full telemetry chart. */
+  .canvas.spark { height: 55px; aspect-ratio: auto; }
   .map { aspect-ratio: 16 / 9; }
 }
 
@@ -1272,6 +1274,31 @@ button:disabled,
   .engineering-workspace .workspace-actions label { min-width: 0; flex: 1; }
 }
 #engineeringComparison, #strategicRivals { overflow-wrap: anywhere; }
+.engineering-visuals { margin: 18px 0; min-width: 0; }
+.engineering-chart-quality { font-weight: 700; }
+.engineering-chart { min-width: 0; margin: 14px 0; padding: 14px; border: 1px solid #263542; border-radius: 10px; background: #0c131a; }
+.engineering-chart-title { font-size: 15px; font-weight: 750; }
+.engineering-sector-row { display: grid; grid-template-columns: 28px minmax(0, 1fr) 90px; gap: 10px; align-items: center; min-height: 42px; font-size: 13px; }
+.engineering-chart-value { text-align: right; font-variant-numeric: tabular-nums; }
+.engineering-delta-track { height: 28px; position: relative; background: #16212b; border-radius: 3px; }
+.engineering-delta-track::after { content: ''; position: absolute; left: 50%; top: -4px; bottom: -4px; width: 1px; background: #91a6b8; }
+.engineering-sector-bar { position: absolute; top: 6px; height: 16px; background: #ffc15c; border-radius: 2px; }
+.engineering-sector-bar[data-direction="quicker"] { background: #49d17d; }
+.engineering-sector-bar[data-direction="equal"] { min-width: 2px; background: #e8eef4; }
+.engineering-delta-legend, .engineering-pace-axis { display: flex; justify-content: space-between; gap: 8px; font-size: 11px; color: #a9bdce; }
+.engineering-delta-legend { margin: 12px 100px 6px 38px; }
+.engineering-pace-row { display: grid; grid-template-columns: 44px minmax(0, 1fr); gap: 10px; align-items: center; font-size: 13px; }
+.engineering-pace-track { height: 42px; position: relative; border-bottom: 1px solid #536779; }
+.engineering-pace-range { position: absolute; top: 20px; height: 3px; background: #6aa8e8; }
+.engineering-pace-dot { position: absolute; width: 10px; height: 10px; border-radius: 50%; transform: translateX(-50%); background: #6aa8e8; border: 1px solid #e8eef4; }
+.engineering-pace-count { position: absolute; bottom: 12px; left: 50%; transform: translateX(-50%); color: #e8eef4; font-size: 11px; white-space: nowrap; }
+.engineering-pace-row[data-side="b"] .engineering-pace-dot, .engineering-pace-row[data-side="b"] .engineering-pace-range { background: #ffc15c; }
+.engineering-pace-axis { margin-left: 54px; margin-top: 10px; }
+@media (max-width: 560px) {
+  .engineering-chart { padding: 10px; }
+  .engineering-sector-row { grid-template-columns: 22px minmax(0, 1fr) 84px; gap: 6px; }
+  .engineering-delta-legend { margin-right: 90px; margin-left: 28px; font-size: 10px; }
+}
 
 /* The status strip has one line; full counters are on Connection. */
 .bottom { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto; height: 44px; min-height: 44px; gap: 12px; padding: 0 12px; border-top: 0; box-shadow: 0 -1px 0 var(--line); }

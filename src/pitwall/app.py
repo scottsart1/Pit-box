@@ -642,6 +642,9 @@ async def lifespan(app: FastAPI):
     voice = NativeVoiceController(store, brain, audio)
     await voice.initialize()
     proactive = ProactiveEngineer(store, brain, voice, setup_advisor, strategy)
+    # StateStore is created before saved settings are loaded. Apply the final
+    # preference before either radio task can queue or deliver a call.
+    await proactive.configure(settings.proactive_enabled, settings.proactive_cadence_laps)
     await proactive.start()
     # The DRIVE toggle reads the saved value from state; settings own it.
     await store.update(brutal_mode=bool(settings.brutal_mode))

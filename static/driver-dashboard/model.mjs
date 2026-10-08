@@ -31,6 +31,7 @@ export function normalizeState(s,{ageMs=0,transport='live',now=Date.now()}={}) {
   if(!s||typeof s!=='object')s={};
   const connected=s.connected===true, fresh=connected&&s.telemetry_stale!==true&&ageMs<3500;
   const provenance=transport==='demo'||s.source_mode==='demo'?'sample':s.source_mode==='replay'?'replay':'live';
+  const regulations2026=typeof s.regulations_2026==='boolean'?s.regulations_2026:null;
   // A disconnected workspace can still be edited, but never retain old race values.
   if(!fresh)s={};
   const drivers=Array.isArray(s.drivers)?s.drivers:[];
@@ -49,7 +50,9 @@ export function normalizeState(s,{ageMs=0,transport='live',now=Date.now()}={}) {
   const fuelUsage=recent.map(l=>finite(l.fuel_start_kg)!==null&&finite(l.fuel_end_kg)!==null?l.fuel_start_kg-l.fuel_end_kg:null).filter(v=>v>0&&v<20);
   const burn=fuelUsage.length?fuelUsage.reduce((a,b)=>a+b,0)/fuelUsage.length:null;
   const recommendation=s.strategy?.available?s.strategy?.recommended:null;
-  const nextStop=Array.isArray(recommendation?.box_laps)?recommendation.box_laps.find(l=>finite(l)!==null&&l>=s.current_lap):null;
+  const suspended=!!(s.red_flag_active||s.race_control_phase==='red_flag'||s.fia_flag==='red');
+  const restart=suspended?s.strategy?.red_flag_restart:null;
+  const nextStop=!suspended&&Array.isArray(recommendation?.box_laps)?recommendation.box_laps.find(l=>finite(l)!==null&&l>=s.current_lap):null;
   const array=a=>Array.from({length:4},(_,i)=>finite(a?.[i]));
   const freshGroup=id=>transport==='demo'||(finite(s.packet_group_freshness?.[id])!==null&&(now/1000-s.packet_group_freshness[id])<5);
   const carData=fresh&&freshGroup('6'),statusData=fresh&&freshGroup('7'),damageData=fresh&&freshGroup('10');
@@ -58,17 +61,18 @@ export function normalizeState(s,{ageMs=0,transport='live',now=Date.now()}={}) {
   const input=v=>finite(v)===null?null:Math.min(1,Math.max(0,v));
   const mapValues=(obj,keys)=>Object.fromEntries(keys.map(k=>[k,damageData?percent(obj?.[k]):null]));
   const flag=fresh&&(!freshGroup('1')||!freshGroup('7'))?makeFlag('unknown','#91a6b8','RACE CONTROL UNAVAILABLE','Follow in-game race control. Awaiting current flag data.'):raceFlag(s,{fresh});
-  return {fresh,transport,provenance,paused:!!s.game_paused,flag,track:String(s.track_name||'Waiting for session'),session:String(s.session_type||'No session'),
+  return {fresh,transport,provenance,regulations2026,paused:!!s.game_paused,flag,track:String(s.track_name||'Waiting for session'),session:String(s.session_type||'No session'),
     lap:positive(s.current_lap),total:positive(s.total_laps),position:positive(s.player_position),field:positive(s.active_cars)||drivers.length||null,player:car(player),ahead:car(ahead),behind:car(behind),
     drivers:drivers.filter(d=>d.active!==false||d.car_idx===s.player_car_index).sort((a,b)=>(a.position||999)-(b.position||999)).map(car),
     current:positive(s.current_lap_time_ms),last:positive(s.last_lap_ms),best,delta,reference,invalid:!!s.current_lap_invalid,sector:finite(s.sector),
     predicted:referenceMs&&delta!==null?referenceMs+delta*1000:null,
     speed:carData?finite(s.speed_kph):null,gear:carData?finite(s.gear):null,rpm:carData?finite(s.engine_rpm):null,
     fuel:statusData?finite(s.fuel_kg):null,fuelMargin:statusData?finite(s.fuel_laps_delta):null,ers:statusData?finite(s.ers_pct):null,burn,
-    aero:fresh&&freshGroup('16')&&s.regulations_2026&&finite(s.active_aero_mode)!==null?(s.active_aero_mode?'STRAIGHT':'CORNER'):null,ersMode:statusData?finite(s.ers_mode):null,
+    aero:fresh&&freshGroup('16')&&s.regulations_2026&&[0,1].includes(s.active_aero_mode)?(s.active_aero_mode?'STRAIGHT':'CORNER'):null,ersMode:statusData?finite(s.ers_mode):null,
     compound:statusData?String(s.tyre?.compound||'UNKNOWN'):'UNKNOWN',tyreAge:statusData?finite(s.tyre?.age_laps):null,temps:carData?array(s.tyre?.surface_temps_c):[null,null,null,null],wear:damageData?array(s.tyre?.wear):[null,null,null,null],
-    penalties:lapData?finite(s.penalties_s):null,warnings:lapData?finite(s.corner_cutting_warnings):null,nextStop:positive(nextStop),nextCompound:recommendation?.compounds?.[1]||null,
-    plan:String(recommendation?.instruction||s.strategy?.reason||'Waiting for strategy'),recent,average,spread:times.length>1?Math.max(...times)-Math.min(...times):null,
+    penalties:lapData?finite(s.penalties_s):null,warnings:lapData?finite(s.corner_cutting_warnings):null,nextStop:positive(nextStop),nextCompound:suspended?restart?.primary?.compound||null:recommendation?.compounds?.[1]||null,
+    suspended,restartAlternative:restart?.alternative?.instruction||'',
+    plan:String(suspended?restart?.primary?.instruction||restart?.instruction||'Session suspended. Prepare fresh restart tyres while stopped; checking available sets.':recommendation?.instruction||s.strategy?.reason||'Waiting for strategy'),recent,average,spread:times.length>1?Math.max(...times)-Math.min(...times):null,
     radio:String((Array.isArray(s.radio_log)?s.radio_log:[]).filter(r=>r.role==='engineer').at(-1)?.text||''),air:sessionData?finite(s.air_temp_c):null,trackTemp:sessionData?finite(s.track_temp_c):null,
     inner:carData?array(s.tyre?.inner_temps_c):array(null),pressures:carData?array(s.tyre?.pressures_psi):array(null),
     throttle:carData?input(s.throttle):null,brake:carData?input(s.brake):null,steer:carData&&finite(s.steer)!==null?Math.min(1,Math.max(-1,s.steer)):null,
@@ -76,9 +80,10 @@ export function normalizeState(s,{ageMs=0,transport='live',now=Date.now()}={}) {
     weather:sessionData?String(s.weather||'Unavailable'):'Unavailable',timeLeft:sessionData?finite(s.session_time_left_s):null,
     progress:lapData&&positive(s.track_length_m)!==null&&finite(s.lap_distance_m)!==null?Math.min(100,Math.max(0,s.lap_distance_m/s.track_length_m*100)):null,
     damage:mapValues(s.damage,['front_left_wing','front_right_wing','rear_wing','floor','diffuser','sidepod','engine','gearbox']),
-    components:mapValues(s.component_wear,['ice','tc','mguk','mguh','es','ce']),
+    components:{...mapValues(s.component_wear,['ice','tc','mguk','mguh','es','ce']),mguh:damageData&&regulations2026===false?percent(s.component_wear?.mguh):null},
     driveThrough:lapData?finite(s.unserved_drive_through_penalties):null,stopGo:lapData?finite(s.unserved_stop_go_penalties):null,
-    drs:statusData&&typeof s.drs_allowed==='boolean'?s.drs_allowed:null,overtake:fresh&&freshGroup('16')&&s.regulations_2026&&typeof s.overtake_available==='boolean'?s.overtake_available:null,
+    drs:statusData&&regulations2026===false&&typeof s.drs_allowed==='boolean'?s.drs_allowed:null,overtake:fresh&&freshGroup('16')&&s.regulations_2026&&typeof s.overtake_available==='boolean'?s.overtake_available:null,
+    overtakeActive:fresh&&freshGroup('16')&&s.regulations_2026&&typeof s.overtake_active==='boolean'?s.overtake_active:null,
     deployed:statusData&&finite(s.ers_deployed_lap_j)!==null?s.ers_deployed_lap_j/1e6:null,harvested:statusData&&finite(s.ers_harvested_lap_j)!==null?s.ers_harvested_lap_j/1e6:null};
 }
 export function demoState(scenario='green',tick=0) {

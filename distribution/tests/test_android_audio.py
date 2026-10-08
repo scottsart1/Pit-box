@@ -245,8 +245,88 @@ def test_stop_cancels_a_playback_in_progress(android_audio):
     sd.play(np.zeros(16000 * 5, dtype=np.int16), 16000)
     sd.stop()
     track = _FakeTrack.instances[-1]
-    assert track.paused and track.released
+    assert track.released and not track.playing
     sd.wait()  # nothing left to wait for
+
+
+def test_stream_stop_plays_queued_speech_before_flushing(android_audio, monkeypatch):
+    sd, _ = android_audio
+    stream = sd.RawOutputStream(samplerate=24000)
+    track = _FakeTrack.instances[-1]
+    head = [0]
+    waiting = threading.Event()
+
+    def playback_head():
+        waiting.set()
+        return head[0]
+
+    monkeypatch.setattr(track, "getPlaybackHeadPosition", playback_head)
+    stream.start()
+    stream.write(b"\x01\x00" * 240)
+    stopper = threading.Thread(target=stream.stop)
+    stopper.start()
+    try:
+        assert waiting.wait(1), "stop never checked whether queued speech was heard"
+        assert stopper.is_alive(), "stop discarded the speech still queued in AudioTrack"
+        assert not track.paused and not track.flushed
+        head[0] = 240
+        stopper.join(1)
+        assert not stopper.is_alive(), "stop did not finish after queued speech played"
+        assert track.paused and track.flushed
+    finally:
+        stream.abort()
+        stopper.join(2)
+        stream.close()
+
+
+@pytest.mark.parametrize("method", ["abort", "close"])
+def test_cancel_and_close_discard_queued_speech_without_waiting(android_audio, monkeypatch, method):
+    sd, _ = android_audio
+    stream = sd.RawOutputStream(samplerate=24000)
+    track = _FakeTrack.instances[-1]
+    monkeypatch.setattr(track, "getPlaybackHeadPosition", lambda: 0)
+    stream.start()
+    stream.write(b"\x01\x00" * 240)
+    monkeypatch.setattr(stream, "drain", lambda *a: pytest.fail("cancel must not drain pending speech"))
+    getattr(stream, method)()
+    assert not stream.active and track.paused and track.flushed
+    stream.close()
+
+
+def test_cancel_before_playback_thread_starts_never_plays_stale_speech(android_audio):
+    sd, _ = android_audio
+    playback = sd._Playback(b"\x01\x00" * 240, 24000)
+    playback.cancel()
+    playback.thread.start()
+    assert playback.done.wait(1)
+    track = _FakeTrack.instances[-1]
+    assert not track.written, "cancelled speech started after the cancellation"
+    assert track.released
+
+
+def test_only_accepted_audio_frames_are_counted_when_a_write_fails(android_audio, monkeypatch):
+    sd, _ = android_audio
+    stream = sd.RawOutputStream(samplerate=24000)
+    track = _FakeTrack.instances[-1]
+    results = iter([2, -6])
+    monkeypatch.setattr(track, "write", lambda *a: next(results))
+    stream.start()
+    try:
+        with pytest.raises(sd.PortAudioError, match="write failed"):
+            stream.write(b"\x01\x00" * 240)
+        assert stream._written_frames == 1
+    finally:
+        stream.close()
+
+
+def test_playback_head_uses_android_unsigned_frame_counter(android_audio, monkeypatch):
+    sd, _ = android_audio
+    stream = sd.RawOutputStream()
+    monkeypatch.setattr(_FakeTrack.instances[-1], "getPlaybackHeadPosition", lambda: -2147483648)
+    try:
+        assert stream.played_frames() == 2147483648
+    finally:
+        stream.close()
 
 
 def test_soundfile_read_returns_float32_mono_and_the_rate(android_audio, tmp_path):

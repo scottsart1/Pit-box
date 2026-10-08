@@ -8,6 +8,7 @@ async def test_gap_ahead(stack):
     store, _, _, _, _, tools = stack
 
     def setup(state):
+        state.connected = True
         state.player_position = 4
         state.active_cars = 2
         state.drivers[2] = DriverState(

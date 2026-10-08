@@ -2578,7 +2578,13 @@ class StrategyEngine:
             return candidate
         new_override = new_rec.get("driver_override", {})
         old_override = old_rec.get("driver_override", {}) if old_rec else {}
-        if new_override.get("active") and new_override != old_override:
+        # Cancelling a driver plan is as deliberate as committing one. The
+        # automatic winner must take over immediately, even inside the hold
+        # window for the stop the driver has just cancelled.
+        if (
+            (new_override.get("active") or old_override.get("active"))
+            and new_override != old_override
+        ):
             self._pending_switch = None
             candidate["stability"] = {"held": False, "reason": "driver strategy override changed"}
             return candidate
@@ -2598,6 +2604,7 @@ class StrategyEngine:
         material_trigger = (
             current_compound != old_source
             or phase != old_phase
+            or phase == "red_flag"
             or weather_now
             or max_wear >= 82.0
             or (old_box is not None and current_lap > old_box)
@@ -2844,15 +2851,24 @@ class StrategyEngine:
         """Identity of a strategy snapshot for persistence de-duplication.
 
         Two snapshots that would answer every later question identically share a
-        key: same session, lap, race-control phase, spoken call, confidence and
-        outstanding-compound status. Monte Carlo jitter between ticks does not.
+        key: same race timeline, lap, race-control phase, full stop schedule,
+        driver control, confidence and outstanding-compound status. Monte
+        Carlo jitter between ticks does not.
         """
         recommended = plan.get("recommended", {}) or {}
+        override = recommended.get("driver_override", {}) or {}
         return (
-            int(state.get("session_uid", 0) or 0),
+            *(int(state.get(name, 0) or 0)
+              for name in ("session_uid", "restart_epoch", "timeline_epoch")),
+            int(state.get("track_id", -1)),
             int(state.get("current_lap", 0) or 0),
             str(state.get("race_control_phase", "green")),
             self._radio_signature(recommended),
+            tuple(recommended.get("box_laps") or []),
+            tuple(recommended.get("compounds") or []),
+            bool(override.get("active")),
+            bool(override.get("honored")),
+            bool(override.get("following_plan")),
             int(recommended.get("projected_finish_position", 0) or 0),
             str(plan.get("strategy_risk_appetite", "balanced")),
             str(plan.get("confidence") or ""),
@@ -3355,7 +3371,9 @@ class StrategyEngine:
         spare_lives.discard(0)
         fitted_life = reported_life(inventory.fitted or {}, current_age)
 
-        for box_lap in range(earliest_box_lap, total_laps):
+        # Suspension changes consume no racing lap, including on the last lap.
+        stop_horizon = total_laps + (1 if red_flag_change and current_lap == total_laps else 0)
+        for box_lap in range(earliest_box_lap, stop_horizon):
             # A normal stop at the end of the current lap still consumes that
             # lap on the fitted tyre. A red-flag change happens during the
             # suspension and therefore consumes zero additional racing laps.
@@ -3389,7 +3407,7 @@ class StrategyEngine:
                 )
                 reason = (
                     f"Fit {compound} during the red flag"
-                    if neutralisation["phase"] == "red_flag"
+                    if red_flag_change and box_lap == current_lap
                     else f"Box lap {box_lap} for {compound}"
                 )
                 append_plan(
@@ -3719,6 +3737,18 @@ class StrategyEngine:
         # Run uncertainty analysis only on credible candidates; this keeps live
         # strategy recomputes bounded even when the full enumeration is large.
         shortlisted = deterministic[: min(48, len(deterministic))]
+        if red_flag_change:
+            # Reserve an executable restart choice for every compound. The
+            # fastest 48 can all use the same tyre, hiding the alternative.
+            seen_restart_compounds: set[str] = set()
+            for plan in deterministic:
+                if (plan.get("feasible") and plan.get("legal")
+                        and plan.get("box_laps", [])[:1] == [current_lap]):
+                    compound = plan["compounds"][1]
+                    if compound not in seen_restart_compounds:
+                        seen_restart_compounds.add(compound)
+                        if all(plan is not item for item in shortlisted):
+                            shortlisted.append(plan)
         imminent_weather = bool(
             weather_plan is not None
             and int(weather_plan.get("weather_crossover", {}).get("time_offset_min", 99)) <= 1
@@ -3829,7 +3859,9 @@ class StrategyEngine:
                 int(plan.get("projected_finish_position", 99)),
                 appetite_position,
                 -float(appetite_points),
-                -first_stop,
+                # Retaining track position by delaying a paid stop has value;
+                # a free suspension change gives up no track position.
+                0 if red_flag_change else -first_stop,
                 float(plan.get("risk_adjusted_time_s", 1e9)),
                 int(plan.get("stops_remaining", 9)),
             )
@@ -3974,6 +4006,12 @@ class StrategyEngine:
             second.get("projected_finish_position", 0) or 0
         ) - int(best.get("projected_finish_position", 0) or 0)
 
+        restart_advice = None
+        if red_flag_change:
+            restart_advice = self._red_flag_restart_advice(
+                state, best, shortlisted, ranking_key, remaining, inventory.status,
+            )
+
         if best["stops_remaining"]:
             box_lap = best["box_laps"][0]
             fit = best["compounds"][1]
@@ -4004,7 +4042,10 @@ class StrategyEngine:
         else:
             box_lap = None
             fit = None
-            instruction = "Stay out to the finish."
+            instruction = (
+                f"Keep the current {current_compound} tyres for the restart and run to the finish."
+                if red_flag_change else "Stay out to the finish."
+            )
             tyre_reason = f"Current {current_compound.lower()}s project to {best['projected_finish_wear_pct']:.0f}% at the finish."
         projected_rule = self._compound_rule(state, best.get("compounds", [])[1:])
         if projected_rule["conditional_on_future_wet_use"]:
@@ -4166,6 +4207,7 @@ class StrategyEngine:
             },
             "pit_loss_s": round(effective_pit_loss, 1),
             "neutralisation": neutralisation,
+            **({"red_flag_restart": restart_advice} if restart_advice else {}),
             # Surfaced even when no stop is called. A driver on slicks in the
             # rain must still learn the conditions were seen and why staying
             # out is the call, rather than hearing nothing about the weather.
@@ -4189,6 +4231,10 @@ class StrategyEngine:
                 **best,
                 "box_lap": box_lap,
                 "fit_compound": fit,
+                "action": (
+                    "red_flag_tyre_change" if red_flag_change and box_lap == current_lap
+                    else "pit_stop" if box_lap is not None else "keep_current_tyres"
+                ),
                 "instruction": instruction,
                 "tyre_reason": tyre_reason,
                 "projected_rejoin_position": best.get("projected_rejoin_position", int(state.get("player_position", 0) or 0)),
@@ -4244,9 +4290,90 @@ class StrategyEngine:
             ],
         }
 
+    @staticmethod
+    def _red_flag_restart_advice(
+        state: dict[str, Any], best: dict[str, Any], plans: list[dict[str, Any]],
+        ranking_key: Any, remaining: int, inventory_status: str,
+    ) -> dict[str, Any]:
+        """Two complete restart choices, retaining physical set uncertainty."""
+        lap = int(state.get("current_lap", 0))
+
+        def choice(plan: dict[str, Any]) -> dict[str, Any]:
+            changing = plan.get("box_laps", [])[:1] == [lap]
+            stint = plan["stint_models"][1 if changing else 0]
+            compound = plan["compounds"][1 if changing else 0]
+            wear = float(stint.get("starting_wear_pct", 0))
+            confirmed = bool(inventory_status != "unknown" or not changing)
+            tyre = ("fresh " if confirmed and wear <= 0 else "spare " if changing else "current ") + compound
+            instruction = (
+                f"Fit {tyre} during the suspension for the restart."
+                if changing else f"Keep the current {compound} tyres for the restart."
+            )
+            later = [
+                {"lap": stop, "compound": fit}
+                for stop, fit in zip(plan.get("box_laps", []), plan.get("compounds", [])[1:])
+                if not (changing and stop == lap)
+            ]
+            if later:
+                instruction += " Then " + "; ".join(
+                    f"change to {item['compound']} on lap {item['lap']}" for item in later
+                ) + "."
+            else:
+                instruction += f" Run to the finish, {remaining} lap{'s' if remaining != 1 else ''} remaining."
+            if changing and not confirmed:
+                instruction += " Confirm that spare set in the tyre selection menu; inventory is unknown."
+            elif changing and wear > 0:
+                instruction += f" This set already has {wear:g} percent wear."
+            return {
+                "compound": compound, "instruction": instruction,
+                "action": "red_flag_tyre_change" if changing else "keep_current_tyres",
+                "tyre_set_index": stint.get("tyre_set_index"),
+                "starting_wear_pct": wear, "inventory_confirmed": confirmed,
+                "later_stops": later, "feasible": bool(plan.get("feasible")),
+                "legal": bool(plan.get("legal")),
+                "projected_finish_wear_pct": plan.get("projected_finish_wear_pct"),
+            }
+
+        viable = sorted(
+            (plan for plan in plans if plan.get("feasible") and plan.get("legal")
+             and plan.get("box_laps", [])[:1] == [lap]), key=ranking_key,
+        )
+        primary = choice(best) if best.get("feasible") and best.get("legal") else None
+        alternative = next(
+            (choice(plan) for plan in viable
+             if primary is None or plan["compounds"][1] != primary["compound"]), None,
+        )
+        if primary is None and alternative:
+            primary, alternative = alternative, None
+        alternative_reason = (
+            "No other legal, usable restart compound is available in the evaluated inventory and conditions."
+            if alternative is None else ""
+        )
+        instruction = "Tyres can be changed while the race is suspended, without a normal pit-lane time loss. "
+        constrained = bool((best.get("driver_override") or {}).get("honored"))
+        instruction += (
+            ("Best strategy within your chosen plan: " if constrained else "Best strategy: ") + primary["instruction"]
+            if primary else "No legal tyre plan can currently cover the remaining distance; check the available sets."
+        )
+        instruction += (
+            " Alternative: " + alternative["instruction"]
+            if alternative else " " + alternative_reason
+        )
+        return {
+            "active": True, "tyre_change_available": True,
+            "laps_remaining": remaining, "inventory_status": inventory_status,
+            "primary": primary, "alternative": alternative,
+            "alternative_reason": alternative_reason, "instruction": instruction,
+        }
+
     async def get_plan(self) -> dict[str, Any]:
         state = await self.store.snapshot_analysis()
         current = state.get("strategy", {})
+        phase = self._neutralisation(state)["phase"]
+        if phase == "red_flag" or phase != current.get("neutralisation", {}).get("phase", "green"):
+            # A tool call can beat the proactive refresh after RDFL/restart.
+            # Re-evaluate inventory and weather throughout the suspension.
+            return await self.recompute()
         if current.get("recommended") or current.get("available") is False:
             return current
         return await self.recompute()

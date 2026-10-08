@@ -52,6 +52,12 @@ function post(path, body) {
 
 /* ---- Current call --------------------------------------------------------- */
 
+function redFlagRestart(s) {
+  if (!(s.red_flag_active || s.race_control_phase === "red_flag" || s.fia_flag === "red")) return null;
+  const stale = s.connected === false || s.telemetry_stale === true;
+  return { ...(stale ? {} : s.strategy?.red_flag_restart), stale };
+}
+
 function evidenceSource(source) {
   const text = String(source || "");
   if (!text) return "source unavailable";
@@ -187,6 +193,21 @@ function renderCall(s) {
   ruleNode.className = "small " + (rule.change_outstanding ? "warn" : "good");
   const hold = s.strategy_hold || {};
   byId("stratHold").hidden = !hold.active;
+  const restart = redFlagRestart(s);
+  if (restart) {
+    byId("stratInstruction").textContent = restart.stale
+      ? "Telemetry unavailable. Confirm race control and restart tyres in game."
+      : restart.primary?.instruction || restart.instruction || "Session suspended. Prepare fresh restart tyres while stopped; checking available sets.";
+    byId("stratWhy").textContent = restart.primary ? "Primary restart strategy" : "";
+    byId("stratChange").textContent = restart.alternative ? `Alternative: ${restart.alternative.instruction}` : "";
+    byId("stratChange").className = "small warn";
+    byId("stratNotice").textContent = restart.stale
+      ? "Last received red flag; current race status unavailable."
+      : "Follow the game’s suspension instructions. Select restart tyres while stopped.";
+    byId("stratMeta").textContent = "";
+    byId("stratReasoning").textContent = restart.alternative_reason || "";
+    byId("stratHold").hidden = true;
+  }
 }
 
 /* ---- Plan board ----------------------------------------------------------- */
@@ -239,7 +260,29 @@ function adoptPlan(plan, statusNode) {
 
 function renderPlans(s) {
   const st = s.strategy || {};
+  const restart = redFlagRestart(s);
+  byId("stratPlansHeading").textContent = restart ? "Compare restart tyres" : "Compare other plans";
+  const planHead = byId("stratPlanRows").closest?.("table")?.tHead;
+  if (planHead) planHead.hidden = !!restart;
+  if (restart) {
+    view.planSignature = "red-flag";
+    const choices = [["Primary", restart.primary], ["Alternative", restart.alternative]].filter(([, plan]) => plan);
+    byId("stratPlanCount").textContent = `${choices.length} restart option${choices.length === 1 ? "" : "s"}`;
+    const body = byId("stratPlanRows");
+    body.replaceChildren();
+    for (const [label, plan] of choices.length ? choices : [["Restart tyres", null]]) {
+      const row = document.createElement("tr"), cell = document.createElement("td");
+      cell.colSpan = 9;
+      cell.textContent = plan ? `${label} · ${plan.compound}: ${plan.instruction}` : restart.stale
+        ? "Current race status unavailable. Confirm restart tyres in game."
+        : "Checking available restart tyres. Select tyres through the game's suspension controls.";
+      row.appendChild(cell); body.appendChild(row);
+    }
+    byId("stratPlanStatus").textContent = "Restart tyre selections are made in game while stopped.";
+    return;
+  }
   const plans = st.plans || [];
+  if (view.planSignature === "red-flag") byId("stratPlanStatus").textContent = "";
   const signature = plans.map(planKey).join(";");
   byId("stratPlanCount").textContent = `${plans.length} plan${plans.length === 1 ? "" : "s"}`;
   if (signature === view.planSignature) return;
@@ -305,6 +348,13 @@ function drawTimeline(s) {
   const width = canvas.width;
   const height = canvas.height;
   context.clearRect(0, 0, width, height);
+  view.timelineGeometry = null;
+  if (redFlagRestart(s)) {
+    context.fillStyle = "#91a6b8";
+    context.font = "14px Segoe UI, system-ui, sans-serif";
+    context.fillText("Session suspended. Restart tyre choices are listed above.", 20, 34);
+    return;
+  }
 
   const st = s.strategy || {};
   const plans = (st.plans || []).slice(0, 4);

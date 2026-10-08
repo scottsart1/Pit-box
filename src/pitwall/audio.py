@@ -18,9 +18,11 @@ RACING_VOCAB = (
     "pit",
     "undercut",
     "overcut",
-    "manual override",
+    "overtake mode",
     "overtake",
     "active aero",
+    "straight line mode",
+    "cornering mode",
     "ers",
     "degradation",
     "safety car",
@@ -78,6 +80,7 @@ class AudioService:
         self.rebind_client()
         self.output_lock = asyncio.Lock()
         self._stop_requested = False
+        self._streaming_output: Any = None
         self._ack_paths = {
             "copy": settings.data_dir / f"ack-copy-{settings.voice}.wav",
             "standby": settings.data_dir / f"ack-standby-{settings.voice}.wav",
@@ -344,7 +347,7 @@ class AudioService:
         target: Path | None = None,
         on_first_audio: FirstAudioCallback | None = None,
     ) -> bool:
-        """Stream raw PCM directly to the Windows audio device.
+        """Stream raw PCM directly to the local audio device.
 
         The Speech API PCM format is 24 kHz, signed 16-bit little-endian mono.
         A WAV copy is written after playback so the dashboard's latest-audio
@@ -367,8 +370,10 @@ class AudioService:
                     blocksize=0,
                     device=None,
                 )
-                stream.start()
+                self._streaming_output = stream
+                completed = False
                 try:
+                    stream.start()
                     remainder = b""
                     async with self.client.audio.speech.with_streaming_response.create(
                         model=settings.tts_model,
@@ -397,12 +402,32 @@ class AudioService:
                                 await self._call_first_audio(on_first_audio)
                             chunks.append(playable)
                             await asyncio.to_thread(stream.write, playable)
+                    completed = not self._stop_requested
                 finally:
-                    with contextlib.suppress(Exception):
-                        stream.stop()
-                    with contextlib.suppress(Exception):
-                        stream.close()
+                    try:
+                        if completed:
+                            # stop() waits for buffered speech to be heard. Keep
+                            # telemetry/HTTP responsive while the device drains.
+                            draining = asyncio.create_task(asyncio.to_thread(stream.stop))
+                            try:
+                                with contextlib.suppress(Exception):
+                                    await asyncio.shield(draining)
+                            except asyncio.CancelledError:
+                                with contextlib.suppress(Exception):
+                                    stream.abort()
+                                with contextlib.suppress(Exception):
+                                    await draining
+                                raise
+                        else:
+                            with contextlib.suppress(Exception):
+                                stream.abort()
+                    finally:
+                        self._streaming_output = None
+                        with contextlib.suppress(Exception):
+                            stream.close()
             except Exception:
+                if self._stop_requested:
+                    return False
                 # Preserve the working v3.1 behavior on unusual audio devices or
                 # SDK versions while still using low-latency streaming normally.
                 fallback = target or (settings.data_dir / "latest_engineer.wav")
@@ -506,6 +531,10 @@ class AudioService:
 
     def stop_playback(self) -> None:
         self._stop_requested = True
+        stream = self._streaming_output
+        if stream is not None:
+            with contextlib.suppress(Exception):
+                stream.abort()
         try:
             import sounddevice as sd
 

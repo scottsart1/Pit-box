@@ -17,6 +17,34 @@ test('PB prediction uses its stated time, not the current session best',()=>{con
 test('Malformed/missing optional data stay unavailable',()=>{const m=normalizeState({connected:true,radio_log:{},speed_kph:Infinity,gear:'6'});assert.equal(m.speed,null);assert.equal(m.gear,null);assert.equal(m.average,null);assert.equal(m.predicted,null);assert.equal(lapTime(null),'—');assert.equal(lapTime(89999),'1:29.999')});
 test('All six layouts support every scenario and escape telemetry text',()=>{for(const l of LAYOUTS)for(const scenario of ['green','yellow','double-yellow','sc','vsc','red','blue','penalty','pit','finish','stale']){const s=demoState(scenario);s.track_name='<img src=x onerror=alert(1)>';s.drivers[2].name='<svg onload=alert(2)>';s.radio_log[0].text='<script>evil()</script>';const html=renderDashboard(l,normalizeState(s,{transport:'demo'}),cleanPreferences(null));assert.ok(html.includes('flag-banner'));assert.ok(!html.includes('<img'));assert.ok(!html.includes('<script>'));assert.ok(!html.includes('<svg'));assert.ok(!html.includes('NaN'));if(scenario==='stale'){assert.ok(html.includes('NO CURRENT DATA'));assert.ok(!html.includes('0.842'));assert.ok(!html.includes('P5'))}}});
 test('Unavailable fuel is not fabricated from a default',()=>{const s=demoState();delete s.fuel_kg;delete s.fuel_laps_delta;const m=normalizeState(s,{transport:'demo'});assert.equal(m.fuel,null);assert.equal(m.fuelMargin,null)});
+test('2026 energy and power-unit widgets show Active Aero and Overtake Mode without legacy DRS or MGU-H',()=>{
+  const state=demoState(),model=normalizeState(state,{transport:'demo'});
+  assert.equal(model.drs,null);assert.equal(model.components.mguh,null);
+  const energy=MODULES.energy.render(model,cleanPreferences()),components=MODULES.components.render(model,cleanPreferences());
+  assert.match(energy,/Active Aero/);assert.match(energy,/Overtake Mode/);
+  assert.doesNotMatch(energy,/DRS/);assert.doesNotMatch(components,/MGU-H/);
+  const stale=normalizeState({...state,connected:false});
+  assert.doesNotMatch(MODULES.energy.render(stale,cleanPreferences()),/DRS/);
+  assert.doesNotMatch(MODULES.components.render(stale,cleanPreferences()),/MGU-H/);
+});
+test('Explicit legacy regulations retain their DRS and MGU-H telemetry',()=>{
+  const model=normalizeState({...demoState(),regulations_2026:false},{transport:'demo'});
+  assert.equal(model.drs,true);assert.equal(model.components.mguh,11);
+  const energy=MODULES.energy.render(model,cleanPreferences());
+  assert.match(energy,/DRS/);assert.doesNotMatch(energy,/Active Aero|Overtake Mode/);
+  assert.match(MODULES.components.render(model,cleanPreferences()),/MGU-H/);
+});
+test('2026 Overtake Mode uses its own fresh flags, never the legacy deployment enum',()=>{
+  const state={...demoState(),ers_mode:3,overtake_available:false,overtake_active:false};
+  let model=normalizeState(state,{transport:'demo'}),html=MODULES.energy.render(model,cleanPreferences());
+  assert.match(html,/Deployment<\/dt><dd class="numeric">Boost/);
+  assert.match(html,/Overtake Mode<\/dt><dd class="numeric">UNAVAILABLE/);
+  state.overtake_active=true;model=normalizeState(state,{transport:'demo'});
+  assert.match(MODULES.energy.render(model,cleanPreferences()),/Overtake Mode<\/dt><dd class="numeric">ACTIVE/);
+  state.packet_group_freshness={'7':100,'16':90};model=normalizeState(state,{now:101000});
+  assert.equal(model.overtake,null);assert.equal(model.overtakeActive,null);assert.equal(model.aero,null);
+  state.active_aero_mode=4;model=normalizeState(state,{transport:'demo'});assert.equal(model.aero,null);
+});
 test('Receiving car telemetry without current flag packets never claims green',()=>{const s=demoState();s.packet_group_freshness={'6':100};assert.equal(normalizeState(s,{now:101000}).flag.id,'unknown');s.packet_group_freshness['1']=100;s.packet_group_freshness['7']=100;assert.equal(normalizeState(s,{now:101000}).flag.id,'green');s.packet_group_freshness['1']=90;assert.equal(normalizeState(s,{now:101000}).flag.id,'unknown')});
 
 test('All catalog widgets and presets are complete, unique and independently editable',()=>{

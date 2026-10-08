@@ -114,7 +114,10 @@ async def test_persona_forbids_unsourced_numbers(radio):
     instructions = payload["instructions"].lower()
     assert "must come from a tool call" in instructions
     assert "restricted" in instructions
-    assert "manual override" in instructions
+    assert "overtake mode" in instructions
+    assert "active aero is a separate" in instructions
+    assert "neither is drs" in instructions
+    assert "do not present old gaps" in instructions
 
 
 @pytest.mark.asyncio

@@ -19,7 +19,7 @@ from .intent import (
     normalize_text,
 )
 from .prerace import PreRacePlanner
-from .providers import ProviderResult, ProviderRouter
+from .providers import ProviderDeadlineError, ProviderRequestError, ProviderResult, ProviderRouter
 from .session_guard import SessionChangedError, session_scoped
 from .state import StateStore
 from .tools import TelemetryTools
@@ -88,7 +88,7 @@ A qualitative note is the driver's evidence, not corroboration from the gap-cove
 Use the temperature unit named in the situation header and retain the driver's latest unit request.
 Never infer that the driver is closing from a single lap-time comparison; use measured gap trend.
 A positive player-minus-rival lap delta means the player was slower.
-There is no DRS- or Manual-Override-specific tyre-temperature target; tyre temperature affects grip,
+There is no DRS- or Overtake-Mode-specific tyre-temperature target; tyre temperature affects grip,
 not activation of the overtaking aid. For rear power-oversteer, lower on-throttle differential; for
 rear instability under braking, move brake bias slightly forward. Do not call adjustable diff settings
 a garage-only item.
@@ -105,13 +105,21 @@ Respect the strategy tool's compound-rule legality. Never recommend finishing a 
 without two different dry compounds unless inters or wets have been used.
 For SC, VSC, and red-flag calls, use the tool's neutralisation state and effective pit loss;
 do not treat a red-flag tyre change like an ordinary green-flag pit stop.
+When race suspension is confirmed, changing tyres during the red flag is an opportunity with no
+normal pit-lane time loss. Do not deny the change merely because the game is paused. Refresh
+get_pit_strategy, explain its best restart plan and one feasible alternative, and distinguish
+confirmed available sets from an assumed fresh set. Never promise an unavailable compound.
 For a strategy request, inspect the ranked alternatives, uncertainty, projected per-wheel wear,
 traffic/rejoin, compound legality, and evidence source. Explain why the chosen plan beats the
 next plan and state the condition that would change the call. Never simply echo the first plan.
 For attack/defence advice, use gap trend, rival tyres/laps, racing-line/corner evidence, energy
 and the current 2026 overtaking aid. Give a concrete preparation point and overtaking/defending
-phase, or say evidence is absent. In 2026-regulation sessions call the overtaking aid Manual
-Override, not DRS. Treat blue flags, invalid qualifying laps, unserved drive-through/stop-go
+phase, or say evidence is absent. F1 25: 2026 Season Pack uses Overtake Mode and separate
+Active Aero (Cornering Mode or Straight Line Mode). A current gap below one second does not prove
+Overtake Mode eligibility: use the observed availability/activation flags. Legacy DRS is independent
+of battery charge. Field freshness in the header and tools takes precedence over CONNECTED: missing
+fields are unknown, stale values are historical, and paused values describe the paused state.
+Never turn a missing boolean into a confirmed negative. Treat blue flags, invalid qualifying laps, unserved drive-through/stop-go
 penalties, and a rival pitting from behind as high-priority operational facts.
 
 In qualifying, do not volunteer race-style gaps ahead or behind. The useful comparison is the
@@ -454,6 +462,14 @@ class EngineerBrain:
 
     async def _header(self, *, include_strategy: bool = False) -> str:
         state = await self.store.snapshot_analysis()
+        freshness = self.tools.field_freshness(state)
+        freshness_clause = "FIELD FRESHNESS " + json.dumps(freshness, separators=(",", ":")) + " | "
+        status_known = freshness["fuel_battery_compound"]["available"]
+        tyre_compound = state["tyre"]["compound"] if status_known else "unknown"
+        tyre_age = state["tyre"]["age_laps"] if status_known else "unknown"
+        weather_known = freshness["weather"]["available"]
+        weather = state["weather"] if weather_known else "unknown"
+        rain15 = state["rain_next_15_pct"] if weather_known and (state.get("weather_forecast") or not state.get("packet_group_freshness")) else "unknown"
         target = state.get("analysis", {}).get("target", {})
         top = state.get("analysis", {}).get("flagged_corners", [])
         corner_text = (
@@ -468,7 +484,7 @@ class EngineerBrain:
                 if item.get("best_lap")
             ) or "no representative field laps yet"
             return (
-                f"SESSION {state['session_type']} | {state['track_name']} | "
+                freshness_clause + f"SESSION {state['session_type']} | {state['track_name']} | "
                 f"LAP {state['current_lap']} | CONNECTED {state['connected']} "
                 f"PAUSED {state['game_paused']} | "
                 f"QUALI BEST LAPS {field_text} | "
@@ -476,16 +492,19 @@ class EngineerBrain:
                 f"THEORETICAL {qualifying.get('theoretical_best')} | "
                 f"TARGET {qualifying.get('target')} | "
                 f"REQUIRED DELTA {qualifying.get('delta_player_to_target_s')}s | "
-                f"TYRE {state['tyre']['compound']} age {state['tyre']['age_laps']} | "
-                f"WEATHER {state['weather']} rain15 {state['rain_next_15_pct']}% | "
+                f"TYRE {tyre_compound} age {tyre_age} | "
+                f"WEATHER {weather} rain15 {rain15}% | "
                 f"OPPORTUNITY {corner_text}. "
                 "Do not volunteer gaps ahead/behind; use best-lap comparisons."
             )
 
         plan = state.get("strategy", {}).get("recommended", {})
         strategy_clause = ""
+        red_restart = state.get("strategy", {}).get("red_flag_restart")
+        if state.get("red_flag_active") or state.get("race_control_phase") == "red_flag":
+            strategy_clause = " | RED FLAG RESTART " + json.dumps(red_restart or {"refresh_required": True}, separators=(",", ":"))
         if include_strategy:
-            strategy_clause = (
+            strategy_clause += (
                 f" | compound rule {state.get('strategy', {}).get('compound_rule', {})}"
                 f" | strategy {plan.get('instruction', 'strategy building')}"
             )
@@ -526,23 +545,30 @@ class EngineerBrain:
             temperature_unit,
         )
         formatted_temperatures = [round(value, 1) for value in temperatures]
+        if not freshness["tyre_temperatures"]["available"]:
+            formatted_temperatures = "unknown"
+        wear = state["tyre"]["wear"] if freshness["tyre_wear_damage"]["available"] else "unknown"
+        fuel_delta = f"{state['fuel_laps_delta']:+.1f}" if status_known else "unknown"
+        battery = f"{state['ers_pct']:.0f}" if status_known else "unknown"
         overtaking_label = (
-            "manual override"
+            "Overtake Mode"
             if state.get("regulations_2026")
             else "DRS"
         )
+        aid_status = "active" if (state.get("overtake_active") if state.get("regulations_2026") else state.get("drs_open")) else "inactive"
+        if not freshness["overtake_active_aero"]["available"]:
+            aid_status = "unknown"
         return (
-            f"SESSION {state['session_type']} | {state['track_name']} | "
+            freshness_clause + f"SESSION {state['session_type']} | {state['track_name']} | "
             f"LAP {state['current_lap']}/{state['total_laps']} | "
             f"P{state['player_position']} | CONNECTED {state['connected']} "
             f"PAUSED {state['game_paused']} | "
-            f"{state['tyre']['compound']} age {state['tyre']['age_laps']} "
-            f"wear FL/FR/RL/RR {state['tyre']['wear']} | "
+            f"{tyre_compound} age {tyre_age} "
+            f"wear FL/FR/RL/RR {wear} | "
             f"inner temps FL/FR/RL/RR {formatted_temperatures} {temperature_label} | "
-            f"fuel delta {state['fuel_laps_delta']:+.1f} laps | "
-            f"ERS {state['ers_pct']:.0f}% | {overtaking_label} "
-            f"{'active' if state.get('overtake_active') else 'inactive'} | "
-            f"weather {state['weather']} rain15 {state['rain_next_15_pct']}% | "
+            f"fuel delta {fuel_delta} laps | "
+            f"ERS {battery}% | {overtaking_label} {aid_status} | "
+            f"weather {weather} rain15 {rain15}% | "
             f"race control {state.get('race_control_phase', 'green')} | "
             f"FIA flag {state.get('fia_flag', 'none')} | "
             f"penalties {state.get('penalties_s', 0)}s, drive-through "
@@ -560,6 +586,45 @@ class EngineerBrain:
         spending a conversational turn discovering them.
         """
         return await self._header(include_strategy=include_strategy)
+
+    async def _strategy_deadline_answer(self) -> str:
+        """A failed narration must not hide an independently computed plan."""
+        state = await self.store.snapshot_analysis()
+        plan = await self.tools.get_pit_strategy()
+        prefix = "Engineer analysis timed out; "
+        restart = plan.get("red_flag_restart", {})
+        if restart.get("active") and restart.get("instruction"):
+            return prefix + str(restart["instruction"])
+        recommended = plan.get("recommended", {})
+        current_lap = int(state.get("current_lap", 0) or 0)
+
+        def supported(candidate: dict[str, Any]) -> bool:
+            return bool(candidate.get("feasible") and candidate.get("legal")) and all(
+                int(lap) >= current_lap for lap in candidate.get("box_laps", [])
+            )
+
+        if not supported(recommended):
+            return prefix + "no current, legal and feasible pit plan is confirmed; I cannot give a new pit instruction."
+
+        def describe(candidate: dict[str, Any]) -> str:
+            stops = list(zip(candidate.get("box_laps", []), candidate.get("compounds", [])[1:]))
+            if not stops:
+                return "stay on the fitted tyres to the finish"
+            return ", then ".join(f"box lap {lap} for {compound}" for lap, compound in stops)
+
+        signature = (recommended.get("box_laps"), recommended.get("compounds"))
+        alternative = next((candidate for candidate in plan.get("plans", []) if supported(candidate)
+                            and (candidate.get("box_laps"), candidate.get("compounds")) != signature), None)
+        fresh = self.tools.packet_freshness(state, 1, 2, 7, 10)
+        label = "current computed plan" if fresh["current"] else "last confirmed computed plan"
+        response = prefix + f"{label}: {describe(recommended)}"
+        response += f"; alternative: {describe(alternative)}" if alternative else "; no distinct feasible alternative is confirmed"
+        response += f"; confidence {plan.get('confidence', 'unknown')}"
+        if plan.get("tyre_inventory", {}).get("status") == "unknown":
+            response += "; confirm spare sets in the tyre menu"
+        if not fresh["current"]:
+            response += "; live telemetry must confirm this before a new pit call"
+        return response + "."
 
     @staticmethod
     def classify_request(utterance: str) -> str:
@@ -581,6 +646,8 @@ class EngineerBrain:
             "battery",
             "ers",
             "manual override",
+            "overtake mode",
+            "active aero",
             "overtake available",
             "last lap",
             "last two laps",
@@ -668,7 +735,8 @@ class EngineerBrain:
             r"(?:what|which) (?:position|place)(?: am i(?: in)?)?|(?:what is |what s )?my position|current position|where am i running|"
             r"(?:what is|what s|how is|how s|check|report)(?: my| the)? (?:fuel|damage|weather|rain|battery|ers|tyre condition|tire condition)|"
             r"how much fuel(?: is)?(?: left| remaining)?|fuel (?:status|delta|margin|level)|"
-            r"(?:battery|ers|manual override|overtake available|gap ahead|gap behind|target lap|best lap|pole)|"
+            r"(?:battery|ers|manual override|overtake mode|overtake available|active aero|gap ahead|gap behind|target lap|best lap|pole)|"
+            r"(?:is |what is |what s )?(?:my |the )?(?:overtake mode|active aero)(?: available| active| status)?|"
             r"(?:what are |what s |what is )?(?:my |the )?(?:last (?:(?:two|three|[1-9]) )?laps?(?: time)?|tyre temperatures|tire temperatures)|"
             r"(?:what tyres|what tires)(?: am i on)?|"
             r"how many (?:warnings|penalties) do i have|(?:any|check|report) (?:damage|warnings|penalties)|damage report|"
@@ -806,10 +874,16 @@ class EngineerBrain:
     @classmethod
     def _strategy_override_action(cls, utterance: str, current_lap: int) -> dict[str, Any] | None:
         text = cls._normalize_text(utterance)
+        # Negation applies to cancellation too: "don't clear my override" is
+        # an instruction to retain it, not permission to restore automatic mode.
+        if has_negation(text):
+            return None
         if has_any_phrase(
             text,
             (
                 "clear strategy override", "cancel strategy override", "unlock strategy",
+                "clear my strategy override", "clear the strategy override",
+                "cancel my strategy override", "cancel the strategy override",
                 "use best strategy", "choose the best strategy", "strategy back to auto",
             ),
         ):
@@ -1070,6 +1144,8 @@ class EngineerBrain:
         current_lap: int,
         tyre: dict[str, Any] | None = None,
     ) -> str:
+        if recommended.get("action") == "red_flag_tyre_change":
+            return str(recommended.get("instruction") or "Change tyres during the red-flag suspension; confirm the restart compound.")
         box_lap = recommended.get("box_lap")
         compound = recommended.get("fit_compound")
         if box_lap is None or not compound:
@@ -1457,6 +1533,35 @@ class EngineerBrain:
         return needs_reasoning or not cls._is_simple_lookup(utterance)
 
     async def _fast_answer(self, utterance: str) -> str | None:
+        answer = await self._fast_answer_unchecked(utterance)
+        if answer is None or not self._is_simple_lookup(utterance):
+            return answer
+        text = normalize_text(utterance)
+        groups: tuple[int, ...] = ()
+        subject = "Telemetry"
+        for terms, required, label in (
+            (("fuel", "battery", "ers", "manual override", "overtake"), (7,), "Fuel or battery telemetry"),
+            (("active aero",), (16,), "Active Aero telemetry"),
+            (("tyre temperatures", "tire temperatures"), (6,), "Tyre temperatures"),
+            (("what tyres", "what tires", "tyre condition", "tire condition"), (7, 10, 6), "Tyre condition telemetry"),
+            (("weather", "rain"), (1,), "Weather telemetry"),
+            (("damage",), (10,), "Damage telemetry"),
+            (("position", "gap", "cars ahead", "car ahead", "car behind", "warnings", "penalties", "time check"), (2,), "Timing telemetry"),
+        ):
+            if has_any_phrase(text, terms):
+                groups, subject = required, label
+                break
+        if not groups:
+            return answer
+        state = await self.store.snapshot_analysis()
+        if groups == (16,) and not state.get("regulations_2026"):
+            return answer
+        freshness = self.tools.packet_freshness(state, *groups)
+        if not freshness["available"]:
+            return f"{subject} is {freshness['status']}; I cannot confirm the current value."
+        return "Paused, last confirmed: " + answer if freshness["status"] == "paused" else answer
+
+    async def _fast_answer_unchecked(self, utterance: str) -> str | None:
         """Answer operational radio requests from state before consulting a model.
 
         Only unambiguous lookups about the player's own car are handled here.
@@ -1847,6 +1952,14 @@ class EngineerBrain:
 
         if self._is_strategy_request(utterance):
             strategy = state.get("strategy", {})
+            if state.get("red_flag_active") or state.get("race_control_phase") == "red_flag":
+                strategy = await self.tools.get_pit_strategy()
+                restart = strategy.get("red_flag_restart", {})
+                if restart.get("active") and restart.get("instruction"):
+                    # The normal radio cap must not cut off the alternative or
+                    # inventory caveat. Keep the complete frozen advice in one
+                    # utterance, including when the driver chose terse mode.
+                    return str(restart["instruction"]).rstrip(".").replace(". ", "; ") + "."
             recommended = strategy.get("recommended", {})
             if telemetry_stale and not recommended:
                 return "Telemetry is stale; I cannot safely issue a new pit call until the feed reconnects."
@@ -1964,11 +2077,18 @@ class EngineerBrain:
             return f"Fuel is {direction} {abs(delta):.1f} laps."
 
         # Complete-token matching is essential: 'ers' must not match Verstappen.
-        if has_any_phrase(text, ("battery", "ers", "manual override", "overtake available")):
+        if has_phrase(text, "active aero"):
+            if not state.get("regulations_2026"):
+                return "Active Aero applies to the 2026 Season Pack; this session uses DRS."
+            mode = {0: "Cornering Mode", 1: "Straight Line Mode"}.get(state.get("active_aero_mode"), "unknown mode")
+            return f"Active Aero is in {mode}; Straight Line Mode is {'available' if state.get('active_aero_available') else 'not available'}."
+
+        if has_any_phrase(text, ("battery", "ers", "manual override", "overtake mode", "overtake available")):
             percent = float(state.get("ers_pct", 0.0))
             if state.get("regulations_2026"):
-                status = "active" if state.get("overtake_active") else ("available" if state.get("overtake_available") else "not available")
-                return f"Battery {percent:.0f} percent; Manual Override is {status}."
+                aid = self.tools.packet_freshness(state, 16)
+                status = ("active" if state.get("overtake_active") else ("available" if state.get("overtake_available") else "not available")) if aid["available"] else f"unknown ({aid['status']} telemetry)"
+                return f"Battery {percent:.0f} percent; Overtake Mode is {status}."
             return f"ERS {percent:.0f} percent; DRS is {'available' if state.get('drs_allowed') else 'not available'}."
 
         if has_any_phrase(text, ("last lap", "last two laps", "last three laps")):
@@ -1996,6 +2116,8 @@ class EngineerBrain:
             crossover = (state.get("strategy", {}) or {}).get("weather_crossover") or {}
             label = state.get("weather", "Unknown")
             risk = int(state.get("rain_next_15_pct", 0))
+            if state.get("packet_group_freshness") and not state.get("weather_forecast"):
+                return f"{label}; no rain forecast is available yet."
             if crossover.get("reason"):
                 return f"{label}, rain risk {risk} percent in 15 minutes. {crossover['reason']}"
             return f"{label}; rain risk {risk} percent in 15 minutes."
@@ -2265,17 +2387,34 @@ class EngineerBrain:
             f"DRIVER: {utterance}"
         )
         effort = settings.deep_reasoning_effort if route == "deep" else settings.reasoning_effort
-        text = await self._run(
-            prompt,
-            effort,
-            compose_persona(
-                PERSONA,
-                str(state.get("radio_verbosity", "standard")),
-                state.get("standing_instructions", []),
-            ),
-            max_rounds=4 if route == "deep" else 3,
-            route=route,
-        )
+        narration_started = time.monotonic()
+        try:
+            text = await self._run(
+                prompt,
+                effort,
+                compose_persona(
+                    PERSONA,
+                    str(state.get("radio_verbosity", "standard")),
+                    state.get("standing_instructions", []),
+                ),
+                max_rounds=4 if route == "deep" else 3,
+                route=route,
+            )
+        except (ProviderDeadlineError, ProviderRequestError) as exc:
+            deadline = isinstance(exc, ProviderDeadlineError) or exc.kind == "deadline"
+            if not deadline or not include_strategy:
+                raise
+            if not await self.store.matches_session(origin):
+                raise SessionChangedError("Session changed; the previous radio request was discarded.") from exc
+            text = await self._strategy_deadline_answer()
+            elapsed_ms = (time.monotonic() - narration_started) * 1000
+            self.last_provider_result = ProviderResult(
+                text=text, provider="local", model="strategy-deadline-fallback", latency_ms=elapsed_ms,
+            )
+            # _run and the router retain the failed provider diagnostic. The
+            # response is explicitly identified as local, degraded guidance.
+            await self.store.update(llm_provider="local", llm_model="strategy-deadline-fallback",
+                                    llm_last_latency_ms=round(elapsed_ms, 1), llm_last_tool_rounds=0)
         if not await self.store.append_radio("engineer", text, expected=origin):
             raise SessionChangedError("Session changed; the previous radio request was discarded.")
         provider_name = self.last_provider_result.provider if self.last_provider_result is not None else "unknown"

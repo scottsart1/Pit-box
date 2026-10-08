@@ -312,6 +312,8 @@ class ProactiveEngineer:
             state.proactive["cadence_laps"] = cadence
             state.proactive["next_due_lap"] = max(cadence, self._last_lap_queued + cadence)
         await self.store.mutate(apply)
+        if not enabled:
+            self._drop_pending("proactive radio disabled")
         return {"enabled": bool(enabled), "cadence_laps": cadence}
 
     @staticmethod
@@ -826,6 +828,11 @@ class ProactiveEngineer:
         self.pending.clear()
 
     @staticmethod
+    def _red_flag_active(state: dict[str, Any]) -> bool:
+        # Neither the pause menu nor a count of earlier red flags is a flag.
+        return bool(state.get("red_flag_active")) or state.get("race_control_phase") == "red_flag"
+
+    @staticmethod
     def _event_still_relevant(event: dict[str, Any], state: dict[str, Any]) -> bool:
         if "session_context" in event and tuple(event["session_context"]) != session_key(state):
             return False
@@ -837,7 +844,11 @@ class ProactiveEngineer:
             return False
         kind = event.get("type")
         if kind == "race_control":
-            return state.get("race_control_phase") != "green" or event.get("payload", {}).get("to") == "green"
+            phase = "red_flag" if ProactiveEngineer._red_flag_active(state) else state.get("race_control_phase", "green")
+            return event.get("payload", {}).get("to") == phase
+        if ProactiveEngineer._red_flag_active(state):
+            # Old box/traffic/pace calls must not accompany suspension advice.
+            return False
         if kind == "weather_crossover":
             # Still worth saying while the surface is over the crossover, or
             # while the model is still asking for the stop or the driver's read.
@@ -929,7 +940,7 @@ class ProactiveEngineer:
         ``_safe_to_speak`` varies from call to call, and giving up on the whole
         queue because the first one failed is what silenced the others.
         """
-        if not state.get("connected") or state.get("game_paused"):
+        if not state.get("connected") or (state.get("game_paused") and not self._red_flag_active(state)):
             return "disconnected or paused"
         if state.get("ptt_pressed"):
             return "driver holding push-to-talk"
@@ -1003,6 +1014,8 @@ class ProactiveEngineer:
             self._safe_since = self._wide_safe_since = 0.0
             self._mark_blocked(event, blocked)
             return False
+        if self._red_flag_active(state):
+            return event.get("type") == "race_control" and event.get("payload", {}).get("to") == "red_flag"
         if bool(getattr(self.voice, "realtime_active", False)) and self._priority_of(
             event
         ) != CRITICAL:
@@ -1101,6 +1114,8 @@ class ProactiveEngineer:
             return state
         signature = repr((
             int(state.get("current_lap", 0)), state.get("race_control_phase"),
+            bool(state.get("red_flag_active")),
+            repr(state.get("tyre_sets", [])), state.get("fitted_tyre_set_idx"),
             state.get("weather"), int(state.get("rain_next_15_pct", 0)),
             # The wet model reads the rain falling now, the driver's report on
             # the surface and the lap times behind it, so a change in any of
@@ -1303,7 +1318,9 @@ class ProactiveEngineer:
         )
 
     async def _detect(self, state: dict[str, Any]) -> None:
-        if not state.get("connected") or state.get("game_paused"):
+        if not state.get("connected") or (state.get("game_paused") and not self._red_flag_active(state)):
+            return
+        if not bool(state.get("proactive", {}).get("enabled", settings.proactive_enabled)):
             return
         state = await self._refresh_strategy_if_needed(state)
         state, released_hold_reason = await self._evaluate_strategy_hold(state)
@@ -1324,6 +1341,53 @@ class ProactiveEngineer:
             self._drop_pending("driver is out of the race")
             return
         in_garage = self._player_in_garage(state)
+
+        phase = "red_flag" if self._red_flag_active(state) else str(state.get("race_control_phase", "green"))
+        safety = str(state.get("safety_car", "none"))
+        if phase != self._last_race_control_phase or safety != self._last_safety_car:
+            previous = self._last_race_control_phase
+            self._last_race_control_phase, self._last_safety_car = phase, safety
+            # The flag itself is never suppressible — a driver may silence
+            # gearbox reminders, not a safety car. The pit recommendation
+            # riding along with it is a different matter: it is ordinary
+            # strategy advice, and the driver can decline it.
+            #
+            # Because the two were welded into one payload, a driver who said
+            # "I'm not going to box" and was told "understood, we'll stay out"
+            # was then told "Box this lap for softs" one lap later, inside a
+            # race-control call that suppression could never reach. The
+            # agreement evaporating is a worse failure than the advice being
+            # wrong: it teaches the driver that nothing they say is retained.
+            strategy_advice = state.get("strategy", {}).get("recommended", {})
+            if self.is_suppressed("strategy_change", self._standing_instructions):
+                strategy_advice = {}
+            payload = {"from": previous, "to": phase, "strategy": strategy_advice, "neutralisation": state.get("strategy", {}).get("neutralisation", {})}
+            if phase == "red_flag":
+                # A suspension change is a new opportunity, not the paid pit
+                # stop the driver may previously have declined.
+                payload["red_flag_restart"] = state.get("strategy", {}).get("red_flag_restart", {})
+                self._drop_pending("race suspended")
+            self._enqueue("race_control", payload, critical=True, cooldown_s=0.0, expires_s=3600.0 if phase == "red_flag" else None)
+            # A transition into an "ending" phase means the restart is imminent:
+            # prep battery, temperatures and the expected go point.
+            if phase in {"safety_car_ending", "vsc_ending"}:
+                self._enqueue(
+                    "sc_restart",
+                    {
+                        "phase": phase,
+                        "position": state.get("player_position"),
+                        "ers_pct": state.get("ers_pct"),
+                        "front_temps_c": state.get("tyre", {}).get("inner_temps_c", [])[:2],
+                    },
+                    critical=True,
+                    cooldown_s=0.0,
+                    expires_s=20.0,
+                )
+
+        if phase == "red_flag":
+            # The persistent restart plan remains visible; announce once per
+            # suspension, without ordinary racing or pit-entry chatter.
+            return
 
         cadence = max(1, int(proactive.get("cadence_laps", settings.proactive_cadence_laps)))
         due_lap = cadence if self._last_lap_queued == 0 else self._last_lap_queued + cadence
@@ -1363,41 +1427,6 @@ class ProactiveEngineer:
             if signature != self._last_corner_signature and (mode == "practice" or (mode == "qualifying" and int(state.get("speed_kph", 0)) < 80) or float(top.get("average_loss_s", 0)) >= 0.30):
                 self._last_corner_signature = signature
                 self._enqueue("corner_coaching", top, cooldown_s=60.0 if mode in {"race", "sprint"} else 35.0)
-
-        phase, safety = str(state.get("race_control_phase", "green")), str(state.get("safety_car", "none"))
-        if phase != self._last_race_control_phase or safety != self._last_safety_car:
-            previous = self._last_race_control_phase
-            self._last_race_control_phase, self._last_safety_car = phase, safety
-            # The flag itself is never suppressible — a driver may silence
-            # gearbox reminders, not a safety car. The pit recommendation
-            # riding along with it is a different matter: it is ordinary
-            # strategy advice, and the driver can decline it.
-            #
-            # Because the two were welded into one payload, a driver who said
-            # "I'm not going to box" and was told "understood, we'll stay out"
-            # was then told "Box this lap for softs" one lap later, inside a
-            # race-control call that suppression could never reach. The
-            # agreement evaporating is a worse failure than the advice being
-            # wrong: it teaches the driver that nothing they say is retained.
-            strategy_advice = state.get("strategy", {}).get("recommended", {})
-            if self.is_suppressed("strategy_change", self._standing_instructions):
-                strategy_advice = {}
-            self._enqueue("race_control", {"from": previous, "to": phase, "strategy": strategy_advice, "neutralisation": state.get("strategy", {}).get("neutralisation", {})}, critical=True, cooldown_s=0.0)
-            # A transition into an "ending" phase means the restart is imminent:
-            # prep battery, temperatures and the expected go point.
-            if phase in {"safety_car_ending", "vsc_ending"}:
-                self._enqueue(
-                    "sc_restart",
-                    {
-                        "phase": phase,
-                        "position": state.get("player_position"),
-                        "ers_pct": state.get("ers_pct"),
-                        "front_temps_c": state.get("tyre", {}).get("inner_temps_c", [])[:2],
-                    },
-                    critical=True,
-                    cooldown_s=0.0,
-                    expires_s=20.0,
-                )
 
         # The conditions call comes from the wetness model, not from a rain
         # percentage. A forecast crossing 60% is not news on a track that is
@@ -1704,6 +1733,12 @@ class ProactiveEngineer:
                 return f"Lap {payload.get('lap')}: target {pace}. {action}"
             return f"Lap {payload.get('lap')}: target {pace}. {opportunity}."
         if kind == "race_control":
+            if payload.get("to") == "red_flag":
+                restart = payload.get("red_flag_restart") or {}
+                advice = restart.get("instruction") or (
+                    "Tyres can be changed during the suspension. Check the available sets for the restart."
+                )
+                return "Red flag, red flag. " + str(advice)
             # Lead with the flag: it is the only part that is always true and
             # always urgent, and this template is now spoken verbatim for FLASH
             # calls rather than being reworded by the model. Advice is appended
@@ -1862,10 +1897,10 @@ class ProactiveEngineer:
                 "and brakes, and watch the leader for the go point."
             )
         if kind == "energy_low":
-            aid = "Manual Override" if payload.get("regulations_2026") else "DRS"
+            aid = "Overtake Mode" if payload.get("regulations_2026", state.get("regulations_2026")) else "ERS deployment"
             return (
                 f"Battery low at {payload.get('ers_pct')} percent. Harvest a lap "
-                f"before you commit {aid} again."
+                f"before using sustained {aid} again."
             )
         if kind == "component_wear":
             return (
@@ -2142,6 +2177,8 @@ class ProactiveEngineer:
         payload = event.get("payload")
         if not isinstance(payload, dict):
             return
+        if kind == "race_control" and payload.get("to") == "red_flag":
+            payload["red_flag_restart"] = state.get("strategy", {}).get("red_flag_restart", {})
         if kind in {"progress_update", "tyre_wear"} and "strategy" in payload:
             payload["strategy"] = self._urgent_strategy(state)
         elif kind in self._STRATEGY_BEARING and payload.get("strategy"):

@@ -4,6 +4,9 @@ const API_ROOT = "/api/v1";
 const state = {
   sessions: [],
   nextCursor: null,
+  libraryRequest: 0,
+  libraryLoading: false,
+  libraryQuery: "",
   selectedSessionId: "",
   sessionDetail: null,
   quality: null,
@@ -215,23 +218,41 @@ function buildSessionQuery(cursor = null) {
 }
 
 async function loadSessions({ append = false, quiet = false } = {}) {
+  // A cursor belongs to the filter which produced it. Editing filters before
+  // Load more must start a new result set, not mix rows from two queries.
+  const query = buildSessionQuery().toString();
+  if (append && state.libraryLoading) return;
+  if (append && query !== state.libraryQuery) append = false;
+  if (append && !state.nextCursor) return;
+  const request = ++state.libraryRequest;
+  state.libraryLoading = true;
+  byId("libraryLoadMore").disabled = true;
+  if (!append) state.nextCursor = null;
   if (!quiet) setNotice("libraryStatus", append ? "Loading more sessions…" : "Loading saved sessions…");
   try {
     const payload = await api(`/sessions?${buildSessionQuery(append ? state.nextCursor : null)}`);
+    if (state.libraryRequest !== request) return;
     if (!append) loadStorageStatus();
     const incoming = payload?.items || [];
     state.sessions = append ? [...state.sessions, ...incoming.filter((item) => !state.sessions.some((session) => session.id === item.id))] : incoming;
     state.nextCursor = payload?.next_cursor || null;
+    state.libraryQuery = query;
     renderSessionRows();
     refreshSessionSelectors();
     setNotice("libraryStatus", state.sessions.length ? `Loaded ${state.sessions.length} saved session${state.sessions.length === 1 ? "" : "s"}.` : "No saved sessions match these filters.", state.sessions.length ? "success" : "");
   } catch (error) {
+    if (state.libraryRequest !== request) return;
     setNotice("libraryStatus", formatError(error), "error");
     if (!append) {
       state.sessions = [];
       state.nextCursor = null;
       renderSessionRows();
       refreshSessionSelectors();
+    }
+  } finally {
+    if (state.libraryRequest === request) {
+      state.libraryLoading = false;
+      byId("libraryLoadMore").disabled = false;
     }
   }
 }

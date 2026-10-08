@@ -162,7 +162,7 @@ class RawOutputStream:
         if minimum <= 0:
             raise PortAudioError(f"No output supports {self.samplerate} Hz mono")
         # Half a second of buffer: enough to ride out a scheduling hiccup while
-        # the engineer speaks, small enough that stop() feels immediate.
+        # the engineer speaks. stop() drains it; abort() cancels immediately.
         buffer_bytes = max(int(minimum), self.samplerate)
         attributes = (
             AudioAttributes.Builder()
@@ -209,11 +209,11 @@ class RawOutputStream:
                 time.sleep(0.005)
                 continue
             offset += written
-        self._written_frames += usable // 2
+            self._written_frames += written // 2
 
     def played_frames(self) -> int:
         try:
-            return int(self._track.getPlaybackHeadPosition())
+            return int(self._track.getPlaybackHeadPosition()) & 0xffffffff
         except Exception:  # noqa: BLE001 - a released track reports nothing; treat as fully played
             return self._written_frames
 
@@ -226,15 +226,25 @@ class RawOutputStream:
             time.sleep(0.02)
 
     def stop(self) -> None:
+        """Finish queued speech before stopping, as sounddevice streams require."""
+        if not self.active:
+            return
+        remaining = max(0, self._written_frames - self.played_frames())
+        self.drain(remaining / self.samplerate + 1.0)
+        self.abort()
+
+    def abort(self) -> None:
+        """Discard queued speech immediately when playback is cancelled."""
         if not self.active:
             return
         self.active = False
         with contextlib.suppress(Exception):
             self._track.pause()
             self._track.flush()
+        self._written_frames = 0
 
     def close(self) -> None:
-        self.stop()
+        self.abort()
         with contextlib.suppress(Exception):
             self._track.stop()
         with contextlib.suppress(Exception):
@@ -263,12 +273,17 @@ class _Playback:
         self.pcm = pcm
         self.samplerate = samplerate
         self.done = threading.Event()
+        self._cancelled = False
+        self._state_lock = threading.Lock()
         self.thread = threading.Thread(target=self._run, name="pitbox-playback", daemon=True)
 
     def _run(self) -> None:
         try:
             with contextlib.suppress(Exception):
-                self.stream.start()
+                with self._state_lock:
+                    if self._cancelled:
+                        return
+                    self.stream.start()
                 self.stream.write(self.pcm)
                 self.stream.drain(len(self.pcm) / 2 / self.samplerate + 1.0)
         finally:
@@ -276,7 +291,9 @@ class _Playback:
             self.done.set()
 
     def cancel(self) -> None:
-        self.stream.stop()
+        with self._state_lock:
+            self._cancelled = True
+            self.stream.abort()
 
 
 _lock = threading.Lock()

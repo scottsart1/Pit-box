@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sqlite3
+import time
 from statistics import median
 from typing import TYPE_CHECKING, Any
 
@@ -20,6 +21,40 @@ if TYPE_CHECKING:
 
 
 class TelemetryTools:
+    @staticmethod
+    def packet_freshness(state: dict[str, Any], *groups: int) -> dict[str, Any]:
+        """A receiving socket does not prove every telemetry field is current."""
+        observed = state.get("packet_group_freshness", {}) or {}
+        tracked = bool(observed or state.get("last_packet_at"))
+        missing = [group for group in groups if str(group) not in observed] if tracked else []
+        ages = [max(0.0, time.time() - float(observed[str(group)])) for group in groups if str(group) in observed]
+        age = max(ages) if ages else None
+        if missing or (not tracked and not state.get("connected")):
+            status = "unavailable"
+        elif state.get("game_paused"):
+            status = "paused"
+        elif not state.get("connected") or (age is not None and age > settings.disconnect_after_s):
+            status = "stale"
+        else:
+            status = "live"
+        return {
+            "status": status, "available": status in {"live", "paused"},
+            "current": status == "live", "age_s": round(age, 1) if age is not None else None,
+            "missing_packet_groups": missing,
+        }
+
+    @classmethod
+    def field_freshness(cls, state: dict[str, Any]) -> dict[str, Any]:
+        return {
+            name: cls.packet_freshness(state, *groups)
+            for name, groups in {
+                "timing": (2,), "weather": (1,), "fuel_battery_compound": (7,),
+                "tyre_temperatures": (6,), "tyre_wear_damage": (10,),
+                "overtake_active_aero": (16,) if state.get("regulations_2026") else (6, 7),
+                "setup": (5,),
+            }.items()
+        }
+
     def __init__(
         self,
         store: StateStore,
@@ -425,7 +460,7 @@ class TelemetryTools:
 
     async def get_session_overview(self) -> dict[str, Any]:
         state = await self.store.snapshot_analysis()
-        return {
+        result = {
             key: state[key]
             for key in (
                 "connected",
@@ -447,6 +482,8 @@ class TelemetryTools:
                 "packet_rate_hz",
             )
         }
+        result["field_freshness"] = self.field_freshness(state)
+        return result
 
     async def get_standings(
         self,
@@ -577,6 +614,9 @@ class TelemetryTools:
 
     async def get_weather_forecast(self, horizon_min: int = 30) -> dict[str, Any]:
         state = await self.store.snapshot_analysis()
+        freshness = self.packet_freshness(state, 1)
+        if not freshness["available"]:
+            return {"available": False, "freshness": freshness, "reason": "Current weather telemetry is unavailable."}
         samples = [
             sample
             for sample in state.get("weather_forecast", [])
@@ -587,10 +627,14 @@ class TelemetryTools:
             None,
         )
         return {
+            "available": True,
+            "freshness": freshness,
             "current": state["weather"],
             "track_temp_c": state["track_temp_c"],
             "air_temp_c": state["air_temp_c"],
             "samples": samples,
+            "forecast_available": bool(samples),
+            "rain_crossover_basis": "First forecast sample with at least 60 percent rain probability; not a measured tyre crossover or a guaranteed rain start.",
             "rain_crossover_min": crossover.get("time_offset_min")
             if crossover
             else None,
@@ -598,12 +642,16 @@ class TelemetryTools:
 
     async def get_gap(self, target: str = "ahead") -> dict[str, Any]:
         state = await self.store.snapshot_analysis()
+        freshness = self.packet_freshness(state, 2)
+        if not freshness["available"]:
+            return {"available": False, "freshness": freshness, "reason": "Current gap telemetry is unavailable."}
         match = self._resolve_driver(state, target)
         if not match or match.get("gap_to_player_s") is None:
             return {"available": False, "reason": "Driver or gap unavailable."}
         gap = float(match["gap_to_player_s"])
         return {
             "available": True,
+            "freshness": freshness,
             "driver": match["name"],
             "gap_s": abs(gap),
             "relative": "ahead" if gap < 0 else "behind",
@@ -694,7 +742,8 @@ class TelemetryTools:
                 }
             )
         return {
-            "available": bool(cars) and bool(state.get("connected")),
+            "available": bool(cars) and self.packet_freshness(state, 2)["current"],
+            "freshness": self.packet_freshness(state, 2),
             "telemetry_stale": bool(state.get("telemetry_stale")),
             "cars": cars,
             "interpretation": (
@@ -1554,7 +1603,7 @@ class TelemetryTools:
 
     async def get_my_car_state(self) -> dict[str, Any]:
         state = await self.store.snapshot_analysis()
-        return {
+        result = {
             key: state[key]
             for key in (
                 "speed_kph",
@@ -1584,6 +1633,9 @@ class TelemetryTools:
                 "pit_stop_should_serve_penalty",
             )
         }
+        result["field_freshness"] = self.field_freshness(state)
+        result["interpretation"] = "Only fields marked live are current; paused values describe the paused state. Stale fields are historical and unavailable fields must not be quoted."
+        return result
 
     async def get_tyre_condition(self, detail: bool = False) -> dict[str, Any]:
         state = await self.store.snapshot_analysis()
@@ -1612,6 +1664,12 @@ class TelemetryTools:
             str(tyre.get("compound", "UNKNOWN")).upper(), {}
         )
         return {
+            "field_freshness": {
+                "compound_age": self.packet_freshness(state, 7),
+                "wear": self.packet_freshness(state, 10),
+                "temperatures": self.packet_freshness(state, 6),
+            },
+            "interpretation": "Quote only fields whose packet freshness is live or paused. Missing wear or temperatures are unknown, never zero wear or cold tyres.",
             "compound": tyre["compound"],
             "age_laps": tyre["age_laps"],
             "average_wear_pct": round(average_wear, 1),
@@ -1637,23 +1695,35 @@ class TelemetryTools:
 
     async def get_fuel_state(self) -> dict[str, Any]:
         state = await self.store.snapshot_analysis()
+        freshness = self.packet_freshness(state, 7)
+        if not freshness["available"]:
+            return {"available": False, "freshness": freshness, "reason": "Current fuel telemetry is unavailable."}
         model = state.get("analysis", {}).get("fuel_model", {})
         return {
+            **model,
+            "available": True,
+            "freshness": freshness,
             "fuel_kg": state["fuel_kg"],
             "fuel_remaining_laps": state["fuel_remaining_laps"],
             "fuel_laps_delta": state["fuel_laps_delta"],
-            **model,
         }
 
     async def get_ers_report(self) -> dict[str, Any]:
         state = await self.store.snapshot_analysis()
+        energy = self.packet_freshness(state, 7)
+        aid = self.packet_freshness(state, 16) if state.get("regulations_2026") else self.packet_freshness(state, 6, 7)
         return {
-            "store_pct": state["ers_pct"],
-            "deploy_mode": state["ers_mode"],
-            "deployed_this_lap_j": state["ers_deployed_lap_j"],
-            "harvested_this_lap_j": state["ers_harvested_lap_j"],
-            "overtake_available": state["overtake_available"],
-            "overtake_active": state["overtake_active"],
+            "field_freshness": {"battery": energy, "overtaking_aid": aid},
+            "store_pct": state["ers_pct"] if energy["available"] else None,
+            "deploy_mode": state["ers_mode"] if energy["available"] else None,
+            "deployed_this_lap_j": state["ers_deployed_lap_j"] if energy["available"] else None,
+            "harvested_this_lap_j": state["ers_harvested_lap_j"] if energy["available"] else None,
+            "overtaking_aid": "Overtake Mode" if state.get("regulations_2026") else "DRS",
+            "overtake_available": state["overtake_available"] if aid["available"] and state.get("regulations_2026") else None,
+            "overtake_active": state["overtake_active"] if aid["available"] and state.get("regulations_2026") else None,
+            "active_aero_mode": state["active_aero_mode"] if aid["available"] and state.get("regulations_2026") else None,
+            "active_aero_available": state["active_aero_available"] if aid["available"] and state.get("regulations_2026") else None,
+            "drs_allowed": state["drs_allowed"] if aid["available"] and not state.get("regulations_2026") else None,
         }
 
     async def get_energy_plan(self) -> dict[str, Any]:
@@ -1661,30 +1731,38 @@ class TelemetryTools:
 
         This is deterministic guidance from ERS store and attack context, not a
         per-corner map (which would need track geometry the telemetry does not
-        provide). 2026 sessions use Manual Override terminology.
+        provide). 2026 sessions use Overtake Mode terminology.
         """
         state = await self.store.snapshot_analysis()
+        freshness = self.packet_freshness(state, 7)
+        if not freshness["current"]:
+            return {"available": False, "freshness": freshness, "reason": "Live battery telemetry is required for an energy recommendation."}
         ers = float(state.get("ers_pct", 0.0))
         regs_2026 = bool(state.get("regulations_2026"))
-        aid = "Manual Override" if regs_2026 else "DRS"
+        aid = "Overtake Mode" if regs_2026 else "DRS"
+        aid_freshness = self.packet_freshness(state, 16 if regs_2026 else 7)
         aid_available = bool(
             state.get("overtake_available") if regs_2026 else state.get("drs_allowed")
-        )
+        ) if aid_freshness["current"] else None
         if ers < 15.0:
             mode = "harvest"
-            recommendation = f"Harvest this lap; hold {aid} until the battery recovers."
+            recommendation = "Conserve electrical energy until the battery recovers."
+            if not regs_2026:
+                recommendation += " DRS availability is independent of battery charge."
         elif ers > 80.0:
             mode = "deploy"
-            recommendation = f"Battery is full — deploy freely and use {aid} where available."
+            recommendation = f"Battery {ers:.0f} percent; there is reserve for an attack. Use {aid} only when telemetry confirms availability."
         else:
             mode = "balanced"
             recommendation = "Deploy onto the main straights and harvest through the slow sections."
         return {
+            "available": True,
+            "field_freshness": {"battery": freshness, "overtaking_aid": aid_freshness},
             "store_pct": round(ers, 1),
             "recommended_mode": mode,
             "overtaking_aid": aid,
             "aid_available": aid_available,
-            "attack_window_open": bool(aid_available and ers >= 30.0),
+            "attack_window_open": bool(aid_available and ers >= 30.0) if aid_available is not None else None,
             "recommendation": recommendation,
         }
 
@@ -1692,15 +1770,17 @@ class TelemetryTools:
         """Deterministic fuel-vs-pace trade for the current fuel margin.
 
         fuel_laps_delta is the margin in laps: negative means the tank is short
-        of race distance and the driver must save. Each lap of fuel recovered by
-        lifting and coasting costs a fixed per-lap time, so the required saving
-        translates directly into a lap-time cost.
+        of race distance. The configured fuel-saving cost is a planning
+        assumption, not a measured per-driver lift-and-coast penalty.
         """
         state = await self.store.snapshot_analysis()
+        freshness = self.packet_freshness(state, 7, 1, 2)
+        if not freshness["current"]:
+            return {"available": False, "freshness": freshness, "reason": "Live fuel and race-distance telemetry are required for a pace recommendation."}
         delta = float(state.get("fuel_laps_delta", 0.0))
         laps_remaining = max(
             0,
-            int(state.get("total_laps", 0)) - int(state.get("current_lap", 0)),
+            int(state.get("total_laps", 0)) - max(1, int(state.get("current_lap", 0))) + 1,
         )
         rate = settings.strategy_fuel_save_s_per_lap
         if delta < -0.05:
@@ -1716,8 +1796,8 @@ class TelemetryTools:
         elif delta > 0.6:
             per_lap_cost = None
             recommendation = (
-                f"Fuel is healthy (+{delta:.1f} laps). You can run a richer mix and "
-                "push; no lift-and-coast required."
+                f"Fuel margin is +{delta:.1f} laps. Fuel saving is not currently required; "
+                "choose pace from tyre condition, traffic and energy."
             )
             mode = "push"
         else:
@@ -1725,10 +1805,13 @@ class TelemetryTools:
             recommendation = "Fuel is on target. Hold the current pace mode."
             mode = "neutral"
         return {
+            "available": True,
+            "freshness": freshness,
             "recommended_mode": mode,
             "fuel_laps_delta": round(delta, 2),
             "laps_remaining": laps_remaining,
             "estimated_cost_s_per_lap": per_lap_cost,
+            "cost_basis": "Configured planning estimate, not measured lift-and-coast loss.",
             "recommendation": recommendation,
         }
 
@@ -1740,6 +1823,9 @@ class TelemetryTools:
 
     async def get_damage_report(self) -> dict[str, Any]:
         state = await self.store.snapshot_analysis()
+        freshness = self.packet_freshness(state, 10)
+        if not freshness["available"]:
+            return {"available": False, "freshness": freshness, "reason": "Current damage telemetry is unavailable."}
         damage = state["damage"]
         wing = max(
             int(damage.get("front_left_wing", 0)),
@@ -1748,14 +1834,17 @@ class TelemetryTools:
         estimated_cost = round(wing * 0.012 + int(damage.get("floor", 0)) * 0.018, 2)
         return {
             "available": bool(damage),
+            "freshness": freshness,
             "damage": damage,
             "estimated_lap_cost_s": estimated_cost,
+            "cost_basis": "Rough fixed-coefficient planning estimate; not a measured lap-time loss.",
         }
 
     async def get_car_setup(self) -> dict[str, Any]:
         state = await self.store.snapshot_analysis()
         return {
             "available": bool(state.get("car_setup")),
+            "freshness": self.packet_freshness(state, 5),
             "setup": state.get("car_setup", {}),
             "next_front_wing_value": state.get("next_front_wing_value", 0),
         }
@@ -1792,17 +1881,22 @@ class TelemetryTools:
 
     async def get_attack_plan(self, driver: str = "ahead") -> dict[str, Any]:
         state = await self.store.snapshot_analysis()
+        freshness = self.packet_freshness(state, 2, 7)
+        if not freshness["current"]:
+            return {"available": False, "freshness": freshness, "reason": "Live timing and battery telemetry are required for an attack plan."}
         target = self._resolve_driver(state, driver)
         if not target or target.get("gap_to_player_s") is None:
             return {"available": False, "reason": "Target driver or live gap is unavailable."}
         gap = abs(float(target.get("gap_to_player_s", 0.0)))
         own_tyre = state.get("tyre", {})
-        rival_age = int(target.get("tyre_age", 0))
+        rival_age = target.get("tyre_age") if not target.get("restricted") else None
         own_age = int(own_tyre.get("age_laps", 0))
-        tyre_offset = rival_age - own_age
+        tyre_offset = int(rival_age) - own_age if rival_age is not None else None
         line = state.get("analysis", {}).get("racing_line", {})
         corner = state.get("analysis", {}).get("flagged_corners", [])
-        assist_name = "Manual Override" if state.get("regulations_2026") else "DRS"
+        assist_name = "Overtake Mode" if state.get("regulations_2026") else "DRS"
+        aid_freshness = self.packet_freshness(state, 16 if state.get("regulations_2026") else 7)
+        assist_available = (state.get("overtake_available") if state.get("regulations_2026") else state.get("drs_allowed")) if aid_freshness["current"] else None
         preparation = (
             f"Stay within the {assist_name} activation window and prioritise the "
             "exit onto the longest straight."
@@ -1817,6 +1911,7 @@ class TelemetryTools:
         opportunity = line.get("top_opportunity") or (corner[0].get("instruction") if corner else None)
         return {
             "available": True,
+            "field_freshness": {"timing_battery": freshness, "overtaking_aid": aid_freshness},
             "driver": target.get("name"),
             "gap_s": round(gap, 2),
             "own_tyre": {"compound": own_tyre.get("compound"), "age": own_age, "wear": own_tyre.get("wear")},
@@ -1824,14 +1919,10 @@ class TelemetryTools:
             "tyre_age_offset_laps": tyre_offset,
             "ers_pct": state.get("ers_pct"),
             "overtaking_assist": assist_name,
-            "assist_available": (
-                state.get("overtake_available")
-                if state.get("regulations_2026")
-                else state.get("drs_allowed")
-            ),
+            "assist_available": assist_available,
             "preparation": preparation,
             "driving_opportunity": opportunity,
-            "attack_window": "next lap" if gap <= 1.0 and state.get("ers_pct", 0) >= 30 else "build the gap/energy first",
+            "attack_window": "aid available now; prepare a safe passing opportunity" if assist_available and gap <= 1.0 and state.get("ers_pct", 0) >= 30 else "build the gap/energy and confirm aid eligibility; a current gap does not guarantee next-lap availability",
             # The car-status packet publishes every car's energy store, so the
             # rival's battery is measured rather than assumed. It is absent only
             # when that car's telemetry is restricted online.
@@ -1839,7 +1930,7 @@ class TelemetryTools:
             # None, not False, when the car withholds telemetry: "unknown" and
             # "he has no boost" are different calls to make.
             "rival_overtake_available": (
-                None if target.get("restricted") else bool(target.get("overtake_available"))
+                None if target.get("restricted") or not aid_freshness["current"] or not state.get("regulations_2026") else bool(target.get("overtake_available"))
             ),
             "rival_damage": {
                 key: value
@@ -1851,11 +1942,15 @@ class TelemetryTools:
 
     async def get_defence_plan(self, driver: str = "behind") -> dict[str, Any]:
         state = await self.store.snapshot_analysis()
+        freshness = self.packet_freshness(state, 2, 7)
+        if not freshness["current"]:
+            return {"available": False, "freshness": freshness, "reason": "Live timing and battery telemetry are required for a defence plan."}
         target = self._resolve_driver(state, driver)
         if not target or target.get("gap_to_player_s") is None:
             return {"available": False, "reason": "Target driver or live gap is unavailable."}
         gap = abs(float(target.get("gap_to_player_s", 0.0)))
-        assist_name = "Manual Override" if state.get("regulations_2026") else "DRS"
+        assist_name = "Overtake Mode" if state.get("regulations_2026") else "DRS"
+        aid_freshness = self.packet_freshness(state, 16 if state.get("regulations_2026") else 7)
         recommendation = (
             "Prioritise exits and deploy energy where the following car is most "
             f"likely to use {assist_name}."
@@ -1867,13 +1962,14 @@ class TelemetryTools:
         assessment = self.strategy.defence_assessment(state)
         return {
             "available": True,
+            "field_freshness": {"timing_battery": freshness, "overtaking_aid": aid_freshness},
             "driver": target.get("name"),
             "gap_s": round(gap, 2),
             "rival_tyre": {"compound": target.get("tyre_compound"), "age": target.get("tyre_age")},
             "ers_pct": state.get("ers_pct"),
             "rival_ers_pct": target.get("ers_pct"),
             "rival_overtake_available": (
-                None if target.get("restricted") else bool(target.get("overtake_available"))
+                None if target.get("restricted") or not aid_freshness["current"] or not state.get("regulations_2026") else bool(target.get("overtake_available"))
             ),
             "rival_telemetry_restricted": bool(target.get("restricted")),
             "recommendation": recommendation,
@@ -1901,7 +1997,22 @@ class TelemetryTools:
         return state.get("analysis", {}).get("target", {})
 
     async def get_pit_strategy(self) -> dict[str, Any]:
-        return await self.strategy.get_plan()
+        plan = await self.strategy.get_plan()
+
+        def compact(value: Any) -> Any:
+            if isinstance(value, dict):
+                return {key: compact(item) for key, item in value.items()
+                        if key not in {"lap_times_s", "wheel_projection"}}
+            if isinstance(value, list):
+                return [compact(item) for item in value]
+            return value
+
+        # Radio needs the complete plan, evidence and final per-wheel limits;
+        # repeating all per-lap simulated arrays across alternatives consumes
+        # the response deadline without adding facts to the spoken decision.
+        result = compact(plan)
+        result["detail_scope"] = "Complete ranked plan summaries; per-lap simulation arrays omitted from this radio tool."
+        return result
 
     async def evaluate_undercut(self, driver: str = "ahead") -> dict[str, Any]:
         return await self.strategy.evaluate_undercut(driver)
@@ -3164,7 +3275,7 @@ class TelemetryTools:
             ),
             (
                 "get_pit_strategy",
-                "Get ranked tyre-and-lap-stop plans with recommended compound and rejoin estimate.",
+                "Get current ranked tyre-and-lap-stop plans with recommended compound, alternatives, neutralisation and rejoin estimate. During a confirmed red flag inspect the free suspension tyre-change opportunity and best restart plan; give a feasible alternative and preserve tyre-inventory uncertainty.",
                 {},
             ),
             (
@@ -3194,7 +3305,7 @@ class TelemetryTools:
             ),
             (
                 "generate_setup",
-                "Get a sourced F1 2026 circuit setup and pace review. Use reference for a fresh baseline; personalized applies bounded driver preferences and applicable live feedback. State the source, conditions and validation limits; published references are not proof of a personal lap-time gain. With personalized, minimum refines the current car, moderate rebalances it, and radical rebuilds from the circuit reference. Full setups are for the garage; do not imply the game setup was changed.",
+                "Get a sourced F1 25: 2026 Season Pack circuit setup and pace review. Use reference for a fresh baseline; personalized applies bounded driver preferences and applicable live feedback. State the source, conditions and validation limits; published references are not proof of a personal lap-time gain. With personalized, minimum refines the current car, moderate rebalances it, and radical rebuilds from the circuit reference. Full setups are for the garage; do not imply the game setup was changed.",
                 {
                     "profile": {"type": "string", "enum": ["race", "quali", "hybrid"]},
                     "track_id": {"type": "integer", "minimum": -1, "maximum": 100},

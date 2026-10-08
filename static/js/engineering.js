@@ -1,4 +1,5 @@
 /* Canonical lap IDs keep user groups and qualitative reports tied to their session. */
+import { comparisonVisuals } from './engineering-visuals.mjs';
 const $ = (id) => document.getElementById(id);
 let report = null, request = 0, comparisonRequest = 0, active = false;
 let notesDirty = false, notesScope = "", selectedSession = "", pendingSession = null, planBusy = false;
@@ -365,6 +366,7 @@ async function compare() {
   if (!report) return;
   const ticket = ++comparisonRequest, key = report.session_id, bKey = reportB()?.session_id;
   const a = $("engineeringRunA").value, b = $("engineeringRunB").value, source = $("engineeringCompareSource").value, mode = $("engineeringCompareMode").value;
+  const selected = { a: compareItems().find(item => item.id === a), b: reportB()?.[compareSourceB()]?.find(item => item.id === b) };
   if (!a || !b || !bKey || comparisonLoading || (a === b && key === bKey)) { $("engineeringComparison").textContent = "Choose two different runs or groups."; return; }
   if ((source === "groups" || (bKey === key && compareSourceB() === "groups")) && groupDirty) { $("engineeringComparison").textContent = "Save or discard your group edits before comparing, so the result uses the lap selection you can see."; return; }
   $("engineeringComparison").textContent = mode === "stint" ? "Reviewing clean laps and recorded context…" : "Matching lap conditions and reviewing context…";
@@ -373,6 +375,7 @@ async function compare() {
     if (ticket !== comparisonRequest || report?.session_id !== key || reportB()?.session_id !== bKey) return;
     const output = $("engineeringComparison"); output.replaceChildren(node("h3", result.conclusion), node("p", result.delta_definition));
     for (const side of ["a", "b"]) if (result.selections?.[side]) { const selection = result.selections[side]; output.append(node("p", `${side.toUpperCase()}: ${selection.name} · ${sessionLabel(selection)}`, "small engineering-comparison-origin")); }
+    output.append(comparisonVisuals(result, selected));
     const testNotes = node("details", "", "engineering-evidence"); testNotes.append(node("summary", "Saved test objectives and conclusions"));
     for (const side of ["a", "b"]) for (const [scope, notes] of [["selected run/group", result.selections?.[side]?.notes], ["session", result.selections?.[side]?.session_notes]]) for (const field of ["objective", "conclusion"]) if (notes?.[field]) testNotes.append(node("p", `${side.toUpperCase()} · ${scope} ${field}: ${notes[field]}`));
     if (testNotes.children.length > 1) output.append(testNotes);

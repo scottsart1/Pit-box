@@ -26,6 +26,70 @@ def free_port(kind):
         return sock.getsockname()[1]
 
 
+def settle_replay(get, summary, expected=None, *, timeout_s=60.0,
+                  clock=time.monotonic, sleep=time.sleep):
+    """Require observed completion and drained work; emitter exit is insufficient.
+
+    An arbitrary capture may end mid-session. Without an independent expected
+    result it proves only that observed ingestion settled, not race completion.
+    """
+    deadline = clock() + timeout_s
+    quiet_since = None
+    previous_count = None
+    summary['validation_scope'] = (
+        'complete_demo_race' if expected else 'capture_observation_only'
+    )
+    summary['race_completion_verified'] = False
+    while True:
+        state, health = get('/api/state'), get('/api/health')
+        summary['state_final'] = {k: state.get(k) for k in (
+            'track_name', 'session_uid', 'player_car_index', 'session_type',
+            'current_lap', 'total_laps', 'player_position', 'packet_format',
+            'packets_received', 'packets_dropped', 'packet_queue_depth',
+            'telemetry_stale', 'final_classification',
+        )}
+        summary['health_after'] = health
+        pending = []
+        if expected:
+            for key in ('session_uid', 'packet_format', 'player_car_index', 'final_classification'):
+                if state.get(key) != expected[key]:
+                    pending.append(f'{key} does not match the emitted result')
+        if not state.get('packets_received'):
+            pending.append('no telemetry received')
+        if state.get('packet_queue_depth') != 0:
+            pending.append('receiver queue has not drained')
+        archive = health.get('full_field_archive') or {}
+        if not archive:
+            pending.append('archive health is unavailable')
+        elif any(archive.get(key) for key in (
+            'queue_drops', 'write_errors', 'invalidation_queue_drops', 'reconciliation_required',
+        )):
+            summary['network_after'] = get('/api/v1/network/status')
+            raise RuntimeError('Archive lost or failed work; a complete persisted replay is not verified')
+        elif (archive.get('queue_depth') != 0 or archive.get('invalidation_queue_depth') != 0
+              or archive.get('submitted') != archive.get('persisted_laps', 0) + archive.get('invalidations', 0)):
+            # Queue depth excludes a batch currently being written. Account
+            # for every accepted batch before allowing app shutdown.
+            pending.append('archive has queued or in-flight work')
+        count = state.get('packets_received')
+        now = clock()
+        if pending or count != previous_count:
+            quiet_since = None
+        elif quiet_since is None:
+            quiet_since = now
+        previous_count = count
+        summary['settlement_pending'] = pending
+        if quiet_since is not None and now - quiet_since >= 2.0:
+            summary['network_after'] = get('/api/v1/network/status')
+            summary['race_completion_verified'] = expected is not None
+            return state
+        if now >= deadline:
+            summary['network_after'] = get('/api/v1/network/status')
+            reason = '; '.join(pending) or 'telemetry has not remained idle'
+            raise RuntimeError(f'Replay did not settle within {timeout_s:g}s: {reason}')
+        sleep(min(0.5, max(0.0, deadline - now)))
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--capture', type=Path)
@@ -33,6 +97,8 @@ def main():
     parser.add_argument('--speed', type=float, default=25)
     parser.add_argument('--circuit', default='monza')
     parser.add_argument('--socks-proxy', action='store_true')
+    parser.add_argument('--settle-timeout', type=float, default=60.0,
+                        help='maximum seconds to await final result and archive drain')
     parser.add_argument('--output-parent', type=Path, default=Path(tempfile.gettempdir()))
     args = parser.parse_args()
     root = Path(tempfile.mkdtemp(prefix='pitbox-strategy-e2e-', dir=args.output_parent))
@@ -109,7 +175,8 @@ def main():
             else:
                 command = [str(PYTHON), '-m', 'tools.replay_demo', '--port', str(udp_port),
                            '--laps', str(args.laps), '--speed', str(args.speed),
-                           '--circuit', args.circuit]
+                           '--circuit', args.circuit,
+                           '--summary-output', str(root / 'emitted-result.json')]
             emitter = subprocess.Popen(command, cwd=REPO, env=env,
                                        stdout=traffic, stderr=subprocess.STDOUT)
             deadline = time.monotonic() + 360
@@ -152,18 +219,15 @@ def main():
             if emitter.poll() is None:
                 raise RuntimeError('telemetry replay timeout')
             assert emitter.returncode == 0
-            time.sleep(2)
-            state = get('/api/state')
-            summary['state_final'] = {k: state.get(k) for k in [
-                'track_name', 'session_type', 'current_lap', 'total_laps', 'player_position',
-                'packet_format', 'packets_received', 'packets_dropped', 'telemetry_stale']}
+            expected = None if args.capture else json.loads((root / 'emitted-result.json').read_text())
+            summary['emitted_result'] = expected
+            state = settle_replay(get, summary, expected, timeout_s=args.settle_timeout)
             summary['drivers'] = len(state.get('drivers') or [])
-            summary['health_after'] = get('/api/health')
             summary['sessions_before_shutdown'] = get('/api/v1/sessions')
             summary['tyre_answer'] = post('/api/ask', {'text': 'What tyres am I on?'})
             assert state['packets_received'] > 0
             assert state['packets_dropped'] == 0
-            assert summary['drivers'] == 20
+            assert summary['drivers'] == 20 if expected else summary['drivers'] > 0
             assert not summary['violations'], summary['violations'][:5]
             assert post('/api/shutdown', {})['stopping']
             app.wait(timeout=25)
@@ -173,10 +237,21 @@ def main():
             try:
                 summary['database_integrity'] = [row[0] for row in connection.execute('PRAGMA integrity_check')]
                 assert summary['database_integrity'] == ['ok']
+                if expected:
+                    summary['saved_player_laps'] = [row[0] for row in connection.execute(
+                        'SELECT lap_num FROM laps WHERE session_uid=? ORDER BY lap_num',
+                        (expected['session_uid'],))]
+                    assert summary['saved_player_laps'] == list(range(1, expected['final_classification']['laps'] + 1)), \
+                        'the completed demo race did not persist every player lap'
             finally:
                 connection.close()
             app, _ = launch(log)
             summary['sessions_after_reopen'] = get('/api/v1/sessions')
+            if expected:
+                completed = [session for session in summary['sessions_after_reopen']['items']
+                             if str(session.get('game_session_uid')) == str(expected['session_uid'])]
+                assert completed and all(session['status'] == 'complete' for session in completed), \
+                    'the emitted race is not recorded as completed after reopening'
             assert post('/api/shutdown', {})['stopping']
             app.wait(timeout=25)
             assert app.returncode == 0

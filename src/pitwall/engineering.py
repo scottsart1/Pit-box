@@ -1042,6 +1042,15 @@ class EngineeringService:
 
 
 def report_text(report: dict) -> str:
+    def metric(value) -> str:
+        # Format missing measurements at their source. Replacing "None" in
+        # the finished report would also rewrite driver-authored notes/names.
+        if value is None:
+            return "Unavailable"
+        if isinstance(value, (list, tuple)):
+            return "[" + ", ".join(metric(item) for item in value) + "]"
+        return str(value)
+
     lines = [
         f"Your Pit Box session report — {report['track_name']}",
         f"{report['session_type']} | {report['started_at']} | {report['status']}",
@@ -1053,9 +1062,9 @@ def report_text(report: dict) -> str:
         lines += [
             f"Run {run['number']} | {run['compound']} | laps {run['lap_range'][0]}–{run['lap_range'][1]}",
             f"Clean laps: {summary['clean_lap_count']} / {summary['lap_count']}",
-            f"Median pace: {summary['median_pace_s']} s; consistency SD: {summary['consistency_stdev_s']} s",
-            f"Observed pace trend: {summary['observed_pace_trend_s_per_lap']} s/lap (fuel and conditions included)",
-            f"Tyre inner temperatures: {summary['tyre_inner_temp_range_c']} C",
+            f"Median pace: {metric(summary['median_pace_s'])} s; consistency SD: {metric(summary['consistency_stdev_s'])} s",
+            f"Observed pace trend: {metric(summary['observed_pace_trend_s_per_lap'])} s/lap (fuel and conditions included)",
+            f"Tyre inner temperatures: {metric(summary['tyre_inner_temp_range_c'])} C",
             f"Setup: {json.dumps(run['setup'], sort_keys=True)}",
             f"Changes: {json.dumps(run['setup_changes'], sort_keys=True)}",
             f"Handling: {json.dumps(summary['balance'])}",
@@ -1075,7 +1084,7 @@ def report_text(report: dict) -> str:
                     f"{lap['lap_num']} (timeline {lap.get('timeline_epoch', 0)})"
                     for lap in group["laps"]
                 ),
-                f"Clean laps: {group['summary']['clean_lap_count']} / {group['summary']['lap_count']}; median pace: {group['summary']['median_pace_s']} s",
+                f"Clean laps: {group['summary']['clean_lap_count']} / {group['summary']['lap_count']}; median pace: {metric(group['summary']['median_pace_s'])} s",
                 f"Measured conditions: {json.dumps(group.get('conditions', {}), ensure_ascii=False)}",
                 f"Group objective: {group.get('notes', {}).get('objective', '')}",
                 f"Group conclusion: {group.get('notes', {}).get('conclusion', '')}",
@@ -1107,4 +1116,4 @@ def report_text(report: dict) -> str:
         "",
         *report["limitations"],
     ]
-    return "\n".join(lines).replace("None", "Unavailable") + "\n"
+    return "\n".join(lines) + "\n"

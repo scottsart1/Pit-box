@@ -197,7 +197,7 @@ async def test_cold_tyre_penalty_only_hits_fresh_stints(stack) -> None:
 @pytest.mark.asyncio
 async def test_pace_mode_recommends_saving_when_fuel_short(stack) -> None:
     store, _, _, _, _, tools = stack
-    await store.update(fuel_laps_delta=-1.5, total_laps=40, current_lap=10)
+    await store.update(connected=True, fuel_laps_delta=-1.5, total_laps=40, current_lap=10)
     short = await tools.get_pace_mode_options()
     assert short["recommended_mode"] == "fuel_save"
     assert short["estimated_cost_s_per_lap"] is not None
@@ -455,10 +455,10 @@ async def test_sc_restart_fires_on_transition_to_ending_phase(stack) -> None:
 @pytest.mark.asyncio
 async def test_energy_plan_tool_recommends_harvest_on_empty(stack) -> None:
     store, _, _, _, _, tools = stack
-    await store.update(ers_pct=10, overtake_available=True, regulations_2026=True)
+    await store.update(connected=True, ers_pct=10, overtake_available=True, regulations_2026=True)
     plan = await tools.get_energy_plan()
     assert plan["recommended_mode"] == "harvest"
-    assert plan["overtaking_aid"] == "Manual Override"
+    assert plan["overtaking_aid"] == "Overtake Mode"
     assert plan["attack_window_open"] is False
 
 

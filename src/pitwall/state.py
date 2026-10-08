@@ -293,6 +293,7 @@ class SessionState:
     virtual_safety_car_periods: int = 0
     red_flag_count: int = 0
     red_flag_active: bool = False
+    red_flag_suspension_observed: bool = False
     race_control_phase: str = "green"
     race_control_changed_at: float = 0.0
     last_safety_car_event_type: int = -1
@@ -502,13 +503,13 @@ class SessionState:
     feedback: list[dict[str, Any]] = field(default_factory=list)
     proactive: dict[str, Any] = field(
         default_factory=lambda: {
-            "enabled": True,
-            "cadence_laps": 2,
+            "enabled": bool(settings.proactive_enabled),
+            "cadence_laps": int(settings.proactive_cadence_laps),
             "last_spoken_lap": 0,
             "queued": 0,
             "last_call": "",
             "last_queued_lap": 0,
-            "next_due_lap": 2,
+            "next_due_lap": int(settings.proactive_cadence_laps),
             "oldest_wait_s": 0.0,
             "delivery_state": "idle",
             # Why the longest-waiting call has not been spoken, and for how
@@ -940,8 +941,12 @@ class StateStore:
         frame_identifier: int | None = None,
         overall_frame_identifier: int | None = None,
         session_time_s: float | None = None,
+        received_monotonic: float | None = None,
+        received_wall: float | None = None,
     ) -> None:
         now = time.monotonic()
+        arrival = now if received_monotonic is None else received_monotonic
+        wall = time.time() if received_wall is None else received_wall
         async with self._lock:
             if (
                 self.state.session_uid
@@ -953,12 +958,14 @@ class StateStore:
                 # only runs when replacing one non-zero UID with another.
                 self._reset_session_locked()
 
-            self._packet_times.append(now)
+            self._packet_times.append(arrival)
             cutoff = now - 2.0
             while self._packet_times and self._packet_times[0] < cutoff:
                 self._packet_times.popleft()
-            self.state.connected = True
-            self.state.game_presence = "receiving"
+            # Parsing an old queued packet does not make telemetry current.
+            # Preserve its arrival timestamp for tools and the watchdog.
+            self.state.connected = now - arrival <= settings.disconnect_after_s
+            self.state.game_presence = "receiving" if self.state.connected else "standing_by"
             self.state.packet_format = int(packet_format)
             self.state.game_year = int(game_year)
             self.state.session_uid = int(session_uid)
@@ -968,7 +975,7 @@ class StateStore:
                 self.state.frame_identifier = int(frame_identifier)
             if overall_frame_identifier is not None:
                 self.state.overall_frame_identifier = int(overall_frame_identifier)
-            self.state.last_packet_at = time.time()
+            self.state.last_packet_at = wall
             if packet_id is not None:
                 group = str(int(packet_id))
                 self.state.packet_group_freshness[group] = self.state.last_packet_at
@@ -1115,13 +1122,21 @@ class StateStore:
                 state.forward_x = float(forward_x)
             if forward_z is not None:
                 state.forward_z = float(forward_z)
+            if state.red_flag_active and state.game_paused and int(speed_kph) <= 5:
+                state.red_flag_suspension_observed = True
+            # RDFL can arrive while the car is still driving toward the
+            # suspension. Speed alone is not a restart. Retain the recovery
+            # fallback only after a stationary, paused suspension was seen;
+            # normal restarts are cleared by LGOT/SSTA or SC deployment.
             if (
                 state.red_flag_active
+                and state.red_flag_suspension_observed
                 and not state.game_paused
                 and int(speed_kph) > 20
                 and time.time() - state.race_control_changed_at > 10.0
             ):
                 state.red_flag_active = False
+                state.red_flag_suspension_observed = False
                 state.race_control_phase = (
                     "safety_car"
                     if state.safety_car == "full"
