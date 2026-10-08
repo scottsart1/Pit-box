@@ -9,7 +9,7 @@ assert.ok(start>0&&end>start);
 const nodes=new Map(['compound','age','fl','fr','rl','rr','flTemp','frTemp','rlTemp','rrTemp','fuel','ers','speed','damageRow','weather','carDataStatus','stintClock'].map(id=>[id,{textContent:'',innerHTML:'',className:''}]));
 const context=vm.createContext({$:id=>nodes.get(id),damageText:()=> 'No recorded damage'});
 vm.runInContext(html.slice(start,end),context);
-const state=()=>({connected:true,packet_group_freshness:{'1':100,'6':100,'7':100,'10':100},tyre:{compound:'MEDIUM',age_laps:0,wear:[0,10,20,30],inner_temps_c:[90,91,92,93]},fuel_laps_delta:0,ers_pct:0,speed_kph:0,gear:0,weather:'Clear',rain_next_15_pct:0});
+const state=()=>({connected:true,packet_group_freshness:{'1':100,'6':100,'7':100,'10':100},tyre:{compound:'MEDIUM',age_laps:0,wear:[0,10,20,30],inner_temps_c:[90,91,92,93]},fuel_laps_delta:0,ers_pct:0,speed_kph:0,gear:0,weather:'Clear',rain_next_15_pct:0,weather_forecast:[{time_offset_min:15,rain_pct:0}]});
 const draw=s=>context.renderLiveCar(s,101000);
 const text=id=>nodes.get(id).textContent;
 
@@ -43,4 +43,18 @@ test('Missing individual fields are unavailable, and replay/sample provenance st
   assert.equal(text('fl'),'0%');for(const id of ['fr','rl','rr','fuel','ers'])assert.equal(text(id),'—',id);
   draw({...state(),source_mode:'replay'});assert.equal(text('carDataStatus'),'Recorded replay');
   draw({...state(),source_mode:'demo'});assert.equal(text('carDataStatus'),'Sample data');
+});
+test('Rain probability requires an observed sample at the stated 15-minute horizon',()=>{
+  for(const weather_forecast of [undefined,[],[{time_offset_min:0,rain_pct:0}],[{time_offset_min:10,rain_pct:40}],[{time_offset_min:30,rain_pct:80}],[{time_offset_min:15,rain_pct:null}],[{time_offset_min:15,rain_pct:'0'}],[{time_offset_min:15,rain_pct:101}]]){
+    draw({...state(),weather_forecast});
+    assert.equal(text('weather'),'Clear · 15-min rain forecast unavailable');
+  }
+  draw(state());assert.equal(text('weather'),'Clear · rain at 15 min 0%');
+  draw({...state(),rain_next_15_pct:0,weather_forecast:[{time_offset_min:0,rain_pct:0},{time_offset_min:15,rain_pct:60},{time_offset_min:30,rain_pct:90}]});
+  assert.equal(text('weather'),'Clear · rain at 15 min 60%');
+});
+test('Unavailable rain forecasts retain independently known track conditions and expire with the session',()=>{
+  const s={...state(),weather_forecast:[],strategy:{weather_crossover:{wetness:.4,trend:'wetting'}}};
+  draw(s);assert.equal(text('weather'),'Clear · 15-min rain forecast unavailable · track wet (wetting)');
+  s.packet_group_freshness['1']=90;draw(s);assert.equal(text('weather'),'Unavailable');
 });

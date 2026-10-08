@@ -47,3 +47,22 @@ historical segment is useful targeted evidence and does not satisfy it.
 - Local signed Android packaging exhausted desktop space before an artifact
   was created. A later artifact must have an independently successful build,
   signing and runtime record.
+- A mixed weather question committed a pit stop; the repaired command parser
+  must preserve an existing override when answering a question.
+- Empty forecasts became a numeric zero in a session summary, and a new 2026
+  session without packet 16 used legacy DRS terminology. Test missing forecast
+  horizons and never-received aid flags independently of socket connectivity.
+
+## Intermediate regression evidence
+
+The Windows workflow for `ce562b9daa3a705dcc5d8bf19471b2e2ac56e435`
+passed 2,392 Python tests with one skip. Its exact installer passed installation,
+frozen startup, a completed 25-lap synthetic race, persistence, restart, SQLite
+integrity and uninstall/data retention. The separate 100.11-second reception
+gate sent, received and parsed 18,604 datagrams, with zero rejections, archive or
+capture drops, errors or timeouts. Queues drained and 19 field laps persisted.
+Health latency p95 was 0.203 s and state latency p95 was 0.250 s.
+
+These results belong to that intermediate commit. They do not establish the
+later fixes or replace the full historical tablet race. Both final artifacts
+must be rebuilt and validated after the remaining corrections.

@@ -467,6 +467,17 @@ class TelemetryTools:
                 return item
         return None
 
+    @staticmethod
+    def forecast_probability(state: dict[str, Any], minutes: int) -> float | None:
+        """Return an observed forecast sample, never a default summary value."""
+        for sample in state.get("weather_forecast", []) or []:
+            probability = sample.get("rain_pct")
+            if (sample.get("time_offset_min") == minutes
+                    and isinstance(probability, (int, float))
+                    and 0 <= probability <= 100):
+                return probability
+        return None
+
     async def get_session_overview(self) -> dict[str, Any]:
         state = await self.store.snapshot_analysis()
         result = {
@@ -492,6 +503,14 @@ class TelemetryTools:
             )
         }
         result["field_freshness"] = self.field_freshness(state)
+        forecast = state.get("weather_forecast", []) or []
+        forecast_available = bool(forecast) and self.packet_freshness(state, 1)["available"]
+        horizon = max((int(sample.get("time_offset_min", 0)) for sample in forecast), default=0)
+        result["forecast_available"] = forecast_available
+        result["forecast_horizon_min"] = horizon if forecast_available else None
+        for minutes in (15, 30):
+            result[f"rain_next_{minutes}_pct"] = self.forecast_probability(state, minutes) if forecast_available else None
+        result["forecast_interpretation"] = "Missing probability is unknown, not zero rain risk; only the reported forecast horizon is covered."
         return result
 
     async def get_standings(

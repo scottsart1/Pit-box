@@ -66,9 +66,12 @@ const strategyModule = fs.readFileSync(path.join(root, 'static/js/strategy.js'),
         assert.match(dimensions.font, /^12px /, 'Empty-state text remains legible at every width');
         assert.deepEqual(errors, []);
       }
+      // Car availability uses an explicit 101000ms renderer clock below, so
+      // these observed packet timestamps are one second old, not wall time.
       const current = { connected: true, packet_group_freshness: { '1': 100, '6': 100, '7': 100, '10': 100 },
         tyre: { compound: 'MEDIUM', age_laps: 4, wear: [10, 12, 9, 11], inner_temps_c: [94, 95, 93, 94] },
-        fuel_laps_delta: 1.2, ers_pct: 67, speed_kph: 200, gear: 5, weather: 'Clear', rain_next_15_pct: 0 };
+        fuel_laps_delta: 1.2, ers_pct: 67, speed_kph: 200, gear: 5, weather: 'Clear', rain_next_15_pct: 0,
+        weather_forecast: [{ time_offset_min: 15, rain_pct: 0 }] };
       for (const [scenario, state] of [['live', current], ['partial', { ...current, packet_group_freshness: { '1': 100, '6': 100, '7': 100 } }], ['stale', { ...current, connected: false }]]) {
         await page.evaluate(state => renderLiveCar(state, 101000), state);
         const car = await page.evaluate(() => Object.fromEntries(['carDataStatus', 'fl', 'flTemp', 'fuel', 'ers', 'speed', 'damageRow'].map(id => [id, document.getElementById(id).textContent])));
@@ -82,7 +85,23 @@ const strategyModule = fs.readFileSync(path.join(root, 'static/js/strategy.js'),
         results.push({ width, deviceScaleFactor, scenario: `car-${scenario}`, car, errors });
         assert.deepEqual(errors, []);
       }
-      const red = { ...current, race_control_phase: 'red_flag', current_lap: 12, total_laps: 20,
+      for (const [scenario, weather_forecast, expected] of [
+        ['observed-zero', [{ time_offset_min: 15, rain_pct: 0 }], 'Clear · rain at 15 min 0%'],
+        ['absent', [], 'Clear · 15-min rain forecast unavailable'],
+        ['different-horizon', [{ time_offset_min: 0, rain_pct: 0 }, { time_offset_min: 30, rain_pct: 70 }], 'Clear · 15-min rain forecast unavailable']
+      ]) {
+        await page.evaluate(state => renderLiveCar(state, 101000), { ...current, weather_forecast });
+        const weather = await page.locator('#weather').textContent();
+        assert.equal(weather, expected);
+        assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth + 1), false);
+        await page.locator('#weather').locator('xpath=..').screenshot({ path: path.join(output, `forecast-${scenario}-${width}-${deviceScaleFactor}x.png`) });
+        results.push({ width, deviceScaleFactor, scenario: `forecast-${scenario}`, weather, errors });
+        assert.deepEqual(errors, []);
+      }
+      // The restart renderers use their normal wall clock, so deliver this
+      // independent frame with current observed packet timestamps.
+      const red = { ...current, packet_group_freshness: Object.fromEntries(Object.keys(current.packet_group_freshness).map(id => [id, Date.now() / 1000])),
+        race_control_phase: 'red_flag', current_lap: 12, total_laps: 20,
         strategy_intent: { active: true, direction: 'stay_out', intent: 'overcut' },
         strategy: { available: true, confidence: 'medium', recommended: { instruction: 'BOX NOW for HARD', box_lap: 12 },
           red_flag_restart: { active: true, instruction: 'Fit fresh HARD during suspension for the restart.',

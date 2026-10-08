@@ -831,7 +831,10 @@ function renderLiveCar(s,now=Date.now()){
   $('speed').textContent=telemetry?`${value(s.speed_kph,' km/h')} · ${gear}`:'—';
   $('damageRow').innerHTML=damage?damageText(s.damage||{}):'Damage data unavailable';
   const wx=s.strategy?.weather_crossover||{},surfaceWord=w=>w>=.85?'flooded':w>=.75?'fully wet':w>=.35?'wet':w>=.15?'damp':'dry';
-  $('weather').textContent=!session?'Unavailable':`${s.weather||'Unavailable'} · rain ${value(s.rain_next_15_pct,'%')}`+(finite(wx.wetness)?` · track ${surfaceWord(wx.wetness)}${wx.trend&&wx.trend!=='steady'?` (${wx.trend})`:''}`:'');
+  // A default aggregate of zero is not evidence of a reported 15-minute forecast.
+  const rain15=Array.isArray(s.weather_forecast)?s.weather_forecast.find(sample=>sample?.time_offset_min===15&&finite(sample.rain_pct)&&sample.rain_pct>=0&&sample.rain_pct<=100):null;
+  const forecast=rain15?`rain at 15 min ${value(rain15.rain_pct,'%')}`:'15-min rain forecast unavailable';
+  $('weather').textContent=!session?'Unavailable':`${s.weather||'Unavailable'} · ${forecast}`+(finite(wx.wetness)?` · track ${surfaceWord(wx.wetness)}${wx.trend&&wx.trend!=='steady'?` (${wx.trend})`:''}`:'');
   const source=s.source_mode==='replay'?'Recorded replay':s.source_mode==='demo'?'Sample data':'Live telemetry';
   $('carDataStatus').textContent=!live?'Current car data unavailable':telemetry&&status&&damage?source:source+' · some car readings unavailable';
   $('carDataStatus').className='small '+(telemetry&&status&&damage?'muted':'warn');

@@ -471,7 +471,8 @@ class EngineerBrain:
         tyre_age = state["tyre"]["age_laps"] if status_known else "unknown"
         weather_known = freshness["weather"]["available"]
         weather = state["weather"] if weather_known else "unknown"
-        rain15 = state["rain_next_15_pct"] if weather_known and (state.get("weather_forecast") or not state.get("packet_group_freshness")) else "unknown"
+        rain15 = self.tools.forecast_probability(state, 15) if weather_known else None
+        rain15 = "unknown" if rain15 is None else rain15
         target = state.get("analysis", {}).get("target", {})
         top = state.get("analysis", {}).get("flagged_corners", [])
         corner_text = (
@@ -880,6 +881,13 @@ class EngineerBrain:
         # an instruction to retain it, not permission to restore automatic mode.
         if has_negation(text):
             return None
+        # Questions may contain an imperative fragment ("switch to inters")
+        # after another clause. They must not mutate or clear the agreed plan.
+        if re.match(
+            r"^(?:should|shall|what|why|how|when|is|are|do|does|did|"
+            r"would|will|could|can)\b", text,
+        ) or re.search(r"\b(?:should|shall|could|would|can)\s+(?:i|we)\b", text):
+            return None
         if has_any_phrase(
             text,
             (
@@ -890,22 +898,6 @@ class EngineerBrain:
             ),
         ):
             return {"clear": True}
-
-        # A refusal is not a plan. "I'm not boxing", "I will not take another
-        # pit stop" and "I'm not going for mediums" previously produced a locked
-        # pit call for the very compound and lap the driver had ruled out, which
-        # the driver then had to argue with for several laps.
-        if has_negation(text):
-            return None
-        # A question about a plan is not a plan. "Should we box for hard
-        # tyres right now?" wants an opinion; locking the compound it names
-        # would answer it with a commitment the driver never made.
-        if re.match(
-            r"^(?:should|shall|what|why|how|when|is it|are we|do you|does it|"
-            r"would it|would you|do we)\b",
-            text,
-        ):
-            return None
 
         compounds = extract_compounds(text)
         lap = extract_lap(text, current_lap)
@@ -1778,6 +1770,25 @@ class EngineerBrain:
             await self.database.save_preference("standing_instructions", standing[-8:])
             return "Copy, understood. I won't bring that up again."
 
+        # A confirmed suspension has a complete authoritative restart summary.
+        # Give its primary, alternative and stock limits together even when a
+        # request for the full plan would otherwise defer to model narration.
+        # Hypotheticals, disputes and rival-specific questions still need tools.
+        if (
+            (state.get("red_flag_active") or state.get("race_control_phase") == "red_flag")
+            and self._is_strategy_request(utterance)
+            and not has_negation(text)
+            and not match_drivers(state.get("drivers", []), utterance)
+            and not has_any_phrase(text, (
+                "what if", "suppose", "instead", "compare", "why", "how much",
+                "if we", "could we", "can we", "what about", "car ahead", "car behind",
+            ))
+        ):
+            strategy = await self.tools.get_pit_strategy()
+            restart = strategy.get("red_flag_restart", {})
+            if restart.get("active") and restart.get("instruction"):
+                return str(restart["instruction"]).rstrip(".").replace(". ", "; ") + "."
+
         # Explicit driver commands are handled above, because they are exact by
         # construction. Everything past this point is keyword lookup over the
         # player's own car, so anything about a rival, any correction and any
@@ -1950,7 +1961,9 @@ class EngineerBrain:
             gap_text = f"; {nearest[0]['driver']} {float(nearest[0]['gap_s']):.1f} ahead" if nearest else ""
             event_text = f"; latest event {material[-1].get('description', material[-1].get('type'))}" if material else "; no new incident or penalty"
             prefix = f"Last confirmed lap {int(state.get('current_lap', 0))}: " if telemetry_stale else ""
-            return prefix + f"P{position}{gap_text}{event_text}; rain risk {int(state.get('rain_next_15_pct', 0))} percent."
+            rain15 = self.tools.forecast_probability(state, 15) if self.tools.packet_freshness(state, 1)["available"] else None
+            rain_text = f"rain risk {rain15:g} percent in 15 minutes" if rain15 is not None else "15-minute rain forecast unavailable"
+            return prefix + f"P{position}{gap_text}{event_text}; {rain_text}."
 
         if self._is_strategy_request(utterance):
             strategy = state.get("strategy", {})
@@ -2117,9 +2130,11 @@ class EngineerBrain:
             # in a wet race is asking what it means for their tyre.
             crossover = (state.get("strategy", {}) or {}).get("weather_crossover") or {}
             label = state.get("weather", "Unknown")
-            risk = int(state.get("rain_next_15_pct", 0))
-            if state.get("packet_group_freshness") and not state.get("weather_forecast"):
+            risk = self.tools.forecast_probability(state, 15)
+            if not state.get("weather_forecast"):
                 return f"{label}; no rain forecast is available yet."
+            if risk is None:
+                return f"{label}; no 15-minute rain probability is available."
             if crossover.get("reason"):
                 return f"{label}, rain risk {risk} percent in 15 minutes. {crossover['reason']}"
             return f"{label}; rain risk {risk} percent in 15 minutes."

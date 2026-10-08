@@ -2,7 +2,7 @@ import asyncio
 import time
 
 import pytest
-from f1.packets import PacketCarTelemetry2Data, PacketHeader
+from f1.packets import PacketCarTelemetry2Data, PacketHeader, PacketSessionData
 
 from pitwall.config import Settings, settings
 from pitwall.state import StateStore
@@ -83,6 +83,66 @@ async def test_new_session_uid_resets_stale_session_state_but_keeps_ptt():
     assert snapshot["ptt_mask"] == 8
     assert snapshot["proactive"]["queued"] == 0
     assert snapshot["proactive"]["last_call"] == ""
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("packet_format", [2025, 2026])
+@pytest.mark.parametrize("formula,expected", [(13, True), (0, False), (2, False), (8, False)])
+async def test_session_formula_identifies_rules_without_claiming_aid_eligibility(packet_format, formula, expected):
+    store = StateStore()
+    protocol = F1DatagramProtocol(store)
+    packet = PacketSessionData()
+    packet.header = header(1)
+    packet.header.packet_format = packet_format
+    packet.formula = formula
+    await protocol._handle(packet)
+    snapshot = await store.snapshot()
+    assert snapshot["regulations_2026"] is expected
+    assert "16" not in snapshot["packet_group_freshness"]
+    assert snapshot["overtake_available"] is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("regulations,formula", [(0, 13), (1, 0)])
+async def test_telemetry2_regulation_flag_overrides_formula_then_resets_on_new_uid(regulations, formula):
+    store = StateStore()
+    protocol = F1DatagramProtocol(store)
+    telemetry = PacketCarTelemetry2Data()
+    telemetry.header = header(16)
+    setattr(telemetry.car_telemetry2_data[0], "2026_regulations", regulations)
+    telemetry.car_telemetry2_data[0].overtake_available = 1
+    await protocol._handle(telemetry)
+    session = PacketSessionData()
+    session.header = header(1)
+    session.formula = formula
+    await protocol._handle(session)
+    assert (await store.snapshot())["regulations_2026"] is bool(regulations)
+    session.header = header(1, session_uid=456)
+    session.formula = 13
+    await protocol._handle(session)
+    snapshot = await store.snapshot()
+    assert snapshot["regulations_2026"] is True
+    assert "16" not in snapshot["packet_group_freshness"]
+    assert snapshot["overtake_available"] is False
+
+
+@pytest.mark.asyncio
+async def test_2026_battery_report_keeps_never_received_overtake_unknown(stack):
+    store, _, _, _, _, tools = stack
+    protocol = F1DatagramProtocol(store)
+    session = PacketSessionData()
+    session.header = header(1)
+    session.formula = 13
+    await protocol._handle(session)
+    await store.mark_packet(2026, 25, 123, packet_id=7)
+    await store.update(ers_pct=50)
+    report = await tools.get_ers_report()
+    assert report["store_pct"] == 50
+    assert report["overtaking_aid"] == "Overtake Mode"
+    assert report["overtake_available"] is None
+    assert report["overtake_active"] is None
+    assert report["active_aero_mode"] is None
+    assert report["drs_allowed"] is None
 
 
 @pytest.mark.asyncio

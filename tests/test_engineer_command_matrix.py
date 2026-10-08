@@ -113,6 +113,43 @@ async def test_empty_forecast_does_not_mean_zero_rain_risk(stack, monkeypatch):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("samples,expected", [
+    ([], (None, None, None)),
+    ([{"time_offset_min": 5, "rain_pct": 0}], (None, None, 5)),
+    ([{"time_offset_min": 30, "rain_pct": 0}], (None, 0, 30)),
+    ([{"time_offset_min": 15, "rain_pct": 0}, {"time_offset_min": 30, "rain_pct": 0}], (0, 0, 30)),
+])
+async def test_session_overview_does_not_convert_missing_forecast_to_zero(stack, monkeypatch, samples, expected):
+    store, tools, _ = await seed_radio(stack, monkeypatch)
+    await store.update(weather_forecast=samples, rain_next_15_pct=0, rain_next_30_pct=0)
+    result = await tools.get_session_overview()
+    assert (result["rain_next_15_pct"], result["rain_next_30_pct"], result["forecast_horizon_min"]) == expected
+    assert result["forecast_available"] is bool(samples)
+
+
+@pytest.mark.asyncio
+async def test_race_update_does_not_claim_zero_rain_when_forecast_is_missing(stack, monkeypatch):
+    store, _, brain = await seed_radio(stack, monkeypatch)
+    # Exercise the legacy composite renderer directly; normal routing currently
+    # delegates race updates to the model and is covered by the overview tests.
+    monkeypatch.setattr(brain, "_defers_to_model", lambda *args: False)
+    await store.update(weather_forecast=[], rain_next_15_pct=0)
+    answer = await brain.ask("race update")
+    assert "rain forecast unavailable" in answer
+    assert "rain risk 0" not in answer
+    assert "0 percent" not in answer
+
+
+@pytest.mark.asyncio
+async def test_later_forecast_sample_is_not_a_fifteen_minute_prediction(stack, monkeypatch):
+    store, _, brain = await seed_radio(stack, monkeypatch)
+    await store.update(weather_forecast=[{"time_offset_min": 30, "rain_pct": 0}], rain_next_15_pct=0)
+    answer = await brain.ask("weather forecast")
+    assert "no 15-minute rain probability" in answer
+    assert "rain15 unknown%" in await brain.situation_header(include_strategy=False)
+
+
+@pytest.mark.asyncio
 async def test_final_lap_fuel_estimate_includes_current_lap_and_names_assumption(stack, monkeypatch):
     store, tools, _ = await seed_radio(stack, monkeypatch)
     await store.update(current_lap=20)
@@ -188,6 +225,27 @@ def test_negated_cancellation_never_clears_driver_plan(command):
     assert EngineerBrain._strategy_override_action(command, 8) is None
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("command", [
+    "Is rain expected, and should I switch to intermediates now?",
+    "It looks wet; should we switch to intermediates now?",
+    "Can I clear my strategy override?",
+    "Should we clear the strategy override?",
+])
+async def test_strategy_question_never_commits_or_clears_an_override(stack, monkeypatch, command):
+    store, _, brain = await seed_radio(stack, monkeypatch)
+    await brain.ask("Box lap 12 for hards")
+    before = (await store.snapshot_analysis())["strategy_override"]
+
+    async def advice(*args, **kwargs):
+        return "I will assess the options; the current plan remains unchanged."
+
+    monkeypatch.setattr(brain, "_run", advice)
+    answer = await brain.ask(command)
+    assert "current plan remains unchanged" in answer
+    assert (await store.snapshot_analysis())["strategy_override"] == before
+
+
 def test_red_flag_action_bypasses_normal_pit_stop_speech_guards():
     plan = {"action": "red_flag_tyre_change", "box_lap": 8, "fit_compound": "MEDIUM",
             "instruction": "Change to a fresh medium set during the suspension.",
@@ -198,7 +256,12 @@ def test_red_flag_action_bypasses_normal_pit_stop_speech_guards():
 
 
 @pytest.mark.asyncio
-async def test_actual_red_flag_ask_keeps_alternative_and_inventory_limit_without_live_feed(stack, monkeypatch):
+@pytest.mark.parametrize("command", [
+    "strategy update",
+    "Red flag: can I change tyres, and what is the best restart strategy and alternative?",
+    "Give me the full pit strategy and its best alternative.",
+])
+async def test_actual_red_flag_ask_keeps_alternative_and_inventory_limit_without_live_feed(stack, monkeypatch, command):
     store, _, brain = await seed_radio(stack, monkeypatch)
     await store.update(
         connected=False, red_flag_active=True, race_control_phase="red_flag",
@@ -206,7 +269,7 @@ async def test_actual_red_flag_ask_keeps_alternative_and_inventory_limit_without
         tyre_sets=[], tyre={"compound": "MEDIUM", "age_laps": 10, "wear": [65] * 4},
         completed_laps=[{"lap_num": 1, "compound": "HARD", "valid": True, "lap_time_ms": 90000}],
     )
-    answer = await brain.ask("strategy update")
+    answer = await brain.ask(command)
     assert "Tyres can be changed" in answer
     assert "Best strategy:" in answer
     assert "Alternative:" in answer

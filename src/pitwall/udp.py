@@ -1256,6 +1256,8 @@ class F1DatagramProtocol(asyncio.DatagramProtocol):
             "red_flag_suspension_observed",
             "speed_kph",
             "race_control_phase",
+            "packet_group_freshness",
+            "regulations_2026",
         )
         raw_session_type_id = int(packet.session_type)
         session_length_id = int(getattr(packet, "session_length", 0))
@@ -1366,6 +1368,14 @@ class F1DatagramProtocol(asyncio.DatagramProtocol):
             game_mode=int(getattr(packet, "game_mode", 0)),
             rule_set=int(getattr(packet, "rule_set", 0)),
             formula=int(getattr(packet, "formula", 0)),
+            # Formula 13 identifies F1 2026 even before telemetry2 arrives.
+            # Keep that packet's per-car regulation flag authoritative once
+            # observed in this session; the UDP format alone is not evidence.
+            regulations_2026=(
+                bool(snapshot.get("regulations_2026"))
+                if "16" in snapshot.get("packet_group_freshness", {})
+                else int(getattr(packet, "formula", 0)) == 13
+            ),
             time_of_day_min=int(getattr(packet, "time_of_day", 0)),
             network_game=bool(getattr(packet, "network_game", 0)),
             weekend_link_identifier=int(getattr(packet, "weekend_link_identifier", 0)),

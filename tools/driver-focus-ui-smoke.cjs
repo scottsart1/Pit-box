@@ -15,7 +15,7 @@ const recommendation={instruction:'A second compound is mandatory — box lap 11
     {usable_life_laps:8},{usable_life_laps:13}]};
 const fixture={connected:true,telemetry_stale:false,session_uid:532,session_generation:1,track_id:42,track_name:'Madrid',formula:13,
   session_type:'Race',mode_profile:'race',current_lap:3,total_laps:29,player_position:17,player_car_index:0,
-  weather:'Overcast',rain_next_15_pct:15,game_presence:'receiving',speed_kph:150,gear:4,ers_pct:60,fuel_laps_delta:3.4,
+  weather:'Overcast',rain_next_15_pct:15,weather_forecast:[{time_offset_min:15,rain_pct:15}],game_presence:'receiving',speed_kph:150,gear:4,ers_pct:60,fuel_laps_delta:3.4,
   tyre:{compound:'MEDIUM',age_laps:2,wear:[13,9,12,10],inner_temps_c:[105,100,108,104]},
   damage:{gearbox:1,engine:1},analysis:{deg_model:{current_compound:'MEDIUM',current_slope_s_per_lap:null,compounds:{}},target:{}},
   strategy:{available:true,confidence:'low',recommended:recommendation,plans:[recommendation],pit_loss_s:23,
@@ -25,6 +25,11 @@ const fixture={connected:true,telemetry_stale:false,session_uid:532,session_gene
       HARD:{laps_observed:6,wear_sample_size:5,pace_sample_size:6,wear_source:'personal_track_history',pace_source:'personal_track_history'},
       SOFT:{laps_observed:0,wear_sample_size:0,pace_sample_size:0,wear_source:'inferred_from_medium_hard',pace_source:'inferred_from_medium_hard'}
     }}},drivers:[],radio_log:[],traces:[]};
+// These fixtures include observed session, telemetry, status and damage
+// packets. Stamp each supplied frame at delivery time, rather than letting
+// screenshots or slower CI navigation turn its measurements into stale data.
+const receivedFrame=state=>({...state,packet_group_freshness:Object.fromEntries(
+  ['1','6','7','10'].map(id=>[id,Date.now()/1000]))});
 
 (async()=>{
  fs.mkdirSync(output,{recursive:true});
@@ -32,21 +37,22 @@ const fixture={connected:true,telemetry_stale:false,session_uid:532,session_gene
  const results=[];let page;
  try{for(const [width,height] of [[1280,800],[800,1280],[390,844]]){
   const context=await browser.newContext({viewport:{width,height}});page=await context.newPage();const errors=[];
+  const renderFrame=state=>page.evaluate(s=>render(s),receivedFrame(state));
   page.on('pageerror',e=>errors.push(String(e)));
   await page.addInitScript(()=>{window.WebSocket=class{constructor(){this.readyState=0}close(){}send(){}addEventListener(){}removeEventListener(){}};});
   await page.route('**/*',async route=>{
    const url=new URL(route.request().url());if(url.origin!=='http://pitbox.test')return route.abort();
    if(url.pathname==='/api/v1/usage')return route.fulfill({json:{decided:true,enabled:false}});
-   if(url.pathname.startsWith('/api/'))return route.fulfill({json:url.pathname==='/api/state'?fixture:{available:false,items:[],settings:[],tracks:[],strategies:[],rivals:[]}});
+   if(url.pathname.startsWith('/api/'))return route.fulfill({json:url.pathname==='/api/state'?receivedFrame(fixture):{available:false,items:[],settings:[],tracks:[],strategies:[],rivals:[]}});
    const target=url.pathname==='/'?path.join(staticRoot,'index.html'):path.resolve(staticRoot,url.pathname.replace(/^\/static\//,''));
    if(!target.startsWith(staticRoot+path.sep)||!fs.existsSync(target)||fs.statSync(target).isDirectory())return route.abort();
-   const type=target.endsWith('.html')?'text/html':target.endsWith('.js')?'text/javascript':target.endsWith('.css')?'text/css':undefined;
+   const type=target.endsWith('.html')?'text/html':/\.m?js$/.test(target)?'text/javascript':target.endsWith('.css')?'text/css':undefined;
    return route.fulfill({path:target,...(type?{contentType:type}:{})});
   });
   await page.goto('http://pitbox.test/');
   const decline=page.getByRole('button',{name:'No thanks',exact:true});if(await decline.isVisible())await decline.click();
   if(await page.locator('#onboardingDialog').isVisible())await page.locator('#onboardingClose').click();
-  await page.evaluate(s=>render(s),fixture);
+  await renderFrame(fixture);
   await page.getByRole('tab',{name:'DRIVE',exact:true}).click();
   assert.equal(await page.locator('#wearProjection').innerText(),'Est. 11 laps of tyre life');
   assert.equal(await page.locator('#tyreStop').innerText(),'8 laps to planned stop');
@@ -59,7 +65,7 @@ const fixture={connected:true,telemetry_stale:false,session_uid:532,session_gene
   await page.screenshot({path:path.join(output,`drive-${width}.png`)});
   await page.locator('#strategyCard summary').click();
   assert.match(await page.locator('#strategyTyreReason').innerText(),/100%/);
-  await page.evaluate(s=>render(s),fixture);
+  await renderFrame(fixture);
   assert.equal(await page.locator('#strategyTyreReason').isVisible(),true,'Live frames preserve the open disclosure.');
   await page.locator('#strategyCard summary').click();
 
@@ -92,7 +98,7 @@ const fixture={connected:true,telemetry_stale:false,session_uid:532,session_gene
   warning.strategy.weather_crossover={wetness:.4,worth_stopping:true,compound:'INTER'};
   warning.strategy.neutralisation={phase:'safety_car',pit_entry_status:'closed'};
   warning.strategy_intent={active:true,direction:'stay_out',intent:'overcut'};
-  await page.evaluate(s=>render(s),warning);
+  await renderFrame(warning);
   assert.match(await page.locator('#stratInstruction').innerText(),/overcut.*staying out/);
   assert.match(await page.locator('#stratWhy').innerText(),/Tyres at wear limit/);
   assert.doesNotMatch(await page.locator('#stratWhy').innerText(),/11 laps of tyre life/);
@@ -100,14 +106,23 @@ const fixture={connected:true,telemetry_stale:false,session_uid:532,session_gene
   assert.match(await page.locator('#stratNotice').innerText(),/safety car.*pit entry closed/);
   await page.screenshot({path:path.join(output,`strategy-warnings-${width}.png`)});
   await page.getByRole('tab',{name:'DRIVE',exact:true}).click();
+  await renderFrame(warning);
   assert.match(await page.locator('#damageRow').innerText(),/FW-L 60%/);
   assert.match(await page.locator('#strategyWarning').innerText(),/wear limit reached.*Weather favours inter/);
+  for(const kind of ['missing','expired']){
+    const incomplete=receivedFrame(warning);
+    if(kind==='missing')delete incomplete.packet_group_freshness['10'];
+    else incomplete.packet_group_freshness['10']-=6;
+    await page.evaluate(s=>render(s),incomplete);
+    assert.equal(await page.locator('#damageRow').innerText(),'Damage data unavailable',`${kind} damage packets must remain unavailable`);
+    assert.equal(await page.locator('#flTemp').innerText(),'105°C','A missing damage packet does not invalidate current temperature telemetry');
+  }
   await page.evaluate(s=>render({...s,connected:false,telemetry_stale:true}),warning);
   assert.equal(await page.locator('#wearProjection').innerText(),'Tyre data unavailable');
   assert.equal(await page.locator('#strategyWarning').innerText(),'Tyre data unavailable');
   assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth+1),false);
   assert.deepEqual(errors,[]);
-  results.push({width,height,driver_call:'pass',details_hidden_until_opened:'pass',disclosure_survives_updates:'pass',observed_compound_rule:'pass',wear_rain_damage_and_pit_warnings:'pass',stale_data:'pass',overflow:false});
+  results.push({width,height,driver_call:'pass',details_hidden_until_opened:'pass',disclosure_survives_updates:'pass',observed_compound_rule:'pass',wear_rain_damage_and_pit_warnings:'pass',current_missing_and_expired_damage_packets:'pass',stale_data:'pass',overflow:false});
   await context.close();page=null;
  }}catch(e){if(page)await page.screenshot({path:path.join(output,'failure.png')}).catch(()=>{});throw e;}
  finally{await browser.close();fs.writeFileSync(path.join(output,'results.json'),JSON.stringify(results,null,2));}
