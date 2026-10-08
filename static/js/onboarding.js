@@ -12,14 +12,59 @@
     return;
   }
   const STORAGE_KEY = "pitwall.onboarding.v1";
+  const viewed = value => value === "finished" || value === "skipped";
+  const bridge = typeof window.PitBoxDashboardPreferences?.postMessage === "function" ? window.PitBoxDashboardPreferences : null;
+  let persistenceReady = false, dismissalVersion = 0, bridgeSequence = 0;
+  const pending = new Map();
+  if (bridge) bridge.onmessage = event => {
+    let response; try { response = JSON.parse(event.data); } catch { return; }
+    const request = pending.get(response?.id);
+    if (!request || response.op !== request.op) return;
+    pending.delete(response.id); clearTimeout(request.timer);
+    if (response.ok === true) request.resolve(response);
+    else request.reject(new Error("Walkthrough storage rejected the request."));
+  };
+  function nativePreference(op, value) {
+    return new Promise((resolve, reject) => {
+      const id = "onboarding-" + (++bridgeSequence), timer = setTimeout(() => {
+        pending.delete(id); reject(new Error("Walkthrough storage did not respond."));
+      }, 4000);
+      pending.set(id, {op, resolve, reject, timer});
+      try { bridge.postMessage(JSON.stringify({id, op, ...(value === undefined ? {} : {value})})); }
+      catch (error) { pending.delete(id); clearTimeout(timer); reject(error); }
+    });
+  }
   const titles = ["Give your engineer a voice", "Connect your PS5 & map L3", "Say hello to Mark", "Take a look around"];
   let step = 0, state = null, stateAt = 0, configured = null, keyBusy = false, radioBusy = false;
   let seen = false, autoSuppressed = false, previousFocus = null, statusGeneration = 0;
   let activityTimer = null;
   let network = null, networkAt = 0, networkAttempt = 0, networkBusy = false;
   let networkError = "";
-  try { seen = ["finished", "skipped"].includes(localStorage.getItem(STORAGE_KEY)); } catch { /* still usable without storage */ }
+  try { seen = viewed(localStorage.getItem(STORAGE_KEY)); } catch { /* still usable without storage */ }
   get("onboardingSavedStatus").textContent = seen ? "Walkthrough already viewed. You can reopen it anytime." : "All three steps are skippable.";
+  async function restoreViewed() {
+    let local = null;
+    try { local = localStorage.getItem(STORAGE_KEY); } catch { /* Native storage may still work. */ }
+    if (bridge) {
+      try {
+        const loaded = await nativePreference("onboarding_load");
+        // An explicit dismissal made while loading takes precedence.
+        if (dismissalVersion === 0) {
+          if (viewed(loaded.value)) {
+            seen = true;
+            try { localStorage.setItem(STORAGE_KEY, loaded.value); } catch { /* Native record remains authoritative. */ }
+          } else if (loaded.value === null && viewed(local)) {
+            // Migrate only a confirmed absent native record, never after a
+            // timeout/error or an invalid reply from the bridge.
+            await nativePreference("onboarding_save", local);
+          }
+        }
+      } catch { /* Retain the browser flag; failed reads never write defaults. */ }
+    }
+    persistenceReady = true;
+    if (seen && dismissalVersion === 0) get("onboardingSavedStatus").textContent = "Walkthrough already viewed. You can reopen it anytime.";
+    considerAutoOpen();
+  }
 
   async function request(url, options = {}) {
     const controller = new AbortController();
@@ -150,6 +195,7 @@
 
   function close(reason = "skipped") {
     seen = true;
+    const version = ++dismissalVersion;
     get("onboardingKey").value = "";
     let saved = true;
     // Only a viewed/skipped flag is stored. Never persist keys or live data here.
@@ -157,6 +203,11 @@
     get("onboardingSavedStatus").textContent = saved
       ? "Walkthrough closed. Reopen it anytime; only settings you explicitly saved were changed."
       : "Walkthrough closed. This browser could not remember that choice, so it may appear again next time.";
+    if (bridge) nativePreference("onboarding_save", reason).then(() => {
+      if (version === dismissalVersion) get("onboardingSavedStatus").textContent = "Walkthrough closed. Reopen it anytime; only settings you explicitly saved were changed.";
+    }).catch(() => {
+      if (version === dismissalVersion) get("onboardingSavedStatus").textContent = "Walkthrough closed. Device storage is unavailable, so it may appear again after an app restart.";
+    });
     clearInterval(activityTimer); activityTimer = null;
     dialog.close();
     previousFocus?.focus();
@@ -183,6 +234,7 @@
     if (seen || autoSuppressed || !state) return;
     // Never interrupt an existing live session, including later in this page load.
     if (state.connected && !state.game_paused) { autoSuppressed = true; return; }
+    if (!persistenceReady) return;
     const boot = get("bootOverlay"), usage = get("usagePrompt"), usageToggle = get("usageToggle");
     if (boot && !boot.classList.contains("done")) return;
     // Let the existing privacy choice finish first; no consent defaults change.
@@ -257,4 +309,5 @@
   }
   get("onboardingCalibrate").addEventListener("click", () => radioAction("calibrate"));
   get("onboardingEnableMark").addEventListener("click", () => radioAction("wake"));
+  restoreViewed();
 })();

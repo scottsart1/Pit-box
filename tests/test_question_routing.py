@@ -31,6 +31,7 @@ async def _make_brain(stack):
         state.fuel_laps_delta = 0.8
         state.weather = "Light cloud"
         state.rain_next_15_pct = 20
+        state.weather_forecast = [{"time_offset_min": 15, "rain_pct": 20, "weather": "Light cloud"}]
         state.corner_cutting_warnings = 2
         state.damage = {"front_left_wing": 6, "floor": 5, "gearbox": 12}
         state.tyre.compound = "HARD"
@@ -122,6 +123,16 @@ async def test_direct_lookups_still_answer_immediately(stack, utterance, expecte
     answer = await brain._fast_answer(utterance)
     assert answer is not None, utterance
     assert expected in answer.lower(), f"{utterance!r} -> {answer!r}"
+
+
+@pytest.mark.asyncio
+async def test_weather_lookup_without_forecast_reports_unknown_immediately(stack):
+    store, brain = await _make_brain(stack)
+    await store.update(weather_forecast=[])
+    answer = await brain._fast_answer("what is the weather")
+    assert answer is not None
+    assert "no rain forecast is available" in answer
+    assert "20 percent" not in answer
 
 
 @pytest.mark.asyncio

@@ -15,9 +15,10 @@ import org.json.JSONObject;
 import java.nio.charset.StandardCharsets;
 import java.util.Collections;
 
-/** App-owned dashboard preferences survive a change of the backend's port. */
+/** App-owned UI preferences survive a change of the backend's port. */
 final class DashboardPreferencesBridge {
     private static final String KEY = "ypb-driver-dashboard-v2";
+    private static final String ONBOARDING_KEY = "pitwall.onboarding.v1";
     private static final int MAX_BYTES = 64 * 1024;
 
     static void install(Context context, WebView web, String dashboardUrl) {
@@ -53,6 +54,16 @@ final class DashboardPreferencesBridge {
                             // Commit before acknowledging: a reload or process
                             // restart after the reply must retain this layout.
                             boolean saved = valid && prefs.edit().putString(KEY, (String) value).commit();
+                            result.put("ok", saved);
+                        } else if ("onboarding_load".equals(op) && isMainFrame) {
+                            String saved = prefs.getString(ONBOARDING_KEY, null);
+                            result.put("ok", true).put("value", saved == null ? JSONObject.NULL : saved);
+                        } else if ("onboarding_save".equals(op) && isMainFrame) {
+                            Object value = request.opt("value");
+                            // Only the walkthrough flag is accepted. Keys, live
+                            // data and arbitrary preference names cannot be saved.
+                            boolean valid = "finished".equals(value) || "skipped".equals(value);
+                            boolean saved = valid && prefs.edit().putString(ONBOARDING_KEY, (String) value).commit();
                             result.put("ok", saved);
                         } else {
                             result.put("ok", false);
