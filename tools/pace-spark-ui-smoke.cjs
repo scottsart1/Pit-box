@@ -140,6 +140,15 @@ const strategyModule = fs.readFileSync(path.join(root, 'static/js/strategy.js'),
       assert.match(await page.locator('#strategyMain').textContent(), /Last confirmed · provisional:.*HARD/);
       await page.locator('#strategyCard').screenshot({path:path.join(output,`restart-provisional-drive-${width}-${deviceScaleFactor}x.png`)});
       results.push({width,deviceScaleFactor,scenario:'provisional-drive-strategy',errors});
+      const unrelatedFresh={...red,connected:true,telemetry_stale:false,player_position:2,current_lap_time_ms:24807,
+        packet_group_freshness:{'1':Date.now()/1000-180,'2':Date.now()/1000-180,'7':Date.now()/1000-180,'10':Date.now()/1000-180,'11':Date.now()/1000}};
+      await page.evaluate(state=>{renderStrategy38(state);strategyQA.renderCall(state);strategyQA.renderPlans(state);renderLiveCar(state);},unrelatedFresh);
+      assert.match(await page.locator('#strategyMain').textContent(),/Last confirmed · provisional:.*HARD/);
+      assert.match(await page.locator('#stratInstruction').textContent(),/Last confirmed · provisional:.*HARD/);
+      assert.equal(await page.locator('#stratPlanCount').textContent(),'2 provisional restart options');
+      for(const id of ['fl','fuel','speed'])assert.equal(await page.locator('#'+id).textContent(),'—');
+      await page.locator('#strategyCard').screenshot({path:path.join(output,`unrelated-packet-drive-${width}-${deviceScaleFactor}x.png`)});
+      results.push({width,deviceScaleFactor,scenario:'unrelated-packet-provisional-drive-strategy',errors});
       const terminal={...red,final_classification:{position:2,laps:20},strategy:{...red.strategy,plans:[{feasible:true,legal:true,compounds:['MEDIUM','HARD'],box_laps:[12],stops_remaining:1}]}};
       for(const connected of [true,false]){
         await page.evaluate(state=>{renderStrategy38(state);strategyQA.renderCall(state);strategyQA.renderPlans(state);strategyQA.drawTimeline(state);},{...terminal,connected,telemetry_stale:!connected});
@@ -160,8 +169,31 @@ const strategyModule = fs.readFileSync(path.join(root, 'static/js/strategy.js'),
       assert.deepEqual(errors,[]);
       results.push({width,deviceScaleFactor,scenario:'completed-drive-strategy-and-new-session',errors});
       await page.setContent('<link rel="stylesheet" href="/static/driver-dashboard/dashboard.css"><main id="qaDashboard"></main>');
-      await page.addScriptTag({type:'module',content:"import {normalizeState} from '/static/driver-dashboard/model.mjs'; import {renderDashboard} from '/static/driver-dashboard/render.mjs'; import {cleanPreferences} from '/static/driver-dashboard/display.mjs'; window.renderSuspension=state=>document.getElementById('qaDashboard').innerHTML=renderDashboard('cockpit',normalizeState(state),cleanPreferences(null));"});
+      await page.addScriptTag({type:'module',content:"import {normalizeState} from '/static/driver-dashboard/model.mjs'; import {renderDashboard} from '/static/driver-dashboard/render.mjs'; import {cleanPreferences} from '/static/driver-dashboard/display.mjs'; window.dashboardQA={normalizeState,renderDashboard,cleanPreferences}; window.renderSuspension=state=>document.getElementById('qaDashboard').innerHTML=renderDashboard('cockpit',normalizeState(state),cleanPreferences(null));"});
       await page.waitForFunction(()=>window.renderSuspension);
+      const greenPartial={...red,race_control_phase:'green',fia_flag:'green',player_car_index:0,player_position:8,current_lap:17,current_lap_time_ms:99999,last_lap_ms:90789,live_delta_s:1.234,sector:2,
+        packet_group_freshness:{'1':Date.now()/1000,'2':Date.now()/1000-180,'6':Date.now()/1000,'7':Date.now()/1000,'10':Date.now()/1000,'11':Date.now()/1000},
+        drivers:[{car_idx:0,name:'PLAYER',position:8,last_lap_ms:90789,best_lap_ms:90123},{car_idx:1,name:'RIVAL',position:7,gap_to_player_s:-1.234,tyre_compound:'SOFT',tyre_age:3,last_lap_ms:90555}],
+        recent_laps:[{lap_num:16,lap_time_ms:90789,valid:true}]};
+      for(const layout of ['cockpit','focus','battle','endurance','modular','portrait']){
+        const observed=await page.evaluate(({state,layout})=>{
+          const {normalizeState,renderDashboard,cleanPreferences}=window.dashboardQA,m=normalizeState(state);
+          document.getElementById('qaDashboard').innerHTML=renderDashboard(layout,m,cleanPreferences({widgets:[{id:'strategy',w:2,h:1},{id:'timing',w:2,h:1}]}));
+          return {position:m.position,current:m.current,delta:m.delta,sector:m.sector,ahead:m.ahead,plan:m.plan,speed:m.speed,fuelMargin:m.fuelMargin,last:m.last,best:m.best};
+        },{state:greenPartial,layout});
+        for(const field of ['position','current','delta','sector','ahead'])assert.equal(observed[field],null);
+        assert.equal(observed.plan,'Current strategy unavailable');assert.equal(observed.speed,200);assert.equal(observed.fuelMargin,1.2);
+        assert.equal(observed.last,90789);assert.equal(observed.best,90123);
+        assert.doesNotMatch(await page.locator('#qaDashboard').textContent(),/1:39.999|1\.234|BOX NOW|P8/);
+        assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth+1),false);
+        await page.screenshot({path:path.join(output,`green-expired-lap-${layout}-${width}-${deviceScaleFactor}x.png`)});
+        results.push({width,deviceScaleFactor,scenario:`green-expired-lap-${layout}`,observed,errors});
+      }
+      await page.evaluate(state=>renderSuspension(state),unrelatedFresh);
+      assert.match(await page.locator('#qaDashboard').textContent(),/LAST CONFIRMED RED FLAG.*PROVISIONAL RESTART TYRES.*HARD.*Alternative:.*MEDIUM/);
+      assert.doesNotMatch(await page.locator('#qaDashboard').textContent(),/RACE CONTROL UNAVAILABLE|0:24.807|BOX NOW/);
+      await page.screenshot({path:path.join(output,`unrelated-packet-dashboard-${width}-${deviceScaleFactor}x.png`)});
+      results.push({width,deviceScaleFactor,scenario:'unrelated-packet-provisional-dashboard',errors});
       await page.evaluate(state=>renderSuspension(state),suspended);
       assert.match(await page.locator('#qaDashboard').textContent(),/PROVISIONAL RESTART TYRES.*HARD.*Alternative:.*MEDIUM/);
       assert.doesNotMatch(await page.locator('#qaDashboard').textContent(),/BOX NOW|Waiting for telemetry|NEXT PIT STOP/);

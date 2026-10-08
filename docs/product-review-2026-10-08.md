@@ -100,6 +100,15 @@ write errors. The failed recording, responses and counters were retained before
 removing only that generated debug session for a clean rerun. These runs remain
 failed observations; focused repair tests do not turn them into full-race passes.
 
+A later wireless run lost 2,164 confirmed emitted datagrams while its debugging
+forward disappeared. The application process survived and reported no parser,
+archive or capture queue loss. This was also stopped and retained as a failed
+wireless run. It exposed a separate presentation bug: unrelated fresh history
+packets revived old position and timing readings during suspension. The updated
+views check their own packet families. The automatic red-flag announcement was
+present in the received recording and saved delivery log; the early observation
+had preceded speech completion, so no missing-announcement defect is claimed.
+
 ## Limits and environment
 
 The original accelerated 25-lap result is **not accepted**: it ended at lap 18,

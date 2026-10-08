@@ -655,7 +655,17 @@ class EngineerBrain:
             response += "; confirm spare sets in the tyre menu"
         if not fresh["current"]:
             response += "; live telemetry must confirm this before a new pit call"
-        return self.qualify_strategy_text(response + ".", plan)
+        return self._with_strategy_change_condition(self.qualify_strategy_text(response + ".", plan), plan)
+
+    @staticmethod
+    def _with_strategy_change_condition(text: str, plan: dict[str, Any] | None) -> str:
+        recommended = (plan or {}).get("recommended", {}) or {}
+        if not recommended.get("legal") or not recommended.get("feasible"):
+            return text
+        condition = str(recommended.get("call_changes_if") or recommended.get("change_condition") or "").strip().rstrip(".")
+        if not condition or condition.casefold() in text.casefold():
+            return text
+        return text.rstrip(". ") + "; " + condition[0].lower() + condition[1:] + "."
 
     @staticmethod
     def _material_plan_identity(plan: dict[str, Any] | None) -> tuple[Any, ...] | None:
@@ -663,11 +673,18 @@ class EngineerBrain:
         if not recommended:
             return None
         def identity(candidate: dict[str, Any]) -> tuple[Any, ...]:
+            # Ranked/held plans can acquire an explicit action on refresh
+            # without changing the actual call. Match the solver's ordinary
+            # action semantics while keeping suspension changes distinct.
+            action = candidate.get("action") or (
+                "pit_stop" if candidate.get("box_laps") or candidate.get("box_lap") is not None
+                else "keep_current_tyres"
+            )
             return (
                 tuple(candidate.get("box_laps", []) or []),
                 tuple(candidate.get("compounds", []) or []),
                 candidate.get("box_lap"), candidate.get("fit_compound"),
-                candidate.get("action"), candidate.get("feasible"), candidate.get("legal"),
+                action, candidate.get("feasible"), candidate.get("legal"),
             )
         primary = identity(recommended)
         alternative = next((identity(candidate) for candidate in (plan or {}).get("plans", [])
@@ -2431,6 +2448,8 @@ class EngineerBrain:
                 result.model = "strategy-refresh-guard"
         if strategy_context is not None:
             result.text = self.qualify_strategy_text(result.text, used_strategy)
+        if refresh_current_strategy:
+            result.text = self._with_strategy_change_condition(result.text, used_strategy)
         self.last_provider_result = result
         await self.store.update(
             llm_provider=result.provider,

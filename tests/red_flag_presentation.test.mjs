@@ -28,7 +28,9 @@ const source=fs.readFileSync(new URL('../static/js/strategy.js',import.meta.url)
 const strategy=await import('data:text/javascript;base64,'+Buffer.from(source).toString('base64'));
 globalThis.document=document;
 globalThis.confirmedSessionFinish=context.confirmedSessionFinish;
+globalThis.redFlagTelemetryStale=context.redFlagTelemetryStale;
 const state=()=>({connected:true,session_identity:'9038043921811877951:0:0:0',race_control_phase:'red_flag',current_lap:12,total_laps:20,
+  packet_group_freshness:{'1':Date.now()/1000,'2':Date.now()/1000,'7':Date.now()/1000,'10':Date.now()/1000},
   strategy_intent:{active:true,direction:'stay_out',intent:'overcut'},strategy_hold:{active:true},
   tyre:{compound:'MEDIUM',wear:[30,32,29,28],age_laps:10},
   strategy:{available:true,confidence:'medium',recommended:{instruction:'BOX NOW for HARD',box_lap:12,box_laps:[12],compounds:['MEDIUM','HARD'],feasible:true,legal:true},
@@ -80,6 +82,31 @@ test('A confirmed suspension retains provisional primary and alternative choices
   assert.match(rendered,/LAST CONFIRMED RED FLAG/);assert.match(rendered,/PROVISIONAL RESTART TYRES/);
   assert.match(rendered,/Fit fresh HARD/);assert.match(rendered,/Alternative:.*MEDIUM/);
   assert.doesNotMatch(rendered,/Waiting for telemetry|NEXT PIT STOP|Laps to stop|BOX NOW/);
+});
+test('Unrelated fresh packets cannot revive stale red-flag car readings or remove provisional advice',()=>{
+  const now=Date.now()/1000;
+  for(const expired of [['1'],['7'],['1','7']]){
+    const s=state();s.connected=true;s.telemetry_stale=false;s.player_position=2;s.current_lap_time_ms=24807;
+    s.speed_kph=200;s.fuel_kg=25;s.radio_log=[{role:'engineer',text:'Old BOX call'}];
+    s.packet_group_freshness['11']=now;
+    for(const id of expired)s.packet_group_freshness[id]=now-180;
+    context.renderStrategy38(s);strategy.renderCall(s);strategy.renderPlans(s);
+    for(const id of ['strategyMain','stratInstruction'])assert.match(get(id).textContent,/Last confirmed · provisional:.*HARD/);
+    assert.equal(get('stratPlanCount').textContent,'2 provisional restart options');
+    const model=normalizeState(s);assert.equal(model.fresh,false);assert.equal(model.provisionalRestart,true);
+    for(const field of ['position','current','lap','speed','fuel','tyreAge'])assert.equal(model[field],null,field);
+    assert.equal(model.ahead,null);assert.equal(model.radio,'');
+    for(const layout of ['cockpit','focus','battle','endurance','modular','portrait']){
+      const rendered=renderDashboard(layout,model,cleanPreferences(null));
+      assert.match(rendered,/LAST CONFIRMED RED FLAG/);assert.match(rendered,/PROVISIONAL RESTART TYRES/);
+      assert.equal((rendered.match(/Fit fresh HARD/g)||[]).length,1,layout);
+      assert.match(rendered,/Alternative:.*MEDIUM/);assert.doesNotMatch(rendered,/Old BOX call|RACE CONTROL UNAVAILABLE/);
+    }
+    for(const id of expired)s.packet_group_freshness[id]=now;
+    context.renderStrategy38(s);strategy.renderCall(s);strategy.renderPlans(s);
+    assert.doesNotMatch(get('strategyMain').textContent,/provisional/);
+    assert.equal(get('stratPlanCount').textContent,'2 restart options');assert.equal(normalizeState(s).fresh,true);
+  }
 });
 test('Exact session identity, including adjacent 64-bit IDs and epochs, is required to retain a stale restart plan',()=>{
   for(const identity of [undefined,'9038043921811877952:0:0:0','9038043921811877951:1:0:0','9038043921811877951:0:1:0','9038043921811877951:0:0:1']){

@@ -98,6 +98,14 @@ historical segment is useful targeted evidence and does not satisfy it.
 - The compact overlay lacked the main dashboards' freshness and confirmed-finish
   behavior. Verify independent packet families, stale suspension plans, socket
   close and silent expiry, delayed REST responses, and new-session clearing.
+- Actual tablet history packets kept the global connection fresh during a
+  suspension while lap and race-control packets were old. Verify current
+  position, timing and rival data per packet family in every dashboard layout,
+  and retain clearly provisional restart choices in Drive and Strategy.
+- An unchanged plan gained an explicit action label during AI generation,
+  triggering an unnecessary local replacement that omitted its change
+  condition. Verify equivalent action normalization and preserve the current
+  authoritative change condition in both generated and refreshed full plans.
 
 ## Intermediate regression evidence
 

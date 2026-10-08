@@ -196,7 +196,12 @@ function raceFlag(s,{fresh=true}={}) {
 }
 function normalizeState(s,{ageMs=0,transport='live',now=Date.now()}={}) {
   if(!s||typeof s!=='object')s={};
-  const connected=s.connected===true, fresh=connected&&s.telemetry_stale!==true&&ageMs<3500;
+  const freshGroup=id=>transport==='demo'||(finite(s.packet_group_freshness?.[id])!==null&&(now/1000-s.packet_group_freshness[id])>=-5&&(now/1000-s.packet_group_freshness[id])<5);
+  const suspensionReported=!!(s.red_flag_active||s.race_control_phase==='red_flag'||s.fia_flag==='red');
+  // Events/history can continue through a suspension while current flag and
+  // car packets stop. Socket activity must not revive their old readings.
+  const connected=s.connected===true, fresh=connected&&s.telemetry_stale!==true&&ageMs<3500
+    &&(!suspensionReported||(freshGroup('1')&&freshGroup('7')));
   const completedFlag=positive(s.final_classification?.position)!==null?raceFlag(s):null;
   const provenance=transport==='demo'||s.source_mode==='demo'?'sample':s.source_mode==='replay'?'replay':'live';
   const regulations2026=typeof s.regulations_2026==='boolean'?s.regulations_2026:null;
@@ -206,37 +211,38 @@ function normalizeState(s,{ageMs=0,transport='live',now=Date.now()}={}) {
   const sameRestartSession=typeof candidateRestart?.session_identity==='string'&&candidateRestart.session_identity.length>0&&candidateRestart.session_identity===s.session_identity;
   const provisionalRestart=!completedFlag&&!fresh&&!!(s.red_flag_active||s.race_control_phase==='red_flag'||s.fia_flag==='red')&&candidateRestart?.active===true&&sameRestartSession;
   if(!fresh)s=provisionalRestart?{race_control_phase:'red_flag',strategy:{red_flag_restart:s.strategy.red_flag_restart}}:{};
+  const carData=fresh&&freshGroup('6'),statusData=fresh&&freshGroup('7'),damageData=fresh&&freshGroup('10');
+  const sessionData=fresh&&freshGroup('1'),motionData=fresh&&freshGroup('0'),lapData=fresh&&freshGroup('2');
+  const planContext=sessionData&&lapData&&statusData;
   const drivers=Array.isArray(s.drivers)?s.drivers:[];
   const player=drivers.find(d=>d.car_idx===s.player_car_index)||{};
   const active=drivers.filter(d=>d.car_idx!==s.player_car_index&&d.active!==false&&![4,5,6].includes(d.result_status));
-  const car=d=>d?{...d,name:String(d.name||'Unknown driver').slice(0,80),gap:finite(d.gap_to_player_s),position:positive(d.position),number:positive(d.race_number),last:positive(d.last_lap_ms),best:positive(d.best_lap_ms),compound:String(d.tyre_compound||'UNKNOWN'),tyreAge:finite(d.tyre_age)}:null;
+  const car=d=>d?{...d,name:String(d.name||'Unknown driver').slice(0,80),gap:lapData?finite(d.gap_to_player_s):null,position:lapData?positive(d.position):null,number:positive(d.race_number),last:positive(d.last_lap_ms),best:positive(d.best_lap_ms),compound:statusData?String(d.tyre_compound||'UNKNOWN'):'UNKNOWN',tyreAge:statusData?finite(d.tyre_age):null}:null;
   // gap_to_player_s is negative ahead and positive behind in the UDP adapter.
-  const ahead=active.filter(d=>finite(d.gap_to_player_s)!==null&&d.gap_to_player_s<0).sort((a,b)=>b.gap_to_player_s-a.gap_to_player_s)[0];
-  const behind=active.filter(d=>finite(d.gap_to_player_s)!==null&&d.gap_to_player_s>0).sort((a,b)=>a.gap_to_player_s-b.gap_to_player_s)[0];
+  const ahead=lapData?active.filter(d=>finite(d.gap_to_player_s)!==null&&d.gap_to_player_s<0).sort((a,b)=>b.gap_to_player_s-a.gap_to_player_s)[0]:null;
+  const behind=lapData?active.filter(d=>finite(d.gap_to_player_s)!==null&&d.gap_to_player_s>0).sort((a,b)=>a.gap_to_player_s-b.gap_to_player_s)[0]:null;
   const recent=(Array.isArray(s.recent_laps)?s.recent_laps:[]).filter(l=>positive(l.lap_time_ms)&&l.valid!==false).slice(-6);
   const times=recent.map(l=>l.lap_time_ms),average=times.length?times.reduce((a,b)=>a+b,0)/times.length:null;
-  const best=positive(player.best_lap_ms), delta=finite(s.live_delta_s);
+  const best=positive(player.best_lap_ms), delta=lapData?finite(s.live_delta_s):null;
   const reference=String(s.live_delta_reference||'Reference');
   const pb=reference.match(/^PB\s+(\d+):(\d{2})\.(\d{3})$/i);
   const referenceMs=pb?(Number(pb[1])*60+Number(pb[2]))*1000+Number(pb[3]):/session best/i.test(reference)?best:null;
   const fuelUsage=recent.map(l=>finite(l.fuel_start_kg)!==null&&finite(l.fuel_end_kg)!==null?l.fuel_start_kg-l.fuel_end_kg:null).filter(v=>v>0&&v<20);
   const burn=fuelUsage.length?fuelUsage.reduce((a,b)=>a+b,0)/fuelUsage.length:null;
-  const recommendation=!completedFlag&&s.strategy?.available?s.strategy?.recommended:null;
+  const recommendation=!completedFlag&&planContext&&s.strategy?.available?s.strategy?.recommended:null;
   const suspended=!completedFlag&&!!(s.red_flag_active||s.race_control_phase==='red_flag'||s.fia_flag==='red');
   const restart=suspended&&candidateRestart?.active===true&&(sameRestartSession||(fresh&&candidateRestart?.session_identity==null))?s.strategy?.red_flag_restart:null;
   const nextStop=!suspended&&Array.isArray(recommendation?.box_laps)?recommendation.box_laps.find(l=>finite(l)!==null&&l>=s.current_lap):null;
   const array=a=>Array.from({length:4},(_,i)=>finite(a?.[i]));
-  const freshGroup=id=>transport==='demo'||(finite(s.packet_group_freshness?.[id])!==null&&(now/1000-s.packet_group_freshness[id])<5);
-  const carData=fresh&&freshGroup('6'),statusData=fresh&&freshGroup('7'),damageData=fresh&&freshGroup('10');
-  const sessionData=fresh&&freshGroup('1'),motionData=fresh&&freshGroup('0'),lapData=fresh&&freshGroup('2');
   const percent=v=>finite(v)===null?null:Math.min(100,Math.max(0,v));
   const input=v=>finite(v)===null?null:Math.min(1,Math.max(0,v));
   const mapValues=(obj,keys)=>Object.fromEntries(keys.map(k=>[k,damageData?percent(obj?.[k]):null]));
-  const flag=completedFlag||(provisionalRestart?makeFlag('red','#ff6969','LAST CONFIRMED RED FLAG','Live telemetry unavailable. Confirm suspension, tyre sets and track conditions in game.'):fresh&&(!freshGroup('1')||!freshGroup('7'))?makeFlag('unknown','#91a6b8','RACE CONTROL UNAVAILABLE','Follow in-game race control. Awaiting current flag data.'):raceFlag(s,{fresh}));
+  const flagState=lapData?s:{...s,driving_wrong_way:undefined,pit_status:undefined,unserved_drive_through_penalties:undefined,unserved_stop_go_penalties:undefined,safety_car_delta_valid:false};
+  const flag=completedFlag||(provisionalRestart?makeFlag('red','#ff6969','LAST CONFIRMED RED FLAG','Live telemetry unavailable. Confirm suspension, tyre sets and track conditions in game.'):fresh&&(!freshGroup('1')||!freshGroup('7'))?makeFlag('unknown','#91a6b8','RACE CONTROL UNAVAILABLE','Follow in-game race control. Awaiting current flag data.'):raceFlag(flagState,{fresh}));
   return {fresh,transport,provenance,regulations2026,paused:!!s.game_paused,flag,track:String(s.track_name||'Waiting for session'),session:String(s.session_type||'No session'),
-    lap:positive(s.current_lap),total:positive(s.total_laps),position:positive(s.player_position),field:positive(s.active_cars)||drivers.length||null,player:car(player),ahead:car(ahead),behind:car(behind),
-    drivers:drivers.filter(d=>d.active!==false||d.car_idx===s.player_car_index).sort((a,b)=>(a.position||999)-(b.position||999)).map(car),
-    current:positive(s.current_lap_time_ms),last:positive(s.last_lap_ms),best,delta,reference,invalid:!!s.current_lap_invalid,sector:finite(s.sector),
+    lap:lapData?positive(s.current_lap):null,total:positive(s.total_laps),position:lapData?positive(s.player_position):null,field:positive(s.active_cars)||drivers.length||null,player:car(player),ahead:car(ahead),behind:car(behind),
+    drivers:drivers.filter(d=>d.active!==false||d.car_idx===s.player_car_index).sort((a,b)=>lapData?(a.position||999)-(b.position||999):(a.car_idx??0)-(b.car_idx??0)).map(car),
+    current:lapData?positive(s.current_lap_time_ms):null,last:positive(s.last_lap_ms),best,delta,reference,invalid:lapData&&!!s.current_lap_invalid,sector:lapData?finite(s.sector):null,
     predicted:referenceMs&&delta!==null?referenceMs+delta*1000:null,
     speed:carData?finite(s.speed_kph):null,gear:carData?finite(s.gear):null,rpm:carData?finite(s.engine_rpm):null,
     fuel:statusData?finite(s.fuel_kg):null,fuelMargin:statusData?finite(s.fuel_laps_delta):null,ers:statusData?finite(s.ers_pct):null,burn,
@@ -244,7 +250,7 @@ function normalizeState(s,{ageMs=0,transport='live',now=Date.now()}={}) {
     compound:statusData?String(s.tyre?.compound||'UNKNOWN'):'UNKNOWN',tyreAge:statusData?finite(s.tyre?.age_laps):null,temps:carData?array(s.tyre?.surface_temps_c):[null,null,null,null],wear:damageData?array(s.tyre?.wear):[null,null,null,null],
     penalties:lapData?finite(s.penalties_s):null,warnings:lapData?finite(s.corner_cutting_warnings):null,nextStop:positive(nextStop),nextCompound:suspended?restart?.primary?.compound||null:recommendation?.compounds?.[1]||null,
     suspended,provisionalRestart,restartAlternative:restart?.alternative?.instruction||'',
-    plan:String(completedFlag?'Session complete. Review recorded laps in Analysis.':suspended?restart?.primary?.instruction||restart?.instruction||'Session suspended. Prepare fresh restart tyres while stopped; checking available sets.':recommendation?.instruction||s.strategy?.reason||'Waiting for strategy'),recent,average,spread:times.length>1?Math.max(...times)-Math.min(...times):null,
+    plan:String(completedFlag?'Session complete. Review recorded laps in Analysis.':suspended?restart?.primary?.instruction||restart?.instruction||'Session suspended. Prepare fresh restart tyres while stopped; checking available sets.':!planContext?'Current strategy unavailable':recommendation?.instruction||s.strategy?.reason||'Waiting for strategy'),recent,average,spread:times.length>1?Math.max(...times)-Math.min(...times):null,
     radio:String((Array.isArray(s.radio_log)?s.radio_log:[]).filter(r=>r.role==='engineer').at(-1)?.text||''),air:sessionData?finite(s.air_temp_c):null,trackTemp:sessionData?finite(s.track_temp_c):null,
     inner:carData?array(s.tyre?.inner_temps_c):array(null),pressures:carData?array(s.tyre?.pressures_psi):array(null),
     throttle:carData?input(s.throttle):null,brake:carData?input(s.brake):null,steer:carData&&finite(s.steer)!==null?Math.min(1,Math.max(-1,s.steer)):null,

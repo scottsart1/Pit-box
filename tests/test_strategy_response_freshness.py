@@ -68,6 +68,63 @@ async def test_same_plan_or_minor_wear_change_preserves_narration(stack, monkeyp
 
 
 @pytest.mark.asyncio
+async def test_explicit_ordinary_action_does_not_falsely_replace_unchanged_plan(stack, monkeypatch):
+    latest = plan()
+    latest["recommended"]["action"] = "pit_stop"
+    latest["plans"][1]["action"] = "pit_stop"
+    store, brain = await radio(stack, monkeypatch, latest)
+    answer = await brain.ask("Give me the full pit strategy and its best alternative.")
+    assert answer.startswith("Provisional strategy (confidence low)")
+    assert "Box lap 23 for softs. Alternative lap 24" in answer
+    assert "Telemetry updated" not in answer
+    assert (await store.snapshot_analysis())["llm_provider"] == "test"
+
+
+def test_suspension_tyre_change_is_still_a_material_action_change():
+    ordinary = plan()
+    suspension = deepcopy(ordinary)
+    suspension["recommended"]["action"] = "red_flag_tyre_change"
+    assert EngineerBrain._material_plan_identity(ordinary) != EngineerBrain._material_plan_identity(suspension)
+
+
+@pytest.mark.asyncio
+async def test_full_plan_keeps_authoritative_change_condition_after_terse_narration_cap(stack, monkeypatch):
+    old = plan()
+    condition = "The call changes for a safety car, red flag, wet crossover, new damage, or a hard tyre-wear limit breach."
+    old["recommended"]["call_changes_if"] = condition
+    store, brain = await radio(stack, monkeypatch, old)
+    await store.update(strategy=old, radio_verbosity="terse")
+
+    async def tool(name, arguments):
+        return deepcopy(old)
+
+    monkeypatch.setattr(brain.tools, "call", tool)
+    answer = await brain.ask("Give me the full pit strategy and its best alternative.")
+    assert condition.casefold() in answer.casefold()
+    assert answer.casefold().count("the call changes") == 1
+    assert (await store.snapshot_analysis())["llm_provider"] == "test"
+
+
+@pytest.mark.asyncio
+async def test_refreshed_complete_plan_includes_latest_change_condition(stack, monkeypatch):
+    latest = plan(21)
+    latest["recommended"]["change_condition"] = "The call changes if a safety car is deployed."
+    _, brain = await radio(stack, monkeypatch, latest)
+    answer = await brain.ask("Give me the full pit strategy and its best alternative.")
+    assert "box lap 21 for SOFT" in answer
+    assert "the call changes if a safety car is deployed" in answer
+    assert answer.count("the call changes") == 1
+
+
+def test_missing_or_unsupported_change_condition_is_not_invented():
+    text = "No current pit plan is confirmed."
+    assert EngineerBrain._with_strategy_change_condition(text, plan()) == text
+    unsupported = plan()
+    unsupported["recommended"].update(legal=False, call_changes_if="Change for rain.")
+    assert EngineerBrain._with_strategy_change_condition(text, unsupported) == text
+
+
+@pytest.mark.asyncio
 async def test_changed_best_alternative_refreshes_full_answer_even_when_primary_is_unchanged(stack, monkeypatch):
     latest = plan()
     latest["plans"][1] = {**latest["plans"][1], "box_lap": 25, "box_laps": [25]}

@@ -13,6 +13,8 @@
   when model narration exceeds its deadline.
 - Strategy answers retain their uncertainty and refresh when the primary or
   alternative plan changes while the engineer is responding.
+- Complete plans state the recorded condition that would change the call;
+  adding an equivalent action label no longer replaces a current AI answer.
 - Rival gap trends explicitly distinguish pulling away from being caught.
 - Session-best answers use the complete available session history, with
   coverage and recent-window limits stated explicitly.
@@ -35,6 +37,8 @@
   telemetry gaps, with the last confirmed status clearly labelled.
 - The compact overlay distinguishes live, unavailable, suspended and completed
   sessions, retaining provisional restart choices without stale car readings.
+- Unrelated fresh packets cannot revive old position, lap, rival or race-control
+  readings, or turn a provisional suspension plan into a live instruction.
 - The strategy decision log shows estimated finishes and complete multi-stop
   schedules so changes behind repeated-looking calls are visible.
 - Recorded lap and sector times are reconciled with the game's session

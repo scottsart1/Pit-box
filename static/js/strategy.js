@@ -55,7 +55,8 @@ function post(path, body) {
 function redFlagRestart(s) {
   if (globalThis.confirmedSessionFinish?.(s)) return null;
   if (!(s.red_flag_active || s.race_control_phase === "red_flag" || s.fia_flag === "red")) return null;
-  const stale = s.connected === false || s.telemetry_stale === true;
+  const stale = typeof globalThis.redFlagTelemetryStale === "function"
+    ? globalThis.redFlagTelemetryStale(s) : true;
   const plan = s.strategy?.red_flag_restart || {};
   const sameSession = typeof plan.session_identity === "string" && plan.session_identity.length > 0 && plan.session_identity === s.session_identity;
   return { ...(plan.active === true && (sameSession || (!stale && plan.session_identity == null)) ? plan : {}), stale };

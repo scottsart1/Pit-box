@@ -760,10 +760,14 @@ function confirmedSessionFinish(s){
   const result=s?.final_classification,position=result?.position;
   return typeof position==='number'&&Number.isFinite(position)&&position>0?result:null;
 }
+function redFlagTelemetryStale(s,now=Date.now()){
+  const current=id=>{const time=s.packet_group_freshness?.[id],age=now/1000-time;return typeof time==='number'&&Number.isFinite(time)&&age>=-5&&age<5;};
+  return s.connected!==true||s.telemetry_stale===true||!current('1')||!current('7');
+}
 function redFlagRestartDisplay(s){
   if(confirmedSessionFinish(s))return null;
   if(!(s.red_flag_active||s.race_control_phase==='red_flag'||s.fia_flag==='red'))return null;
-  const stale=s.connected===false||s.telemetry_stale===true;
+  const stale=redFlagTelemetryStale(s);
   const candidate=s.strategy?.red_flag_restart||{};
   const sameSession=typeof candidate.session_identity==='string'&&candidate.session_identity.length>0&&candidate.session_identity===s.session_identity;
   const restart=candidate.active===true&&(sameSession||(!stale&&candidate.session_identity==null))?candidate:{};

@@ -78,11 +78,9 @@ function render(state, {ageMs = 0, now = Date.now(), transportLost = false} = {}
     return time !== null && now / 1000 - time >= -5 && now / 1000 - time < 5;
   };
   const suspension = !!(state.red_flag_active || state.race_control_phase === 'red_flag' || state.fia_flag === 'red');
-  // Reuse the dashboard's exact-session restart and missing-data contract.
-  // Old flag packets also make suspension advice provisional, even if some
-  // unrelated packets continue to keep the socket active.
-  const snapshot = transportLost || (suspension && (!group('1') || !group('7')))
-    ? {...state, connected: false} : state;
+  // Shared normalization handles expired flag families even when unrelated
+  // packets keep the socket active. A lost transport expires all readings.
+  const snapshot = transportLost ? {...state, connected: false} : state;
   const data = normalizeState(snapshot, {ageMs, now});
   const finished = positive(state.final_classification?.position);
   const live = data.fresh && finished === null;
