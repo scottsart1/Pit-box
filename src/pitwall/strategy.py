@@ -2008,7 +2008,7 @@ class StrategyEngine:
         remaining = max(
             0,
             int(state.get("total_laps", 0) or 0)
-            - int(state.get("current_lap", 0) or 0),
+            - max(1, int(state.get("current_lap", 0) or 0)) + 1,
         )
         pursuer = next(
             (
@@ -2046,7 +2046,7 @@ class StrategyEngine:
             round(gap / abs(closing_rate), 1)
             if closing_rate is not None and closing_rate < -0.05 and gap > 0
             else float(remaining)
-            if remaining > 0
+            if closing_rate is not None and remaining > 0
             else None
         )
         track_id = int(state.get("track_id", -1))
@@ -2084,26 +2084,25 @@ class StrategyEngine:
             ),
             {},
         )
-        position_history = player.get("position_history", []) or []
+        position_history = [item for item in player.get("position_history", []) or []
+                            if int(item.get("position", 0) or 0) > 0]
+        position_evidence = len({item.get("lap") for item in position_history if item.get("lap") is not None}) >= 2
         positions_lost = (
             max(0, int(position_history[-1]["position"]) - int(position_history[0]["position"]))
-            if len(position_history) >= 2
-            else 0
+            if position_evidence
+            else None
         )
-        corner_loss = max(
-            [
-                float(item.get("loss_vs_pb_s", 0.0) or 0.0)
-                for item in state.get("analysis", {}).get("corner_metrics", [])
-            ]
-            or [0.0]
-        )
+        corner_comparisons = [value for item in state.get("analysis", {}).get("corner_metrics", [])
+                              if (value := finite(item.get("loss_vs_pb_s"))) is not None]
+        corner_loss = max(corner_comparisons) if corner_comparisons else None
+        quality_evidence = position_evidence and corner_loss is not None and closing_rate is not None
         score = max(
             1.0,
             min(
                 10.0,
                 8.5
-                - positions_lost * 1.2
-                - min(2.5, corner_loss * 4.0)
+                - (positions_lost or 0) * 1.2
+                - min(2.5, max(0.0, corner_loss or 0) * 4.0)
                 - max(0.0, pass_probability - 0.50) * 3.0,
             ),
         )
@@ -2118,16 +2117,24 @@ class StrategyEngine:
             "overtaking_difficulty": round(difficulty, 2),
             "passing_zone_count": zones,
             "estimated_pass_probability": round(pass_probability, 3),
-            "defence_quality_score_out_of_10": round(score, 1),
+            "defence_quality_score_out_of_10": round(score, 1) if quality_evidence else None,
+            "quality_evidence_available": quality_evidence,
+            "quality_evidence": {"position_history_samples": len(position_history),
+                                 "corner_comparison_samples": len(corner_comparisons),
+                                 "gap_trend_available": closing_rate is not None},
+            "quality_basis": (
+                "Heuristic assessment from recorded position retention, corner comparisons and gap trend; not proof of defensive skill."
+                if quality_evidence else "Insufficient recorded position, corner-comparison or gap-trend evidence; do not rate the driver's defence as strong or weak."
+            ),
             "positions_lost_in_recorded_history": positions_lost,
-            "largest_corner_loss_vs_pb_s": round(corner_loss, 3),
+            "largest_corner_loss_vs_pb_s": round(corner_loss, 3) if corner_loss is not None else None,
             "confidence": (
-                "medium" if len(history) >= 3 and position_history else "low"
+                "medium" if quality_evidence and len(history) >= 3 else "low"
             ),
             "interpretation": (
                 "A negative closing rate means the car behind is catching. The "
-                "quality score combines position retention, corner-time retention, "
-                "track passing difficulty and measured pressure; it is not subjective."
+                "quality score requires observed position retention, corner comparisons and gap trend; "
+                "missing observations are unknown, not zero loss. Pass probability is an uncalibrated planning heuristic."
             ),
         }
 

@@ -16,6 +16,8 @@
 
 - Clearer car-data availability and corrected 2026 dashboard hardware labels.
 - Stable Library filtering and pagination, and faithful engineering text exports.
+- A/B sector-delta bars and lap-time distributions show accepted samples,
+  exclusions, consistency and the limits of cross-session comparisons.
 - Sharper, correctly sized pace charts on phones and tablets.
 - Android speech drains normally and stops promptly when interrupted.
 - Rebuilt Android dashboards refresh reliably without replacing saved data.

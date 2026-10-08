@@ -736,6 +736,7 @@ def test_custom_persona_safety_anchor_is_last(monkeypatch) -> None:
 async def test_temperature_unit_request_persists_in_header(stack) -> None:
     store, database, _, _, _, tools = stack
     brain = brain_module.EngineerBrain(store, tools, database)
+    await store.mark_packet(2026, 26, 42, packet_id=6)
     await store.update(
         tyre={
             "compound": "HARD",

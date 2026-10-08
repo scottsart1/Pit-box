@@ -1997,8 +1997,10 @@ class TelemetryTools:
         return state.get("analysis", {}).get("target", {})
 
     async def get_pit_strategy(self) -> dict[str, Any]:
-        plan = await self.strategy.get_plan()
+        return await self.strategy.get_plan()
 
+    @staticmethod
+    def _compact_strategy_for_radio(plan: dict[str, Any]) -> dict[str, Any]:
         def compact(value: Any) -> Any:
             if isinstance(value, dict):
                 return {key: compact(item) for key, item in value.items()
@@ -3423,4 +3425,5 @@ class TelemetryTools:
         function = getattr(self, name, None)
         if function is None or name.startswith("_"):
             return {"error": f"Unknown tool: {name}"}
-        return await function(**arguments)
+        result = await function(**arguments)
+        return self._compact_strategy_for_radio(result) if name == "get_pit_strategy" else result

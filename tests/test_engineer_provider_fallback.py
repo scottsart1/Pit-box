@@ -94,7 +94,8 @@ async def test_deadline_during_session_switch_discards_old_answer(stack, monkeyp
 async def test_radio_strategy_payload_omits_repeated_simulation_series_preserves_decision(stack, monkeypatch):
     store, tools, _ = await configured(stack, monkeypatch)
     raw = (await store.snapshot_analysis())["strategy"]
-    payload = await tools.get_pit_strategy()
+    assert await tools.get_pit_strategy() == raw
+    payload = await tools.call("get_pit_strategy", {})
     assert len(json.dumps(payload)) < len(json.dumps(raw)) / 2
     assert payload["recommended"]["box_laps"] == [12]
     assert payload["recommended"]["projected_finish_wear_fl_fr_rl_rr"] == [51, 52, 53, 54]
@@ -103,3 +104,4 @@ async def test_radio_strategy_payload_omits_repeated_simulation_series_preserves
     assert "lap_times_s" not in json.dumps(payload)
     assert "wheel_projection" not in json.dumps(payload)
     assert (await store.snapshot_analysis())["strategy"] == raw
+    assert await tools.get_pit_strategy() == raw

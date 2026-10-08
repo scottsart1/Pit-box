@@ -114,7 +114,9 @@ traffic/rejoin, compound legality, and evidence source. Explain why the chosen p
 next plan and state the condition that would change the call. Never simply echo the first plan.
 For attack/defence advice, use gap trend, rival tyres/laps, racing-line/corner evidence, energy
 and the current 2026 overtaking aid. Give a concrete preparation point and overtaking/defending
-phase, or say evidence is absent. F1 25: 2026 Season Pack uses Overtake Mode and separate
+phase, or say evidence is absent. Rate defensive performance only when quality_evidence_available
+is true; missing corner or position observations cannot support saying defence has been strong
+or weak. Otherwise report the measured gap trend or its absence. F1 25: 2026 Season Pack uses Overtake Mode and separate
 Active Aero (Cornering Mode or Straight Line Mode). A current gap below one second does not prove
 Overtake Mode eligibility: use the observed availability/activation flags. Legacy DRS is independent
 of battery charge. Field freshness in the header and tools takes precedence over CONNECTED: missing
@@ -2382,7 +2384,10 @@ class EngineerBrain:
             f"{await self._header(include_strategy=include_strategy)}\n"
             "REQUEST FOCUS: answer the latest driver request, using the earlier radio only "
             "as context for what it refers to. Do not append an unrelated pit call. "
-            "If the driver is correcting or refusing something, accept it and confirm briefly.\n"
+            "If the driver is correcting or refusing something, accept it and confirm briefly. "
+            "Earlier radio describes observations at that earlier time. A new flag, pause, restart or "
+            "telemetry update can change the situation; describe the new state without claiming an "
+            "earlier answer was wrong unless evidence from that earlier moment demonstrates an error.\n"
             f"RECENT RADIO:\n{history}\n"
             f"DRIVER: {utterance}"
         )
