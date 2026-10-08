@@ -56,7 +56,9 @@ async function harness(overrides = {}) {
       const [, name, view] = lapMatch;
       if (view === 'trace') return response(trace(name, name === 'c' ? 20 : 50));
       if (view === 'references') return response({ items: name === 'a' ? [{ lap_id: 'b', suggested: true, compatibility: { class: 'strict' } }] : [] });
-      return response({ lap_id: name, lap_number: 1, top_speed_kph: 180, minimum_speed_kph: 50, segments: [], trace_source: 'fixture' });
+      // Solo analysis carries canonical whole-lap coverage independently of
+      // the finite-sample fraction in /trace. This fixture is a complete lap.
+      return response({ lap_id: name, lap_number: 1, coverage_ratio: 1, top_speed_kph: 180, minimum_speed_kph: 50, segments: [], trace_source: 'fixture' });
     }
     if (u.pathname === '/api/v1/comparisons' && options.method === 'POST') return response(comparison);
     if (u.pathname === '/api/v1/comparisons/cmp1/trace') return response(pairTrace);
@@ -349,7 +351,7 @@ test('Out-of-order session responses and failures cannot restore stale session',
 
 test('Partial solo measurements show unavailable, never fabricated zero or null units', async () => {
   const h = await harness({ '/api/v1/laps/a/analysis': () => response({
-    lap_number: 1, top_speed_kph: null, minimum_speed_kph: null,
+    lap_number: 1, coverage_ratio: .5, top_speed_kph: null, minimum_speed_kph: null,
     braking_events: null, full_throttle_pct: null, braking_pct: null,
     metric_coverage: { speed: 0, throttle: .5, brake: 0 },
     segments: [{ label: 'Sector 1', start_m: 0, end_m: 50, time_s: null, entry_speed_kph: null, minimum_speed_kph: null, exit_speed_kph: null }],
@@ -362,7 +364,23 @@ test('Partial solo measurements show unavailable, never fabricated zero or null 
     assert.match(h.id('soloAnalysisSummary').textContent, /Braking events unavailable/);
     assert.match(h.id('soloAnalysisRows').textContent, /Unavailable/);
     assert.match(h.id('lapLabStatus').textContent, /Partial recording/);
+    assert.equal(h.id('lapLabStatus').dataset.tone, 'warning');
     assert.equal(h.id('gaugeSpeed').textContent, '180.0 km/h');
     assert.equal(h.id('playbackToggle').disabled, false);
+  } finally { h.close(); }
+});
+
+test('Missing canonical solo coverage remains unavailable even with finite trace samples', async () => {
+  const h = await harness({ '/api/v1/laps/a/analysis': () => response({
+    lap_number: 1, top_speed_kph: 180, minimum_speed_kph: 50,
+    metric_coverage: { speed: 1, throttle: 1, brake: 1 }, segments: [],
+  }) });
+  try {
+    await h.api.selectSession('s1'); await h.api.openLap('a');
+    h.id('analyzeLapAlone').click(); await settle();
+    assert.match(h.id('lapLabStatus').textContent, /Whole-lap recording coverage is unavailable/);
+    assert.equal(h.id('lapLabStatus').dataset.tone, 'warning');
+    assert.equal(h.id('playbackToggle').disabled, false);
+    assert.equal(h.id('gaugeSpeed').textContent, '180.0 km/h');
   } finally { h.close(); }
 });
