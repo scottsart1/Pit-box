@@ -160,6 +160,35 @@ async def test_telemetry_gap_does_not_assign_lap5_time_to_lap4(stack):
 
 
 @pytest.mark.asyncio
+async def test_history_before_lap_transition_keeps_one_authoritative_observed_summary(stack):
+    store, _, protocol = await prepare(stack)
+    await store.update(current_lap=1, traces=[{"d": 0, "t": 0, "speed": 90},
+                                            {"d": 4990, "t": 94, "speed": 90}], track_length_m=5000)
+    rows = copy.deepcopy(TIMINGS[:1])
+    rows[0]["valid_flags"] = 14
+    await protocol.handle_PacketSessionHistoryData(packet(rows))
+    completed = await store.transition_lap(2, rows[0]["lap_time_ms"] + 16, False, 1, 0, 0)
+    summaries = (await store.snapshot_analysis())["completed_laps"]
+    assert len(summaries) == 1
+    assert summaries[0]["lap_time_ms"] == rows[0]["lap_time_ms"]
+    assert summaries[0]["timing_source"] == "session_history" and not summaries[0]["valid"]
+    assert completed["trace"] and summaries[0]["trace_coverage"] > 0.99
+    assert "missing_telemetry" not in summaries[0]["learning_exclusions"]
+
+
+@pytest.mark.asyncio
+async def test_history_before_skipped_lap_transition_keeps_chronological_summaries(stack):
+    store, _, protocol = await prepare(stack)
+    await store.update(current_lap=4, traces=[{"d": 100, "t": 1, "speed": 90}], track_length_m=5000)
+    await protocol.handle_PacketSessionHistoryData(packet(TIMINGS[:5]))
+    await store.transition_lap(6, TIMINGS[4]["lap_time_ms"], False, 1, 0, 0)
+    summaries = (await store.snapshot_analysis())["completed_laps"]
+    assert [row["lap_num"] for row in summaries] == [1, 2, 3, 4, 5]
+    assert [row["lap_time_ms"] for row in summaries] == [row["lap_time_ms"] for row in TIMINGS[:5]]
+    assert summaries[3]["trace_incomplete"] and summaries[3]["trace_coverage"] == 0
+
+
+@pytest.mark.asyncio
 async def test_old_epoch_history_and_analysis_cannot_replace_current_legacy_lap(stack):
     store, database, protocol = await prepare(stack)
     await protocol.handle_PacketSessionHistoryData(packet(TIMINGS[:1]))

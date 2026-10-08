@@ -154,6 +154,20 @@ const strategyModule = fs.readFileSync(path.join(root, 'static/js/strategy.js'),
       assert.doesNotMatch(await page.locator('#qaDashboard').textContent(),/PROVISIONAL RESTART TYRES|Fit fresh HARD/);
       assert.deepEqual(errors,[]);
       results.push({width,deviceScaleFactor,scenario:'provisional-dashboard-and-clearing',errors});
+      const finished={...suspended,final_classification:{position:1,laps:31,best_lap_ms:91649},strategy:{...suspended.strategy,available:true,recommended:{instruction:'BOX NOW',box_laps:[32]}}};
+      for(const connected of [true,false]){
+        await page.evaluate(state=>renderSuspension(state),{...finished,connected,telemetry_stale:!connected});
+        const text=await page.locator('#qaDashboard').textContent();
+        assert.match(text,/CHEQUERED FLAG/);
+        assert.doesNotMatch(text,/PROVISIONAL RESTART TYRES|Fit fresh HARD|BOX NOW|GREEN FLAG/);
+        if(!connected)assert.match(text,/Session complete.*Review recorded laps/);
+        assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth+1),false);
+        await page.screenshot({path:path.join(output,`finished-dashboard-${connected?'connected':'stale'}-${width}-${deviceScaleFactor}x.png`)});
+      }
+      await page.evaluate(state=>renderSuspension({...state,final_classification:{},session_identity:'9038043921811877952:0:0:1',race_control_phase:'green',red_flag_active:false}),finished);
+      assert.doesNotMatch(await page.locator('#qaDashboard').textContent(),/CHEQUERED FLAG|Session complete/);
+      assert.deepEqual(errors,[]);
+      results.push({width,deviceScaleFactor,scenario:'final-classification-fresh-stale-and-clearing',errors});
       await context.close();
     }
   } finally {

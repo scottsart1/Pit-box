@@ -1260,12 +1260,21 @@ class StateStore:
                     observed = next((row for row in state.drivers[state.player_car_index].lap_history
                                      if row.get("lap_num") == old_lap), {})
                     completed.update(authoritative_timing(observed))
+                # History and lap-data packets may arrive in either order.
+                # Replace the provisional timing-only summary with these
+                # observations, preserving any authoritative split already seen.
+                previous = next((row for row in state.completed_laps
+                                 if row.get("lap_num") == old_lap and row.get("timing_source") == "session_history"), {})
+                if previous and completed.get("timing_source") != "session_history":
+                    completed.update(authoritative_timing({**previous, "lap_ms": previous["lap_time_ms"]}))
                 summary = {
                     key: copy.deepcopy(value)
                     for key, value in completed.items()
                     if key != "trace"
                 }
+                state.completed_laps = [row for row in state.completed_laps if row.get("lap_num") != old_lap]
                 state.completed_laps.append(summary)
+                state.completed_laps.sort(key=lambda row: row["lap_num"])
                 state.completed_laps = state.completed_laps[-100:]
                 state.traces.clear()
 

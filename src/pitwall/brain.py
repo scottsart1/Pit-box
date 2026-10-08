@@ -1590,6 +1590,8 @@ class EngineerBrain:
         answer = await self._fast_answer_unchecked(utterance)
         if answer is None or not self._is_simple_lookup(utterance):
             return answer
+        if self._requests_current_final_result(await self.store.snapshot_analysis(), utterance):
+            return answer
         text = normalize_text(utterance)
         groups: tuple[int, ...] = ()
         subject = "Telemetry"
@@ -1615,6 +1617,16 @@ class EngineerBrain:
             return f"{subject} is {freshness['status']}; I cannot confirm the current value."
         return "Paused, last confirmed: " + answer if freshness["status"] == "paused" else answer
 
+    @staticmethod
+    def _requests_current_final_result(state: dict[str, Any], utterance: str) -> bool:
+        text = normalize_text(utterance)
+        return (has_any_phrase(text, ("final classification", "final result", "final position", "race result", "result confirmed"))
+                and not has_negation(text)
+                and not match_drivers(state.get("drivers", []), utterance)
+                and not has_any_phrase(text, ("what if", "if i", "if we", "would", "will", "could", "predict", "why",
+                                             "previous", "last race", "last session", "yesterday", "history", "historical",
+                                             "rival", "field", "everyone", "all drivers", "compare")))
+
     async def _fast_answer_unchecked(self, utterance: str) -> str | None:
         """Answer operational radio requests from state before consulting a model.
 
@@ -1624,6 +1636,22 @@ class EngineerBrain:
         """
         text = self._normalize_text(utterance)
         state = await self.store.snapshot_analysis()
+
+        if self._requests_current_final_result(state, utterance):
+            result = self.tools.final_result(state)
+            if not result["result_confirmed"]:
+                return "No final classification has been received for this session yet; the live position is not a confirmed result."
+            classification = result["final_classification"]
+            facts = [f"Confirmed final classification: P{int(classification['position'])}"]
+            for key, label in (("laps", "laps completed"), ("points", "points"), ("pit_stops", "pit stops")):
+                if classification.get(key) is not None:
+                    facts.append(f"{int(classification[key])} {label}")
+            if int(classification.get("best_lap_ms", 0) or 0) > 0:
+                from .analysis import fmt_ms
+                facts.append(f"best lap {fmt_ms(int(classification['best_lap_ms']))}")
+            if classification.get("penalties_s") is not None:
+                facts.append(f"{int(classification['penalties_s'])} seconds of penalties")
+            return "; ".join(facts) + "."
 
         session_override = self._manual_session_override_mode(utterance)
         if session_override is not None:

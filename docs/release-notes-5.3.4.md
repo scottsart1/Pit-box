@@ -14,6 +14,10 @@
 - Strategy answers retain their uncertainty and refresh when the primary or
   alternative plan changes while the engineer is responding.
 - Rival gap trends explicitly distinguish pulling away from being caught.
+- Session-best answers use the complete available session history, with
+  coverage and recent-window limits stated explicitly.
+- Confirmed final results remain available to the engineer after live
+  telemetry stops, and the dashboard clearly marks the completed session.
 
 ## Dashboard and reliability
 

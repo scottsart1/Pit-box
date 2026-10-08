@@ -72,6 +72,15 @@ historical segment is useful targeted evidence and does not satisfy it.
 - Restart choices disappeared from the dashboard during a confirmed red-flag
   telemetry gap. Retain explicitly provisional same-session choices, without
   displaying old car readings as live or carrying choices into a new session.
+- A late-race answer labelled the fastest lap in the recent returned window
+  as the session best. Compare against the complete independently decoded
+  history, including a best lap outside the requested window.
+- A confirmed final result was refused as stale and the dashboard returned to
+  its waiting screen. Verify the authoritative result survives the end of live
+  telemetry and is cleared on a new session.
+- The intermediate full tablet replay lost wireless transport packets and its
+  ADB forwarding connection. Preserve the failed reception and monitor record;
+  a repaired-source run must satisfy the complete counted replay gate.
 
 ## Intermediate regression evidence
 

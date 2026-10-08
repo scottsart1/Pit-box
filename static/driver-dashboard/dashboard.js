@@ -44,8 +44,8 @@ function render(){
     if(!old)d.insertBefore(node.cloneNode(true),d.children[index]||null);
     else if(!(gesture&&node.classList.contains('data-surface')))patchNode(old,node);
   });
-  const sourceLabel=m.provenance==='sample'?'SAMPLE · SIMULATED':m.provenance==='replay'?'RECORDED REPLAY':m.fresh?'LIVE TELEMETRY':'WAITING FOR TELEMETRY';
-  $('sessionStatus').textContent=sourceLabel;$('trackStatus').textContent=m.fresh?m.track+' · '+m.session:'Start a simulator session';$('raceModeSource').textContent=sourceLabel;
+  const sourceLabel=m.provenance==='sample'?'SAMPLE · SIMULATED':m.provenance==='replay'?'RECORDED REPLAY':m.flag.id==='finish'?'SESSION COMPLETE':m.fresh?'LIVE TELEMETRY':'WAITING FOR TELEMETRY';
+  $('sessionStatus').textContent=sourceLabel;$('trackStatus').textContent=m.flag.id==='finish'?'Session complete':m.fresh?m.track+' · '+m.session:'Start a simulator session';$('raceModeSource').textContent=sourceLabel;
   updateStorageLabel();
 }
 function acceptState(s){if(!s||typeof s!=='object')return;currentState=s;receivedAt=Date.now();scheduleRender()}

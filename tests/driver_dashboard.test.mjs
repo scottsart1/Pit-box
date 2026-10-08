@@ -47,6 +47,46 @@ test('2026 Overtake Mode uses its own fresh flags, never the legacy deployment e
 });
 test('Receiving car telemetry without current flag packets never claims green',()=>{const s=demoState();s.packet_group_freshness={'6':100};assert.equal(normalizeState(s,{now:101000}).flag.id,'unknown');s.packet_group_freshness['1']=100;s.packet_group_freshness['7']=100;assert.equal(normalizeState(s,{now:101000}).flag.id,'green');s.packet_group_freshness['1']=90;assert.equal(normalizeState(s,{now:101000}).flag.id,'unknown')});
 
+test('The actual flat final-classification contract confirms completion after car packets stop',()=>{
+  const state={...demoState(),connected:false,telemetry_stale:true,session_identity:'9038043921811877951:0:0:0',
+    final_classification:{position:1,laps:31,grid_position:3,points:25,pit_stops:2,best_lap_ms:91649,total_race_time_s:3466.302,penalties_s:0}};
+  assert.equal(raceFlag(state,{fresh:false}).id,'finish');
+  const model=normalizeState(state);
+  assert.equal(model.flag.id,'finish');assert.equal(model.fresh,false);
+  for(const field of ['speed','fuel','ers','position','lap'])assert.equal(model[field],null,field);
+  for(const layout of LAYOUTS){
+    const html=renderDashboard(layout,model,cleanPreferences());
+    assert.match(html,/CHEQUERED FLAG/);assert.doesNotMatch(html,/GREEN FLAG|Track clear\. Racing/);
+    if(layout!=='modular')assert.match(html,/<h2>Session complete<\/h2>/);
+  }
+  // The adapter keeps no completion cache across the backend's session reset.
+  const next=normalizeState({...state,session_identity:'9038043921811877952:0:0:1',final_classification:{}});
+  assert.equal(next.flag.id,'stale');
+});
+
+test('Only an observed positive numeric final position confirms completion',()=>{
+  for(const position of [undefined,null,0,-1,'1',NaN,Infinity])assert.notEqual(raceFlag({final_classification:{position}}).id,'finish');
+  const current={...demoState(),packet_group_freshness:{'6':100},final_classification:{position:2}};
+  assert.equal(normalizeState(current,{now:101000}).flag.id,'finish');
+});
+
+test('Dashboard header and race-mode status agree with completion and preserve source provenance',()=>{
+  const source=readFileSync(new URL('../static/driver-dashboard/dashboard.js',import.meta.url),'utf8');
+  const labels=source.slice(source.indexOf('  const sourceLabel='),source.indexOf('  updateStorageLabel();'));
+  assert.ok(labels.length>100);
+  for(const [state,transport,status] of [
+    [{connected:false,final_classification:{position:1}},'live','SESSION COMPLETE'],
+    [{connected:false,final_classification:{}},'live','WAITING FOR TELEMETRY'],
+    [{connected:false,source_mode:'replay',final_classification:{position:1}},'live','RECORDED REPLAY'],
+    [{connected:false,final_classification:{position:1}},'demo','SAMPLE · SIMULATED'],
+  ]){
+    const nodes=Object.fromEntries(['sessionStatus','trackStatus','raceModeSource'].map(id=>[id,{textContent:''}]));
+    vm.runInNewContext(labels,{m:normalizeState(state,{transport}),$:id=>nodes[id]});
+    assert.equal(nodes.sessionStatus.textContent,status);assert.equal(nodes.raceModeSource.textContent,status);
+    assert.equal(nodes.trackStatus.textContent,state.final_classification.position?'Session complete':'Start a simulator session');
+  }
+});
+
 test('All catalog widgets and presets are complete, unique and independently editable',()=>{
   assert.equal(WIDGET_CATALOG.length,24);
   assert.equal(new Set(WIDGET_CATALOG.map(w=>w.id)).size,24);

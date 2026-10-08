@@ -503,6 +503,7 @@ class TelemetryTools:
             )
         }
         result["field_freshness"] = self.field_freshness(state)
+        result.update(self.final_result(state))
         forecast = state.get("weather_forecast", []) or []
         forecast_available = bool(forecast) and self.packet_freshness(state, 1)["available"]
         horizon = max((int(sample.get("time_offset_min", 0)) for sample in forecast), default=0)
@@ -512,6 +513,18 @@ class TelemetryTools:
             result[f"rain_next_{minutes}_pct"] = self.forecast_probability(state, minutes) if forecast_available else None
         result["forecast_interpretation"] = "Missing probability is unknown, not zero rain risk; only the reported forecast horizon is covered."
         return result
+
+    @staticmethod
+    def final_result(state: dict[str, Any]) -> dict[str, Any]:
+        classification = dict(state.get("final_classification") or {})
+        confirmed = int(classification.get("position", 0) or 0) > 0
+        return {"result_confirmed": confirmed,
+                "final_classification": classification if confirmed else None,
+                "result_source": "game_final_classification" if confirmed else None,
+                "result_interpretation": (
+                    "The game's final classification is confirmed for this session and remains valid after telemetry pauses or disconnects. Live gaps are not the result."
+                    if confirmed else "No final classification has been received for this session; live position does not establish the final result."
+                )}
 
     async def get_standings(
         self,
@@ -532,6 +545,7 @@ class TelemetryTools:
                 if abs(driver["position"] - position) <= radius
             ]
         return {
+            **self.final_result(state),
             "drivers": [
                 {
                     "position": driver["position"],
@@ -1071,6 +1085,12 @@ class TelemetryTools:
         deterministic state the other tools report.
         """
         state = await self.store.snapshot_analysis()
+        result = self.final_result(state)
+        if result["result_confirmed"]:
+            classification = result["final_classification"]
+            return {**result, "available": True, "position": classification["position"],
+                    "headline": f"Final classification confirmed: P{classification['position']}.",
+                    "race_completed": True, "lap": state.get("current_lap"), "total_laps": state.get("total_laps")}
         player = self._resolve_driver(state, "me")
         position = int(state.get("player_position", 0) or 0)
         running = sorted(
@@ -1511,8 +1531,19 @@ class TelemetryTools:
         match = self._resolve_driver(state, driver)
         if not match:
             return {"available": False, "reason": "Driver not found."}
+        observed = list(match.get("lap_history", []) or [])
+        completed = [item for item in observed if int(item.get("lap_ms", 0) or 0) > 0]
+        valid = [item for item in completed if int(item.get("valid_flags", 0) or 0) & 1]
+        best = min(valid, key=lambda item: int(item["lap_ms"])) if valid else None
+        completed_numbers = {int(item.get("lap_num", 0) or 0) for item in completed}
+        expected_completed = max(0, int(match.get("current_lap", 0) or 0) - 1)
+        observed_through = max(completed_numbers, default=0)
+        complete_history = bool(completed_numbers) and completed_numbers == set(range(1, observed_through + 1)) and observed_through >= expected_completed
+        def describe_best(item: dict[str, Any] | None) -> dict[str, Any] | None:
+            return {"lap_num": int(item["lap_num"]), "lap_ms": int(item["lap_ms"]),
+                    "lap": fmt_ms(int(item["lap_ms"])), "valid_flags": int(item["valid_flags"])} if item else None
         laps = []
-        for item in match.get("lap_history", [])[-n_laps:]:
+        for item in observed[-n_laps:]:
             laps.append(
                 {
                     **item,
@@ -1527,12 +1558,28 @@ class TelemetryTools:
             "available": bool(laps),
             "driver": match["name"],
             "laps": laps,
+            "history_source": "game_session_history",
+            "session_uid": str(state.get("session_uid", 0)),
+            "history_complete_to_current_lap": complete_history,
+            "completed_laps_observed": len(completed_numbers),
+            "history_observed_through_lap": observed_through or None,
+            "session_best_valid_lap": describe_best(best) if complete_history else None,
+            "best_valid_observed_lap": describe_best(best),
+            "returned_window": {"requested_entries": n_laps, "returned_entries": len(laps)},
+            "interpretation": (
+                "laps is only the requested recent window. session_best_valid_lap uses all complete current-session "
+                "game history and validity bit0, before truncating that window; null means full-session coverage "
+                "is not established. best_valid_observed_lap is only the best in the available history when "
+                "earlier completed laps are missing. Never label a recent-window minimum the session best."
+            ),
             "restricted": match.get("restricted", False),
             "staleness_s": max(
                 0.0,
-                float(state.get("last_packet_at", 0))
+                float(state.get("session_time_s", 0))
                 - float(match.get("history_updated_at", 0)),
-            ),
+            ) + max(0.0, time.time() - float(state.get("last_packet_at", 0))) if (
+                observed and state.get("session_time_s") is not None and state.get("last_packet_at")
+            ) else None,
         }
 
     async def get_rival_sector_comparison(self, driver: str) -> dict[str, Any]:
@@ -1596,6 +1643,7 @@ class TelemetryTools:
             "compound": match.get("tyre_compound") if match else None,
             "tyre_age": match.get("tyre_age") if match else None,
             "best_lap": fmt_ms(min(times)) if times else None,
+            "best_lap_scope": "recent returned valid laps only; use session_best_valid_lap for the whole session",
             "median_lap": fmt_ms(int(median(times))) if times else None,
             "sample_size": len(times),
             "prediction_note": "Prediction confidence improves after at least three valid laps on the current stint.",
@@ -3207,7 +3255,7 @@ class TelemetryTools:
             ),
             (
                 "get_driver_lap_history",
-                "Get exact recent lap and sector history for a driver or the player.",
+                "Get exact recent lap/sector history plus best valid lap from all available current-session history. Includes explicit session coverage; recent-window best is not session best.",
                 {
                     "driver": {"type": "string"},
                     "n_laps": {"type": "integer", "minimum": 1, "maximum": 20},
