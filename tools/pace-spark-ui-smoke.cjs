@@ -14,7 +14,7 @@ const carStart = html.indexOf('function renderLiveCar(');
 const carRenderer = html.slice(carStart, html.indexOf('function renderRaceControl(', carStart));
 const damageStart = html.indexOf('function damageText(');
 const damageRenderer = html.slice(damageStart, html.indexOf('\nfunction ', damageStart + 1));
-const restartRenderer = html.slice(html.indexOf('function redFlagRestartDisplay('), html.indexOf('function renderTyreDegradation('));
+const restartRenderer = html.slice(html.indexOf('function confirmedSessionFinish('), html.indexOf('function renderTyreDegradation('));
 const strategyRenderer = html.slice(html.indexOf('function renderStrategy38('), html.indexOf('/* ---- Pre-race plan panel'));
 const strategyModule = fs.readFileSync(path.join(root, 'static/js/strategy.js'), 'utf8');
 
@@ -140,6 +140,25 @@ const strategyModule = fs.readFileSync(path.join(root, 'static/js/strategy.js'),
       assert.match(await page.locator('#strategyMain').textContent(), /Last confirmed · provisional:.*HARD/);
       await page.locator('#strategyCard').screenshot({path:path.join(output,`restart-provisional-drive-${width}-${deviceScaleFactor}x.png`)});
       results.push({width,deviceScaleFactor,scenario:'provisional-drive-strategy',errors});
+      const terminal={...red,final_classification:{position:2,laps:20},strategy:{...red.strategy,plans:[{feasible:true,legal:true,compounds:['MEDIUM','HARD'],box_laps:[12],stops_remaining:1}]}};
+      for(const connected of [true,false]){
+        await page.evaluate(state=>{renderStrategy38(state);strategyQA.renderCall(state);strategyQA.renderPlans(state);strategyQA.drawTimeline(state);},{...terminal,connected,telemetry_stale:!connected});
+        assert.equal(await page.locator('#strategyMain').textContent(),'Session complete · P2');
+        assert.equal(await page.locator('#stratInstruction').textContent(),'Session complete · P2');
+        assert.equal(await page.locator('#strategyPlans').textContent(),'');
+        assert.equal(await page.locator('#stratPlanRows button').count(),0);
+        assert.equal(await page.locator('#stratPlanCount').textContent(),'0 active plans');
+        assert.doesNotMatch(await page.locator('#strategyCard').textContent(),/BOX NOW|Fit fresh|staying out|stop due|change required/i);
+      }
+      await page.locator('#strategyCard').screenshot({path:path.join(output,`finished-drive-${width}-${deviceScaleFactor}x.png`)});
+      await page.evaluate(()=>{document.getElementById('strategy').hidden=false;document.getElementById('carCard').closest('main').hidden=true;});
+      await page.locator('#stratInstruction').locator('xpath=..').screenshot({path:path.join(output,`finished-strategy-${width}-${deviceScaleFactor}x.png`)});
+      await page.evaluate(state=>{renderStrategy38(state);strategyQA.renderCall(state);strategyQA.renderPlans(state);},{...terminal,session_identity:'9038043921811877952:0:0:1',race_control_phase:'green',red_flag_active:false,strategy_intent:{},final_classification:{}});
+      assert.match(await page.locator('#strategyMain').textContent(),/BOX NOW/);
+      assert.equal(await page.locator('#stratPlanRows button').count(),1);
+      assert.equal(await page.locator('#stratPlanStatus').textContent(),'');
+      assert.deepEqual(errors,[]);
+      results.push({width,deviceScaleFactor,scenario:'completed-drive-strategy-and-new-session',errors});
       await page.setContent('<link rel="stylesheet" href="/static/driver-dashboard/dashboard.css"><main id="qaDashboard"></main>');
       await page.addScriptTag({type:'module',content:"import {normalizeState} from '/static/driver-dashboard/model.mjs'; import {renderDashboard} from '/static/driver-dashboard/render.mjs'; import {cleanPreferences} from '/static/driver-dashboard/display.mjs'; window.renderSuspension=state=>document.getElementById('qaDashboard').innerHTML=renderDashboard('cockpit',normalizeState(state),cleanPreferences(null));"});
       await page.waitForFunction(()=>window.renderSuspension);

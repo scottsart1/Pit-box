@@ -18,6 +18,8 @@
   coverage and recent-window limits stated explicitly.
 - Confirmed final results remain available to the engineer after live
   telemetry stops, and the dashboard clearly marks the completed session.
+- Drive, Strategy and current pit advice stop offering racing instructions
+  after the game's final classification is received.
 
 ## Dashboard and reliability
 

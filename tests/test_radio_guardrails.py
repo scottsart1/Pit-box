@@ -126,7 +126,7 @@ async def test_strategy_no_change_keeps_instruction_in_one_sentence(stack) -> No
         strategy_spoken_signature="17:MEDIUM:1",
     )
     answer = await brain._fast_answer("any strategy updates")
-    assert answer == "No change — Box lap 17 for mediums."
+    assert answer == "Provisional strategy (confidence unreported); No change — Box lap 17 for mediums."
 
 
 @pytest.mark.asyncio

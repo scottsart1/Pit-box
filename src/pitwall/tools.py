@@ -2075,6 +2075,12 @@ class TelemetryTools:
         return state.get("analysis", {}).get("target", {})
 
     async def get_pit_strategy(self) -> dict[str, Any]:
+        state = await self.store.snapshot_analysis()
+        result = self.final_result(state)
+        if result["result_confirmed"]:
+            return {**result, "race_completed": True, "planning_available": False,
+                    "recommended": {}, "plans": [],
+                    "reason": "The race is complete; no further racing pit stop or live strategy alternative is needed."}
         return await self.strategy.get_plan()
 
     @staticmethod

@@ -756,7 +756,12 @@ function tyreDegradationInsight(s){
   return unavailable('Learning','Needs 3+ comparable clean laps after warm-up, with fuel data.');
 }
 /* Suspension tyre choices are separate from normal pit-lane calls. */
+function confirmedSessionFinish(s){
+  const result=s?.final_classification,position=result?.position;
+  return typeof position==='number'&&Number.isFinite(position)&&position>0?result:null;
+}
 function redFlagRestartDisplay(s){
+  if(confirmedSessionFinish(s))return null;
   if(!(s.red_flag_active||s.race_control_phase==='red_flag'||s.fia_flag==='red'))return null;
   const stale=s.connected===false||s.telemetry_stale===true;
   const candidate=s.strategy?.red_flag_restart||{};
@@ -770,6 +775,7 @@ function redFlagRestartDisplay(s){
 }
 /* Current tyres and the next stop, not the wear of a different final stint. */
 function tyreStintInsight(s){
+  if(confirmedSessionFinish(s))return {headline:'Session complete',stop:'Confirmed final result',warning:'Review recorded laps in Analysis.',tone:'muted',life:null};
   const finite=v=>typeof v==='number'&&Number.isFinite(v)?v:null;
   const unavailable={headline:'Tyre data unavailable',stop:'',warning:'',tone:'muted',life:null};
   if(s.connected===false||s.telemetry_stale===true)return unavailable;
@@ -896,6 +902,16 @@ const st=s.strategy||{},rec=st.recommended||{};/* An agreed stay-out tactic owns
 for(const[id,key]of Object.entries(PREF_FIELDS)){const el=$(id);if(!el||el===document.activeElement||el.dataset.dirty==='1')continue;el.value=String(prefs[key]||0)}$('wingPit').textContent=s.setup_recommendation?.pit_adjustment?.instruction||'Generate a setup in Setup Lab.';
 $('wakeEnabled').checked=!!s.wake_enabled;$('wakeStatus').textContent=s.wake_status||'disabled';$('wakeDiag').textContent=`phrase ${s.wake_phrase||'mark'} · mic ${Number(s.wake_input_rms||0).toFixed(0)} / trigger ${Number(s.wake_threshold_rms||0).toFixed(0)} RMS · ${s.wake_config_source||'default'} · accepted ${s.wake_trigger_count||0} · rejected ${s.wake_rejected_count||0} · ${s.wake_last_reason||'waiting'}`;$('wakeFooter').textContent=s.wake_armed?'Wake armed':(s.wake_enabled?(s.wake_status||'Wake enabled'):'Wake off');$('ptt').textContent=s.ptt_pressed?'RADIO OPEN':s.ptt_status;$('pttHelp').textContent=s.ptt_pressed?'Listening; release the button normally. Long natural pauses are protected.':s.ptt_status;$('pttDiag').textContent=`mode ${s.ptt_release_mode||'—'} · mask events ${s.ptt_mask_events||0} · last release ${s.ptt_release_reason||'—'}`;$('rate').textContent=`${Number(s.packet_rate_hz||0).toFixed(1)} pkt/s · UDP queue ${s.packet_queue_depth||0}/${s.packet_queue_capacity||0}`;$('llmFooter').textContent=s.llm_provider?`${s.llm_provider} · ${s.llm_model||'model pending'}`:'LLM pending';const p=s.proactive||{};$('queue').textContent=`${p.queued||0} proactive queued`;$('proactiveEnabled').checked=!!p.enabled;$('cadence').value=String(p.cadence_laps||2);if(document.activeElement!==$('brutalMode'))$('brutalMode').checked=!!s.brutal_mode;$('proactiveCard').classList.toggle('brutal-on',!!s.brutal_mode);$('proactiveState').textContent=`Every ${p.cadence_laps||2} analyzed lap(s); next due lap ${p.next_due_lap||'—'}.${s.brutal_mode?' Brutal mode on.':''}`;$('proactiveDiag').textContent=`${p.delivery_state||'idle'} · oldest wait ${p.oldest_wait_s||0}s · last spoken lap ${p.last_spoken_lap||0}`+(p.blocked_reason?` · HELD: ${p.blocked_reason}${p.blocked_for_s?` for ${p.blocked_for_s}s`:''}${p.blocked_calls>1?` (${p.blocked_calls} calls)`:''}`:'');$('proactiveDiag').classList.toggle('warn',!!p.blocked_reason&&Number(p.oldest_wait_s||0)>20);$('error').textContent=s.last_error||'';if((s.radio_log||[]).length!==lastRadio){lastRadio=(s.radio_log||[]).length;$('radio').textContent=(s.radio_log||[]).map(x=>`${x.role==='driver'?'DRIVER':'ENGINEER'}: ${x.text}`).join('\n\n');$('radio').scrollTop=$('radio').scrollHeight}$('currentSetup').innerHTML=setupFields(s.car_setup||{})}
 function renderStrategy38(s){
+  const finished=confirmedSessionFinish(s);
+  if(finished){
+    $('strategyMain').textContent=`Session complete · P${finished.position}`;
+    $('strategyReason').textContent='Confirmed final result. Review recorded laps in Analysis.';
+    for(const id of ['strategyWarning','strategyTyreReason','strategyMeta','strategyRationale','strategyChange','neutralisation','compoundRule'])$(id).textContent='';
+    $('strategyIntent').style.display='none';$('strategyHold').style.display='none';
+    $('strategyCard').className='card';$('stintClock').textContent='Session complete';
+    $('strategyPlans').innerHTML='';
+    return;
+  }
   const st=s.strategy||{},rec=st.recommended||{},intent=s.strategy_intent||{},stint=tyreStintInsight(s);
   const restart=redFlagRestartDisplay(s);
   if(restart){

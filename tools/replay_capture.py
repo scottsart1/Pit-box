@@ -41,7 +41,7 @@ def replay(
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     sent = 0
     first_ns: int | None = None
-    started = time.monotonic()
+    started: float | None = None
     try:
         for frame in CaptureReader(path):
             if first_ns is None:
@@ -49,6 +49,11 @@ def replay(
             offset_s = (frame.monotonic_ns - first_ns) / 1e9
             if offset_s < start_offset_s:
                 continue
+            # CaptureReader validates the complete recording before yielding.
+            # Do not turn that initial scan (or skipped prefix) into a burst of
+            # overdue packets when the replay finally starts.
+            if started is None:
+                started = time.monotonic()
             target = started + (offset_s - start_offset_s) / max(0.01, speed)
             delay = target - time.monotonic()
             if delay > 0:

@@ -21,12 +21,13 @@ const get=id=>{if(!nodes.has(id))nodes.set(id,new Element());return nodes.get(id
 const document={getElementById:get,createElement:tag=>new Element(tag),body:new Element()};
 const context=vm.createContext({$:get,document,esc:v=>String(v).replaceAll('<','&lt;')});
 const slice=(start,end)=>html.slice(html.indexOf(start),html.indexOf(end,html.indexOf(start)));
-vm.runInContext(slice('function redFlagRestartDisplay(','function renderTyreDegradation('),context);
+vm.runInContext(slice('function confirmedSessionFinish(','function renderTyreDegradation('),context);
 vm.runInContext(slice('function renderStrategy38(','/* ---- Pre-race plan panel'),context);
 vm.runInContext(slice('function renderRaceControl(','/* Compact status strip'),context);
 const source=fs.readFileSync(new URL('../static/js/strategy.js',import.meta.url),'utf8');
 const strategy=await import('data:text/javascript;base64,'+Buffer.from(source).toString('base64'));
 globalThis.document=document;
+globalThis.confirmedSessionFinish=context.confirmedSessionFinish;
 const state=()=>({connected:true,session_identity:'9038043921811877951:0:0:0',race_control_phase:'red_flag',current_lap:12,total_laps:20,
   strategy_intent:{active:true,direction:'stay_out',intent:'overcut'},strategy_hold:{active:true},
   tyre:{compound:'MEDIUM',wear:[30,32,29,28],age_laps:10},
@@ -102,6 +103,31 @@ test('Missing or inactive restart advice cannot become a provisional plan',()=>{
     context.renderStrategy38(s);assert.doesNotMatch(get('strategyMain').textContent,/HARD|MEDIUM|BOX/);
     assert.equal(normalizeState(s).provisionalRestart,false);
   }
+});
+
+test('Confirmed final results replace fresh or stale pit and restart calls on Drive and Strategy',()=>{
+  for(const connected of [true,false]){
+    const running=state();context.renderStrategy38(running);strategy.renderCall(running);strategy.renderPlans(running);
+    const finished={...running,connected,telemetry_stale:!connected,final_classification:{position:2,laps:20}};
+    context.renderStrategy38(finished);strategy.renderCall(finished);strategy.renderPlans(finished);
+    for(const id of ['strategyMain','stratInstruction'])assert.equal(get(id).textContent,'Session complete · P2');
+    for(const id of ['strategyReason','strategyMeta','strategyRationale','strategyChange','neutralisation','stratWhy','stratChange','stratMeta','stratNotice','stratRule'])assert.doesNotMatch(get(id).textContent,/BOX|restart|suspension|staying out|to the finish|change required/i);
+    assert.equal(get('strategyPlans').innerHTML,'');assert.equal(get('stratPlanRows').children.length,0);
+    assert.equal(get('stratPlanCount').textContent,'0 active plans');assert.equal(get('stintClock').textContent,'Session complete');
+    assert.equal(context.redFlagRestartDisplay(finished),null);
+    assert.equal(context.tyreStintInsight(finished).headline,'Session complete');
+  }
+});
+
+test('A new unfinished session restores original strategy and Adopt controls without retained completion',()=>{
+  const completed={...state(),final_classification:{position:1}};
+  strategy.renderCall(completed);strategy.renderPlans(completed);
+  const next={...state(),session_identity:'9038043921811877952:0:0:1',race_control_phase:'green',strategy_intent:{},final_classification:{}};
+  context.renderStrategy38(next);strategy.renderCall(next);strategy.renderPlans(next);
+  assert.match(get('strategyMain').textContent,/BOX NOW/);assert.match(get('stratInstruction').textContent,/BOX NOW/);
+  assert.equal(get('stratPlanCount').textContent,'1 plan');assert.equal(get('stratPlanStatus').textContent,'');
+  assert.equal(get('stratPlanRows').children[0].children.at(-1).children[0].textContent,'Adopt');
+  for(const position of [null,0,-1,'1',NaN,Infinity])assert.equal(context.confirmedSessionFinish({final_classification:{position}}),null);
 });
 
 test('Every dashboard layout shows one provisional restart panel without changing selected widgets',()=>{

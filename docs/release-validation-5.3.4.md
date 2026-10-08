@@ -78,9 +78,15 @@ historical segment is useful targeted evidence and does not satisfy it.
 - A confirmed final result was refused as stale and the dashboard returned to
   its waiting screen. Verify the authoritative result survives the end of live
   telemetry and is cleared on a new session.
+- Drive, Strategy and actual answers to current pit requests retained live
+  stay-out instructions after the confirmed finish. Verify completed-session
+  wording, cleared action controls and terminal tool responses together.
 - The intermediate full tablet replay lost wireless transport packets and its
   ADB forwarding connection. Preserve the failed reception and monitor record;
   a repaired-source run must satisfy the complete counted replay gate.
+- Capture validation originally consumed the replay clock before the first
+  packet, causing a catch-up burst. Both the release replay harness and the
+  standalone capture command start their clocks after initialization.
 
 ## Intermediate regression evidence
 

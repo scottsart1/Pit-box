@@ -87,6 +87,22 @@ async def test_session_change_discards_narration_before_using_new_session_plan(s
     assert not any(item["role"] == "engineer" for item in (await store.snapshot_analysis())["radio_log"])
 
 
+@pytest.mark.asyncio
+async def test_confirmed_finish_during_generation_replaces_live_plan_even_if_plan_is_unchanged(stack, monkeypatch):
+    store, brain = await radio(stack, monkeypatch, plan())
+
+    async def generate(**kwargs):
+        await kwargs["execute_tool"]("get_pit_strategy", {})
+        await store.update(final_classification={"position": 1, "laps": 31})
+        return ProviderResult("Stay out and finish the lap.", "test", "test", 1)
+
+    monkeypatch.setattr(brain.router, "generate", generate)
+    answer = await brain.ask("Give me the full pit strategy and its best alternative.")
+    assert answer.startswith("Race complete; final classification P1 is confirmed")
+    assert "stay out" not in answer.lower() and "Provisional" not in answer
+    assert (await store.snapshot_analysis())["llm_model"] == "strategy-refresh-guard"
+
+
 @pytest.mark.parametrize("utterance", [
     "What if we box earlier for hards instead?",
     "Compare my current pit strategy with my previous race.",

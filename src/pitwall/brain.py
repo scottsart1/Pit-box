@@ -621,6 +621,8 @@ class EngineerBrain:
 
     def _complete_strategy_answer(self, plan: dict[str, Any], state: dict[str, Any], prefix: str) -> str:
         """Describe one frozen, authoritative complete plan without reranking."""
+        if finished := self._finished_strategy_answer(state):
+            return finished
         restart = plan.get("red_flag_restart", {})
         if restart.get("active") and restart.get("instruction"):
             return self.qualify_strategy_text(prefix + str(restart["instruction"]), plan)
@@ -1627,6 +1629,29 @@ class EngineerBrain:
                                              "previous", "last race", "last session", "yesterday", "history", "historical",
                                              "rival", "field", "everyone", "all drivers", "compare")))
 
+    @classmethod
+    def _requests_current_pit_instruction(cls, state: dict[str, Any], utterance: str) -> bool:
+        text = normalize_text(utterance)
+        if match_drivers(state.get("drivers", []), utterance) or has_any_phrase(text, (
+            "what if", "if i", "if we", "suppose", "would", "should have", "could have", "why",
+            "previous", "last race", "last session", "next race", "next session", "historical", "history",
+            "earlier", "what was", "what were", "did i", "did we", "review", "debrief",
+            "compare", "versus", "rival", "car ahead", "car behind", "leader", "teammate",
+        )):
+            return False
+        return cls._requests_current_strategy_plan(state, utterance) or has_any_phrase(text, (
+            "should i box", "should i pit", "should we box", "should we pit",
+            "when should i box", "when should i pit", "when do i box", "box now", "pit now", "stay out",
+        ))
+
+    @staticmethod
+    def _finished_strategy_answer(state: dict[str, Any]) -> str | None:
+        result = TelemetryTools.final_result(state)
+        if not result["result_confirmed"]:
+            return None
+        position = int(result["final_classification"]["position"])
+        return f"Race complete; final classification P{position} is confirmed, so no further racing pit stop or live strategy alternative is needed."
+
     async def _fast_answer_unchecked(self, utterance: str) -> str | None:
         """Answer operational radio requests from state before consulting a model.
 
@@ -1636,6 +1661,10 @@ class EngineerBrain:
         """
         text = self._normalize_text(utterance)
         state = await self.store.snapshot_analysis()
+
+        if self._requests_current_pit_instruction(state, utterance):
+            if finished := self._finished_strategy_answer(state):
+                return finished
 
         if self._requests_current_final_result(state, utterance):
             result = self.tools.final_result(state)
@@ -2389,7 +2418,13 @@ class EngineerBrain:
             if not await self.store.matches_session(guard_origin):
                 raise SessionChangedError("Session changed; the previous strategy response was discarded.")
             latest_plan = latest_state.get("strategy", {})
-            if self._material_plan_identity(used_strategy) != self._material_plan_identity(latest_plan):
+            finished = self._finished_strategy_answer(latest_state)
+            if finished:
+                result.text = finished
+                used_strategy = {}
+                result.provider = "local"
+                result.model = "strategy-refresh-guard"
+            elif self._material_plan_identity(used_strategy) != self._material_plan_identity(latest_plan):
                 result.text = self._complete_strategy_answer(latest_plan, latest_state, "Telemetry updated while checking; ")
                 used_strategy = latest_plan
                 result.provider = "local"

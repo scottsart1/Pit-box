@@ -53,6 +53,7 @@ function post(path, body) {
 /* ---- Current call --------------------------------------------------------- */
 
 function redFlagRestart(s) {
+  if (globalThis.confirmedSessionFinish?.(s)) return null;
   if (!(s.red_flag_active || s.race_control_phase === "red_flag" || s.fia_flag === "red")) return null;
   const stale = s.connected === false || s.telemetry_stale === true;
   const plan = s.strategy?.red_flag_restart || {};
@@ -140,6 +141,16 @@ function finishDisplay(plan) {
 }
 
 function renderCall(s) {
+  const finished = globalThis.confirmedSessionFinish?.(s);
+  if (finished) {
+    byId("stratConfidence").textContent = "Confirmed final result";
+    byId("stratConfidence").dataset.state = "healthy";
+    byId("stratInstruction").textContent = `Session complete · P${finished.position}`;
+    byId("stratNotice").textContent = "Review recorded laps and session history in Analysis.";
+    for (const id of ["stratWhy", "stratChange", "stratMeta", "stratReasoning", "stratLearning", "stratRule"]) byId(id).textContent = "";
+    byId("stratHold").hidden = true;
+    return;
+  }
   const st = s.strategy || {};
   const rec = st.recommended || {};
   const chip = byId("stratConfidence");
@@ -233,6 +244,10 @@ function planKey(plan) {
 }
 
 function adoptPlan(plan, statusNode) {
+  if (globalThis.confirmedSessionFinish?.(view.lastState)) {
+    statusNode.textContent = "Session complete. No plan can be adopted.";
+    return;
+  }
   if (!canAdopt(plan)) {
     statusNode.textContent = "Only feasible, legal plans can be adopted.";
     statusNode.dataset.tone = "error";
@@ -262,9 +277,17 @@ function adoptPlan(plan, statusNode) {
 function renderPlans(s) {
   const st = s.strategy || {};
   const restart = redFlagRestart(s);
-  byId("stratPlansHeading").textContent = restart ? "Compare restart tyres" : "Compare other plans";
+  const finished = globalThis.confirmedSessionFinish?.(s);
+  byId("stratPlansHeading").textContent = finished ? "Session complete" : restart ? "Compare restart tyres" : "Compare other plans";
   const planHead = byId("stratPlanRows").closest?.("table")?.tHead;
-  if (planHead) planHead.hidden = !!restart;
+  if (planHead) planHead.hidden = !!(restart || finished);
+  if (finished) {
+    view.planSignature = "session-complete";
+    byId("stratPlanCount").textContent = "0 active plans";
+    byId("stratPlanRows").replaceChildren();
+    byId("stratPlanStatus").textContent = "Confirmed final result. No further stop is scheduled.";
+    return;
+  }
   if (restart) {
     view.planSignature = "red-flag";
     const choices = [["Primary", restart.primary], ["Alternative", restart.alternative]].filter(([, plan]) => plan);
@@ -283,7 +306,7 @@ function renderPlans(s) {
     return;
   }
   const plans = st.plans || [];
-  if (view.planSignature === "red-flag") byId("stratPlanStatus").textContent = "";
+  if (["red-flag", "session-complete"].includes(view.planSignature)) byId("stratPlanStatus").textContent = "";
   const signature = plans.map(planKey).join(";");
   byId("stratPlanCount").textContent = `${plans.length} plan${plans.length === 1 ? "" : "s"}`;
   if (signature === view.planSignature) return;
@@ -350,6 +373,12 @@ function drawTimeline(s) {
   const height = canvas.height;
   context.clearRect(0, 0, width, height);
   view.timelineGeometry = null;
+  if (globalThis.confirmedSessionFinish?.(s)) {
+    context.fillStyle = "#91a6b8";
+    context.font = "14px Segoe UI, system-ui, sans-serif";
+    context.fillText("Session complete. Review recorded laps in Analysis.", 20, 34);
+    return;
+  }
   if (redFlagRestart(s)) {
     context.fillStyle = "#91a6b8";
     context.font = "14px Segoe UI, system-ui, sans-serif";

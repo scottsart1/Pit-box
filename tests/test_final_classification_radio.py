@@ -61,3 +61,59 @@ def test_hypothetical_rival_and_history_queries_are_not_replaced(question):
 def test_named_driver_result_does_not_use_player_classification():
     state={"drivers":[{"name":"Norris","driver_id":54,"car_index":0,"position":2}]}
     assert not EngineerBrain._requests_current_final_result(state,"What is Norris's final classification?")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fresh", [True, False])
+@pytest.mark.parametrize("question", ["Should I box now?", "Give me the full pit strategy and its best alternative."])
+async def test_confirmed_finish_suppresses_live_pit_instructions_without_mutating_plan(stack, monkeypatch, fresh, question):
+    store, db, _, _, _, tools = stack
+    for group in (1, 2, 6, 7, 8, 10):
+        await store.mark_packet(2026, 26, 1234, packet_id=group)
+    old_plan = {"recommended": {"box_lap": 31, "fit_compound": "SOFT", "feasible": True, "legal": True}}
+    await store.update(final_classification=RESULT, current_lap=31, total_laps=31, strategy=old_plan)
+    if not fresh:
+        await store.update(connected=False, last_packet_at=1)
+    brain = EngineerBrain(store, tools, db)
+
+    async def forbidden(*args, **kwargs):
+        raise AssertionError("A confirmed finish needs neither a provider nor another live plan calculation")
+
+    monkeypatch.setattr(brain.router, "generate", forbidden)
+    monkeypatch.setattr(tools.strategy, "get_plan", forbidden)
+    answer = await brain.ask(question)
+    assert answer.startswith("Race complete; final classification P1 is confirmed")
+    assert "no further racing pit stop or live strategy alternative is needed" in answer
+    assert "stay out" not in answer.lower() and "finish the lap" not in answer.lower()
+    result = await tools.get_pit_strategy()
+    assert result["race_completed"] is True and result["planning_available"] is False
+    assert result["recommended"] == {} and result["plans"] == []
+    assert result["final_classification"] == RESULT
+    assert (await store.snapshot_analysis())["strategy"] == old_plan
+
+
+@pytest.mark.asyncio
+async def test_new_session_and_unconfirmed_final_lap_still_allow_planning(stack, monkeypatch):
+    store, db, _, _, _, tools = stack
+    await store.mark_packet(2026, 26, 1234, packet_id=8)
+    await store.update(final_classification=RESULT)
+    await store.mark_packet(2026, 26, 5678, packet_id=1)
+    await store.update(current_lap=31, total_laps=31)
+    expected = {"recommended": {"box_lap": 31}}
+
+    async def plan():
+        return expected
+
+    monkeypatch.setattr(tools.strategy, "get_plan", plan)
+    assert await tools.get_pit_strategy() == expected
+    assert EngineerBrain._finished_strategy_answer(await store.snapshot_analysis()) is None
+
+
+@pytest.mark.parametrize("question", [
+    "What if I box now?", "What was my pit strategy during this race?",
+    "Compare my pit strategy with the previous race.", "What is the car ahead's pit strategy?",
+    "Should Norris box now?", "Give me the best strategy for the next race.",
+])
+def test_terminal_pit_guard_preserves_hypothetical_history_and_other_driver_scope(question):
+    state = {"drivers": [{"name": "Norris", "driver_id": 54}]}
+    assert not EngineerBrain._requests_current_pit_instruction(state, question)
