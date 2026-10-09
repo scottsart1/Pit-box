@@ -1,8 +1,8 @@
-# Your Pit Box 5.3.2 — AI race engineer and driver dashboard
+# Your Pit Box 5.3.4 — AI race engineer and driver dashboard
 
 [Download Windows or Android](https://yourpitbox.com/#download),
 [try the Driver Dashboard](https://your-pit-box-driver-dashboard.sarthakvij123450.chatgpt.site/),
-or read the [release verification](docs/release-qa-5.3.2.md).
+or read the [release notes](docs/release-notes-5.3.4.md).
 
 Your Pit Box receives **F1 26** telemetry (UDP format **2026**) from a PS5, runs deterministic
 strategy/corner/setup analysis locally, keeps persistent SQLite history, answers spoken questions,
@@ -105,6 +105,54 @@ Only enable `PITWALL_WEB_LAN_ACCESS=true` when a phone/tablet needs the
 dashboard. Bind the web host to `0.0.0.0`, set a long
 `PITWALL_WEB_ACCESS_TOKEN`, and keep it on a trusted LAN. Your Pit Box never opens a
 router or firewall to the public internet automatically.
+
+## What changed in 5.3.4
+
+**Red flags** produce a restart tyre plan: a preferred choice and an
+alternative, using your available sets, their wear and any later stops.
+Provisional restart choices stay visible through a confirmed suspension
+telemetry gap, labelled with the last confirmed status, and suspension advice
+remains available through menu pauses.
+
+**Strategy answers** keep their uncertainty and refresh if the primary or
+alternative plan changes while the engineer is responding. Complete plans state
+the recorded condition that would change the call, and narration falls back to
+a grounded summary when the model misses its deadline. Clearing a driver
+override restores automatic planning immediately. Rival gap trends say whether
+a car is pulling away or catching, and session-best answers use the complete
+session history, stating coverage and recent-window limits.
+
+**Finished races stay finished.** The confirmed result remains available to the
+engineer after live telemetry stops and the dashboard marks the session
+complete. Drive, Strategy and pit advice stop offering racing instructions once
+the game's final classification arrives.
+
+**Old data cannot pose as new.** Fuel, tyre, temperature and energy reports
+check their own telemetry freshness and distinguish missing values from measured
+zeros. Unrelated fresh packets can no longer revive old position, lap, rival or
+race-control readings, or turn a provisional suspension plan into a live
+instruction. The compact overlay distinguishes live, unavailable, suspended and
+completed sessions. Overtake Mode and Active Aero use updated language, and
+legacy DRS stays separate.
+
+**Recorded history** is reconciled with the game's own session history across
+the whole field, including laps missed during a suspension; missing or
+inconsistent telemetry stays out of setup learning. Repeated history packets are
+coalesced so the archive keeps up. Flashback recovery revalidates timing-only
+laps and keeps abandoned timelines from returning after a restart. A deleted
+session can be recorded again cleanly, and deleting one restart keeps the
+history another restart shares.
+
+**Analysis and Android.** A/B sector deltas and lap-time distributions show
+accepted samples, exclusions and the limits of cross-session comparisons. The
+strategy decision log shows estimated finishes and complete multi-stop
+schedules. Pace charts are sharper on phones and tablets, and Lap Lab and
+History fit phone screens. Android speech stops promptly when interrupted,
+rebuilt dashboards refresh without replacing saved data, and walkthrough
+completion survives dashboard port changes.
+
+Windows remains an explicitly unsigned direct-download installer, and Android
+keeps the existing signing identity.
 
 ## What changed in 5.3.2
 
