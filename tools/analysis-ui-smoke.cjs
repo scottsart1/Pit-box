@@ -489,11 +489,15 @@ test('Pickers leave out abandoned and superseded timelines and never default to 
     const values = [...h.id('candidateLapSelect').options].map(option => option.value).filter(Boolean);
     assert.deepEqual(values.sort(), ['a2', 'b', 't']);
     assert.equal(h.id('candidateLapSelect').value, 'b', 'the fastest lap with telemetry opens');
+    // The reference picker lists the same driver's laps: the timing-only lap
+    // is there, labelled, and cannot be chosen.
+    const driver = h.id('referenceDriverSelect');
+    driver.value = 'car:0'; driver.dispatchEvent(new h.w.Event('change')); await settle();
     const timingOption = [...h.id('referenceLapSelect').options].find(option => option.value === 't');
-    if (timingOption) {
-      assert.equal(timingOption.disabled, true);
-      assert.match(timingOption.textContent, /timing only/);
-    }
+    assert.ok(timingOption, 'timing-only lap listed');
+    assert.equal(timingOption.disabled, true);
+    assert.match(timingOption.textContent, /timing only/);
+    assert.notEqual(h.id('referenceLapSelect').value, 't');
   } finally { h.close(); }
 });
 
@@ -626,5 +630,254 @@ test('Deleting a session announces it and compares again when it supplied the re
     assert.deepEqual(deleted, ['s2']);
     assert.equal(references, 2, 'references are fetched again without the deleted session');
     assert.equal(h.id('comparisonDelta').textContent, 'Unavailable');
+  } finally { h.close(); }
+});
+
+// ------------------------------------------- Lap Lab review findings (5.4.0)
+const timingOnly = { context_observed: false, learning_exclusions: ['missing_telemetry'] };
+
+test('Identity revisions give one picker row per car and lap', async () => {
+  const items = [];
+  for (const number of [1, 2, 3]) {
+    items.push({ ...lap(`p${number}`), lap_number: number, session_car_id: 'rev0', created_at: '2026-10-08T13:00:00Z' });
+    items.push({ ...lap(`q${number}`), lap_number: number, session_car_id: 'rev1', coverage_ratio: 0, engineering_json: JSON.stringify(timingOnly), created_at: '2026-10-08T13:30:00Z' });
+  }
+  // A car outside the trace scope: timing-only rows under both revisions.
+  items.push({ ...lap('m1'), car_index: 1, display_name: 'Martins', lap_number: 1, session_car_id: 'mar0', coverage_ratio: 0, timeline_epoch: 0, created_at: '2026-10-08T13:00:00Z' });
+  items.push({ ...lap('m2'), car_index: 1, display_name: 'Martins', lap_number: 1, session_car_id: 'mar1', coverage_ratio: 0, timeline_epoch: 1, created_at: '2026-10-08T13:30:00Z' });
+  const h = await harness(withLaps(items));
+  try {
+    await h.api.selectSession('s1'); await settle();
+    const drivers = [...h.id('candidateDriverSelect').options].map(option => option.textContent);
+    assert.ok(drivers.some(text => /^Driver · 3 laps$/.test(text)), drivers.join(' | '));
+    assert.ok(drivers.some(text => /^Martins · 1 lap, timing only$/.test(text)), drivers.join(' | '));
+    const select = h.id('candidateDriverSelect');
+    select.value = 'car:0'; select.dispatchEvent(new h.w.Event('change')); await settle();
+    const values = [...h.id('candidateLapSelect').options].map(option => option.value).filter(Boolean).sort();
+    assert.deepEqual(values, ['p1', 'p2', 'p3']);
+  } finally { h.close(); }
+});
+
+test('A slow session name never holds up the automatic comparison and is filled in when it arrives', async () => {
+  const slowName = deferred();
+  const h = await harness({
+    '/api/v1/laps/a/references': () => response({ items: [{ lap_id: 'r9', session_id: 's9', driver: 'Rival', lap_number: 7, lap_time_ms: 89500, suggested: true, compatibility: { class: 'strict' }, reasons: ['same track/layout'] }] }),
+    '/api/v1/sessions/s9': () => slowName.promise,
+  });
+  try {
+    await h.api.selectSession('s1'); await h.api.openLap('a'); await settle();
+    assert.equal(posts(h).length, 1, 'compared without waiting for the session name');
+    assert.match(h.id('lapLabStatus').textContent, /from another session; its setup/);
+    assert.doesNotMatch(h.id('lapLabStatus').textContent, /another session \(another session\)/);
+    slowName.resolve(response({ session: { id: 's9', session_type: 'Qualifying 1', started_at: '2026-10-01T12:00:00Z' } }));
+    await settle(); await settle();
+    assert.match(h.id('lapLabStatus').textContent, /another session \(Qualifying 1/);
+    assert.match(h.id('referenceDriverSelect').textContent, /Rival · Qualifying 1/);
+  } finally { h.close(); }
+});
+
+test('The automatic comparison keeps playback running at the same distance', async () => {
+  const slowReferences = deferred();
+  const h = await harness({ '/api/v1/laps/a/references': () => slowReferences.promise });
+  try {
+    await h.api.selectSession('s1'); const opening = h.api.openLap('a'); await settle();
+    h.id('playbackToggle').click(); assert.equal(h.timers.size, 1);
+    h.id('playbackNext').click(); h.id('playbackNext').click();
+    assert.equal(h.id('playbackDistance').textContent, '30 m');
+    slowReferences.resolve(response({ items: [{ lap_id: 'b', suggested: true, compatibility: { class: 'strict' } }] }));
+    await opening; await settle();
+    assert.match(h.id('lapLabStatus').textContent, /Comparison ready/);
+    assert.equal(h.timers.size, 1, 'still playing');
+    assert.equal(h.id('playbackToggle').textContent, 'Pause');
+    assert.equal(h.id('playbackDistance').textContent, '30 m');
+    assert.equal(h.id('playbackRange').value, '2');
+  } finally { h.close(); }
+});
+
+test('A refused comparison keeps the cursor and the slider on the same sample', async () => {
+  const refusal = deferred();
+  const h = await harness({ '/api/v1/comparisons': (url, options, route) => options.method === 'POST' ? refusal.promise : route(url, options) });
+  try {
+    // Opening lap a starts its automatic comparison, held pending here.
+    await h.api.selectSession('s1'); const opening = h.api.openLap('a'); await settle();
+    h.id('playbackNext').click(); h.id('playbackNext').click();
+    assert.equal(h.id('playbackRange').value, '2');
+    refusal.resolve(response({ detail: { message: 'Laps cannot be aligned' } }, 422)); await opening; await settle();
+    assert.match(h.id('lapLabStatus').textContent, /Laps cannot be aligned/);
+    assert.equal(h.id('playbackRange').value, '2');
+    assert.equal(h.id('playbackDistance').textContent, '30 m');
+  } finally { h.close(); }
+});
+
+test('Compare again keeps keyboard focus while its comparison runs', async () => {
+  const pending = deferred();
+  let calls = 0;
+  const h = await harness({ '/api/v1/comparisons': (url, options, route) => {
+    if (options.method !== 'POST') return route(url, options);
+    calls += 1;
+    return calls === 2 ? pending.promise : route(url, options);
+  } });
+  try {
+    h.id('tab-analysis').click(); await settle();
+    await h.api.selectSession('s1'); await h.api.openLap('a'); await settle();
+    const action = h.id('createComparison');
+    action.focus(); action.click();
+    assert.equal(h.w.document.activeElement, action);
+    assert.equal(action.getAttribute('aria-disabled'), 'true');
+    action.click();
+    assert.equal(posts(h).length, 2, 'a busy Compare again ignores clicks');
+    pending.resolve(response(comparison)); await settle();
+    assert.equal(h.w.document.activeElement, action);
+    assert.equal(action.hasAttribute('aria-disabled'), false);
+  } finally { h.close(); }
+});
+
+test('A hand-off into the selected session reads it again before saying a lap is gone', async () => {
+  let reads = 0;
+  const h = await harness({ '/api/v1/sessions/s1/laps': () => {
+    reads += 1;
+    return response({ items: reads === 1 ? [lap('a'), lap('b')] : [lap('a'), lap('b'), { ...lap('n'), lap_number: 9 }] });
+  } });
+  try {
+    await h.api.selectSession('s1'); await settle();
+    h.w.dispatchEvent(new h.w.CustomEvent('pitwall:open-lap', { detail: { sessionId: 's1', lapId: 'n' } }));
+    await settle(); await settle();
+    assert.equal(reads, 2);
+    assert.equal(h.id('candidateLapSelect').value, 'n');
+    assert.doesNotMatch(h.id('lapLabStatus').textContent, /no longer in the saved session/);
+  } finally { h.close(); }
+});
+
+test('After a failed session load, the next hand-off retries it', async () => {
+  let reads = 0;
+  const h = await harness({ '/api/v1/sessions/s1/laps': () => {
+    reads += 1;
+    return reads === 1 ? response({ detail: 'database is locked' }, 503) : response({ items: [lap('a'), lap('b')] });
+  } });
+  try {
+    h.w.dispatchEvent(new h.w.CustomEvent('pitwall:open-lap', { detail: { sessionId: 's1', lapId: 'a' } }));
+    await settle(); await settle();
+    assert.match(h.id('lapLabStatus').textContent, /could not be opened: database is locked/);
+    h.w.dispatchEvent(new h.w.CustomEvent('pitwall:open-lap', { detail: { sessionId: 's1', lapId: 'a' } }));
+    await settle(); await settle();
+    assert.equal(reads, 2);
+    assert.equal(h.id('candidateLapSelect').value, 'a');
+  } finally { h.close(); }
+});
+
+test('A pending hand-off stands down when the driver picks another session', async () => {
+  const slowS2 = deferred();
+  const h = await harness({ '/api/v1/sessions/s2': () => slowS2.promise });
+  try {
+    h.id('tab-analysis').click(); await settle();
+    h.w.dispatchEvent(new h.w.CustomEvent('pitwall:open-lap', { detail: { sessionId: 's2', lapId: 'c' } }));
+    await settle();
+    await h.api.selectSession('s1'); await settle();
+    slowS2.resolve(response({ session: session('s2') })); await settle(); await settle();
+    assert.equal(h.id('lapLabSessionSelect').value, 's1');
+    assert.doesNotMatch(h.id('lapLabStatus').textContent, /no longer in the saved session|could not be opened/);
+    assert.equal(h.calls.some(call => call.url.includes('/laps/c/trace')), false);
+  } finally { h.close(); }
+});
+
+test('A hand-off session that fails to load is named unavailable, not loading', async () => {
+  const h = await harness({ '/api/v1/sessions/s7': () => response({ detail: { message: "Saved session 's7' was not found" } }, 404) });
+  try {
+    h.w.dispatchEvent(new h.w.CustomEvent('pitwall:open-lap', { detail: { sessionId: 's7', lapId: 'z' } }));
+    await settle(); await settle();
+    for (const id of ['lapLabSessionSelect', 'reviewSessionSelect', 'fieldSessionSelect']) {
+      assert.equal(h.id(id).selectedOptions[0].textContent, 'Session unavailable', id);
+    }
+    assert.match(h.id('lapLabStatus').textContent, /could not be opened/);
+  } finally { h.close(); }
+});
+
+const deleteRoute = (url, options, route) => options.method === 'DELETE'
+  ? response(options.headers?.['X-Pitwall-Delete-Token'] ? { deleted: true } : { confirmation_token: 'token', impact: { records: {}, artifacts: [] } })
+  : route(url, options);
+const deleteFromLibrary = async (h, name) => {
+  h.id('tab-analysis').click(); await settle();
+  [...h.id('libraryRows').querySelectorAll('tr')].find(row => row.textContent.includes(name))
+    .querySelectorAll('button').forEach(item => { if (item.textContent === 'Delete') item.click(); });
+  await settle(); await settle();
+};
+
+test('Deleting a session that did not supply the chosen reference keeps the choice and its comparison', async () => {
+  const h = await harness({
+    '/api/v1/sessions/s2': deleteRoute,
+    '/api/v1/laps/a/references': () => response({ items: [
+      { lap_id: 'b', session_id: 's1', suggested: true, compatibility: { class: 'strict' } },
+      { lap_id: 'r2', session_id: 's2', driver: 'Rival', lap_number: 3, lap_time_ms: 89000, compatibility: { class: 'strict' } },
+    ] }),
+  });
+  try {
+    await h.api.selectSession('s1'); await h.api.openLap('a'); await settle();
+    assert.equal(posts(h).length, 1);
+    await deleteFromLibrary(h, 'Session s2');
+    assert.equal(posts(h).length, 1, 'no new comparison');
+    assert.equal(h.id('referenceLapSelect').value, 'b');
+    assert.match(h.id('lapLabStatus').textContent, /Session s2 deleted|Comparison ready/);
+    assert.notEqual(h.id('comparisonDelta').textContent, 'Unavailable');
+    assert.doesNotMatch(h.id('referenceDriverSelect').textContent, /Rival/);
+  } finally { h.close(); }
+});
+
+test('Deleting a session while references load never offers or compares its laps', async () => {
+  const slowReferences = deferred();
+  const h = await harness({ '/api/v1/sessions/s2': deleteRoute, '/api/v1/laps/a/references': () => slowReferences.promise });
+  try {
+    await h.api.selectSession('s1'); const opening = h.api.openLap('a'); await settle();
+    await deleteFromLibrary(h, 'Session s2');
+    slowReferences.resolve(response({ items: [{ lap_id: 'c', session_id: 's2', driver: 'Driver', lap_number: 2, suggested: true, compatibility: { class: 'strict' } }] }));
+    await opening; await settle();
+    assert.equal(posts(h).some(call => JSON.parse(call.options.body).reference.lap_id === 'c'), false);
+  } finally { h.close(); }
+});
+
+test('Superseded laps of the session never come back through the references list', async () => {
+  const items = [{ ...lap('a'), lap_time_ms: 88000 }, { ...lap('a2'), lap_number: 1, timeline_epoch: 1, lap_time_ms: 89000 }, { ...lap('b'), lap_number: 4 }];
+  const h = await harness({
+    ...withLaps(items),
+    '/api/v1/laps/b/references': () => response({ items: [
+      { lap_id: 'a', session_id: 's1', driver: 'Driver', lap_number: 1, lap_time_ms: 88000, suggested: true, compatibility: { class: 'strict' } },
+      { lap_id: 'a2', session_id: 's1', driver: 'Driver', lap_number: 1, lap_time_ms: 89000, compatibility: { class: 'strict' } },
+    ] }),
+  });
+  try {
+    await h.api.selectSession('s1'); await h.api.openLap('b'); await settle();
+    const thisSession = [...h.id('referenceDriverSelect').querySelectorAll('optgroup')].find(group => group.label === 'This session');
+    assert.equal(thisSession.querySelectorAll('option').length, 1, 'one entry per driver');
+    assert.equal(h.id('referenceLapSelect').value, 'a2');
+    assert.equal(posts(h).some(call => JSON.parse(call.options.body).reference.lap_id === 'a'), false);
+  } finally { h.close(); }
+});
+
+test('An abandoned lap opened from Session Review stays under its own driver', async () => {
+  const items = [
+    { ...lap('me1'), is_player: 1, display_name: 'Me', lap_number: 1 },
+    { ...lap('ai1'), car_index: 1, display_name: 'Rival', lap_number: 1, invalid_reason_mask: 3, valid: false },
+  ];
+  const h = await harness(withLaps(items));
+  try {
+    await h.api.selectSession('s1'); await h.api.openLap('ai1'); await settle();
+    assert.equal(h.id('candidateDriverSelect').value, 'car:1');
+    assert.match(h.id('candidateDriverSelect').selectedOptions[0].textContent, /^Rival/);
+    assert.equal(h.id('candidateLapSelect').value, 'ai1');
+    assert.match(h.id('candidateLapSelect').selectedOptions[0].textContent, /abandoned by a flashback/);
+  } finally { h.close(); }
+});
+
+test('A driver whose telemetry laps have no time still opens on a lap with telemetry', async () => {
+  const items = [
+    { ...lap('obs1'), lap_number: 1, lap_time_ms: null },
+    { ...lap('hist3'), lap_number: 3, coverage_ratio: 0, lap_time_ms: 91234 },
+  ];
+  const h = await harness(withLaps(items));
+  try {
+    await h.api.selectSession('s1'); await settle();
+    const select = h.id('candidateDriverSelect');
+    select.value = 'car:0'; select.dispatchEvent(new h.w.Event('change')); await settle();
+    assert.equal(h.id('candidateLapSelect').value, 'obs1');
+    assert.equal(h.calls.some(call => call.url.includes('/laps/obs1/references')), true);
   } finally { h.close(); }
 });

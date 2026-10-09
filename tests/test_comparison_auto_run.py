@@ -51,3 +51,19 @@ async def test_a_lap_a_flashback_abandoned_is_never_offered_as_a_reference(tmp_p
     offered = {item["lap_id"] for item in (await service.list_references(candidate_id))["items"]}
     assert reference_id not in offered
     assert other_id in offered
+
+
+@pytest.mark.asyncio
+async def test_an_older_timeline_of_a_lap_is_never_offered_as_a_reference(tmp_path: Path) -> None:
+    service, reference_id, candidate_id, other_id, database, _ = await _three_laps(tmp_path)
+    with sqlite3.connect(database.path) as db:
+        db.row_factory = sqlite3.Row
+        row = dict(db.execute("SELECT * FROM recorded_laps WHERE id=?", (other_id,)).fetchone())
+        newer = {**row, "id": f"{other_id}-e1", "timeline_epoch": int(row["timeline_epoch"]) + 1, "legacy_lap_id": None}
+        columns = ",".join(newer)
+        db.execute(f"INSERT INTO recorded_laps({columns}) VALUES ({','.join('?' for _ in newer)})", tuple(newer.values()))
+        db.commit()
+    offered = {item["lap_id"] for item in (await service.list_references(candidate_id))["items"]}
+    assert other_id not in offered
+    assert f"{other_id}-e1" in offered
+    assert reference_id in offered
