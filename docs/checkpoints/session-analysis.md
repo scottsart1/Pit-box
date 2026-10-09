@@ -92,8 +92,8 @@ checkpoint.
 | 5 | Frontend view, charts, Analyze session entry points | done (first version) |
 | 6 | Lap Lab driver -> lap pickers, auto + manual reference | done (first version) |
 | 7a | Regression pressure tests and fixes, backend | done |
-| 7b | Regression fixes, Session Analysis UI | **next** - see Remaining work 1 |
-| 7c | Regression fixes, Lap Lab pickers and auto-run | pending - Remaining work 2 |
+| 7b | Regression fixes, Session Analysis UI | in progress on branch `wf/session-analysis-ui` (separate worktree), to be merged |
+| 7c | Regression fixes, Lap Lab pickers and auto-run | done - reviewed adversarially, all findings fixed |
 | 7d | Browser smokes locally and on a PR; screenshots | pending - Remaining work 4 |
 | 8 | Squash-merge to `main`, CI builds | pending |
 | 9 | Production release (5.4.0, Android revision 37) | pending |
@@ -155,7 +155,7 @@ Each item needs a behaviour test.
      move, data tables for lap times, heatmap and timelapse.
    - Register `session-analysis` in `tools/analysis-ui-smoke.cjs`,
      `tools/onboarding-ui-smoke.cjs` and `tools/all-workspaces-ui-smoke.cjs`.
-2. **Lap Lab** (`workspaces.js`, Lap Lab markup):
+2. **Lap Lab** - done (see the log). Kept for reference:
    - Hide abandoned laps (`invalid_reason_mask & 2`); label unconfirmed and
      untraced laps; one option per driver/lap/timeline; default laps and the
      suggested reference must have telemetry (two real-race cars have
@@ -174,9 +174,8 @@ Each item needs a behaviour test.
    - Other-session reference labels show type and date; distinct accessible
      names for the four selects; keep focus on "Use suggested"; deleting the
      session that supplies the reference resets the comparison.
-3. **Docs**: replace "Analyze / reprocess" and "Compare laps" in
-   `docs/SHAKEDOWN_4_2.md` and `docs/PIT_WALL_4_2.md`; check every sentence of
-   `docs/release-notes-5.4.0.md` against the merged behaviour.
+3. **Docs**: guides updated; check every sentence of the Session Analysis
+   section of `docs/release-notes-5.4.0.md` against the merged behaviour.
 4. **Verification**: `python -m pytest tests -q`, `node --test
    tests/*.test.mjs`, every jsdom and Playwright smoke listed in
    `.github/workflows/android-apk.yml` (install `jsdom` and
@@ -219,3 +218,29 @@ Each item needs a behaviour test.
   official classification for order, laps, best laps and gaps; stop counts
   match except the two untraced cars (unknown, not 0) and the two retirements
   (the game counts the retirement as a stop).
+- **Checkpoint 7c.** Lap Lab (`workspaces.js`): pickers read the active branch
+  like Session Analysis (no abandoned rows, newest timeline per identity, one
+  row per car and lap across identity revisions, telemetry first); timing-only
+  laps are labelled and never a default or a reference; the suggested reference
+  is compared once the lap has played back, manual picks once the choice
+  settles (350 ms), Use suggested and Compare again at once; a late lap trace
+  never overwrites a comparison's status; playback keeps running and keeps its
+  distance when a comparison lands or is refused; hand-offs from Session
+  Analysis let the last pick win, reload a stale or failed session copy, and
+  stand down when the driver picks a session; other sessions are named by type
+  and date without delaying the comparison; deleting a session drops its laps
+  and recompares only when it supplied the chosen reference; the server no
+  longer offers abandoned or superseded laps as references. `pitwall:session-deleted`
+  is dispatched for Session Analysis. Smoke: `tools/analysis-ui-smoke.cjs` (44
+  cases); layout: `tools/lap-lab-layout-ui-smoke.cjs` (six sizes).
+- **Comparisons and Field corners.** Comparisons are stored per pair (input
+  hash); repeating a pair keeps its row and timestamp, so browsing does not
+  change Field corners. The first comparison of a new pair (an automatic
+  suggestion or a manual pick) becomes that lap's newest comparison, as a
+  Compare click always did.
+- **Running the browser smokes locally.** Install `jsdom` and
+  `playwright@1.58.2` into a folder outside the repo (`npm install --prefix
+  <dir> --no-save jsdom playwright@1.58.2`, with
+  `PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1` to use an installed Chrome), set
+  `NODE_PATH=<dir>/node_modules`, and for Playwright smokes
+  `PITBOX_BROWSER_CHANNEL=chrome` (or `PITBOX_BROWSER_PATH`).
