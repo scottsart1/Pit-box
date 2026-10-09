@@ -23,5 +23,14 @@ def test_fixture_race_exercises_every_chart_case() -> None:
     assert drivers["BOT"]["status"] == "lapped"
     assert drivers["HAD"]["status"] == "retired"
     assert [s["kind"] for s in result["pit_stops"] if s["car_index"] == 1] == ["tyre_change", "pit_stop"]
+    assert [s["kind"] for s in result["pit_stops"] if s["car_index"] == 3] == ["tyre_change", "unrecorded_stop"]
     bottas = next(row["stints"] for row in result["stints"] if row["car_index"] == 4)
     assert bottas[-1]["compound"] is None
+    assert drivers["BOT"]["pit_stops"] is None  # known from lap history only
+    assert drivers["LEC"]["pit_stops"] == 1
+    assert result["race_control"]["safety_car_laps"] == [3]
+    assert result["race_control"]["red_flag_laps"] == [6]
+    piastri_4 = next(row for row in result["laps"] if row["car_index"] == 2 and row["lap_number"] == 4)
+    assert piastri_4["pace_excluded"] == "flags" and piastri_4["neutralised"] is None
+    bottas_9 = next(row for row in result["laps"] if row["car_index"] == 4 and row["lap_number"] == 9)
+    assert bottas_9["pace_excluded"] == "no_context" and bottas_9["traced"] is False

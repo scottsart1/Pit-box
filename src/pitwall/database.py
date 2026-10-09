@@ -535,6 +535,11 @@ class PitWallDatabase:
                     payload_json TEXT NOT NULL,
                     created_at REAL NOT NULL
                 );
+
+                -- Session Analysis reads one recording's race-control
+                -- messages by uid and time window.
+                CREATE INDEX IF NOT EXISTS idx_session_events_uid_time
+                    ON session_events(session_uid, created_at);
                 """
             )
             existing = {row[1] for row in db.execute("PRAGMA table_info(laps)").fetchall()}

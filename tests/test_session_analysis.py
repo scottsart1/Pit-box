@@ -29,6 +29,12 @@ from pitwall.session_analysis import (
 _DEFAULT = object()
 RACE = {"id": "ses_test", "session_type": "Race 2", "raw_session_type_id": 16, "track_id": 12}
 PRACTICE = {"id": "ses_fp", "session_type": "Practice 1", "raw_session_type_id": 1, "track_id": 12}
+# Race-control messages: a full safety car on laps 4-5, a red flag on lap 5.
+SAFETY_CAR_4_5 = [
+    {"type": "SCAR", "lap": 4, "payload": {"safety_car_type": 1, "event_type": 0}},
+    {"type": "SCAR", "lap": 5, "payload": {"safety_car_type": 1, "event_type": 2}},
+]
+RED_FLAG_5 = [{"type": "RDFL", "lap": 5, "payload": {"active": True}}]
 
 
 def car(index: int, name: str, *, player: bool = False, team: int | None = None) -> AnalysisCar:
@@ -212,7 +218,7 @@ def safety_car_race() -> tuple[list[AnalysisCar], list[AnalysisLap]]:
 
 def test_uninterrupted_race_has_race_time_positions_and_intervals() -> None:
     cars, laps = safety_car_race()
-    result = build_session_analysis(RACE, cars, laps)
+    result = build_session_analysis(RACE, cars, laps, events=SAFETY_CAR_4_5)
     drivers = by_code(result)
     assert result["suspended_laps"] == []
     assert result["neutralised_laps"] == [4, 5]
@@ -227,7 +233,7 @@ def test_uninterrupted_race_has_race_time_positions_and_intervals() -> None:
 
 def test_pit_stop_under_safety_car_has_no_loss_estimate_and_changes_compound() -> None:
     cars, laps = safety_car_race()
-    result = build_session_analysis(RACE, cars, laps)
+    result = build_session_analysis(RACE, cars, laps, events=SAFETY_CAR_4_5)
     stops = [row for row in result["pit_stops"] if row["car_index"] == 1]
     assert len(stops) == 1
     stop = stops[0]
@@ -267,7 +273,7 @@ def test_lapped_and_retired_cars_are_classified_correctly() -> None:
     for number in range(1, 4):  # retired after lap 3
         laps.append(lap(2, number, 91_000))
     laps.append(lap(2, 4, None))  # the unfinished lap of the retirement
-    result = build_session_analysis(RACE, cars, laps)
+    result = build_session_analysis(RACE, cars, laps, events=[])
     drivers = by_code(result)
     assert drivers["RUS"]["status"] == "finished"
     assert drivers["STR"]["status"] == "lapped"
@@ -337,9 +343,16 @@ def test_stints_split_at_out_lap_one_lap_pit_runs_and_red_flag_changes() -> None
         ("MEDIUM", 6, 10),
         ("HARD", 11, 14),
     ]
-    result = build_session_analysis(RACE, [car(0, "OCON")], laps)
+    result = build_session_analysis(RACE, [car(0, "OCON")], laps, events=RED_FLAG_5)
     kinds = [(row["kind"], row["lap_number"]) for row in result["pit_stops"]]
     assert kinds == [("tyre_change", 5), ("pit_stop", 10)]
+    # Without a red flag, the same reset is a stop nobody recorded, not a
+    # free change while suspended.
+    unflagged = build_session_analysis(RACE, [car(0, "OCON")], laps, events=[])
+    assert [(row["kind"], row["lap_number"]) for row in unflagged["pit_stops"]] == [
+        ("unrecorded_stop", 5),
+        ("pit_stop", 10),
+    ]
 
 
 def test_unknown_tyre_laps_are_their_own_stint_and_never_a_tyre_change() -> None:
@@ -465,7 +478,7 @@ async def test_analysis_route_serves_results_and_404s_unknown_sessions(tmp_path:
     response = client.get(f"/api/v1/sessions/{key}/analysis")
     assert response.status_code == 200
     body = response.json()
-    assert body["schema_version"] == 1
+    assert body["schema_version"] == 2
     assert body["winner_car_index"] == 0
     assert client.get(f"/api/v1/sessions/{key}/analysis?hide_outliers=false").json()["hide_outliers"] is False
     missing = client.get("/api/v1/sessions/ses_missing/analysis")

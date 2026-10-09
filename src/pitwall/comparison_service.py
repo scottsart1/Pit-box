@@ -634,7 +634,8 @@ class ComparisonService:
         Database maintenance empties old legacy traces to reclaim space, and a
         real history had 435 of 446 legacy-only laps emptied that way; every
         one was still listed, and choosing one failed as soon as it was
-        compared.
+        compared. A lap a flashback abandoned (bit 2) was never raced on the
+        branch that counts, so it is never offered either.
         """
         with self._connect() as db:
             rows = db.execute(
@@ -648,6 +649,7 @@ class ComparisonService:
                 JOIN recorded_sessions s ON s.id=c.session_id
                 LEFT JOIN laps lg ON lg.id=l.legacy_lap_id
                 WHERE s.track_id IS ? AND l.id<>?
+                  AND (l.invalid_reason_mask & 2)=0
                   AND (
                       l.trace_manifest_id IS NOT NULL
                       OR (lg.id IS NOT NULL
