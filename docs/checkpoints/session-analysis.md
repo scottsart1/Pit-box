@@ -42,13 +42,34 @@ checkpoint.
 ## Key decisions
 
 - **Data source.** Everything is derived from stored `recorded_laps` rows for
-  the newest timeline epoch of each lap (the same rule as `FieldAnalysisService`).
-  `started_game_ms`/`ended_game_ms` are empty for field laps, so elapsed race
-  time is the **cumulative sum of lap times** (lap 1 is timed from the start in
-  the F1 games, matching FastF1's convention). A car with a missing lap time has
-  no cumulative time from that lap on; it is reported, not interpolated.
-- **Finishing order is derived**, not official: laps completed, then cumulative
-  time. The full-field final classification is not stored. Labelled as derived.
+  the newest timeline epoch of each lap (the same rule as `FieldAnalysisService`),
+  one row per physical car (identity revisions merged by `car_index`).
+- **Race order and gaps: segmented lap-time sums.** Plain cumulative sums fail
+  after a red flag: the game's lap timer stops while the race is suspended (by a
+  different amount per car) and the restart is timed from lights out, like lap 1.
+  Suspended laps are recognised from the field's pace (median lap time on the lap
+  > 1.8× each car's usual pace; safety cars are ~1.3-1.6×) and each racing
+  segment between suspensions is summed from its own first lap. On the real
+  Singapore replay (red flag on laps 4-5) this reproduces the official order for
+  all 22 cars, laps completed, best laps and gaps within 20 ms.
+- **Why not traces?** Trace session clocks give exact line crossings, but in
+  races the recorder keeps full traces only for a scoped set of cars
+  (`cars_in_trace_scope` in `full_field_archive.py`; the player, teammate, podium
+  and grid neighbours) and the player's own traces lack `current_lap_time_s`.
+  Lap times exist for every car, so they are the only complete basis. Trace
+  reads also cost ~2 s on desktop per session. This was tried and removed.
+- **Finishing order is derived**, not official: laps completed, then segment
+  time. Penalties are not applied. The full-field final classification is not
+  stored. Cars with a hole in their lap record after the last restart are not
+  placed (`incomplete_record`).
+- **Tyres.** Compounds come from traces; cars without traces have none after the
+  first laps. Three or more laps without tyre data form an `unknown` stint, never
+  stretched from a known compound, and never counted as a tyre change. The game's
+  final classification stores stint end laps one lower than ours (zero-based or
+  laps completed); our end lap is the last lap driven on that set.
+- **Pit stops** include red-flag tyre changes (`kind: tyre_change`, no loss
+  estimate), matching the game's stop count. Stops under neutralisation get no
+  loss estimate.
 - **Race pace laps** exclude lap 1, pit-context laps, flag-context (SC/VSC/red)
   laps, laps without a time, and (when "hide outliers" is on, default) laps
   slower than 107% of that driver's median. Track-limit-invalid laps are kept
@@ -96,8 +117,8 @@ checkpoint.
 | --- | --- | --- |
 | 1 | Research + code map | done |
 | 2 | Design canvas (Race Analysis + Lap Lab pickers) | in progress |
-| 3 | `session_analysis.py` + tests against the real race | pending |
-| 4 | API route + tests | pending |
+| 3 | `session_analysis.py` + tests against the real race | done |
+| 4 | API route + tests | done |
 | 5 | Frontend view, charts, Analyze session entry points | pending |
 | 6 | Lap Lab driver → lap pickers, auto + manual reference | pending |
 | 7 | Full suites, browser checks (phone/tablet/desktop) on real data | pending |
@@ -130,3 +151,17 @@ checkpoint.
   track, compatibility classes; manual references outside that list are sent
   with `allow_caveated_reference` and incompatible ones are rejected by the
   server). Team names: `src/pitwall/identity.py` `TEAM_NAMES`.
+- **Checkpoints 3-4.** `src/pitwall/session_analysis.py` and
+  `GET /api/v1/sessions/{id}/analysis` (wired in `app.py`, optional second
+  argument of `create_field_router`). `tests/test_session_analysis.py` (29 tests:
+  red flag, safety car, lapped/retired, record hole, stints, unknown tyres,
+  practice, flashback epochs, identity revisions, route). Real-data check:
+  `C:\Users\Sarth\PitBoxTestData\validate_race.py` compares the replay's analysis
+  with the official classification decoded from the capture; remaining
+  differences are only the 4 untraced cars' stop counts (no tyre data) and one
+  off-by-one stint end on the player's red-flag change.
+- **2026 season-pack team IDs** (476-486) are not in `TEAM_NAMES`. Rosters
+  match the F1 25 team order offset by 476 with Cadillac at 486; the frontend may
+  use that mapping for colours only, never for names, until the spec confirms it.
+- Regression inventory workflow (recent issues → pressure tests) is running; its
+  checklist will be appended here and drives the test plan for checkpoints 5-7.
