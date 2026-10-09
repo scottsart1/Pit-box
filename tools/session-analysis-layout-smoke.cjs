@@ -4,8 +4,9 @@
    only the Session Analysis module. No installed app, user data or network.
      NODE_PATH=<dir with playwright>/node_modules node tools/session-analysis-layout-smoke.cjs
    Payloads: the committed synthetic race, a practice session derived from it
-   and a 22-car, 60-lap race printed by `python tests/session_analysis_fixture.py
-   --large` (PITBOX_PYTHON selects the interpreter; src/ is put on PYTHONPATH).
+   (with one lap missing from the recording) and a 22-car, 60-lap race printed
+   by `python tests/session_analysis_fixture.py --large` (PITBOX_PYTHON selects
+   the interpreter; src/ is put on PYTHONPATH).
    PITBOX_ANALYSIS_PAYLOADS=<file>[<path delimiter><file>...] adds more payloads
    for local checks. PITBOX_BROWSER_PATH selects an installed Chrome or Edge.
    PITBOX_WIDE_FONT=<family> (for example Verdana) lays the view out in a wider
@@ -63,6 +64,8 @@ function payloads() {
   for (const d of practice.drivers) Object.assign(d, { status: 'running', finish_position: null, laps_down: null });
   Object.assign(practice, { segments: [], suspended_laps: [], neutralised_laps: [], winner_car_index: null, warnings: [] });
   practice.race_control = { available: false, covered_from_lap: null, neutralisations: [], safety_car_laps: [], vsc_laps: [], red_flag_laps: [] };
+  // A lap missing from the recording: its heatmap cell is dashed and empty.
+  practice.laps = practice.laps.filter((lap) => !(lap.car_index === 0 && lap.lap_number === 4));
   const list = [
     { name: 'race', payload: race },
     { name: 'large-race', payload: largeRace() },
@@ -86,6 +89,157 @@ function cssGuards() {
   assert.doesNotMatch(block, /touch-action:\s*(?:none|pan-y\s*;|pan-x\s*;)/, 'no touch-action lock');
   assert.doesNotMatch(block, /overscroll-behavior/, 'no scroll containment');
   assert.doesNotMatch(block, /position:\s*(?:sticky|fixed)/, 'no sticky or fixed elements');
+  // An unpainted cell would only answer a tap on its 1 px outline.
+  assert.doesNotMatch(block.match(/\.sa-cell-missing \{[^}]*\}/)?.[0] || 'missing rule', /fill:\s*none|pointer-events:\s*none|missing rule/, 'not-recorded cells take taps');
+}
+
+// Scrolls #analysis so the element's top sits `by` px above the top of the
+// visible area (negative: below it).
+async function revealAt(page, selector, by) {
+  await page.evaluate(([target, offset]) => {
+    const area = document.getElementById('analysis');
+    const r = document.querySelector(target).getBoundingClientRect();
+    area.scrollTop += r.top - area.getBoundingClientRect().top + offset;
+  }, [selector, by]);
+  await page.waitForTimeout(80);
+}
+
+// The open reading of a chart: where it is, whether it lies inside the
+// visible part of the page and whether it is what a finger would touch there.
+async function tipBox(page, chartId) {
+  return page.evaluate((id) => {
+    const t = document.querySelector(`#${id} > .sa-tip`);
+    if (!t || t.hidden) return null;
+    const r = t.getBoundingClientRect();
+    const a = document.getElementById('analysis').getBoundingClientRect();
+    const centre = document.elementFromPoint((r.left + r.right) / 2, (r.top + r.bottom) / 2);
+    return {
+      left: Math.round(r.left), right: Math.round(r.right), top: Math.round(r.top), bottom: Math.round(r.bottom), area: [Math.round(a.top), Math.round(a.bottom)],
+      inArea: r.top >= a.top - 0.5 && r.bottom <= a.bottom + 0.5 && r.left >= -0.5 && r.right <= innerWidth + 0.5,
+      onTop: Boolean(centre?.closest('.sa-tip')), text: t.textContent.slice(0, 50),
+    };
+  }, chartId);
+}
+
+// A tap in the page gutter, outside every chart, closes a pinned reading.
+async function closeTips(page) {
+  const y = await page.evaluate(() => document.getElementById('analysis').getBoundingClientRect().bottom - 6);
+  await page.touchscreen.tap(3, y);
+  await page.waitForTimeout(60);
+}
+
+// Readings stay visible near the top of the scrolled page, follow the
+// heatmap sideways, point at the race-pace box and read missing laps.
+async function readingChecks(page, cdp, set, viewport, check, charts) {
+  await page.evaluate(() => { window.__opened.length = 0; });
+  // A cell in the heatmap's first row with the chart at the top of the visible area.
+  await closeTips(page);
+  await revealAt(page, '#analysisHeatmapChart', -6);
+  const topCell = await page.evaluate(() => {
+    const scroller = document.querySelector('#analysisHeatmapChart .sa-heat-scroll');
+    const box = scroller.getBoundingClientRect();
+    const a = document.getElementById('analysis').getBoundingClientRect();
+    const cells = [...scroller.querySelectorAll('rect[data-lap-id][data-row="0"]')].map((c) => c.getBoundingClientRect())
+      .filter((r) => r.left >= box.left + 2 && r.right <= box.right - 2 && r.top >= a.top && r.bottom <= a.bottom);
+    const r = cells[Math.min(3, cells.length - 1)];
+    return r ? { x: r.left + r.width / 2, y: r.top + r.height / 2 } : null;
+  });
+  if (topCell) {
+    await page.touchscreen.tap(topCell.x, topCell.y);
+    await page.waitForTimeout(80);
+    const tip = await tipBox(page, 'analysisHeatmapChart');
+    check(set, 'heatmap-reading-near-the-top-is-visible', Boolean(tip?.inArea && tip.onTop), { tip, cell: topCell });
+  } else check(set, 'heatmap-reading-near-the-top-is-visible', false, { note: 'no first-row cell in view' });
+  // Crosshair readings with the chart at the top, and with its top scrolled away.
+  for (const id of ['analysisTraceChart', 'analysisPositionsChart'].filter((c) => charts.includes(c))) {
+    for (const by of [-6, 120]) {
+      await closeTips(page);
+      await revealAt(page, `#${id}`, by);
+      const spot = await page.evaluate((cid) => {
+        const hit = document.querySelector(`#${cid} .sa-hit`).getBoundingClientRect();
+        const a = document.getElementById('analysis').getBoundingClientRect();
+        const top = Math.max(hit.top, a.top);
+        const bottom = Math.min(hit.bottom, a.bottom);
+        return bottom - top < 40 ? null : { x: Math.round(hit.left + hit.width * 0.55), y: Math.round(top + 20) };
+      }, id);
+      if (!spot) continue;
+      await page.touchscreen.tap(spot.x, spot.y);
+      await page.waitForTimeout(80);
+      const tip = await tipBox(page, id);
+      check(set, `crosshair-reading-is-visible-${id}-${by > 0 ? 'scrolled' : 'top'}`, Boolean(tip?.inArea && tip.onTop), { tip, spot });
+    }
+  }
+  // A pinned heatmap reading follows a sideways swipe, and closes once its cell has gone.
+  await closeTips(page);
+  await page.evaluate(() => { document.querySelector('#analysisHeatmapChart .sa-heat-scroll').scrollLeft = 0; });
+  await reveal(page, '#analysisHeatmapChart');
+  const strip = await page.evaluate(() => {
+    const scroller = document.querySelector('#analysisHeatmapChart .sa-heat-scroll');
+    const box = scroller.getBoundingClientRect();
+    const a = document.getElementById('analysis').getBoundingClientRect();
+    const cells = [...scroller.querySelectorAll('rect[data-lap-id]')].map((c) => ({ c, r: c.getBoundingClientRect() }))
+      .filter(({ r }) => r.left >= box.left + box.width * 0.55 && r.right <= box.right - 4 && r.top >= a.top + 120 && r.bottom <= Math.min(box.bottom, a.bottom) - 50);
+    const pick = cells[0];
+    return { room: scroller.scrollWidth - scroller.clientWidth, width: box.width, swipeY: Math.min(box.bottom, a.bottom) - 30, cell: pick ? { key: pick.c.getAttribute('data-key'), x: pick.r.left + pick.r.width / 2, y: pick.r.top + pick.r.height / 2 } : null };
+  });
+  if (strip.room > 120 && strip.cell) {
+    const follow = async () => page.evaluate((key) => {
+      const scroller = document.querySelector('#analysisHeatmapChart .sa-heat-scroll');
+      const box = scroller.getBoundingClientRect();
+      const m = document.querySelector(`#analysisHeatmapChart [data-key="${key}"]`).getBoundingClientRect();
+      const t = document.querySelector('#analysisHeatmapChart > .sa-tip');
+      const tip = t && !t.hidden ? t.getBoundingClientRect() : null;
+      const centre = (m.left + m.right) / 2;
+      return { scrollLeft: Math.round(scroller.scrollLeft), markCentre: Math.round(centre), markVisible: m.right > box.left && m.left < box.right, tip: tip ? [Math.round(tip.left), Math.round(tip.right)] : null, covers: tip ? tip.left <= centre && centre <= tip.right : null };
+    }, strip.cell.key);
+    await page.touchscreen.tap(strip.cell.x, strip.cell.y);
+    await page.waitForTimeout(80);
+    const x = strip.cell.x;
+    await swipe(page, cdp, { x, y: strip.swipeY }, { x: x - 40, y: strip.swipeY });
+    const near = await follow();
+    check(set, 'heatmap-reading-follows-its-cell', near.scrollLeft > 10 && near.markVisible && near.covers === true, near);
+    await swipe(page, cdp, { x, y: strip.swipeY }, { x: Math.max(8, x - Math.min(260, strip.width - 20)), y: strip.swipeY });
+    const far = await follow();
+    check(set, 'heatmap-reading-closes-when-its-cell-leaves', far.markVisible ? far.covers === true : far.tip === null, far);
+  }
+  // Race pace: a tapped box gets its reading at the box, in rows or columns.
+  await closeTips(page);
+  await reveal(page, '#analysisPaceChart');
+  const boxes = await page.evaluate(() => {
+    const a = document.getElementById('analysis').getBoundingClientRect();
+    return [...document.querySelectorAll('#analysisPaceChart [data-key^="box-"] rect')].map((r) => r.getBoundingClientRect())
+      .filter((r) => r.top >= a.top + 8 && r.bottom <= a.bottom - 8)
+      .map((r) => ({ x: r.left + r.width / 2, y: r.top + r.height / 2, top: r.top, bottom: r.bottom }));
+  });
+  for (const box of [boxes[0], boxes[boxes.length - 1]].filter(Boolean)) {
+    await page.touchscreen.tap(box.x, box.y);
+    await page.waitForTimeout(80);
+    const tip = await tipBox(page, 'analysisPaceChart');
+    check(set, 'pace-reading-at-its-box', Boolean(tip) && tip.left <= box.x && box.x <= tip.right && (tip.bottom <= box.top + 1 || tip.top >= box.bottom - 1), { tip, box });
+  }
+  // A cell for a lap missing from the recording answers a tap anywhere on it.
+  await closeTips(page);
+  const missing = await page.evaluate(() => {
+    const cell = document.querySelector('#analysisHeatmapChart .sa-cell-missing');
+    if (!cell) return null;
+    cell.scrollIntoView({ block: 'center', inline: 'center' });
+    const r = cell.getBoundingClientRect();
+    const x = r.left + r.width / 2;
+    const y = r.top + r.height / 2;
+    return { x, y, hit: document.elementFromPoint(x, y) === cell, label: cell.getAttribute('aria-label') };
+  });
+  if (missing) {
+    await page.waitForTimeout(80);
+    await page.touchscreen.tap(missing.x, missing.y);
+    await page.waitForTimeout(80);
+    const tip = await tipBox(page, 'analysisHeatmapChart');
+    check(set, 'not-recorded-cell-answers-a-tap', missing.hit && Boolean(tip) && /not recorded/.test(tip.text), { missing, tip });
+  } else if (set.name === 'practice') check(set, 'not-recorded-cell-answers-a-tap', false, { note: 'the practice payload has no missing lap' });
+  // Every value axis of race pace is readable: at least three labels.
+  const ticks = await page.evaluate(() => [...document.querySelectorAll('#analysisPaceChart svg text.sa-tick')].map((t) => t.textContent));
+  check(set, 'pace-axis-has-three-labels', ticks.length >= 3, { ticks, width: viewport.width });
+  await closeTips(page);
+  check(set, 'readings-never-open-a-lap', (await page.evaluate(() => window.__opened.length)) === 0);
 }
 
 async function reveal(page, selector) {
@@ -351,6 +505,7 @@ async function verticalSwipe(page, cdp, id) {
             check(set, 'hover-reads-a-box-at-the-mark', Boolean(tip) && tip.left <= box.x && box.x <= tip.right && tip.bottom <= box.top + 1 && tip.live === 'off', { tip, box });
             await page.mouse.move(2, 2);
           }
+          await readingChecks(page, cdp, set, viewport, check, g.charts);
           const small = await controlSizes(page);
           check(set, 'controls-at-least-44px', !small.length, { small: small.slice(0, 8) });
         }

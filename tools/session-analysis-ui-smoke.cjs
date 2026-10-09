@@ -65,6 +65,38 @@ const raceB = (() => {
   b.warnings = ['marker-b'];
   return b;
 })();
+// The race as the backend reports an unfinished recording: every placed car
+// is "running" and keeps its place and laps down.
+const provisionalRace = (() => {
+  const p = clone(race);
+  p.session_id = 'ses_provisional';
+  Object.assign(p.session, { provisional: true, status: 'incomplete' });
+  for (const d of p.drivers) {
+    if (['finished', 'lapped', 'retired'].includes(d.status)) d.status = 'running';
+    d.gap_to_winner_ms = null;
+  }
+  p.warnings = ['This session did not finish recording, so the order is provisional: it stops at the last recorded lap.'];
+  return p;
+})();
+// One recorded car: unplaced, its laps still at position 1 with a 0 ms gap.
+const singleRace = (() => {
+  const p = clone(race);
+  p.session_id = 'ses_single';
+  const player = p.drivers.find((d) => d.is_player);
+  p.drivers = [{ ...player, status: 'unranked', finish_position: null, laps_down: null, gap_to_winner_ms: null }];
+  p.laps = p.laps.filter((l) => l.car_index === player.car_index).map((l) => ({ ...l, position: l.position == null ? null : 1, gap_to_leader_ms: l.gap_to_leader_ms == null ? null : 0 }));
+  for (const key of ['race_pace', 'stints', 'pit_stops', 'fastest_laps']) p[key] = p[key].filter((r) => r.car_index === player.car_index);
+  Object.assign(p, { field: { cars: 6, cars_with_laps: 1, complete: false }, winner_car_index: null, warnings: ["Only one car's laps were recorded, so there is no race order to derive."] });
+  p.official_result = { player_position: null, derived_player_position: null, agrees: null };
+  return p;
+})();
+// The game's result puts the player (first on lap times) third.
+const disputedRace = (() => {
+  const p = clone(race);
+  p.session_id = 'ses_disputed';
+  p.official_result = { player_position: 3, derived_player_position: 1, agrees: false };
+  return p;
+})();
 
 const LIST = [
   { id: 'ses_fixture_race', track_name: 'Singapore', session_type: 'Race', started_at: '2026-10-08T13:00:00+00:00' },
@@ -93,7 +125,7 @@ async function harness({ hash = '', storage = {}, overrides = {}, reducedMotion 
   w.HTMLCanvasElement.prototype.getContext = () => null;
   const calls = [];
   const state = { list };
-  const payloads = { ses_fixture_race: race, ses_b: raceB, ses_practice: practice };
+  const payloads = { ses_fixture_race: race, ses_b: raceB, ses_practice: practice, ses_provisional: provisionalRace, ses_single: singleRace, ses_disputed: disputedRace };
   const route = async (url) => {
     const u = new URL(url, 'http://127.0.0.1:8769');
     if (u.pathname === '/api/v1/sessions') return response({ items: state.list });
@@ -129,6 +161,14 @@ async function harness({ hash = '', storage = {}, overrides = {}, reducedMotion 
 }
 
 const text = (h, name) => h.id(name).textContent;
+// Text a reader can meet: everything outside hidden elements, SVG text and
+// screen-reader text included, plus the labels of SVG groups.
+function shownText(node) {
+  if (node.nodeType === 3) return node.textContent;
+  if (node.nodeType !== 1 || node.hidden || node.getAttribute('aria-hidden') === 'true') return '';
+  const label = node.getAttribute('aria-label') || '';
+  return `${label} ${[...node.childNodes].map(shownText).join(' ')}`;
+}
 const chartIsEmpty = (h, name) => {
   const node = h.id(name);
   return !node.querySelector('svg') && node.querySelectorAll('.empty').length === 1;
@@ -320,9 +360,16 @@ test('Practice: focus changes redraw lap times, race-only captions hide and the 
   try {
     await h.show();
     await h.analyse('ses_practice');
-    for (const node of h.w.document.querySelectorAll('#session-analysis [data-analysis-race-only]')) assert.equal(node.hidden, true);
+    for (const node of h.w.document.querySelectorAll('#session-analysis [data-analysis-race-only], #session-analysis [data-analysis-order-only]')) assert.equal(node.hidden, true);
     assert.equal(h.id('analysisRaceOnlyNote').hidden, false);
+    assert.match(text(h, 'analysisRaceOnlyNote'), /need a race/);
     assert.equal(text(h, 'analysisPaceBasis'), `Pace ${practice.basis.pace_laps}.`);
+    // Rows come most laps first: nothing may call that a finishing order.
+    assert.equal(text(h, 'analysisStrategyHeading'), 'Stints per driver, most laps first');
+    assert.match(h.id('analysisStrategyChart').querySelector('svg').getAttribute('aria-label'), /^Tyre strategy: stints per driver, most laps first\./);
+    const strategyHelp = shownText(h.id('analysisStrategyChart').parentElement.querySelector('.field-help')).replace(/\s+/g, ' ').trim();
+    assert.equal(strategyHelp, '"?" stints had no tyre data recorded .');
+    assert.doesNotMatch(shownText(h.id('session-analysis')), /finishing order|in a race\)|Race leader|\bFinish\b/);
     const series = () => h.id('analysisLapTimesChart').querySelectorAll('svg .sa-label-strong').length;
     const start = series();
     assert.ok(start >= 2, 'the default focus is drawn');
@@ -345,8 +392,101 @@ test('Practice: focus changes redraw lap times, race-only captions hide and the 
     await raceView.show();
     await raceView.analyse('ses_fixture_race');
     assert.match(text(raceView, 'analysisPaceBasis'), /^Pace excludes lap 1, restart laps/);
-    for (const node of raceView.w.document.querySelectorAll('#session-analysis [data-analysis-race-only]')) assert.equal(node.hidden, false);
+    for (const node of raceView.w.document.querySelectorAll('#session-analysis [data-analysis-race-only], #session-analysis [data-analysis-order-only]')) assert.equal(node.hidden, false);
+    assert.equal(text(raceView, 'analysisStrategyHeading'), 'Stints in finishing order');
+    assert.match(raceView.id('analysisStrategyChart').querySelector('svg').getAttribute('aria-label'), /in finishing order/);
+    assert.equal(raceView.id('analysisRaceOnlyNote').hidden, true);
   } finally { raceView.close(); }
+});
+
+test('A single recorded car makes no order claim: race trace, positions and the timelapse give way to a note', async () => {
+  const h = await harness();
+  try {
+    await h.show();
+    await h.analyse('ses_single');
+    const doc = h.w.document;
+    for (const node of doc.querySelectorAll('#session-analysis [data-analysis-order-only]')) assert.equal(node.hidden, true, 'order-only sections are hidden');
+    // A one-car race still had its red flag: race captions stay.
+    for (const node of doc.querySelectorAll('#session-analysis [data-analysis-race-only]')) assert.equal(node.hidden, false);
+    assert.equal(h.id('analysisRaceOnlyNote').hidden, false);
+    assert.match(text(h, 'analysisRaceOnlyNote'), /^Only one car was recorded, so there is no race order/);
+    assert.equal(text(h, 'analysisStrategyHeading'), 'Stints per driver, most laps first');
+    assert.equal(h.id('analysisReference').disabled, true);
+    assert.equal(h.t.state.lapse.frames.length, 0, 'nothing to replay');
+    assert.equal(h.id('analysisLapsePlay').disabled, true);
+    const shown = shownText(h.id('session-analysis'));
+    assert.doesNotMatch(shown, /\bP1\b|\bLeader\b|\bFinish\b|\bwins\b|\bleads\b|finishing order/, 'no place, leader or finish anywhere a reader can meet');
+    assert.match(shown, /only recorded car: no order/);
+    assert.deepEqual(h.errors, []);
+    // A full race brings every section back.
+    await h.analyse('ses_fixture_race');
+    for (const node of doc.querySelectorAll('#session-analysis [data-analysis-order-only]')) assert.equal(node.hidden, false);
+    assert.equal(h.id('analysisRaceOnlyNote').hidden, true);
+    assertRace(h, 'after the single car');
+  } finally { h.close(); }
+});
+
+test('An unfinished race replays every placed car to its last recorded lap and never calls it the finish', async () => {
+  const h = await harness();
+  try {
+    await h.show();
+    await h.analyse('ses_provisional');
+    const svg = h.id('analysisLapseChart').querySelector('svg');
+    const drawn = [...svg.querySelectorAll(':scope > g[visibility="visible"]')].map((g) => g.querySelector('text.sa-label')?.textContent);
+    assert.deepEqual(drawn.sort(), ['ALB', 'BOT', 'HAD', 'LEC', 'NOR', 'PIA'], 'the last frame draws every placed car');
+    const rows = [...h.id('analysisLapseTable').querySelectorAll('tbody tr')].map((tr) => [...tr.children].map((c) => c.textContent));
+    const [lap, order, note] = rows[rows.length - 1];
+    assert.equal(lap, '12');
+    assert.match(order, /P5 BOT \+1 lap, P6 HAD \+10 laps$/);
+    assert.equal(note, 'Last recorded lap');
+    assert.doesNotMatch(shownText(h.id('session-analysis')), /\bFinish\b|\bwins\b/);
+    assert.match(text(h, 'analysisTitle'), /^Provisional order/);
+    const labels = [...h.id('analysisKpis').children].map((card) => card.firstChild.textContent);
+    assert.ok(labels.includes('Fastest recorded lap') && !labels.includes('Fastest lap'), labels.join(' | '));
+    // The finished race keeps its finish.
+    await h.analyse('ses_fixture_race');
+    const done = [...h.id('analysisLapseTable').querySelectorAll('tbody tr')].pop();
+    assert.equal(done.lastChild.textContent, 'Finish');
+    assert.deepEqual(h.errors, []);
+  } finally { h.close(); }
+});
+
+test('When the game result disputes the order from lap times, the headline names no winner', async () => {
+  const h = await harness();
+  try {
+    await h.show();
+    await h.analyse('ses_disputed');
+    assert.doesNotMatch(text(h, 'analysisTitle'), /wins/);
+    assert.match(text(h, 'analysisTitle'), /first on lap times$/);
+    const cards = [...h.id('analysisKpis').children].map((card) => [...card.children].map((c) => c.textContent));
+    assert.deepEqual(cards[0].slice(0, 2), ['First on lap times', 'LEC']);
+    assert.deepEqual(cards[1].slice(0, 2), ['Your result', 'P3']);
+    assert.ok(!cards.some((c) => c[0] === 'Winner'));
+  } finally { h.close(); }
+});
+
+test('A heatmap cell for a lap missing from the recording is a whole, labelled mark', async () => {
+  const gap = clone(race);
+  gap.session_id = 'ses_gap';
+  gap.laps = gap.laps.filter((l) => !(l.car_index === 0 && l.lap_number === 4));
+  const h = await harness({ overrides: { '/api/v1/sessions/ses_gap/analysis': () => response(gap) } });
+  try {
+    await h.show();
+    await h.analyse('ses_gap');
+    const cell = h.id('analysisHeatmapChart').querySelector('[data-key="heat-0-4"]');
+    assert.ok(cell.classList.contains('sa-cell-missing'));
+    assert.equal(cell.getAttribute('aria-label'), 'LEC lap 4 · not recorded');
+    assert.equal(cell.hasAttribute('fill'), false, 'the stylesheet paints it');
+    // Hit-testing needs a painted fill: "none" would leave only the outline.
+    const css = read('static/css/v42.css');
+    const rule = css.match(/\.sa-cell-missing \{([^}]*)\}/);
+    assert.ok(rule && /fill:\s*transparent/.test(rule[1]) && !/pointer-events:\s*none/.test(rule[1]), rule?.[0]);
+    tap(h, cell);
+    const tip = h.id('analysisHeatmapChart').querySelector('.sa-tip');
+    assert.equal(tip.hidden, false);
+    assert.match(tip.textContent, /LEC lap 4 · not recorded/);
+    assert.equal(tip.querySelector('.sa-tip-open'), null, 'nothing to open');
+  } finally { h.close(); }
 });
 
 test('Reduced motion keeps one cancellable timeout and every exit path stops the timelapse', async () => {

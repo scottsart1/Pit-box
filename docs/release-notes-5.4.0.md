@@ -18,18 +18,19 @@
 - Positions at the end of every lap, with each driver's finishing place: a
   lapped finisher keeps its place with its laps down, and only a retirement
   is shown as out.
-- Tyre strategy: every stint in finishing order, lettered S, M, H, I or W (or
-  the game's C1-C6 label). Laps without recorded tyre data are shown as
-  unknown instead of borrowing a compound, and a tyre change made while the
-  race is suspended starts a stint.
+- Tyre strategy: every stint per driver, in finishing order in a race and most
+  laps first otherwise, lettered S, M, H, I or W (or the game's C1-C6 label).
+  Laps without recorded tyre data are shown as unknown instead of borrowing a
+  compound, and a tyre change made while the race is suspended starts a stint.
 - Lap times for the drivers in focus, and a lap-time heatmap of every driver
   and lap against that driver's own median. Select a lap to read it, then
   open it in Lap Lab; laps known only from timing say so instead, and a lap
   missing from the recording is marked as not recorded.
 - Race timelapse: play, pause or scrub through the running order and gaps lap
   by lap. While a race is suspended the order is shown frozen; the finish
-  shows every classified car, lapped cars with their laps down. With reduced
-  motion it steps a lap at a time.
+  shows every classified car, lapped cars with their laps down. A recording
+  that stopped early ends on its last recorded lap, not a finish, with every
+  placed car still in the order. With reduced motion it steps a lap at a time.
 - Fastest and ideal laps (best sectors combined), and pit stops with an
   estimated time lost for green-flag stops. A stop count that cannot be known
   is shown as unknown, never 0, and a tyre change without a recorded stop is
@@ -39,9 +40,12 @@
   each racing segment is timed from its own start. The finishing order is
   derived from laps completed and race time; penalties are not applied. Your
   official result is shown when the game reported one, with a note when the
-  derived order differs. A session that did not finish recording, or with
-  only some cars recorded, is labelled provisional or among the recorded cars
-  instead of naming a winner.
+  derived order differs; then the car first on lap times is not called the
+  winner. A session that did not finish recording, or with only some cars
+  recorded, is labelled provisional or among the recorded cars instead of
+  naming a winner, and its fastest lap is the fastest recorded lap. With only
+  one car recorded there is no race order, so the race trace, positions and
+  timelapse give way to a note.
 - Every chart has a data table, including one with an Open in Lap Lab button
   for every lap recorded with telemetry. Each chart is one Tab stop: arrow
   keys move between its marks and Enter opens a lap. Readings appear on hover,

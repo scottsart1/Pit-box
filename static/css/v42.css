@@ -1389,7 +1389,8 @@ button:disabled,
 .sa-box:hover rect, .sa-stint:hover rect, .sa-bar:hover rect { filter: brightness(1.15); }
 .sa-cell.sa-link:hover { stroke: var(--text-1); stroke-width: 1.5; }
 .sa-cell-excluded { stroke: #2b3946; stroke-width: 1; }
-.sa-cell-missing { fill: none; stroke: #7d8d9c; stroke-width: 1; stroke-dasharray: 3 2; }
+/* A transparent fill, not none: the whole dashed cell answers a tap, not just its outline. */
+.sa-cell-missing { fill: transparent; stroke: #7d8d9c; stroke-width: 1; stroke-dasharray: 3 2; }
 .sa-tip { position: absolute; z-index: 5; max-width: min(300px, calc(100% - 8px)); min-width: 160px; padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; background: #0a1016; color: var(--text-1); font-size: .8rem; line-height: 1.35; box-shadow: 0 8px 24px rgba(0, 0, 0, .45); pointer-events: none; }
 .sa-tip-sticky { pointer-events: auto; }
 .sa-tip strong { display: block; font-weight: 800; }
