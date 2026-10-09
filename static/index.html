@@ -447,15 +447,15 @@
     <header class="comparison-header panel-surface">
       <div class="comparison-card lap-picker"><span class="field-label">Lap to study</span>
         <div class="picker-pair">
-          <label class="picker-field" for="candidateDriverSelect"><span>Driver</span><select id="candidateDriverSelect" disabled><option value="">Choose a session first</option></select></label>
-          <label class="picker-field" for="candidateLapSelect"><span>Lap</span><select id="candidateLapSelect"><option value="">Choose a lap</option></select></label>
+          <label class="picker-field" for="candidateDriverSelect"><span>Driver<span class="sr-only"> to study</span></span><select id="candidateDriverSelect" disabled><option value="">Choose a session first</option></select></label>
+          <label class="picker-field" for="candidateLapSelect"><span>Lap<span class="sr-only"> to study</span></span><select id="candidateLapSelect"><option value="">Choose a lap</option></select></label>
         </div>
         <strong id="candidateLapMeta">Unavailable</strong></div>
       <div class="comparison-delta"><span class="field-label">Candidate loss</span><output id="comparisonDelta">Unavailable</output><span id="comparisonSign" class="field-help">Positive means the candidate arrived later.</span></div>
       <div class="comparison-card lap-picker"><div class="picker-head"><span class="field-label">Compare against</span><span id="referenceChoice" class="choice-chip" data-choice="none">No reference yet</span><button id="referenceUseSuggested" class="button ghost compact-button" type="button" hidden>Use suggested</button></div>
         <div class="picker-pair">
-          <label class="picker-field" for="referenceDriverSelect"><span>Driver</span><select id="referenceDriverSelect" disabled><option value="">Choose a lap first</option></select></label>
-          <label class="picker-field" for="referenceLapSelect"><span>Lap</span><select id="referenceLapSelect" disabled><option value="">Choose candidate first</option></select></label>
+          <label class="picker-field" for="referenceDriverSelect"><span><span class="sr-only">Reference </span>Driver</span><select id="referenceDriverSelect" disabled><option value="">Choose a lap first</option></select></label>
+          <label class="picker-field" for="referenceLapSelect"><span><span class="sr-only">Reference </span>Lap</span><select id="referenceLapSelect" disabled><option value="">Choose candidate first</option></select></label>
         </div>
         <strong id="referenceLapMeta">Unavailable</strong></div>
       <button id="createComparison" class="button primary" type="button" disabled>Compare again</button>

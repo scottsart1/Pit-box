@@ -22,13 +22,26 @@ const state = {
   // True while a comparison is being computed, so a late lap trace does not
   // replace its "Aligning laps" status with "playback ready".
   comparing: false,
+  // What the current lap's comparison status line belongs to: "idle" (no
+  // comparison asked for), "pending", "ready" or "failed". A lap trace that
+  // arrives late only writes the status line while this is "idle".
+  comparisonStatus: "idle",
+  comparisonTimer: null,
+  comparisonAbort: null,
   comparison: null,
   comparisonTrace: null,
   lapTrace: null,
+  // "idle", "loading", "ready" or "failed" for the selected session's laps.
+  lapsStatus: "idle",
+  lapsError: "",
+  sessionLoading: null,
   sessionRequest: 0,
   lapRequest: 0,
   comparisonRequest: 0,
   referenceRequest: 0,
+  handoffRequest: 0,
+  // Labels for sessions outside the Library list (other-session references).
+  sessionLabels: new Map(),
   mapTraces: { candidate: null, reference: null },
   traceLayer: "speed",
   cursorIndex: 0,
@@ -148,6 +161,64 @@ function driverName(lap) {
   return lap.display_name || `Car ${Number(lap.car_index ?? 0) + 1}`;
 }
 
+// A row a flashback abandoned (bit 2 of invalid_reason_mask) was never raced
+// on the branch that counts.
+function isAbandoned(lap) {
+  return (Number(lap?.invalid_reason_mask) & 2) !== 0;
+}
+
+// The laps of the branch that counts, as Session Analysis reads them: no
+// abandoned rows; for each car identity and lap number only the newest
+// timeline (older recordings did not flag abandoned rows, a newer timeline
+// supersedes them); and across identity revisions of one car, a lap with
+// telemetry wins over the timing-only copy the game's lap history leaves
+// when it is reconciled again under the new revision.
+function activeLaps(laps = state.laps) {
+  const byIdentity = new Map();
+  for (const lap of laps) {
+    if (!lap?.id || isAbandoned(lap)) continue;
+    const key = `${lap.session_car_id ?? lapDriverKey(lap)}|${lap.lap_number}`;
+    const epoch = Number(lap.timeline_epoch ?? 0);
+    const entry = byIdentity.get(key);
+    if (!entry || epoch > entry.epoch) byIdentity.set(key, { epoch, laps: [lap] });
+    else if (epoch === entry.epoch) entry.laps.push(lap);
+  }
+  const byCar = new Map();
+  for (const { laps: rows } of byIdentity.values()) {
+    for (const lap of rows) {
+      const key = `${lapDriverKey(lap)}|${lap.lap_number}`;
+      if (!byCar.has(key)) byCar.set(key, []);
+      byCar.get(key).push(lap);
+    }
+  }
+  const keep = new Set();
+  for (const rows of byCar.values()) {
+    const revisions = new Set(rows.map((lap) => lap.session_car_id ?? ""));
+    const playable = rows.filter(hasTelemetry);
+    (revisions.size > 1 && playable.length ? playable : rows).forEach((lap) => keep.add(lap));
+  }
+  return laps.filter((lap) => keep.has(lap));
+}
+
+// Whether a lap can be played and compared: laps known only from the game's
+// lap history have no trace and no recorded share of the lap.
+function hasTelemetry(lap) {
+  if (!lap) return false;
+  if (lap.trace_manifest_id) return true;
+  return lap.coverage_ratio === null || lap.coverage_ratio === undefined || Number(lap.coverage_ratio) > 0;
+}
+
+// Laps kept through a frame-only flashback until the game's history confirms
+// which timeline they belong to.
+function isUnconfirmed(lap) {
+  let context = lap?.engineering_json;
+  if (typeof context === "string") {
+    try { context = JSON.parse(context); } catch { context = null; }
+  }
+  const pending = Number(context?.history_revalidation_required_epoch);
+  return Number.isFinite(pending) && pending > Number(lap?.timeline_epoch ?? 0);
+}
+
 function fastestOf(items, idOf) {
   const valid = items.filter((item) => item.valid && Number(item.lap_time_ms) > 0);
   const pool = valid.length ? valid : items.filter((item) => Number(item.lap_time_ms) > 0);
@@ -155,9 +226,16 @@ function fastestOf(items, idOf) {
   return best ? idOf(best) : "";
 }
 
+// The lap a driver opens on: their fastest lap that has telemetry to play,
+// else their fastest lap, else their first.
+function defaultLapOf(laps) {
+  const playable = laps.filter(hasTelemetry);
+  return fastestOf(playable, (lap) => lap.id) || fastestOf(laps, (lap) => lap.id) || laps[0]?.id || "";
+}
+
 function sessionLapDrivers() {
   const groups = new Map();
-  for (const lap of state.laps) {
+  for (const lap of activeLaps()) {
     if (!lap.id) continue;
     const key = lapDriverKey(lap);
     if (!groups.has(key)) groups.set(key, { key, name: driverName(lap), isPlayer: false, laps: [] });
@@ -178,6 +256,8 @@ function lapChoiceLabel(lap, fastestId) {
   if (Number(lap.pit_context)) tags.push("pit");
   if (Number(lap.flag_context)) tags.push("flag");
   if (Number(lap.timeline_epoch) > 0) tags.push(`timeline ${lap.timeline_epoch}`);
+  if (isUnconfirmed(lap)) tags.push("unconfirmed after flashback");
+  if (!hasTelemetry(lap)) tags.push("timing only, no telemetry");
   return `Lap ${lap.lap_number ?? "—"} · ${formatLapTime(lap.lap_time_ms)}${tags.length ? ` · ${tags.join(" · ")}` : ""}`;
 }
 
@@ -210,7 +290,15 @@ function replaceOptions(select, options, placeholder, selectedValue = "") {
 }
 
 function refreshSessionSelectors() {
-  const options = state.sessions.map((session) => ({ value: session.id, label: `${sessionLabel(session)} · ${formatDate(session.started_at)}` }));
+  const sessions = [...state.sessions];
+  // A session opened from Session Analysis can sit outside the Library's
+  // filtered or paged list; its selectors must still name it.
+  if (state.selectedSessionId && !sessions.some((session) => session.id === state.selectedSessionId)) {
+    sessions.unshift(state.sessionDetail?.id === state.selectedSessionId
+      ? state.sessionDetail
+      : { id: state.selectedSessionId, display_name: "Loading session…" });
+  }
+  const options = sessions.map((session) => ({ value: session.id, label: `${sessionLabel(session)}${session.started_at ? ` · ${formatDate(session.started_at)}` : ""}` }));
   replaceOptions(byId("reviewSessionSelect"), options, "Choose session", state.selectedSessionId);
   replaceOptions(byId("fieldSessionSelect"), options, "Choose session", state.selectedSessionId);
   replaceOptions(byId("lapLabSessionSelect"), options, "Choose session", state.selectedSessionId);
@@ -386,7 +474,15 @@ async function deleteSession(session) {
       return;
     }
     await api(`/sessions/${encodeURIComponent(session.id)}`, { method: "DELETE", headers: { "X-Pitwall-Delete-Token": preview.confirmation_token } });
+    // Session Analysis keeps its own copy of the session; tell it.
+    window.dispatchEvent(new CustomEvent("pitwall:session-deleted", { detail: { sessionId: session.id } }));
+    state.sessionLabels.delete(session.id);
     if (state.selectedSessionId === session.id) resetSelectedSession();
+    else if (state.candidateLapId && [...state.referenceOptions.values()].some((option) => option.session_id === session.id)) {
+      // The deleted session supplied references (and its comparisons went
+      // with it): pick and compare again against what remains.
+      selectCandidateLap(state.candidateLapId);
+    }
     await loadSessions();
     setNotice("libraryStatus", `${sessionLabel(session)} deleted.`, "success");
   } catch (error) {
@@ -401,6 +497,8 @@ function resetSelectedSession() {
   state.sessionDetail = null;
   state.quality = null;
   state.laps = [];
+  state.lapsStatus = "idle";
+  state.lapsError = "";
   state.candidateDriver = "";
   resetLapSelection();
   state.fieldCache.clear();
@@ -423,9 +521,21 @@ function analyzeSession(sessionId) {
 }
 
 // A lap picked in Session Analysis opens in Lap Lab with its session loaded.
+// Only the latest pick counts: a second tap while the first one's session is
+// still loading wins.
 async function openLapFromAnalysis(sessionId, lapId) {
   if (!lapId) return;
+  const handoff = ++state.handoffRequest;
   if (sessionId && sessionId !== state.selectedSessionId) await selectSession(sessionId);
+  else if (state.sessionLoading) await state.sessionLoading;
+  if (handoff !== state.handoffRequest) return;
+  if (!state.laps.some((lap) => lap.id === lapId)) {
+    navigate("lap-lab");
+    setNotice("lapLabStatus", state.lapsStatus === "failed"
+      ? `That session could not be opened: ${state.lapsError}`
+      : "That lap is no longer in the saved session.", "error");
+    return;
+  }
   await openLap(lapId);
 }
 
@@ -440,6 +550,7 @@ async function selectSession(sessionId) {
   resetSelectedSession();
   const request = state.sessionRequest;
   state.selectedSessionId = sessionId;
+  state.lapsStatus = "loading";
   if (byId("reviewEngineering")) {
     byId("reviewEngineering").disabled = false;
     byId("reviewEngineering").onclick = () => {
@@ -456,27 +567,40 @@ async function selectSession(sessionId) {
   renderFieldClassification(null);
   setNotice("sessionReviewStatus", "Loading recorded session, quality, and laps…");
   setNotice("fieldStatus", "Loading saved field summary…");
+  const loading = (async () => {
+    try {
+      const [detail, quality, laps, field] = await Promise.all([
+        api(`/sessions/${encodeURIComponent(sessionId)}`),
+        api(`/sessions/${encodeURIComponent(sessionId)}/quality`),
+        api(`/sessions/${encodeURIComponent(sessionId)}/laps`),
+        api(`/sessions/${encodeURIComponent(sessionId)}/field`).catch((error) => ({ _error: formatError(error) })),
+      ]);
+      if (state.sessionRequest !== request) return;
+      state.sessionDetail = detail.session;
+      state.quality = quality;
+      state.laps = laps.items || [];
+      state.lapsStatus = "ready";
+      state.fieldCache.set(`${sessionId}:classification`, field);
+      refreshSessionSelectors();
+      renderSessionReview();
+      renderFieldSummary(field);
+      renderFieldClassification(field);
+      populateLapSelectors();
+      if (state.fieldView !== "classification") loadFieldView(state.fieldView);
+    } catch (error) {
+      if (state.sessionRequest !== request) return;
+      state.lapsStatus = "failed";
+      state.lapsError = formatError(error);
+      populateLapSelectors();
+      setNotice("sessionReviewStatus", formatError(error), "error");
+      setNotice("fieldStatus", formatError(error), "error");
+    }
+  })();
+  state.sessionLoading = loading;
   try {
-    const [detail, quality, laps, field] = await Promise.all([
-      api(`/sessions/${encodeURIComponent(sessionId)}`),
-      api(`/sessions/${encodeURIComponent(sessionId)}/quality`),
-      api(`/sessions/${encodeURIComponent(sessionId)}/laps`),
-      api(`/sessions/${encodeURIComponent(sessionId)}/field`).catch((error) => ({ _error: formatError(error) })),
-    ]);
-    if (state.sessionRequest !== request) return;
-    state.sessionDetail = detail.session;
-    state.quality = quality;
-    state.laps = laps.items || [];
-    state.fieldCache.set(`${sessionId}:classification`, field);
-    renderSessionReview();
-    renderFieldSummary(field);
-    renderFieldClassification(field);
-    populateLapSelectors();
-    if (state.fieldView !== "classification") loadFieldView(state.fieldView);
-  } catch (error) {
-    if (state.sessionRequest !== request) return;
-    setNotice("sessionReviewStatus", formatError(error), "error");
-    setNotice("fieldStatus", formatError(error), "error");
+    await loading;
+  } finally {
+    if (state.sessionLoading === loading) state.sessionLoading = null;
   }
 }
 
@@ -528,6 +652,9 @@ function populateReviewDriverFilter() {
 
 function lapContext(lap) {
   const labels = [];
+  if (isAbandoned(lap)) labels.push("Abandoned by a flashback");
+  if (isUnconfirmed(lap)) labels.push("Unconfirmed after a flashback");
+  if (!hasTelemetry(lap)) labels.push("Timing only");
   if (!Boolean(lap.valid)) labels.push("Invalid lap");
   if (Number(lap.pit_context)) labels.push("Pit context");
   if (Number(lap.flag_context)) labels.push("Flag context");
@@ -590,27 +717,40 @@ function populateLapSelectors() {
     state.candidateDriver = (drivers.find((driver) => driver.isPlayer) || drivers[0])?.key || "";
   }
   const driverSelect = byId("candidateDriverSelect");
+  const emptyText = !state.selectedSessionId ? "Choose a session first"
+    : state.lapsStatus === "loading" ? "Loading laps…"
+      : state.lapsStatus === "failed" ? "Laps unavailable"
+        : "No recorded laps";
   replaceOptions(
     driverSelect,
-    drivers.map((driver) => ({ value: driver.key, label: `${driver.name}${driver.isPlayer ? " (you)" : ""} · ${driver.laps.length} lap${driver.laps.length === 1 ? "" : "s"}` })),
-    drivers.length ? "Choose a driver" : state.selectedSessionId ? "No recorded laps" : "Choose a session first",
+    drivers.map((driver) => ({
+      value: driver.key,
+      label: `${driver.name}${driver.isPlayer ? " (you)" : ""} · ${driver.laps.length} lap${driver.laps.length === 1 ? "" : "s"}${driver.laps.some(hasTelemetry) ? "" : ", timing only"}`,
+    })),
+    drivers.length ? "Choose a driver" : emptyText,
     state.candidateDriver,
   );
   if (driverSelect) driverSelect.disabled = !drivers.length;
   const driver = drivers.find((item) => item.key === state.candidateDriver);
-  const fastest = fastestOf(driver?.laps || [], (lap) => lap.id);
-  replaceOptions(byId("candidateLapSelect"), (driver?.laps || []).map((lap) => ({ value: lap.id, label: lapChoiceLabel(lap, fastest) })), driver ? "Choose a lap" : "Choose a driver first", state.candidateLapId);
+  const laps = [...(driver?.laps || [])];
+  // A lap opened from Session Review can be one the pickers leave out (an
+  // abandoned timeline); it stays selectable while it is the lap shown.
+  if (candidate && driver && !laps.includes(candidate)) laps.push(candidate);
+  const fastest = fastestOf(laps.filter((lap) => !isAbandoned(lap)), (lap) => lap.id);
+  replaceOptions(byId("candidateLapSelect"), laps.map((lap) => ({
+    value: lap.id,
+    label: `${lapChoiceLabel(lap, fastest)}${isAbandoned(lap) ? " · abandoned by a flashback" : ""}`,
+  })), driver ? "Choose a lap" : "Choose a driver first", state.candidateLapId);
   updateCandidateMeta();
   byId("analyzeLapAlone").disabled = !state.candidateLapId;
 }
 
-// Choosing a driver opens their fastest lap at once; any other lap is one
-// more choice away in the lap picker.
+// Choosing a driver opens their fastest lap with telemetry at once; any other
+// lap is one more choice away in the lap picker.
 function selectCandidateDriver(key) {
   state.candidateDriver = key;
   const driver = sessionLapDrivers().find((item) => item.key === key);
-  const lapId = driver ? fastestOf(driver.laps, (lap) => lap.id) || driver.laps[0]?.id || "" : "";
-  return selectCandidateLap(lapId);
+  return selectCandidateLap(driver ? defaultLapOf(driver.laps) : "");
 }
 
 function updateCandidateMeta() {
@@ -630,11 +770,20 @@ function activeTrace() {
   return { axis: state.lapTrace.axis, candidate: { series: state.lapTrace.series } };
 }
 
+function cancelComparison() {
+  clearTimeout(state.comparisonTimer);
+  state.comparisonTimer = null;
+  state.comparisonAbort?.abort();
+  state.comparisonAbort = null;
+}
+
 function resetLapSelection() {
   stopPlayback();
+  cancelComparison();
   state.lapRequest += 1;
   state.comparisonRequest += 1;
   state.referenceRequest += 1;
+  state.comparisonStatus = "idle";
   state.candidateLapId = "";
   state.references = [];
   state.referenceOptions = new Map();
@@ -672,26 +821,44 @@ async function selectCandidateLap(lapId) {
   const request = state.lapRequest;
   setNotice("lapLabStatus", "Loading recorded lap playback…");
   const query = new URLSearchParams({ fields: "speed,brake,throttle,steering,gear,world_x,world_z,line_n", max_points: "2400" });
+  // Playback never waits for a comparison. The trace's own status line is
+  // written only while no comparison has been asked for: a late trace must
+  // not replace "Aligning laps" or a comparison's result or error.
   const traceLoading = (async () => {
     try {
       const trace = await api(`/laps/${encodeURIComponent(lapId)}/trace?${query}`);
-      if (state.lapRequest !== request) return;
+      if (state.lapRequest !== request) return false;
       state.lapTrace = trace;
-      if (!state.comparisonTrace && !state.comparing) {
+      const playable = Boolean(trace.axis?.values?.length);
+      if (!state.comparisonTrace) {
         state.mapTraces = { candidate: trace, reference: null };
         configurePlayback();
         renderComparison();
-        const quality = lapRecordingQuality(state.laps.find(lap => lap.id === lapId), trace.coverage);
-        setNotice("lapLabStatus", trace.axis?.values?.length ? `Lap playback ready. A reference is optional.${quality.warning ? ` ${quality.warning}` : ""}` : "No recorded samples are available for this lap.", trace.axis?.values?.length ? (quality.warning ? "warning" : "success") : "");
       }
+      if (state.comparisonStatus === "idle") {
+        const quality = lapRecordingQuality(state.laps.find(lap => lap.id === lapId), trace.coverage);
+        setNotice("lapLabStatus", playable ? `Lap playback ready. A reference is optional.${quality.warning ? ` ${quality.warning}` : ""}` : "No recorded samples are available for this lap.", playable ? (quality.warning ? "warning" : "success") : "");
+      }
+      return playable;
     } catch (error) {
-      if (state.lapRequest !== request || state.comparisonTrace || state.comparing) return;
-      configurePlayback();
-      renderComparison();
-      setNotice("lapLabStatus", formatError(error), "error");
+      if (state.lapRequest !== request) return false;
+      if (!state.comparisonTrace) {
+        configurePlayback();
+        renderComparison();
+      }
+      if (state.comparisonStatus === "idle") setNotice("lapLabStatus", formatError(error), "error");
+      return false;
     }
   })();
-  await Promise.all([traceLoading, loadReferences(lapId)]);
+  const [playable] = await Promise.all([traceLoading, loadReferences(lapId)]);
+  if (state.lapRequest !== request) return;
+  // The suggestion is compared once the lap itself has played back: a lap
+  // with no readable telemetry has nothing to align. A reference the driver
+  // already chose while the lap loaded is not replaced.
+  const suggestion = state.referenceSuggestion;
+  if (playable && suggestion && state.comparisonStatus === "idle" && byId("referenceLapSelect")?.value === suggestion) {
+    await createComparison();
+  }
 }
 
 async function loadReferences(lapId) {
@@ -701,6 +868,17 @@ async function loadReferences(lapId) {
   select.disabled = true;
   if (byId("referenceDriverSelect")) byId("referenceDriverSelect").disabled = true;
   byId("createComparison").disabled = true;
+  const candidate = state.laps.find((lap) => lap.id === lapId);
+  if (candidate && !hasTelemetry(candidate)) {
+    // Known only from the game's lap timing: there is no telemetry to align.
+    state.references = [];
+    state.referenceOptions = new Map();
+    state.referenceSuggestion = "";
+    setReferenceSelection("");
+    if (byId("referenceDriverSelect")) byId("referenceDriverSelect").disabled = true;
+    byId("referenceLapMeta").textContent = "This lap was recorded from lap timing only, so there is no telemetry to compare.";
+    return;
+  }
   byId("referenceLapMeta").textContent = "Loading compatible references…";
   let failure = "";
   try {
@@ -714,28 +892,31 @@ async function loadReferences(lapId) {
   }
   buildReferenceOptions();
   setReferenceSelection(state.referenceSuggestion);
+  // Named before the automatic comparison reports which session it used.
+  await loadOtherSessionLabels();
+  if (state.lapRequest !== selection || state.referenceRequest !== request) return;
   if (!state.referenceSuggestion) {
+    const comparable = [...state.referenceOptions.values()].some((option) => option.telemetry);
     byId("referenceLapMeta").textContent = failure
-      ? `References unavailable: ${failure}. You can still choose a driver and lap from this session.`
-      : state.referenceOptions.size
+      ? `References unavailable: ${failure}.${comparable ? " You can still choose a driver and lap from this session." : ""}`
+      : comparable
         ? "No comparable reference was suggested. Choose a driver and lap to compare anyway; the comparison names any caveats."
-        : "No other lap to compare with. This lap can still be played and analyzed alone.";
-    return;
+        : "No other lap with telemetry to compare with. This lap can still be played and analyzed alone.";
   }
-  // The suggestion is compared straight away, as choosing it by hand would.
-  await createComparison();
 }
 
 function buildReferenceOptions() {
   const options = new Map();
   const references = new Map(state.references.map((reference) => [reference.lap_id, reference]));
-  for (const lap of state.laps) {
-    if (!lap.id || lap.id === state.candidateLapId) continue;
+  for (const lap of activeLaps()) {
+    if (lap.id === state.candidateLapId) continue;
     const reference = references.get(lap.id);
     options.set(lap.id, {
       lap_id: lap.id, driverKey: lapDriverKey(lap), driver: driverName(lap), isPlayer: Boolean(lap.is_player),
       lap_number: lap.lap_number, lap_time_ms: lap.lap_time_ms, valid: Boolean(lap.valid),
       session_id: state.selectedSessionId, sameSession: true,
+      // The server lists only laps whose telemetry can be read.
+      telemetry: Boolean(reference) || hasTelemetry(lap),
       compatibility: reference?.compatibility || null, reasons: reference?.reasons || [], suggested: Boolean(reference?.suggested),
     });
   }
@@ -748,13 +929,36 @@ function buildReferenceOptions() {
       driver: reference.driver || "Driver", isPlayer: Boolean(reference.is_player),
       lap_number: reference.lap_number, lap_time_ms: reference.lap_time_ms,
       valid: !(reference.reasons || []).includes("invalid/context lap"),
-      session_id: reference.session_id, sameSession,
+      session_id: reference.session_id, sameSession, telemetry: true,
       compatibility: reference.compatibility || null, reasons: reference.reasons || [], suggested: Boolean(reference.suggested),
     });
   }
   state.referenceOptions = options;
   const suggested = state.references.find((reference) => reference.suggested) || state.references[0];
   state.referenceSuggestion = suggested && options.has(suggested.lap_id) ? suggested.lap_id : "";
+}
+
+// Other sessions' references are named by type and date. The Library list
+// may not hold them (filters, paging), so their details are fetched once.
+function loadOtherSessionLabels() {
+  const missing = new Set();
+  for (const option of state.referenceOptions.values()) {
+    if (option.sameSession || !option.session_id) continue;
+    if (state.sessions.some((session) => session.id === option.session_id) || state.sessionLabels.has(option.session_id)) continue;
+    missing.add(option.session_id);
+  }
+  const selection = state.lapRequest;
+  return Promise.all([...missing].map(async (sessionId) => {
+    state.sessionLabels.set(sessionId, null);
+    try {
+      const payload = await api(`/sessions/${encodeURIComponent(sessionId)}`);
+      const session = payload?.session || payload;
+      state.sessionLabels.set(sessionId, session?.id ? session : null);
+      if (state.lapRequest === selection) populateReferenceSelectors();
+    } catch {
+      state.sessionLabels.delete(sessionId);
+    }
+  }));
 }
 
 function referenceDriverGroups() {
@@ -775,7 +979,7 @@ function referenceDriverGroups() {
 }
 
 function otherSessionLabel(sessionId) {
-  const session = state.sessions.find((item) => item.id === sessionId);
+  const session = state.sessions.find((item) => item.id === sessionId) || state.sessionLabels.get(sessionId);
   return session ? `${session.session_type || "Session"} · ${formatDate(session.started_at)}` : "another session";
 }
 
@@ -798,10 +1002,13 @@ function populateReferenceSelectors(selectedLapId = byId("referenceLapSelect")?.
     const group = document.createElement("optgroup");
     group.label = label;
     for (const item of items) {
+      const comparable = item.options.filter((option) => option.telemetry).length;
       const option = element("option", "", item.sameSession
-        ? `${item.name}${item.isPlayer ? " (you)" : ""} · ${item.options.length} lap${item.options.length === 1 ? "" : "s"}`
+        ? `${item.name}${item.isPlayer ? " (you)" : ""} · ${comparable ? `${comparable} lap${comparable === 1 ? "" : "s"}` : "timing only, no telemetry"}`
         : `${item.name} · ${otherSessionLabel(item.session_id)}`);
       option.value = item.key;
+      // Laps known only from lap timing cannot be compared.
+      option.disabled = !comparable;
       group.append(option);
     }
     driverSelect.append(group);
@@ -809,24 +1016,27 @@ function populateReferenceSelectors(selectedLapId = byId("referenceLapSelect")?.
   addGroup("This session", groups.filter((group) => group.sameSession));
   addGroup("Other sessions at this track", groups.filter((group) => !group.sameSession));
   driverSelect.value = groups.some((group) => group.key === state.referenceDriver) ? state.referenceDriver : "";
-  driverSelect.disabled = !groups.length;
+  driverSelect.disabled = !groups.some((group) => group.options.some((option) => option.telemetry));
   const current = groups.find((group) => group.key === state.referenceDriver);
-  const fastest = current ? fastestOf(current.options, (option) => option.lap_id) : "";
+  const fastest = current ? fastestOf(current.options.filter((option) => option.telemetry), (option) => option.lap_id) : "";
   replaceOptions(byId("referenceLapSelect"), (current?.options || []).map((option) => ({
     value: option.lap_id,
-    label: `${option.suggested ? "Suggested · " : ""}Lap ${option.lap_number ?? "—"} · ${formatLapTime(option.lap_time_ms)}${option.lap_id === fastest ? " · fastest" : ""}${option.valid ? "" : " · invalid"} · ${compatibilityText(option)}`,
+    label: `${option.suggested ? "Suggested · " : ""}Lap ${option.lap_number ?? "—"} · ${formatLapTime(option.lap_time_ms)}${option.lap_id === fastest ? " · fastest" : ""}${option.valid ? "" : " · invalid"} · ${option.telemetry ? compatibilityText(option) : "timing only, no telemetry"}`,
+    disabled: !option.telemetry,
   })), current ? "Choose a lap" : "Choose a driver first", selectedLapId);
   byId("referenceLapSelect").disabled = !current;
 }
 
 // The lap a reference driver opens on: the server's suggestion when it is
-// theirs, else their best-ranked compatible lap, else their fastest lap.
+// theirs, else their best-ranked compatible lap, else their fastest lap with
+// telemetry.
 function defaultReferenceLap(driverKey) {
   const group = referenceDriverGroups().find((item) => item.key === driverKey);
   if (!group) return "";
   const ids = new Set(group.options.map((option) => option.lap_id));
   const ranked = state.references.find((reference) => ids.has(reference.lap_id));
-  return ranked?.lap_id || fastestOf(group.options, (option) => option.lap_id) || group.options[0]?.lap_id || "";
+  const playable = group.options.filter((option) => option.telemetry);
+  return ranked?.lap_id || fastestOf(playable, (option) => option.lap_id) || playable[0]?.lap_id || "";
 }
 
 function setReferenceSelection(lapId) {
@@ -931,6 +1141,10 @@ function updateReferenceMeta() {
 async function createComparison() {
   const referenceLapId = byId("referenceLapSelect")?.value || "";
   if (!state.candidateLapId || !referenceLapId) return;
+  // One comparison at a time: a newer one supersedes and cancels the last.
+  cancelComparison();
+  const abort = typeof AbortController === "function" ? new AbortController() : null;
+  state.comparisonAbort = abort;
   const candidateLapId = state.candidateLapId;
   const selection = state.lapRequest;
   const request = ++state.comparisonRequest;
@@ -938,6 +1152,11 @@ async function createComparison() {
   const reference = state.referenceOptions.get(referenceLapId);
   const compatibility = reference?.compatibility;
   const classification = compatibility?.class || compatibility?.classification;
+  // A reference from another session was driven in other conditions: its
+  // setup, fuel and weather were not recorded alongside this lap.
+  const otherSession = () => (reference && !reference.sameSession
+    ? ` The reference is from another session (${otherSessionLabel(reference.session_id)}); its setup, fuel and conditions may differ.`
+    : "");
   // A rival on another compound or fuel load is still a rival worth
   // comparing against, and choosing one is the driver's decision: the
   // compatibility badge already names every caveat before the click. This
@@ -960,11 +1179,13 @@ async function createComparison() {
   configurePlayback();
   renderComparison();
   state.comparing = true;
+  state.comparisonStatus = "pending";
   setNotice("lapLabStatus", "Aligning laps by distance and calculating deterministic segment evidence…");
   try {
     const comparison = await api("/comparisons", {
       method: "POST",
       body: JSON.stringify({ candidate_lap_id: candidateLapId, reference: { kind: "lap", lap_id: referenceLapId }, allow_caveated_reference: allowCaveat }),
+      ...(abort ? { signal: abort.signal } : {}),
     });
     if (!current()) return;
     const traceQuery = new URLSearchParams({ fields: "speed,delta,brake,throttle,steering,gear,line_n", max_points: "2400" });
@@ -986,23 +1207,42 @@ async function createComparison() {
     // it rounds differently ("1%" against "less than 1%").
     const coverage = comparison.coverage_warning ? "" : ` · ${formatPercent(comparison.coverage_ratio)} aligned coverage`;
     const coverageNote = comparison.coverage_warning ? ` ${comparison.coverage_warning}` : "";
-    setNotice("lapLabStatus", `Comparison ready${coverage} · ${comparison.algorithm_bundle}.${caveatNote}${coverageNote}`, comparison.coverage_warning ? "warning" : "success");
+    state.comparisonStatus = "ready";
+    const sessionNote = otherSession();
+    const tone = sessionNote ? "warning" : comparison.coverage_warning ? "warning" : "success";
+    setNotice("lapLabStatus", `Comparison ready${coverage} · ${comparison.algorithm_bundle}.${caveatNote}${sessionNote}${coverageNote}`, tone);
   } catch (error) {
     if (!current()) return;
     state.comparison = null;
     state.comparisonTrace = null;
     state.mapTraces = { candidate: state.lapTrace, reference: null };
+    state.comparisonStatus = "failed";
     configurePlayback();
     renderComparison();
-    setNotice("lapLabStatus", formatError(error), "error");
+    // Playback of the lap itself stays available; say so with the reason.
+    setNotice("lapLabStatus", `${formatError(error)}${state.lapTrace?.axis?.values?.length ? " The lap can still be played on its own." : ""}`, "error");
   } finally {
     if (current()) {
       state.comparing = false;
+      if (state.comparisonAbort === abort) state.comparisonAbort = null;
       updateReferenceMeta();
       // Metadata must not replace the comparison's evidence/compatibility badge.
       renderComparison();
     }
   }
+}
+
+// A reference picked from a list is compared once the choice settles, so
+// stepping through the list with the keyboard runs one comparison, not one
+// per step. Use suggested and Compare again run at once.
+const COMPARISON_SETTLE_MS = 350;
+
+function scheduleComparison() {
+  cancelComparison();
+  state.comparisonTimer = setTimeout(() => {
+    state.comparisonTimer = null;
+    createComparison();
+  }, COMPARISON_SETTLE_MS);
 }
 
 function renderComparison() {
@@ -1736,8 +1976,17 @@ function bindEvents() {
     if (!state.referenceSuggestion) return;
     setReferenceSelection(state.referenceSuggestion);
     byId("referenceLapSelect")?.dispatchEvent(new Event("change"));
+    // An explicit choice is compared at once rather than after the settle delay.
+    if (state.comparisonTimer) {
+      clearTimeout(state.comparisonTimer);
+      state.comparisonTimer = null;
+      createComparison();
+    }
+    // The button hides once the suggestion is chosen; keep focus nearby.
+    byId("referenceLapSelect")?.focus();
   });
   byId("referenceLapSelect")?.addEventListener("change", () => {
+    cancelComparison();
     state.comparisonRequest += 1;
     state.comparing = false;
     stopPlayback();
@@ -1753,12 +2002,15 @@ function bindEvents() {
     // "Aligning laps" of one still in flight, whose answer is now discarded -
     // must not stay on screen above a blank delta.
     const referenceLapId = byId("referenceLapSelect")?.value || "";
+    // A lap trace arriving now must not replace this line.
+    state.comparisonStatus = state.candidateLapId && referenceLapId ? "pending" : "idle";
     setNotice("lapLabStatus", state.candidateLapId
       ? (referenceLapId ? "Reference changed. Comparing against it…" : "Reference changed. Choose a lap to compare against.")
       : "Choose a recorded lap to see its playback.");
     updateReferenceChoice();
-    // A chosen reference is compared at once; Compare again repeats it.
-    if (state.candidateLapId && referenceLapId) createComparison();
+    // A chosen reference is compared once the choice settles; Compare again
+    // repeats it at once.
+    if (state.candidateLapId && referenceLapId) scheduleComparison();
   });
   byId("createComparison")?.addEventListener("click", createComparison);
   byId("playbackToggle")?.addEventListener("click", startPlayback);
