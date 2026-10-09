@@ -12,6 +12,7 @@ backend so the Node chart tests always read the current contract.
 from __future__ import annotations
 
 import json
+import sys
 from pathlib import Path
 
 from pitwall.session_analysis import AnalysisCar, AnalysisLap, build_session_analysis
@@ -116,10 +117,93 @@ def build_fixture() -> dict:
     return build_session_analysis(SESSION, CARS, laps(), events=EVENTS)
 
 
+# A full field over a long race, for layout checks at scale: 22 cars and 60
+# laps, a VSC and a safety car from race control, a stop under the safety
+# car, two lapped cars, a retirement, a car known only from lap history
+# after half distance and a car whose record has a lap without a time. It is
+# not stored: tools/session-analysis-layout-smoke.cjs runs
+# `python tests/session_analysis_fixture.py --large` and reads stdout.
+LARGE_SESSION = {
+    "id": "ses_fixture_large",
+    "session_type": "Race",
+    "raw_session_type_id": 15,
+    "track_id": 7,
+    "track_name": "Silverstone",
+    "total_laps": 60,
+    "status": "complete",
+    "started_at": "2026-10-05T13:00:00+00:00",
+}
+LARGE_NAMES = [
+    "Lando Norris", "Oscar Piastri", "George Russell", "Kimi Antonelli", "Max Verstappen",
+    "Isack Hadjar", "Charles Leclerc", "Lewis Hamilton", "Alexander Albon", "Carlos Sainz",
+    "Liam Lawson", "Arvid Lindblad", "Fernando Alonso", "Lance Stroll", "Oliver Bearman",
+    "Esteban Ocon", "Nico Hulkenberg", "Gabriel Bortoleto", "Pierre Gasly", "Franco Colapinto",
+    "Sergio Perez", "Valtteri Bottas",
+]
+# Teammates share a 2026 season-pack team id (476-486).
+LARGE_TEAMS = [team for team in (484, 476, 478, 477, 479, 482, 480, 483, 485, 481, 486) for _ in range(2)]
+LARGE_PLAYER = 9
+LARGE_EVENTS = [
+    {"type": "LGOT", "lap": 1, "payload": {}},
+    {"type": "SCAR", "lap": 18, "payload": {"safety_car_type": 2, "event_type": 0}},
+    {"type": "SCAR", "lap": 19, "payload": {"safety_car_type": 2, "event_type": 2}},
+    {"type": "SCAR", "lap": 34, "payload": {"safety_car_type": 1, "event_type": 0}},
+    {"type": "SCAR", "lap": 37, "payload": {"safety_car_type": 1, "event_type": 2}},
+]
+
+
+def large_cars() -> list[AnalysisCar]:
+    return [
+        AnalysisCar(index, (f"car_{index}",), name, LARGE_TEAMS[index], index + 1, index == LARGE_PLAYER)
+        for index, name in enumerate(LARGE_NAMES)
+    ]
+
+
+def large_laps() -> list[AnalysisLap]:
+    out: list[AnalysisLap] = []
+    for car in range(22):
+        last = {20: 59, 21: 58, 15: 41}.get(car, 60)  # two lapped cars and a retirement
+        pit_lap = 35 if car in (4, 5) else 22 + (car * 3) % 9  # two cars stop under the safety car
+        start = "SOFT" if car % 3 == 0 else "MEDIUM"
+        for number in range(1, last + 1):
+            ms = 90_000 + car * 110 + (number * 37 + car * 53) % 400
+            if car >= 20:
+                ms += 2_600  # off the pace: lapped before the flag
+            if number == 1:
+                ms += 2_500
+            if number in (18, 19):
+                ms = int(ms * 1.3)
+            if number in range(34, 38):
+                ms = int(ms * 1.45)
+            pit = number in (pit_lap, pit_lap + 1)
+            if pit and number not in range(34, 38):
+                ms += 11_000
+            fresh = number > pit_lap
+            compound = "HARD" if fresh else start
+            age = number - pit_lap - 1 if fresh else number - 1
+            if car == 12 and number == 45:
+                out.append(_lap(car, number, None, compound=compound, age=age))
+                continue
+            if car == 19 and number > 30:
+                # Outside the trace scope after half distance: lap history only.
+                out.append(_lap(car, number, ms, compound=None, age=None, observed=False))
+                continue
+            flag = number in (18, 19, 34, 35, 36, 37)
+            out.append(_lap(car, number, ms, pit=pit, flag=flag, compound=compound, age=age))
+    return out
+
+
+def build_large_fixture() -> dict:
+    return build_session_analysis(LARGE_SESSION, large_cars(), large_laps(), events=LARGE_EVENTS)
+
+
 def write_fixture() -> None:
     FIXTURE.parent.mkdir(parents=True, exist_ok=True)
     FIXTURE.write_text(json.dumps(build_fixture(), indent=1, sort_keys=True) + "\n", encoding="utf-8")
 
 
 if __name__ == "__main__":
-    write_fixture()
+    if "--large" in sys.argv[1:]:
+        sys.stdout.write(json.dumps(build_large_fixture(), separators=(",", ":"), sort_keys=True))
+    else:
+        write_fixture()

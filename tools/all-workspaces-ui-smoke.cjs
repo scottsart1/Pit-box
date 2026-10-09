@@ -89,7 +89,7 @@ const { chromium } = require('playwright');
       };
       await page.goto(base);
       await check('first-use-readiness', async () => ({ ...await settle(), delayedPrivacyResponse: delayedFirstPrivacyResponse }));
-      const analysisViews = ['library', 'test-engineer', 'session-review', 'lap-lab', 'field', 'review'];
+      const analysisViews = ['library', 'session-analysis', 'test-engineer', 'session-review', 'lap-lab', 'field', 'review'];
       for (const id of ['live', 'driver-dashboard', 'strategy', 'connection', 'analysis', 'setup', 'settings', ...analysisViews]) {
         await check(`navigate-${id}`, async () => {
           if (analysisViews.includes(id) && !await page.locator('#analysis').isVisible()) await open('analysis');
