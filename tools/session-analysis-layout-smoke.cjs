@@ -8,6 +8,8 @@
    --large` (PITBOX_PYTHON selects the interpreter; src/ is put on PYTHONPATH).
    PITBOX_ANALYSIS_PAYLOADS=<file>[<path delimiter><file>...] adds more payloads
    for local checks. PITBOX_BROWSER_PATH selects an installed Chrome or Edge.
+   PITBOX_WIDE_FONT=<family> (for example Verdana) lays the view out in a wider
+   font than the app's, as machines without Segoe UI see it.
    PITBOX_SHOTS=<dir> saves a viewport screenshot per viewport and payload;
    PITBOX_SHOTS_CARDS=<payload name>[,<name>] also saves every card of those
    payloads (names: race, large-race, practice, or an added file's name). */
@@ -146,6 +148,8 @@ async function openPage(browser, viewport, sets) {
     document.querySelectorAll('.analysis-view').forEach((el) => { el.hidden = el.id !== 'session-analysis'; });
     localStorage.setItem('pitwall.analysis.session', first);
   }, String(sets[0].payload.session_id));
+  // A wide fallback font, to see the layout as machines without Segoe UI do.
+  if (process.env.PITBOX_WIDE_FONT) await page.addStyleTag({ content: `body, body * { font-family: ${process.env.PITBOX_WIDE_FONT}, sans-serif !important; }` });
   await page.addScriptTag({ type: 'module', url: 'http://pitbox.test/static/js/session-analysis.js' });
   return { context, page, problems };
 }
@@ -182,10 +186,16 @@ async function geometry(page) {
     const gestures = [...view.querySelectorAll('.sa-svg, .sa-heat-scroll, .sa-chart')].map((el) => getComputedStyle(el).touchAction)
       .filter((t) => !(t === 'auto' || t === 'manipulation' || t.includes('pinch-zoom')));
     const stretched = view.querySelectorAll('svg[preserveAspectRatio="none"]').length;
-    // Labels inside one chart never sit on top of each other.
+    // Labels inside one chart never sit on top of each other, and none is
+    // cut off by the edge of its chart.
     const collisions = [];
+    const clipped = [];
     for (const svg of view.querySelectorAll('svg.sa-svg')) {
+      const frame = svg.getBoundingClientRect();
       const boxes = [...svg.querySelectorAll('text')].filter((t) => t.textContent.trim() && visible(t)).map((t) => ({ text: t.textContent, r: t.getBoundingClientRect() }));
+      for (const { text, r } of boxes) {
+        if (r.left < frame.left - 1 || r.right > frame.right + 1 || r.top < frame.top - 1 || r.bottom > frame.bottom + 1) clipped.push({ chart: svg.closest('.sa-chart')?.id, text: text.slice(0, 24) });
+      }
       for (let i = 0; i < boxes.length; i += 1) {
         for (let j = i + 1; j < boxes.length; j += 1) {
           const a = boxes[i].r, b = boxes[j].r;
@@ -200,7 +210,7 @@ async function geometry(page) {
       docOverflow: document.documentElement.scrollWidth - innerWidth,
       areaOverflow: area.scrollWidth - area.clientWidth,
       viewOverflow: view.scrollWidth - view.clientWidth,
-      overflowing, smallText, htmlText, scaled, positioned, gestures, stretched, collisions,
+      overflowing, smallText, htmlText, scaled, positioned, gestures, stretched, collisions, clipped,
       charts: charts.filter((id) => { const el = document.getElementById(id); return el && visible(el) && el.querySelector('svg'); }),
     };
   }, CHARTS);
@@ -274,6 +284,7 @@ async function verticalSwipe(page, cdp, id) {
           check(set, 'no-sticky-or-fixed', !g.positioned.length, { positioned: g.positioned });
           check(set, 'gestures-keep-pan-and-zoom', !g.gestures.length && !g.stretched, { gestures: g.gestures, stretched: g.stretched });
           check(set, 'chart-labels-do-not-collide', !g.collisions.length, { collisions: g.collisions.slice(0, 6) });
+          check(set, 'chart-labels-inside-their-chart', !g.clipped.length, { clipped: g.clipped.slice(0, 6) });
           const expected = set.payload.session?.is_race ? CHARTS.length : CHARTS.length - 3;
           check(set, 'every-chart-drawn', g.charts.length === expected, { drawn: g.charts });
           if (shots) await page.screenshot({ path: path.join(shots, `session-analysis-${set.name}-${label}.png`), scale: 'css' });

@@ -593,7 +593,7 @@ export function finishLabel(driver, lastLapNumber, total) {
   }
 }
 
-export function positionsModel(analysis, { focus = [], width = 640, height = 360 } = {}) {
+export function positionsModel(analysis, { focus = [], width = 640, height = 360, measure = null } = {}) {
   const total = lastLap(analysis);
   const styles = driverStyles(analysis);
   const drivers = driversByIndex(analysis);
@@ -605,10 +605,11 @@ export function positionsModel(analysis, { focus = [], width = 640, height = 360
     if (points.length) ends.push({ carIndex, points, text: finishLabel(drivers.get(carIndex) || { code: `#${carIndex}` }, points[points.length - 1].lap, total) });
   }
   // The right margin holds the finishing column only; a line that ends
-  // earlier is labelled inside the plot.
-  const CHAR = 6.6;
-  const longest = Math.max(6, ...ends.filter((e) => e.points[e.points.length - 1].lap === total).map((e) => e.text.length));
-  const margin = { l: 40, r: Math.min(150, 14 + longest * CHAR), t: 18, b: 28 };
+  // earlier is labelled inside the plot. Label widths come from `measure`
+  // (the view measures its own font) or a generous per-character estimate.
+  const textWidth = typeof measure === "function" ? (text) => measure(text) : (text) => text.length * 7.2;
+  const longest = Math.max(textWidth("P20 XXX"), ...ends.filter((e) => e.points[e.points.length - 1].lap === total).map((e) => textWidth(e.text)));
+  const margin = { l: 40, r: Math.min(180, 14 + Math.ceil(longest)), t: 18, b: 28 };
   const plot = { left: margin.l, right: width - margin.r, top: margin.t, bottom: height - margin.b };
   const x = scale(1, Math.max(2, total), plot.left, plot.right);
   const y = scale(1, field, plot.top, plot.bottom);
@@ -637,11 +638,11 @@ export function positionsModel(analysis, { focus = [], width = 640, height = 360
   }
   // A label that would run into the finishing column turns to the left of
   // its dot; labels that still overlap step down until they clear.
-  const boxOf = (l) => (l.anchor === "start" ? { left: l.tx, right: l.tx + l.text.length * CHAR } : { left: l.tx - l.text.length * CHAR, right: l.tx });
+  const boxOf = (l) => (l.anchor === "start" ? { left: l.tx, right: l.tx + textWidth(l.text) } : { left: l.tx - textWidth(l.text), right: l.tx });
   for (const label of labels) {
-    if (label.lap === total || label.tx + label.text.length * CHAR <= plot.right - 4) continue;
+    if (label.lap === total || label.tx + textWidth(label.text) <= plot.right - 4) continue;
     label.anchor = "end";
-    label.tx = Math.max(plot.left + label.text.length * CHAR, label.x - 8);
+    label.tx = Math.max(plot.left + textWidth(label.text), label.x - 8);
   }
   const placed = [];
   for (const label of labels.slice().sort((a, b) => a.ty - b.ty)) {

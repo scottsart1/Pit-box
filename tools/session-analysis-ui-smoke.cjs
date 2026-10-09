@@ -89,6 +89,8 @@ async function harness({ hash = '', storage = {}, overrides = {}, reducedMotion 
   w.cancelAnimationFrame = (handle) => { frames.delete(handle); };
   w.matchMedia = (query) => ({ matches: reducedMotion && /reduce/.test(query), media: query, addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {} });
   w.confirm = w.alert = w.prompt = () => { throw new Error('native dialogs are not allowed'); };
+  // jsdom has no canvas: the view falls back to estimated label widths.
+  w.HTMLCanvasElement.prototype.getContext = () => null;
   const calls = [];
   const state = { list };
   const payloads = { ses_fixture_race: race, ses_b: raceB, ses_practice: practice };

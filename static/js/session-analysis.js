@@ -604,12 +604,24 @@ function renderTrace() {
   });
 }
 
+// Width of a 12 px chart label in the font the page really uses, so labels
+// fit whatever font a device falls back to; null where canvas is missing.
+let measureContext;
+function labelMeasure(container) {
+  if (measureContext === undefined) {
+    try { measureContext = document.createElement("canvas").getContext("2d") || null; } catch { measureContext = null; }
+  }
+  if (!measureContext) return null;
+  const font = `800 12px ${getComputedStyle(container).fontFamily || "sans-serif"}`;
+  return (text) => { measureContext.font = font; return measureContext.measureText(text).width; };
+}
+
 function renderPositions() {
   const container = byId("analysisPositionsChart");
   if (!container) return;
   const width = widthOf(container);
   const field = Math.max(2, ...(state.analysis.laps || []).map((l) => Number(l.position) || 0));
-  const model = M.positionsModel(state.analysis, { focus: state.focus, width, height: clamp(field * 18 + 48, 200, 460) });
+  const model = M.positionsModel(state.analysis, { focus: state.focus, width, height: clamp(field * 18 + 48, 200, 460), measure: labelMeasure(container) });
   placeTable("analysisPositionsTable", M.positionsTable(state.analysis));
   if (!model.lines.length) { mount(container, emptyNote("No lap positions could be derived for this session.")); bindChart(container, { kind: "none" }); return; }
   const svg = svgRoot(model.width, model.height, "Position at the end of every lap; lapped finishers keep their place. Arrow keys step through laps.", { interactive: true, focusable: true });
