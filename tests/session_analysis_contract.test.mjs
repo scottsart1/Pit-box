@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import {
   COMPOUNDS, PACE_EXCLUSION_TEXT, STATUS_TEXT, STOP_KIND_TEXT, compoundInfo, countText, deltaWords, exclusionText, fastestTable,
-  formatGap, formatLapTime, frameAt, gapWords, headline, heatmapModel, heatmapTable, lapBands, lapTimesModel, lapTimesTable,
+  formatGap, formatLapTime, frameAt, gapWords, hasRaceOrder, headline, heatmapModel, heatmapTable, lapBands, lapTimesModel, lapTimesTable,
   lapsDownText, lapseTable, paceTable, pitStopRows, positionText, positionsModel, positionsTable, racePaceModel,
   raceTraceModel, referenceNote, referenceOptions, resultText, schemaSupported, statusText, stopKindText, stopLossText,
   stopsText, strategyModel, strategyTable, timelapseFrames, traceReading, traceTable, fastestModel,
@@ -15,6 +15,42 @@ import {
 const race = JSON.parse(readFileSync(new URL('./fixtures/session_analysis_race.json', import.meta.url), 'utf8'));
 const clone = (value) => JSON.parse(JSON.stringify(value));
 const idx = (analysis, c) => analysis.drivers.find((d) => d.code === c).car_index;
+
+// The committed race as the backend reports it while the recording is
+// unfinished: every placed car is "running" and keeps its place and laps down.
+function provisionalRace() {
+  const p = clone(race);
+  p.session.provisional = true;
+  p.session.status = 'incomplete';
+  for (const d of p.drivers) {
+    if (['finished', 'lapped', 'retired'].includes(d.status)) d.status = 'running';
+    d.gap_to_winner_ms = null;
+  }
+  return p;
+}
+
+// One recorded car: unplaced, but its laps still carry position 1 and a 0 ms
+// gap, as the backend's per-lap order produces for a field of one.
+function singleCar({ provisional = false } = {}) {
+  const p = clone(race);
+  const player = p.drivers.find((d) => d.is_player);
+  p.session.provisional = provisional;
+  p.drivers = [{ ...player, status: provisional ? 'running' : 'unranked', finish_position: null, laps_down: null, gap_to_winner_ms: null }];
+  p.laps = p.laps.filter((l) => l.car_index === player.car_index).map((l) => ({ ...l, position: l.position == null ? null : 1, gap_to_leader_ms: l.gap_to_leader_ms == null ? null : 0 }));
+  p.field = { cars: 6, cars_with_laps: 1, complete: false };
+  p.winner_car_index = null;
+  return p;
+}
+
+// Two recorded cars, LEC and the given runner-up placed second.
+function duelWith(code) {
+  const p = clone(race);
+  const keep = new Set([idx(race, 'LEC'), idx(race, code)]);
+  p.drivers = p.drivers.filter((d) => keep.has(d.car_index)).map((d) => (d.code === code ? { ...d, finish_position: 2 } : d));
+  p.laps = p.laps.filter((l) => keep.has(l.car_index));
+  p.field = { cars: 2, cars_with_laps: 2, complete: true };
+  return p;
+}
 
 // The enum tuples come from the backend source, so a new value fails here
 // until it has text.
@@ -209,6 +245,34 @@ test('headline: a provisional session or a partial field never claims a win', ()
   assert.equal(q.kpis.find((k) => /Fastest/.test(k.label)).label, 'Fastest recorded lap');
 });
 
+test('headline: an unfinished recording claims only the fastest recorded lap', () => {
+  // record_complete only covers gaps and flashbacks; it stays true here.
+  const p = provisionalRace();
+  assert.equal(p.record_complete, true);
+  const h = headline(p);
+  assert.equal(h.kpis.find((k) => /Fastest/.test(k.label)).label, 'Fastest recorded lap');
+  assert.ok(!h.kpis.some((k) => k.label === 'Fastest lap'));
+  const practice = clone(race);
+  practice.session = { ...race.session, is_race: false, session_type: 'Practice 1', provisional: true };
+  assert.equal(headline(practice).kpis.find((k) => /Fastest/.test(k.label)).label, 'Fastest recorded lap');
+});
+
+test('headline: the runner-up reads by its status; a retirement is never laps down', () => {
+  const retired = headline(duelWith('HAD'));
+  assert.equal(retired.kpis[0].label, 'Winner');
+  assert.equal(retired.kpis[0].detail, 'HAD retired');
+  assert.doesNotMatch(JSON.stringify(retired), /\+10 laps/);
+  const lapped = headline(duelWith('BOT'));
+  assert.equal(lapped.kpis[0].detail, 'BOT +1 lap');
+  const close = headline(duelWith('PIA'));
+  assert.match(close.kpis[0].detail, /^PIA \d+\.\d{3} s behind$/);
+  // Provisional: the runner-up is "running" and only its laps down are known.
+  const provisional = provisionalRace();
+  provisional.drivers.find((d) => d.code === 'PIA').finish_position = 7;
+  provisional.drivers.find((d) => d.code === 'BOT').finish_position = 2;
+  assert.equal(headline(provisional).kpis[0].detail, 'BOT +1 lap');
+});
+
 test('headline: a single recorded car makes no order claim', () => {
   const single = clone(race);
   single.drivers = [{ ...race.drivers[0], status: 'unranked' }];
@@ -221,6 +285,23 @@ test('headline: a single recorded car makes no order claim', () => {
   assert.equal(you.value, '—');
   assert.match(you.detail, /only recorded car/);
   assert.doesNotMatch(h.subtitle, /order derived/);
+});
+
+test('a single recorded car has no race order: no frames to replay, whatever its laps say', () => {
+  assert.equal(hasRaceOrder(race), true);
+  assert.equal(hasRaceOrder(provisionalRace()), true);
+  for (const single of [singleCar(), singleCar({ provisional: true })]) {
+    assert.equal(hasRaceOrder(single), false, single.drivers[0].status);
+    assert.ok(single.laps.some((l) => l.position === 1), 'its laps still carry P1');
+    assert.deepEqual(timelapseFrames(single), []);
+    assert.deepEqual(lapseTable(single, timelapseFrames(single)).rows, []);
+    const h = headline(single);
+    assert.doesNotMatch(JSON.stringify(h), /\bP1\b|wins|leads|Leader/);
+  }
+  const practice = clone(race);
+  practice.session = { ...race.session, is_race: false };
+  assert.equal(hasRaceOrder(practice), false, 'practice has no race order');
+  assert.equal(hasRaceOrder(null), false);
 });
 
 test('headline: the official result wins and a disagreement is explained', () => {
@@ -237,6 +318,31 @@ test('headline: the official result wins and a disagreement is explained', () =>
   assert.match(same.detail, /official result/);
   const derived = headline(race).kpis.find((k) => /^Your/.test(k.label));
   assert.equal(derived.label, 'Your result (derived)');
+});
+
+test('headline: when the official result disputes the derived order, nobody "wins" on lap times', () => {
+  // The player (LEC) is first on lap times, but the official result is P3.
+  const disagree = clone(race);
+  assert.equal(disagree.winner_car_index, idx(race, 'LEC'));
+  disagree.official_result = { player_position: 3, derived_player_position: 1, agrees: false };
+  const h = headline(disagree);
+  assert.doesNotMatch(h.title, /wins/);
+  assert.match(h.title, /first on lap times$/);
+  assert.equal(h.kpis[0].label, 'First on lap times');
+  assert.equal(h.kpis[0].value, 'LEC');
+  assert.ok(!h.kpis.some((k) => k.label === 'Winner'));
+  assert.deepEqual(h.kpis.slice(1, 2).map((k) => [k.label, k.value]), [['Your result', 'P3']]);
+  // A disagreement elsewhere in the order unsettles the derived winner too.
+  const lower = clone(race);
+  lower.official_result = { player_position: 2, derived_player_position: 1, agrees: false };
+  lower.winner_car_index = idx(race, 'PIA');
+  assert.doesNotMatch(headline(lower).title, /wins/);
+  // Agreement, or no official result at all, keeps the win.
+  const agree = clone(race);
+  agree.official_result = { player_position: 1, derived_player_position: 1, agrees: true };
+  assert.match(headline(agree).title, /wins/);
+  assert.equal(headline(agree).kpis[0].label, 'Winner');
+  assert.match(headline(race).title, /wins/);
 });
 
 test('headline: incomplete records, retirements and race control', () => {
@@ -299,8 +405,40 @@ test('lapped finishers stay classified in the timelapse; only a retirement leave
   assert.ok(!frameAt(frames, 2.5).entries.some((e) => e.car_index === idx(race, 'HAD')));
   const table = lapseTable(race, frames);
   assert.match(table.rows[table.rows.length - 1][1], /P5 BOT \+1 lap$/);
+  assert.match(table.rows[table.rows.length - 1][2], /^Finish/);
   assert.match(table.rows[5][2], /Race suspended/);
   assert.match(table.rows[2][2], /Safety car/);
+});
+
+test('provisional timelapse: every placed car stays to the last recorded lap with its laps down, and that lap is not the finish', () => {
+  const p = provisionalRace();
+  const frames = timelapseFrames(p);
+  assert.equal(frames.length, 12);
+  const last = frames[frames.length - 1];
+  const placed = p.drivers.filter((d) => d.finish_position).sort((a, b) => a.finish_position - b.finish_position);
+  assert.deepEqual(last.entries.map((e) => e.car_index), placed.map((d) => d.car_index), 'the last frame holds every placed car in order');
+  const at = (frame, c) => frame.entries.find((e) => e.car_index === idx(p, c));
+  assert.deepEqual([at(last, 'BOT').label, at(last, 'BOT').laps_down, at(last, 'BOT').gap_ms], ['P5', 1, null]);
+  assert.deepEqual([at(last, 'HAD').label, at(last, 'HAD').laps_down], ['P6', 10]);
+  // Not known to have retired: it holds its place after its record ends.
+  assert.ok(frames.every((f) => at(f, 'HAD')), 'HAD is in every frame');
+  assert.equal(at(frames[2], 'HAD').laps_down, 1);
+  assert.ok(frames.flatMap((f) => f.entries).every((e) => !e.out), 'nobody is shown leaving');
+  assert.ok(frameAt(frames, 11.5).entries.some((e) => e.car_index === idx(p, 'BOT')));
+  const table = lapseTable(p, frames);
+  const [lap, order, note] = table.rows[table.rows.length - 1];
+  assert.equal(lap, '12');
+  assert.match(order, /P5 BOT \+1 lap, P6 HAD \+10 laps$/);
+  assert.doesNotMatch(note, /Finish/);
+  assert.match(note, /^Last recorded lap/);
+  // A started but unfinished lap after the last ordered lap has no order:
+  // the replay still ends at the last ordered lap, with the whole field.
+  const unfinished = provisionalRace();
+  const lec = unfinished.laps.find((l) => l.car_index === idx(unfinished, 'LEC') && l.lap_number === 12);
+  unfinished.laps.push({ ...lec, lap_number: 13, lap_id: 'lap_0_13', lap_time_ms: null, s1_ms: null, s2_ms: null, s3_ms: null, position: null, gap_to_leader_ms: null, interval_ms: null, segment_time_ms: null, pace_excluded: 'missing_time' });
+  const more = timelapseFrames(unfinished);
+  assert.equal(more.length, 12);
+  assert.equal(more[11].entries.length, placed.length);
 });
 
 test('positions label every status: lapped, retired, incomplete record and provisional', () => {
@@ -325,6 +463,26 @@ test('race pace: identical laps give a finite box with n, far outliers stay insi
     for (const key of ['q1', 'q3', 'median', 'whiskerLow', 'whiskerHigh', 'cross', 'crossStart', 'crossEnd']) assert.ok(Number.isFinite(box[key]), `${key} is finite`);
     assert.equal(box.nText, '5 laps');
     assert.ok(model.ticks.length >= 1 && model.ticks.every((t) => Number.isFinite(t.pos)));
+  }
+  // The time axis at phone width (a 390 px phone leaves the chart 344 px)
+  // keeps at least three labels, spaced so they never touch (7.25 s is a real
+  // 22-car race). Very short spans or narrower charts may fall back to two
+  // labels where three would touch, but never to a lone label.
+  for (const span of [600, 1000, 1600, 2600, 4000, 7248, 8200, 9000, 12500, 21000]) {
+    for (const offset of [0, 37, 250, 518, 1300]) {
+      const low = 91000 + offset;
+      const paced = { drivers: [{ car_index: 0, code: 'AAA' }, { car_index: 1, code: 'BBB' }], race_pace: [0, 1].map((car) => ({
+        car_index: car, n: 8, q1_ms: low + span * 0.3, median_ms: low + span * 0.4, q3_ms: low + span * 0.5,
+        whisker_low_ms: car ? low + span * 0.2 : low, whisker_high_ms: car ? low + span : low + span * 0.6, outliers: [], excluded: {},
+      })) };
+      for (const width of [300, 344, 390, 520]) {
+        const { ticks } = racePaceModel(paced, { width, horizontal: true });
+        assert.ok(ticks.length >= (width >= 344 && span >= 1600 ? 3 : 2), `${span} ms at ${width} px: ${ticks.map((t) => t.label).join(' ')}`);
+        const spacing = Math.min(...ticks.slice(1).map((t, i) => t.pos - ticks[i].pos));
+        const widest = Math.max(...ticks.map((t) => t.label.length));
+        assert.ok(spacing >= widest * 5.5 + 4, `${span} ms at ${width} px: ${ticks.map((t) => t.label).join(' ')} only ${spacing.toFixed(0)} px apart`);
+      }
+    }
   }
   const spike = clone(race);
   spike.race_pace[0].outliers = [{ lap_number: 7, lap_time_ms: 140000 }, { lap_number: 8, lap_time_ms: 92700 }];

@@ -355,7 +355,7 @@
       <button id="analysisResetFocus" class="button ghost" type="button" disabled>Reset</button>
       <span class="sa-spacer"></span>
       <label class="sa-check"><input id="analysisHideOutliers" type="checkbox" checked> Hide laps over 107%</label>
-      <label class="sa-inline" for="analysisReference" data-analysis-race-only>Gap to <select id="analysisReference" disabled><option value="leader">Race leader</option></select></label>
+      <label class="sa-inline" for="analysisReference" data-analysis-order-only>Gap to <select id="analysisReference" disabled><option value="leader">Race leader</option></select></label>
     </section>
     <p id="analysisRaceOnlyNote" class="field-help workspace-wide" hidden>Race trace, positions and the timelapse need a race; this session shows pace, tyres and laps.</p>
     <section class="panel-surface sa-card workspace-wide" aria-labelledby="analysisPaceHeading">
@@ -364,7 +364,7 @@
       <p class="field-help"><span id="analysisPaceBasis">Pace uses representative laps only; laps over 107% of the driver's median are hidden unless you turn that off.</span> <span id="analysisPaceThin"></span></p>
       <div id="analysisPaceTable"></div>
     </section>
-    <div class="sa-pair workspace-wide" data-analysis-race-only>
+    <div class="sa-pair workspace-wide" data-analysis-order-only>
       <section class="panel-surface sa-card" aria-labelledby="analysisTraceHeading">
         <div class="section-heading"><div><div class="eyebrow">Race trace</div><h2 id="analysisTraceHeading">Gap per lap</h2></div></div>
         <div id="analysisTraceChart" class="sa-chart"><div class="empty">No session analysed.</div></div>
@@ -382,7 +382,7 @@
       <div class="section-heading"><div><div class="eyebrow">Tyre strategy</div><h2 id="analysisStrategyHeading">Stints in finishing order</h2></div>
         <div class="sa-legend" aria-label="Compounds"><span><i class="sa-swatch" data-compound="SOFT">S</i>Soft</span><span><i class="sa-swatch" data-compound="MEDIUM">M</i>Medium</span><span><i class="sa-swatch" data-compound="HARD">H</i>Hard</span><span><i class="sa-swatch" data-compound="INTER">I</i>Intermediate</span><span><i class="sa-swatch" data-compound="WET">W</i>Wet</span><span><i class="sa-swatch" data-compound="UNKNOWN">?</i>No tyre data</span></div></div>
       <div id="analysisStrategyChart" class="sa-chart"><div class="empty">No session analysed.</div></div>
-      <p class="field-help">"?" stints had no tyre data recorded (cars without full traces in a race).<span data-analysis-race-only> A tyre change while the race was suspended starts a new stint.</span></p>
+      <p class="field-help">"?" stints had no tyre data recorded<span data-analysis-race-only> (cars without full traces in a race)</span>.<span data-analysis-race-only> A tyre change while the race was suspended starts a new stint.</span></p>
       <div id="analysisStrategyTable"></div>
     </section>
     <div class="sa-pair workspace-wide">
@@ -400,7 +400,7 @@
         <div id="analysisHeatmapTable"></div>
       </section>
     </div>
-    <section class="panel-surface sa-card workspace-wide" aria-labelledby="analysisLapseHeading" data-analysis-race-only>
+    <section class="panel-surface sa-card workspace-wide" aria-labelledby="analysisLapseHeading" data-analysis-order-only>
       <div class="section-heading sa-lapse-head"><div><div class="eyebrow">Race timelapse</div><h2 id="analysisLapseHeading">The field lap by lap</h2></div>
         <div class="sa-lapse-controls">
           <button id="analysisLapsePlay" class="button primary" type="button" aria-pressed="false" disabled>Play</button>

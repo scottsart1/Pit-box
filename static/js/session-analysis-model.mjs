@@ -212,6 +212,38 @@ export function niceTicks(min, max, count = 5) {
   return ticks;
 }
 
+// Steps a lap-time axis may use, in seconds, largest first. Quarter seconds
+// fill the gap between half and fifth seconds on short axes.
+const TIME_STEPS = [60, 30, 20, 10, 5, 2.5, 2, 1, 0.5, 0.25, 0.2, 0.1];
+
+// Width of an 11 px tick label such as "1:31.25": digits about 6.4 px, the
+// colon and point about 3.4 px.
+function tickTextWidth(text) {
+  const narrow = (String(text).match(/[.:]/g) || []).length;
+  return (String(text).length - narrow) * 6.4 + narrow * 3.4;
+}
+
+// Seconds to label on a lap-time axis `length` px long: about `count` ticks,
+// at least three where their labels fit (`horizontal` labels need their own
+// width, stacked ones 18 px), and never a lone label.
+function timeTicks(min, max, length, count, { horizontal = true } = {}) {
+  const at = (step) => {
+    const out = [];
+    for (let k = Math.ceil(min / step - 1e-9); k * step <= max + 1e-9; k += 1) out.push(Number((k * step).toFixed(3)));
+    return out;
+  };
+  const fits = (ticks, step) => (step / Math.max(1e-9, max - min)) * length
+    >= (horizontal ? Math.max(...ticks.map((s) => tickTextWidth(shortLapTime(s * 1000)))) + 8 : 18);
+  let ticks = niceTicks(min, max, count);
+  if (ticks.length >= 3) return ticks;
+  for (const step of TIME_STEPS) {
+    const finer = at(step);
+    if (finer.length > ticks.length && fits(finer, step)) ticks = finer;
+    if (ticks.length >= 3) return ticks;
+  }
+  return ticks.length >= 2 ? ticks : TIME_STEPS.map(at).find((t) => t.length >= 2) || ticks;
+}
+
 // Lap numbers to label: lap 1, round laps, and the last lap. `maxTicks`
 // thins them for narrow charts.
 export function lapAxisTicks(total, maxTicks = Infinity) {
@@ -295,6 +327,29 @@ export function lastLap(analysis) {
 }
 
 const timed = (lap) => Boolean(lap) && isNumber(lap.lap_time_ms) && Number(lap.lap_time_ms) > 0;
+
+// Cars with at least one completed lap, from the field summary when present.
+function carsWithLaps(analysis) {
+  const reported = analysis?.field?.cars_with_laps;
+  if (isNumber(reported)) return Number(reported);
+  return new Set((analysis?.laps || []).filter(timed).map((lap) => lap.car_index)).size;
+}
+
+// A race order needs a race and two or more recorded cars. A car on its own
+// still has laps at "P1" with a 0 ms gap, but that is not an order.
+export function hasRaceOrder(analysis) {
+  if (!analysis?.session?.is_race) return false;
+  if ((analysis.drivers || []).some((d) => d.status === "unranked")) return false;
+  return carsWithLaps(analysis) >= 2;
+}
+
+// Why the race trace, positions and timelapse are not shown; "" when they are.
+export function raceOrderNote(analysis) {
+  if (!analysis || hasRaceOrder(analysis)) return "";
+  if (!analysis.session?.is_race) return "Race trace, positions and the timelapse need a race; this session shows pace, tyres and laps.";
+  if (carsWithLaps(analysis) === 0 && !(analysis.drivers || []).some((d) => d.status === "unranked")) return "No car completed a lap, so there is no race order to show.";
+  return "Only one car was recorded, so there is no race order: race trace, positions and the timelapse need two or more cars.";
+}
 
 // A lap Lap Lab can play: it has a time and a telemetry trace.
 export function lapOpenable(lap) {
@@ -436,11 +491,13 @@ export function racePaceModel(analysis, { width = 1200, height = 340, minLaps = 
     const rowHeight = 28;
     const h = margin.t + rows.length * rowHeight + margin.b;
     const x = scale(domain[0], domain[1], margin.l, width - margin.r);
-    const tickCount = Math.max(2, Math.floor((width - margin.l - margin.r) / 90));
+    // A phone-width axis still gets three labels where they fit.
+    const length = width - margin.l - margin.r;
+    const seconds = timeTicks(domain[0] / 1000, domain[1] / 1000, length, Math.max(3, Math.floor(length / 90)));
     return {
       width, height: h, horizontal: true, domain, thin,
       plot: { left: margin.l, right: width - margin.r, top: margin.t, bottom: h - margin.b },
-      ticks: niceTicks(domain[0] / 1000, domain[1] / 1000, tickCount).map((s) => s * 1000).map((v) => ({ value: v, pos: x(v), label: shortLapTime(v) })),
+      ticks: seconds.map((s) => s * 1000).map((v) => ({ value: v, pos: x(v), label: shortLapTime(v) })),
       boxes: rows.map((row, i) => {
         const y = margin.t + i * rowHeight;
         const box = boxOf(row, x, { x: margin.l - 8, y: y + 14 });
@@ -452,10 +509,11 @@ export function racePaceModel(analysis, { width = 1200, height = 340, minLaps = 
   const y = scale(domain[1], domain[0], margin.t, height - margin.b);
   const band = (width - margin.l - margin.r) / rows.length;
   const boxWidth = Math.max(6, Math.min(24, band * 0.6));
-  const tickCount = Math.max(3, Math.floor((height - margin.t - margin.b) / 48));
+  const length = height - margin.t - margin.b;
+  const seconds = timeTicks(domain[0] / 1000, domain[1] / 1000, length, Math.max(3, Math.floor(length / 48)), { horizontal: false });
   return {
     width, height, horizontal: false, domain, thin,
-    ticks: niceTicks(domain[0] / 1000, domain[1] / 1000, tickCount).map((s) => s * 1000).map((v) => ({ value: v, pos: y(v), label: shortLapTime(v) })),
+    ticks: seconds.map((s) => s * 1000).map((v) => ({ value: v, pos: y(v), label: shortLapTime(v) })),
     plot: { left: margin.l, right: width - margin.r, top: margin.t, bottom: height - margin.b },
     boxes: rows.map((row, i) => {
       const centre = margin.l + band * (i + 0.5);
@@ -802,13 +860,19 @@ export function heatmapModel(analysis) {
 
 // ------------------------------------------------------------- timelapse
 
-// One frame per lap end: running order and gap to the leader. Suspended laps
-// carry the frozen order with no gaps. A lapped car keeps its place behind
-// the lead-lap cars after its last lap, and the final frame is the flag:
-// every classified car in finish order, lapped cars with their laps down.
-// Only a retired car leaves the field.
+// One frame per lap end with a running order: places and gap to the leader.
+// Suspended laps carry the frozen order with no gaps. A placed car that is
+// not known to have retired (lapped, or still running in a recording that
+// stopped early) keeps its place behind the lead-lap cars after its last lap,
+// its laps down growing. The final frame holds every placed car in that
+// order, with its laps down: the flag, or the last recorded lap of an
+// unfinished recording. Only a retired car leaves the field. A single
+// recorded car has no order to replay.
 export function timelapseFrames(analysis) {
-  const total = lastLap(analysis);
+  if (!hasRaceOrder(analysis)) return [];
+  // A lap that was started but not finished has no order; the replay ends
+  // at the last lap that has one.
+  const total = (analysis?.laps || []).reduce((max, lap) => (isNumber(lap.position) ? Math.max(max, Number(lap.lap_number) || 0) : max), 0);
   const laps = lapLookup(analysis);
   const drivers = driversByIndex(analysis);
   const stints = new Map((analysis?.stints || []).map((row) => [row.car_index, row.stints || []]));
@@ -824,6 +888,11 @@ export function timelapseFrames(analysis) {
     lastPlaced.set(carIndex, last);
   }
   const finishOf = (carIndex) => (isNumber(drivers.get(carIndex)?.finish_position) ? Number(drivers.get(carIndex).finish_position) : Infinity);
+  // Placed and laps down without a retirement: a lapped finisher, or a car
+  // still running when an unfinished recording stopped. A retirement or an
+  // unplaced record ends where its record does.
+  const staysInField = (driver) => Boolean(driver) && isNumber(driver.finish_position)
+    && (driver.status === "lapped" || (driver.status === "running" && Number(driver.laps_down) > 0));
   const frames = [];
   for (let lap = 1; lap <= total; lap += 1) {
     const final = lap === total;
@@ -837,7 +906,7 @@ export function timelapseFrames(analysis) {
     const carried = [];
     for (const [carIndex, last] of lastPlaced) {
       const driver = drivers.get(carIndex);
-      if (driver?.status !== "lapped" || !last || lap <= last) continue;
+      if (!staysInField(driver) || !last || lap <= last) continue;
       const down = final && isNumber(driver.laps_down) ? Number(driver.laps_down) : lap - last;
       carried.push({ car_index: carIndex, order: Infinity, gap_ms: null, laps_down: down, compound: compoundAt(carIndex, last), pit: false });
     }
@@ -940,6 +1009,21 @@ export function pitStopRows(analysis) {
 
 // ------------------------------------------------------------- headline
 
+// The runner-up beside the winner, by status: a gap for a finisher, laps
+// down for a lapped car (or one still running when the recording stopped),
+// and a retirement as a retirement, never as laps down.
+function runnerUpText(second) {
+  if (!second) return "";
+  const code = second.code || `#${second.car_index}`;
+  switch (second.status) {
+    case "finished": return isNumber(second.gap_to_winner_ms) ? `${code} ${gapWords(second.gap_to_winner_ms)}` : code;
+    case "lapped":
+    case "running": return [code, lapsDownText(second.laps_down)].filter(Boolean).join(" ");
+    case "retired": return `${code} retired`;
+    default: return [code, STATUS_TEXT[second.status] ? STATUS_TEXT[second.status].toLowerCase() : null].filter(Boolean).join(" ");
+  }
+}
+
 export function headline(analysis) {
   const drivers = analysis?.drivers || [];
   const session = analysis?.session || {};
@@ -948,7 +1032,11 @@ export function headline(analysis) {
   const isRace = Boolean(session.is_race);
   const provisional = Boolean(session.provisional);
   const partial = field.complete === false;
-  const single = drivers.some((d) => d.status === "unranked") || (isNumber(field.cars_with_laps) && Number(field.cars_with_laps) < 2);
+  const recordedCars = carsWithLaps(analysis);
+  const single = isRace && !hasRaceOrder(analysis);
+  // The game's own result for the player contradicts the order derived from
+  // lap times (penalties): the derived order is not the result.
+  const disputed = analysis?.official_result?.agrees === false;
   const byCar = driversByIndex(analysis);
   const winner = analysis?.winner_car_index !== null && analysis?.winner_car_index !== undefined ? byCar.get(analysis.winner_car_index) : null;
   const second = drivers.find((d) => d.finish_position === 2);
@@ -960,21 +1048,18 @@ export function headline(analysis) {
   const place = [session.track_name || session.display_name, session.session_type].filter(Boolean).join(" · ");
   let title = place || "Session analysis";
   if (isRace && winner && !single) {
-    const settled = !provisional && !partial;
+    const settled = !provisional && !partial && !disputed;
     if (settled) {
       title = second && isNumber(second.gap_to_winner_ms) && second.status === "finished"
         ? `${named(winner)} wins by ${formatSeconds(second.gap_to_winner_ms)}`
         : `${named(winner)} wins`;
-    } else {
-      title = provisional ? `Provisional order · ${named(winner)} leads` : `${named(winner)} leads the recorded cars`;
-    }
-    const secondText = !second ? "" : second.status === "finished" && isNumber(second.gap_to_winner_ms)
-      ? `${second.code} ${gapWords(second.gap_to_winner_ms)}`
-      : [second.code, lapsDownText(second.laps_down)].filter(Boolean).join(" ");
+    } else if (provisional) title = `Provisional order · ${named(winner)} leads`;
+    else if (partial) title = `${named(winner)} leads the recorded cars`;
+    else title = `${named(winner)} first on lap times`;
     kpis.push({
-      label: settled ? "Winner" : provisional ? "Provisional order" : "Leading recorded car",
+      label: settled ? "Winner" : provisional ? "Provisional order" : partial ? "Leading recorded car" : "First on lap times",
       value: winner.code || "—",
-      detail: [secondText, isNumber(winner.classified_at_lap) ? `order at lap ${winner.classified_at_lap}` : null].filter(Boolean).join(" · "),
+      detail: [runnerUpText(second), isNumber(winner.classified_at_lap) ? `order at lap ${winner.classified_at_lap}` : null].filter(Boolean).join(" · "),
     });
   }
   if (player) kpis.push(isRace ? playerResult(analysis, player, { provisional, single }) : {
@@ -982,8 +1067,10 @@ export function headline(analysis) {
     detail: isNumber(player.best_lap_ms) ? `${countText(player.laps_recorded, "lap")} recorded` : "no timed lap",
   });
   if (fastest) {
+    // Only the recorded laps can be compared when the record has gaps, the
+    // field is partial or the recording stopped early.
     kpis.push({
-      label: analysis?.record_complete === false || partial ? "Fastest recorded lap" : "Fastest lap",
+      label: analysis?.record_complete === false || partial || provisional ? "Fastest recorded lap" : "Fastest lap",
       value: formatLapTime(fastest.lap_time_ms),
       detail: [fastestDriver?.code, isNumber(fastest.lap_number) ? `lap ${fastest.lap_number}` : null, fastest.traced === false ? "timing only" : null].filter(Boolean).join(" · "),
     });
@@ -1013,7 +1100,8 @@ export function headline(analysis) {
     sc.length ? `safety car ${onLaps(sc)}` : null,
     vsc.length ? `VSC ${onLaps(vsc)}` : null,
     !recorded ? "safety cars not recorded" : coveredFrom ? `race control recorded from lap ${coveredFrom}` : null,
-    single ? "only one car recorded" : partial && isNumber(field.cars_with_laps) && isNumber(field.cars) ? `${field.cars_with_laps} of ${field.cars} cars recorded` : null,
+    single ? (recordedCars === 1 || drivers.some((d) => d.status === "unranked") ? "only one car recorded" : "no completed laps recorded")
+      : partial && isNumber(field.cars_with_laps) && isNumber(field.cars) ? `${field.cars_with_laps} of ${field.cars} cars recorded` : null,
     single ? null : provisional ? "provisional order: the recording did not finish" : "order derived from lap times; penalties not applied",
   ] : [
     session.display_name && session.display_name !== session.track_name ? session.display_name : null,
@@ -1035,7 +1123,7 @@ function playerResult(analysis, player, { provisional, single }) {
     else detail.push("official result");
   } else if (player.status === "retired") {
     value = "DNF";
-  } else if (single || player.status === "unranked") {
+  } else if (player.status === "unranked" || (single && Number(player.laps_completed) > 0)) {
     detail.push("only recorded car: no order");
   } else if (isNumber(player.finish_position)) {
     value = `P${player.finish_position}`;
@@ -1130,13 +1218,15 @@ export function heatmapTable(analysis, carIndex) {
 
 export function lapseTable(analysis, frames) {
   const codes = driversByIndex(analysis);
+  // A recording that stopped early ends at its last recorded lap, not a flag.
+  const end = analysis?.session?.provisional ? "Last recorded lap" : "Finish";
   return {
     caption: "Running order at the end of every lap",
     headers: ["Lap", "Order", "Note"],
     rows: (frames || []).map((frame) => [
       String(frame.lap),
       frame.entries.map((e) => [e.label, codes.get(e.car_index)?.code || `#${e.car_index}`, lapsDownText(e.laps_down)].filter(Boolean).join(" ")).join(", ") || "—",
-      [frame.final ? "Finish" : null, frame.suspended ? "Race suspended, order frozen" : null, frame.neutralised === "SC" ? "Safety car" : frame.neutralised === "VSC" ? "Virtual safety car" : null].filter(Boolean).join(" · ") || "—",
+      [frame.final ? end : null, frame.suspended ? "Race suspended, order frozen" : null, frame.neutralised === "SC" ? "Safety car" : frame.neutralised === "VSC" ? "Virtual safety car" : null].filter(Boolean).join(" · ") || "—",
     ]),
   };
 }

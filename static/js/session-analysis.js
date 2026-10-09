@@ -17,6 +17,7 @@ const CHOOSE_MESSAGE = "Choose a saved session, or press Analyze session in Libr
 const DEFAULT_TITLE = "Session analysis";
 const DEFAULT_SUBTITLE = "Race pace, race trace, positions, tyre strategy, lap times and the timelapse for one saved session.";
 const DEFAULT_PACE_BASIS = "Pace uses representative laps only; laps over 107% of the driver's median are hidden unless you turn that off.";
+const STRATEGY_HEADING = "Stints in finishing order";
 const CHARTS = ["analysisPaceChart", "analysisTraceChart", "analysisPositionsChart", "analysisStrategyChart", "analysisLapTimesChart", "analysisHeatmapChart", "analysisLapseChart", "analysisFastestChart"];
 const TABLES = ["analysisPaceTable", "analysisTraceTable", "analysisPositionsTable", "analysisStrategyTable", "analysisLapTimesTable", "analysisHeatmapTable", "analysisLapseTable", "analysisFastestTable"];
 const NOTES = ["analysisPaceThin", "analysisTraceNote"];
@@ -136,6 +137,12 @@ function isRace() {
   return Boolean(state.analysis?.session?.is_race);
 }
 
+// The race trace, positions and timelapse need a race order: a race with two
+// or more recorded cars.
+function hasOrder() {
+  return M.hasRaceOrder(state.analysis);
+}
+
 // ------------------------------------------------------------- tooltips
 
 function tipOf(container) {
@@ -148,9 +155,32 @@ function tipOf(container) {
   return tip;
 }
 
+// The part of the screen where a chart's tooltip can be seen: the viewport
+// cut down by every scrolling or clipping ancestor. In the app the analysis
+// page scrolls under the top bar and tabs, so its top edge is well below the
+// viewport's.
+function visibleBox(container) {
+  const box = {
+    left: 0, top: 0,
+    right: document.documentElement.clientWidth || window.innerWidth || 0,
+    bottom: document.documentElement.clientHeight || window.innerHeight || 0,
+  };
+  for (let node = container.parentElement; node && node !== document.body && node !== document.documentElement; node = node.parentElement) {
+    const style = getComputedStyle(node);
+    if (!/auto|scroll|hidden|clip/.test(`${style.overflowX} ${style.overflowY}`)) continue;
+    const rect = node.getBoundingClientRect();
+    if (!rect.width || !rect.height) continue;
+    box.left = Math.max(box.left, rect.left);
+    box.top = Math.max(box.top, rect.top);
+    box.right = Math.min(box.right, rect.right);
+    box.bottom = Math.min(box.bottom, rect.bottom);
+  }
+  return box;
+}
+
 // Tooltips sit at their mark inside the chart's non-scrolling wrapper and
-// stay inside the viewport. A tap leaves one open until the next tap
-// elsewhere; only a keyboard focus change is announced.
+// stay inside the visible part of the page. A tap leaves one open until the
+// next tap elsewhere; only a keyboard focus change is announced.
 function showTip(container, anchor, lines, { key = "", sticky = false, live = false, lapId = "", openLabel = "" } = {}) {
   const tip = tipOf(container);
   const nodes = lines.map((line, i) => (typeof line === "string" ? element(i === 0 ? "strong" : "div", "", line) : line));
@@ -169,18 +199,47 @@ function showTip(container, anchor, lines, { key = "", sticky = false, live = fa
   placeTip(tip, container, anchor);
 }
 
+// Above the mark where it fits in the visible box, else below it, else on
+// the roomier side; always clamped inside the visible box.
 function placeTip(tip, container, anchor) {
+  // Measured at the container's left edge, so its width never depends on
+  // where it sat before.
+  tip.style.left = "0px";
+  tip.style.top = "0px";
   const box = container.getBoundingClientRect();
   const rect = typeof anchor?.getBoundingClientRect === "function" ? anchor.getBoundingClientRect() : anchor || box;
-  const viewport = document.documentElement.clientWidth || window.innerWidth || box.right;
-  const viewportHeight = document.documentElement.clientHeight || window.innerHeight || box.bottom;
+  const clip = visibleBox(container);
   const width = tip.offsetWidth || 220;
   const height = tip.offsetHeight || 48;
-  const left = clamp((rect.left + rect.right) / 2 - width / 2, 4, Math.max(4, viewport - width - 4));
-  let top = rect.top - height - 8;
-  if (top < 4) top = Math.min(rect.bottom + 8, Math.max(4, viewportHeight - height - 4));
+  const left = clamp((rect.left + rect.right) / 2 - width / 2, clip.left + 4, Math.max(clip.left + 4, clip.right - width - 4));
+  const above = rect.top - height - 8;
+  const below = rect.bottom + 8;
+  const fits = (top) => top >= clip.top + 4 && top + height <= clip.bottom - 4;
+  let top = above;
+  if (!fits(above)) top = fits(below) || rect.top - clip.top < clip.bottom - rect.bottom ? below : above;
+  top = clamp(top, clip.top + 4, Math.max(clip.top + 4, clip.bottom - height - 4));
   tip.style.left = `${Math.round(left - box.left)}px`;
   tip.style.top = `${Math.round(top - box.top)}px`;
+}
+
+// Keeps a reading at its mark while the heatmap scrolls sideways under it,
+// and closes it once the mark has left the scroller's visible part.
+function followTip(container, scroller) {
+  const tip = state.tip;
+  if (!tip || tip.container !== container || !tip.key) return;
+  const mark = container.querySelector(`[data-key="${tip.key}"]`);
+  const node = container.querySelector(":scope > .sa-tip");
+  if (!mark || !node || node.hidden) return;
+  const view = scroller.getBoundingClientRect();
+  const rect = mark.getBoundingClientRect();
+  if (rect.right <= view.left || rect.left >= view.right) { hideTip(container, true); return; }
+  placeTip(node, container, markAnchor(mark));
+}
+
+// What a mark's reading points at: its shape, not the labels grouped with it
+// (a race-pace row also holds the driver code and the lap count).
+function markAnchor(mark) {
+  return mark.querySelector?.("[data-anchor]") || mark;
 }
 
 function hideTip(container, force = false) {
@@ -251,7 +310,7 @@ function neighbour(marks, mark, key) {
 
 function markTip(container, mark, { sticky = false, live = false } = {}) {
   const lapId = mark.getAttribute("data-lap-id") || "";
-  showTip(container, mark, [mark.getAttribute("data-tip") || mark.getAttribute("aria-label") || ""], {
+  showTip(container, markAnchor(mark), [mark.getAttribute("data-tip") || mark.getAttribute("aria-label") || ""], {
     key: mark.getAttribute("data-key"), sticky, live, lapId: sticky && lapId ? lapId : "",
     openLabel: lapId ? `Open ${mark.getAttribute("data-tip")} in Lap Lab` : "",
   });
@@ -267,7 +326,10 @@ function crosshairTip(container, config, lap, { sticky = false, live = false } =
   const box = config.svg.getBoundingClientRect();
   const k = box.width ? box.width / Number(config.svg.getAttribute("width")) : 1;
   const x = box.left + point.x * k;
-  const top = box.top + config.plot.top * k;
+  // The reading hangs from the top of the plot, or from the top of the
+  // visible area when a tall chart's top has scrolled out of view.
+  const plotTop = box.top + config.plot.top * k;
+  const top = clamp(visibleBox(container).top, plotTop, Math.max(plotTop, box.top + config.plot.bottom * k));
   const rows = config.rows(point.lap).map((item) => {
     const row = element("div", "sa-tip-row");
     const key = element("span", "sa-key-line");
@@ -533,11 +595,13 @@ function renderPace() {
       class: box.player ? "sa-box sa-mark sa-player" : "sa-box sa-mark", tabindex: -1, role: "img",
       "data-key": `box-${box.car_index}`, "data-row": 0, "data-col": i, "aria-label": box.text, "data-tip": box.text,
     });
-    const shapes = svgElement("g", { "clip-path": clip });
+    // The reading points at the box (a row also holds the code and lap
+    // count), or in columns at the whiskers above it.
+    const shapes = svgElement("g", { "clip-path": clip, "data-anchor": model.horizontal ? null : "box" });
     const stroke = { stroke: box.colour, "stroke-width": 2 };
     if (model.horizontal) {
       shapes.append(svgElement("line", { x1: box.whiskerLow, x2: box.whiskerHigh, y1: box.cross, y2: box.cross, ...stroke }));
-      shapes.append(svgElement("rect", { x: Math.min(box.q1, box.q3), y: box.crossStart, width: Math.max(3, Math.abs(box.q3 - box.q1)), height: box.crossEnd - box.crossStart, rx: 4, fill: box.colour }));
+      shapes.append(svgElement("rect", { x: Math.min(box.q1, box.q3), y: box.crossStart, width: Math.max(3, Math.abs(box.q3 - box.q1)), height: box.crossEnd - box.crossStart, rx: 4, fill: box.colour, "data-anchor": "box" }));
       shapes.append(svgElement("line", { class: "sa-median", x1: box.median, x2: box.median, y1: box.crossStart, y2: box.crossEnd }));
       g.append(svgElement("text", { class: box.player ? "sa-label sa-label-player" : "sa-label", x: box.label.x, y: box.label.y, "text-anchor": "end" }, box.code));
       g.append(svgElement("text", { class: "sa-value", x: box.nLabel.x, y: box.nLabel.y }, box.nText));
@@ -642,6 +706,12 @@ function renderPositions() {
   });
 }
 
+// Drivers come in finishing order in a race with an order, otherwise most
+// laps first (the backend's order).
+function strategyOrderText() {
+  return hasOrder() ? "in finishing order" : "most laps first";
+}
+
 function renderStrategy() {
   const container = byId("analysisStrategyChart");
   if (!container) return;
@@ -649,7 +719,7 @@ function renderStrategy() {
   const model = M.strategyModel(state.analysis, { width, rowHeight: 24 });
   placeTable("analysisStrategyTable", M.strategyTable(state.analysis));
   if (!model.rows.some((r) => r.stints.length)) { mount(container, emptyNote("No tyre data was stored for this session.")); bindChart(container, { kind: "none" }); return; }
-  const svg = svgRoot(model.width, model.height, "Tyre strategy: stints per driver in finishing order. Arrow keys move between stints and drivers.", { interactive: true });
+  const svg = svgRoot(model.width, model.height, `Tyre strategy: stints per driver, ${strategyOrderText()}. Arrow keys move between stints and drivers.`, { interactive: true });
   model.rows.forEach((row, r) => {
     svg.append(svgElement("text", { class: row.player ? "sa-label sa-label-player" : "sa-label", x: model.left - 6, y: row.labelY, "text-anchor": "end" }, row.code));
     row.stints.forEach((stint, s) => {
@@ -728,6 +798,9 @@ function renderHeatmap() {
   scroller.append(svg);
   mount(container, labels, scroller);
   scroller.scrollLeft = previousScroll;
+  // The reading sits outside the scroller: keep it on its cell while the
+  // grid moves sideways.
+  scroller.addEventListener("scroll", () => followTip(container, scroller), { passive: true });
   bindChart(container, { kind: "marks" });
 }
 
@@ -1029,7 +1102,7 @@ function renderFocus() {
     reference.replaceChildren(new Option("Race leader", "leader"), ...options.map((o) => new Option(o.label, o.value)));
     if (!options.some((o) => o.value === String(state.reference))) state.reference = "leader";
     reference.value = String(state.reference);
-    reference.disabled = !isRace();
+    reference.disabled = !hasOrder();
   }
 }
 
@@ -1053,7 +1126,7 @@ function safely(render) {
 function renderFocusDependent() {
   renderFocus();
   if (!state.analysis) return;
-  if (isRace()) { safely(renderTrace); safely(renderPositions); }
+  if (hasOrder()) { safely(renderTrace); safely(renderPositions); }
   safely(renderLapTimes);
 }
 
@@ -1065,7 +1138,7 @@ function renderCharts() {
   safely(renderHeatmap);
   safely(renderFastest);
   safely(renderStops);
-  if (isRace()) { safely(renderTrace); safely(renderPositions); safely(renderLapse); }
+  if (hasOrder()) { safely(renderTrace); safely(renderPositions); safely(renderLapse); }
 }
 
 function paceCaption(analysis) {
@@ -1073,13 +1146,27 @@ function paceCaption(analysis) {
   return basis ? `Pace ${basis}.` : DEFAULT_PACE_BASIS;
 }
 
+// Race-only captions need a race; the race trace, positions, timelapse and
+// gap reference also need a race order (two or more recorded cars), so a
+// session without one says why instead of claiming places.
+function showSections(analysis) {
+  const race = Boolean(analysis?.session?.is_race);
+  const ordered = M.hasRaceOrder(analysis);
+  document.querySelectorAll("#session-analysis [data-analysis-race-only]").forEach((node) => { node.hidden = !race; });
+  document.querySelectorAll("#session-analysis [data-analysis-order-only]").forEach((node) => { node.hidden = !ordered; });
+  const note = byId("analysisRaceOnlyNote");
+  if (note) {
+    note.textContent = M.raceOrderNote(analysis);
+    note.hidden = ordered;
+  }
+  const strategy = byId("analysisStrategyHeading");
+  if (strategy) strategy.textContent = ordered ? STRATEGY_HEADING : "Stints per driver, most laps first";
+}
+
 function renderAll() {
   const analysis = state.analysis;
   if (!analysis) return;
-  const race = isRace();
-  document.querySelectorAll("#session-analysis [data-analysis-race-only]").forEach((node) => { node.hidden = !race; });
-  const note = byId("analysisRaceOnlyNote");
-  if (note) note.hidden = race;
+  showSections(analysis);
   const basis = byId("analysisPaceBasis");
   if (basis) basis.textContent = paceCaption(analysis);
   renderHeader();
@@ -1123,9 +1210,11 @@ function clearView({ loading = false } = {}) {
     tr.append(td);
     stops.replaceChildren(tr);
   }
-  document.querySelectorAll("#session-analysis [data-analysis-race-only]").forEach((node) => { node.hidden = false; });
+  document.querySelectorAll("#session-analysis [data-analysis-race-only], #session-analysis [data-analysis-order-only]").forEach((node) => { node.hidden = false; });
   const raceNote = byId("analysisRaceOnlyNote");
   if (raceNote) raceNote.hidden = true;
+  const strategy = byId("analysisStrategyHeading");
+  if (strategy) strategy.textContent = STRATEGY_HEADING;
   state.focus = [];
   state.reference = "leader";
   state.heatDriver = null;
@@ -1216,7 +1305,8 @@ export async function openAnalysis(sessionId) {
     state.analysis = analysis;
     state.focus = focus;
     if (!keepFocus) { state.reference = "leader"; state.heatDriver = null; }
-    resetLapse(analysis.session?.is_race ? M.timelapseFrames(analysis) : []);
+    // No frames without a race order (practice, or a single recorded car).
+    resetLapse(M.timelapseFrames(analysis));
     populateSessions();
     renderAll();
   } catch (error) {
