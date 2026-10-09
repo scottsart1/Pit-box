@@ -10,7 +10,9 @@
    PITBOX_ANALYSIS_PAYLOADS=<file>[<path delimiter><file>...] adds more payloads
    for local checks. PITBOX_BROWSER_PATH selects an installed Chrome or Edge.
    PITBOX_WIDE_FONT=<family> (for example Verdana) lays the view out in a wider
-   font than the app's, as machines without Segoe UI see it.
+   font than the app's, as machines without Segoe UI see it, and
+   PITBOX_WIDE_SPACING=<length> adds letter spacing on top: .07em reproduces
+   the wrapping of the Linux CI runner's fonts on Windows.
    PITBOX_SHOTS=<dir> saves a viewport screenshot per viewport and payload;
    PITBOX_SHOTS_CARDS=<payload name>[,<name>] also saves every card of those
    payloads (names: race, large-race, practice, or an added file's name). */
@@ -304,6 +306,7 @@ async function openPage(browser, viewport, sets) {
   }, String(sets[0].payload.session_id));
   // A wide fallback font, to see the layout as machines without Segoe UI do.
   if (process.env.PITBOX_WIDE_FONT) await page.addStyleTag({ content: `body, body * { font-family: ${process.env.PITBOX_WIDE_FONT}, sans-serif !important; }` });
+  if (process.env.PITBOX_WIDE_SPACING) await page.addStyleTag({ content: `body, body * { letter-spacing: ${process.env.PITBOX_WIDE_SPACING} !important; }` });
   await page.addScriptTag({ type: 'module', url: 'http://pitbox.test/static/js/session-analysis.js' });
   return { context, page, problems };
 }

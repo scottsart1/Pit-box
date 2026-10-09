@@ -203,13 +203,17 @@ function showTip(container, anchor, lines, { key = "", sticky = false, live = fa
 // the roomier side; always clamped inside the visible box.
 function placeTip(tip, container, anchor) {
   // Measured at the container's left edge, so its width never depends on
-  // where it sat before.
+  // where it sat before, then held at that width: an auto-width reading moved
+  // towards the right edge wraps again and grows taller than the space it
+  // was placed in (wider system fonts made it cover its own mark).
   tip.style.left = "0px";
   tip.style.top = "0px";
+  tip.style.width = "";
   const box = container.getBoundingClientRect();
   const rect = typeof anchor?.getBoundingClientRect === "function" ? anchor.getBoundingClientRect() : anchor || box;
   const clip = visibleBox(container);
   const width = tip.offsetWidth || 220;
+  tip.style.width = `${width}px`;
   const height = tip.offsetHeight || 48;
   const left = clamp((rect.left + rect.right) / 2 - width / 2, clip.left + 4, Math.max(clip.left + 4, clip.right - width - 4));
   const above = rect.top - height - 8;
