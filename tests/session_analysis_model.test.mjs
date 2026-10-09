@@ -12,7 +12,7 @@ const race = JSON.parse(readFileSync(new URL('./fixtures/session_analysis_race.j
 const code = (analysis, carIndex) => analysis.drivers.find((d) => d.car_index === carIndex).code;
 const idx = (analysis, c) => analysis.drivers.find((d) => d.code === c).car_index;
 
-test('formatting: lap times, gaps and compounds including inters and wets', () => {
+test('formatting: lap times, gaps and compounds including inters, wets and C-labels', () => {
   assert.equal(formatLapTime(91649), '1:31.649');
   assert.equal(formatLapTime(null), '—');
   assert.equal(formatLapTime(0), '—');
@@ -22,7 +22,11 @@ test('formatting: lap times, gaps and compounds including inters and wets', () =
   assert.equal(compoundInfo('INTER').letter, 'I');
   assert.equal(compoundInfo('wet').letter, 'W');
   assert.equal(compoundInfo(null), COMPOUNDS.UNKNOWN);
-  assert.equal(compoundInfo('C3'), COMPOUNDS.UNKNOWN);
+  assert.equal(compoundInfo('UNKNOWN'), COMPOUNDS.UNKNOWN);
+  assert.equal(compoundInfo('mystery'), COMPOUNDS.UNKNOWN);
+  // A C-label is a recorded compound, not missing tyre data.
+  assert.deepEqual([compoundInfo('C3').letter, compoundInfo('c3').label], ['C3', 'C3 compound']);
+  assert.notEqual(compoundInfo('C3').fill, COMPOUNDS.UNKNOWN.fill);
 });
 
 test('scales and ticks are round and cover the domain', () => {
@@ -34,6 +38,10 @@ test('scales and ticks are round and cover the domain', () => {
   assert.deepEqual(lapAxisTicks(31), [1, 5, 10, 15, 20, 25, 31]);
   assert.deepEqual(lapAxisTicks(12), [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
   assert.deepEqual(lapAxisTicks(1), [1]);
+  // A narrow chart thins the labels but keeps lap 1 and the last lap.
+  const thin = lapAxisTicks(12, 5);
+  assert.ok(thin.length <= 5 && thin[0] === 1 && thin[thin.length - 1] === 12, JSON.stringify(thin));
+  assert.ok(lapAxisTicks(60, 6).length <= 8);
 });
 
 test('team colours: teammates share a colour, the second is dashed, unknown teams get stable fallbacks', () => {
@@ -67,6 +75,7 @@ test('race pace boxes follow the API order and keep thin samples out of the boxe
   for (const box of model.boxes) {
     assert.ok(box.whiskerHigh <= box.q3 && box.q3 <= box.median && box.median <= box.q1 && box.q1 <= box.whiskerLow, `${box.code} box is ordered top to bottom`);
     assert.ok(box.crossEnd - box.crossStart <= 24, 'boxes are at most 24 px wide');
+    assert.equal(box.nText, `${box.n} laps`);
   }
   const horizontal = racePaceModel(race, { width: 358, horizontal: true });
   assert.equal(horizontal.horizontal, true);
@@ -83,12 +92,13 @@ test('race trace never draws a line across the red flag and resets at the restar
   assert.ok(runs.every((run) => run.every((p, i) => i === 0 || p.lap === run[i - 1].lap + 1)));
   const model = raceTraceModel(race, { focus: [idx(race, 'LEC'), idx(race, 'NOR')] });
   const red = model.bands.find((b) => b.kind === 'suspended');
-  assert.ok(red && red.first === 6 && red.last === 7);
-  assert.ok(model.bands.some((b) => b.kind === 'neutralised' && b.first === 3));
+  assert.ok(red && red.first === 6 && red.last === 7 && red.label === 'RED');
+  assert.ok(model.bands.some((b) => b.kind === 'sc' && b.first === 3 && b.label === 'SC'));
   const focusLines = model.lines.filter((l) => l.focus);
   assert.equal(focusLines.length, 2);
   assert.equal(model.lines[model.lines.length - 1].focus, true, 'focus lines are drawn last, on top');
   for (const line of model.lines) for (const run of line.runs) assert.match(run, /^[\d.]+,[\d.]+( [\d.]+,[\d.]+)+$/);
+  assert.deepEqual(model.endLabels.map((l) => l.text).sort(), ['LEC', 'NOR'], 'focus lines carry their driver code');
 });
 
 test('race trace against a chosen driver compares only within one racing segment', () => {
@@ -101,14 +111,17 @@ test('race trace against a chosen driver compares only within one racing segment
   assert.equal(lec.find((p) => p.lap === 8).gap, lap8.segment_time_ms - nor8.segment_time_ms);
 });
 
-test('positions: every completed lap has a line point, retirements end with an out label', () => {
+test('positions: every completed lap has a line point, a retirement ends "out", a lapped finisher is classified', () => {
   const model = positionsModel(race, { focus: [idx(race, 'LEC')] });
   const had = model.labels.find((l) => l.car_index === idx(race, 'HAD'));
   assert.match(had.text, /out L2/);
+  const bot = model.labels.find((l) => l.car_index === idx(race, 'BOT'));
+  assert.equal(bot.text, 'P5 BOT +1 lap');
   const lecLabel = model.labels.find((l) => l.car_index === idx(race, 'LEC'));
   assert.match(lecLabel.text, /^P1 LEC$/);
   assert.equal(model.lines.filter((l) => l.focus).length, 1);
   assert.equal(model.yTicks[0].label, 'P1');
+  assert.ok(model.labels.filter((l) => / out /.test(l.text)).every((l) => race.drivers.find((d) => d.car_index === l.car_index).status === 'retired'));
 });
 
 test('tyre strategy: stints tile the race, letters only where they fit, unknown tyres are grey', () => {
@@ -121,7 +134,9 @@ test('tyre strategy: stints tile the race, letters only where they fit, unknown 
   const bot = model.rows.find((r) => r.code === 'BOT');
   assert.equal(bot.stints[bot.stints.length - 1].fill, COMPOUNDS.UNKNOWN.fill);
   const narrow = strategyModel(race, { width: 140 });
-  assert.ok(narrow.rows.flatMap((r) => r.stints).some((s) => s.letter === ''), 'tiny bars drop the letter instead of clipping it');
+  const letterless = narrow.rows.flatMap((r) => r.stints).filter((s) => s.letter === '');
+  assert.ok(letterless.length, 'tiny bars drop the letter instead of clipping it');
+  assert.ok(letterless.every((s) => s.text.includes(s.label)), 'a letterless bar still names its compound');
   assert.equal(model.rows.length, race.drivers.length);
 });
 
@@ -132,6 +147,7 @@ test('lap times plot racing laps only and break lines at excluded laps', () => {
   const excluded = race.laps.filter((l) => l.car_index === lecIndex && l.pace_excluded).map((l) => l.lap_number);
   assert.ok(lec.points.every((p) => !excluded.includes(p.lap)));
   assert.ok(lec.runs.length >= 2);
+  assert.ok(lec.points.every((p) => p.openable && p.lap_id), 'traced racing laps can open in Lap Lab');
   assert.equal(lapTimesModel(race, { focus: [] }).empty, true);
 });
 
@@ -147,12 +163,13 @@ test('heatmap colours are diverging around the median and explain every excluded
   assert.equal(lec.cells.length, model.total);
   const lap1 = lec.cells[0];
   assert.equal(lap1.fill, HEAT_EXCLUDED);
-  assert.match(lap1.text, /lap 1/);
+  assert.match(lap1.text, /Lap 1/);
   const suspended = lec.cells[5];
-  assert.match(suspended.text, /race suspended/);
-  assert.ok(lec.cells.some((c) => c.delta !== null && c.lap_id), 'racing cells link to a lap');
+  assert.match(suspended.text, /race suspended/i);
+  assert.ok(lec.cells.some((c) => c.delta !== null && c.lap_id && c.openable), 'racing cells link to a lap');
   const had = model.rows.find((r) => r.code === 'HAD');
-  assert.equal(had.cells[11].text, 'not driven');
+  assert.match(had.cells[11].text, /not driven/);
+  assert.equal(had.cells[11].state, 'none');
 });
 
 test('timelapse frames follow the order, freeze while suspended and interpolate between laps', () => {
@@ -181,9 +198,13 @@ test('fastest laps, pit stops and the headline read straight from the payload', 
   const nor = stops.filter((s) => s.code === 'NOR');
   assert.deepEqual(nor.map((s) => s.kindText), ['Tyre change while suspended', 'Pit stop']);
   assert.equal(nor[0].lossText, '—');
+  assert.equal(nor[1].lossText, '22.1 s');
+  const alb = stops.filter((s) => s.code === 'ALB');
+  assert.deepEqual(alb.map((s) => s.kindText), ['Tyre change while suspended', 'Stop not recorded']);
+  assert.equal(alb[1].lossText, 'Unknown');
   const head = headline(race);
   assert.match(head.title, /wins/);
-  assert.ok(head.kpis.some((k) => k.label === 'Your result' && k.value === 'P1'));
+  assert.ok(head.kpis.some((k) => k.label === 'Your result (derived)' && k.value === 'P1'));
   assert.ok(head.kpis.some((k) => k.label === 'Neutralised' && /red flag 6–7/.test(k.detail) && /safety car 3/.test(k.detail)));
   const practice = headline({ session: { is_race: false, session_type: 'Practice 1', track_name: 'Singapore' }, drivers: [{ car_index: 0, code: 'LEC', is_player: true, best_lap_ms: 91000, laps_recorded: 8 }], fastest_laps: [] });
   assert.equal(practice.title, 'Singapore · Practice 1');

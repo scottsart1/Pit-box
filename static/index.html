@@ -343,7 +343,7 @@
       <div class="workspace-actions">
         <label class="sr-only" for="analysisSessionSelect">Session to analyse</label><select id="analysisSessionSelect"><option value="">Choose a saved session</option></select>
         <button id="analysisRefresh" class="button ghost" type="button">Refresh</button>
-        <button id="analysisOpenBest" class="button ghost" type="button">Open my best lap in Lap Lab</button>
+        <button id="analysisOpenBest" class="button ghost" type="button" disabled>Open my best lap in Lap Lab</button>
       </div>
     </header>
     <div id="analysisStatus" class="inline-notice workspace-wide" role="status" aria-live="polite">Choose a saved session, or press Analyze session in Library or Session Review.</div>
@@ -351,71 +351,77 @@
     <section class="sa-filters workspace-wide" aria-label="Chart filters">
       <span class="field-label">Focus drivers</span>
       <div id="analysisFocus" class="sa-focus" role="group" aria-label="Focus drivers; press a driver to remove them"></div>
-      <label class="sr-only" for="analysisAddDriver">Add a driver to focus</label><select id="analysisAddDriver"><option value="">Add driver…</option></select>
-      <button id="analysisResetFocus" class="button ghost" type="button">Reset</button>
+      <label class="sr-only" for="analysisAddDriver">Add a driver to focus</label><select id="analysisAddDriver" disabled><option value="">Add driver…</option></select>
+      <button id="analysisResetFocus" class="button ghost" type="button" disabled>Reset</button>
       <span class="sa-spacer"></span>
       <label class="sa-check"><input id="analysisHideOutliers" type="checkbox" checked> Hide laps over 107%</label>
-      <label class="sa-inline" for="analysisReference">Gap to <select id="analysisReference"><option value="leader">Race leader</option></select></label>
+      <label class="sa-inline" for="analysisReference" data-analysis-race-only>Gap to <select id="analysisReference" disabled><option value="leader">Race leader</option></select></label>
     </section>
     <p id="analysisRaceOnlyNote" class="field-help workspace-wide" hidden>Race trace, positions and the timelapse need a race; this session shows pace, tyres and laps.</p>
     <section class="panel-surface sa-card workspace-wide" aria-labelledby="analysisPaceHeading">
       <div class="section-heading"><div><div class="eyebrow">Race pace</div><h2 id="analysisPaceHeading">Lap-time spread per driver, fastest median first</h2></div></div>
       <div id="analysisPaceChart" class="sa-chart"><div class="empty">No session analysed.</div></div>
-      <p class="field-help">Racing laps only: lap 1, restart laps, pit in/out, safety-car and red-flag laps are left out; laps over 107% of the driver's median are hidden unless you turn that off. <span id="analysisPaceThin"></span></p>
+      <p class="field-help"><span id="analysisPaceBasis">Pace uses representative laps only; laps over 107% of the driver's median are hidden unless you turn that off.</span> <span id="analysisPaceThin"></span></p>
       <div id="analysisPaceTable"></div>
     </section>
     <div class="sa-pair workspace-wide" data-analysis-race-only>
       <section class="panel-surface sa-card" aria-labelledby="analysisTraceHeading">
         <div class="section-heading"><div><div class="eyebrow">Race trace</div><h2 id="analysisTraceHeading">Gap per lap</h2></div></div>
-        <div id="analysisTraceChart" class="sa-chart"></div>
-        <p class="field-help">Amber bands: safety car. Red band: race suspended; gaps restart from the grid after a red flag.</p>
+        <div id="analysisTraceChart" class="sa-chart"><div class="empty">No session analysed.</div></div>
+        <p class="field-help">Amber bands: safety car (SC) or virtual safety car (VSC). Red bands (RED): race suspended; gaps restart from the grid after a red flag. <span id="analysisTraceNote"></span></p>
         <div id="analysisTraceTable"></div>
       </section>
       <section class="panel-surface sa-card" aria-labelledby="analysisPositionsHeading">
         <div class="section-heading"><div><div class="eyebrow">Positions</div><h2 id="analysisPositionsHeading">Position at the end of every lap</h2></div></div>
-        <div id="analysisPositionsChart" class="sa-chart"></div>
+        <div id="analysisPositionsChart" class="sa-chart"><div class="empty">No session analysed.</div></div>
+        <p class="field-help">Each line ends with the finishing place; "+1 lap" marks a lapped finisher and "out" a retirement.</p>
         <div id="analysisPositionsTable"></div>
       </section>
     </div>
     <section class="panel-surface sa-card workspace-wide" aria-labelledby="analysisStrategyHeading">
       <div class="section-heading"><div><div class="eyebrow">Tyre strategy</div><h2 id="analysisStrategyHeading">Stints in finishing order</h2></div>
         <div class="sa-legend" aria-label="Compounds"><span><i class="sa-swatch" data-compound="SOFT">S</i>Soft</span><span><i class="sa-swatch" data-compound="MEDIUM">M</i>Medium</span><span><i class="sa-swatch" data-compound="HARD">H</i>Hard</span><span><i class="sa-swatch" data-compound="INTER">I</i>Intermediate</span><span><i class="sa-swatch" data-compound="WET">W</i>Wet</span><span><i class="sa-swatch" data-compound="UNKNOWN">?</i>No tyre data</span></div></div>
-      <div id="analysisStrategyChart" class="sa-chart"></div>
-      <p class="field-help">"?" stints had no tyre data recorded (cars without full traces in a race). A tyre change while the race was suspended starts a new stint.</p>
+      <div id="analysisStrategyChart" class="sa-chart"><div class="empty">No session analysed.</div></div>
+      <p class="field-help">"?" stints had no tyre data recorded (cars without full traces in a race).<span data-analysis-race-only> A tyre change while the race was suspended starts a new stint.</span></p>
       <div id="analysisStrategyTable"></div>
     </section>
     <div class="sa-pair workspace-wide">
       <section class="panel-surface sa-card" aria-labelledby="analysisLapTimesHeading">
-        <div class="section-heading"><div><div class="eyebrow">Lap times</div><h2 id="analysisLapTimesHeading">Racing laps for focus drivers</h2></div></div>
-        <div id="analysisLapTimesChart" class="sa-chart"></div>
+        <div class="section-heading"><div><div class="eyebrow">Lap times</div><h2 id="analysisLapTimesHeading">Pace laps for focus drivers</h2></div></div>
+        <div id="analysisLapTimesChart" class="sa-chart"><div class="empty">No session analysed.</div></div>
+        <p class="field-help">Select a lap to read it; select it again to open it in Lap Lab.</p>
+        <div id="analysisLapTimesTable"></div>
       </section>
       <section class="panel-surface sa-card" aria-labelledby="analysisHeatmapHeading">
         <div class="section-heading"><div><div class="eyebrow">Lap-time heatmap</div><h2 id="analysisHeatmapHeading">Each lap against the driver's own median</h2></div></div>
-        <div class="sa-heat-legend" aria-hidden="true">Faster<span class="sa-heat-scale"><i></i><i></i><i></i><i></i><i></i></span>Slower · select a lap to open it in Lap Lab</div>
-        <div id="analysisHeatmapChart" class="sa-chart sa-chart-scroll" tabindex="0"></div>
+        <div class="sa-heat-legend" aria-hidden="true"><span class="sa-heat-key">Faster<span class="sa-heat-scale"><i></i><i></i><i></i><i></i><i></i></span>Slower</span><span>Dark: not a pace lap</span><span>Dashed: not recorded</span></div>
+        <div id="analysisHeatmapChart" class="sa-chart sa-heat"><div class="empty">No session analysed.</div></div>
+        <p class="field-help">Select a lap to read it, then Open in Lap Lab. The data table lists each driver's laps with an Open in Lap Lab button for every lap recorded with telemetry.</p>
+        <div id="analysisHeatmapTable"></div>
       </section>
     </div>
     <section class="panel-surface sa-card workspace-wide" aria-labelledby="analysisLapseHeading" data-analysis-race-only>
       <div class="section-heading sa-lapse-head"><div><div class="eyebrow">Race timelapse</div><h2 id="analysisLapseHeading">The field lap by lap</h2></div>
         <div class="sa-lapse-controls">
-          <button id="analysisLapsePlay" class="button primary" type="button" aria-pressed="false">Play</button>
+          <button id="analysisLapsePlay" class="button primary" type="button" aria-pressed="false" disabled>Play</button>
           <label class="sa-lapse-range" for="analysisLapseRange"><span id="analysisLapseLabel">No laps</span><input id="analysisLapseRange" type="range" min="1" max="1" step="1" value="1" disabled></label>
           <label class="sr-only" for="analysisLapseSpeed">Timelapse speed</label><select id="analysisLapseSpeed"><option value="0.5">½ lap/s</option><option value="1" selected>1 lap/s</option><option value="2">2 laps/s</option><option value="4">4 laps/s</option></select>
         </div>
       </div>
-      <div id="analysisLapseChart" class="sa-chart"></div>
-      <p class="field-help">Gap to the leader in seconds. While a race is suspended the order is frozen and no gap is shown.</p>
+      <div id="analysisLapseChart" class="sa-chart"><div class="empty">No session analysed.</div></div>
+      <p class="field-help">Gap to the leader in seconds; "+1 lap" marks a lapped car. While a race is suspended the order is frozen and no gap is shown.</p>
+      <div id="analysisLapseTable"></div>
     </section>
     <div class="sa-pair workspace-wide">
       <section class="panel-surface sa-card" aria-labelledby="analysisFastestHeading">
         <div class="section-heading"><div><div class="eyebrow">Fastest and ideal laps</div><h2 id="analysisFastestHeading">Best lap behind the fastest; tick = best sectors combined</h2></div></div>
-        <div id="analysisFastestChart" class="sa-chart"></div>
+        <div id="analysisFastestChart" class="sa-chart"><div class="empty">No session analysed.</div></div>
         <div id="analysisFastestTable"></div>
       </section>
       <section class="panel-surface sa-card" aria-labelledby="analysisStopsHeading">
         <div class="section-heading"><div><div class="eyebrow">Pit stops</div><h2 id="analysisStopsHeading">Stops and tyre changes</h2></div></div>
-        <div class="table-scroll" tabindex="0"><table class="table workspace-table sa-table"><caption class="sr-only">Pit stops and tyre changes</caption><thead><tr><th scope="col">Driver</th><th scope="col">Lap</th><th scope="col">Tyres</th><th scope="col">Kind</th><th scope="col">Time lost</th></tr></thead><tbody id="analysisStopsRows"><tr><td colspan="5" class="empty">No session analysed.</td></tr></tbody></table></div>
-        <p class="field-help">Time lost: in-lap and out-lap against the driver's median racing lap, an estimate. Stops under a safety car or red flag have none.</p>
+        <div class="table-scroll" tabindex="0" aria-label="Pit stops and tyre changes"><table class="table workspace-table sa-table"><caption class="sr-only">Pit stops and tyre changes</caption><thead><tr><th scope="col">Driver</th><th scope="col">Lap</th><th scope="col">Tyres</th><th scope="col">Kind</th><th scope="col">Time lost</th></tr></thead><tbody id="analysisStopsRows"><tr><td colspan="5" class="empty">No session analysed.</td></tr></tbody></table></div>
+        <p class="field-help">Time lost: in-lap and out-lap against the driver's median pace lap, an estimate.<span data-analysis-race-only> Stops under a safety car or red flag have none.</span> "Stop not recorded": the tyres changed without a recorded stop, so the time lost is unknown.</p>
       </section>
     </div>
   </div>
