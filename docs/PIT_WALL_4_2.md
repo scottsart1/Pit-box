@@ -315,9 +315,12 @@ preview, deletion is refused and must be previewed again. A session still marked
 ### Session Review
 
 Session Review loads session metadata, participant identity revisions, quality,
-lap validity/context, trace coverage, and derived counts. **Analyze / reprocess**
-queues a durable deterministic job. A duplicate request for the same algorithm
-bundle reuses the existing job.
+lap validity/context, trace coverage, and derived counts. **Reprocess** queues
+a durable deterministic job. A duplicate request for the same algorithm bundle
+reuses the existing job. **Analyze session** (also on each Library row) opens
+the read-only Session Analysis view: race pace, race trace, positions, tyre
+strategy, lap times, a lap-time heatmap, a race timelapse, fastest and ideal
+laps, and pit stops.
 
 The current reprocessor chooses the fastest valid traced player lap as its
 reference, or the fastest valid traced field lap when no player lap is
@@ -328,15 +331,20 @@ the job finishes.
 
 ### Lap Lab
 
-1. Open a valid recorded lap from Session Review, a Field matrix cell, or the
-   candidate selector.
-2. Select one of the stored reference laps. Suggested references prioritize
-   compatibility, trace completeness, performance, and context.
-3. Review the compatibility badge. A caveated reference requires explicit
-   confirmation and may disable prescriptive coaching.
-4. Choose **Compare laps**. Pit Wall aligns the traces by distance, calculates
-   cumulative/local timing, segment metrics, quality, confidence, and
-   deterministic findings, then caches the result by its input hash.
+1. Open a recorded lap from Session Review, a Field matrix cell, a Session
+   Analysis heatmap cell, or the pickers: choose a driver, then one of their
+   laps (choosing a driver opens their fastest lap with telemetry).
+2. The suggested reference (ranked by compatibility, trace completeness,
+   performance and context) is compared as soon as the lap has loaded. Choose
+   any other driver and lap to compare against it instead; **Use suggested**
+   returns to the suggestion and **Compare again** repeats the comparison.
+   Laps known only from lap timing are labelled and cannot be compared.
+3. Review the compatibility badge. A caveated reference is compared without a
+   confirmation dialog; its caveats are shown with the result and may limit
+   prescriptive coaching.
+4. Pit Wall aligns the traces by distance, calculates cumulative/local timing,
+   segment metrics, quality, confidence, and deterministic findings, then
+   caches the result by its input hash.
 5. Use the shared scrubber/playback controls, trace tabs, segment rail, map, and
    synchronized instruments. Selecting a segment or finding moves the shared
    distance cursor to its evidence.

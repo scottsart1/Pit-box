@@ -30,13 +30,18 @@
 
 ## Lap Lab
 
-- Choose a driver, then a lap, for the lap you are studying.
-- The best comparable reference is chosen and compared straight away. Choose
-  any other driver and lap - including any lap of the same session, or a
-  compatible lap from another session at the track - and it is compared at
-  once; Use suggested goes back to the recommendation.
+- Choose a driver, then a lap, for the lap you are studying. A driver opens on
+  their fastest lap with telemetry.
+- The best comparable reference is chosen and compared as soon as the lap has
+  loaded. Choose any other driver and lap - including any lap of the same
+  session, or a compatible lap from another session at the track - and it is
+  compared once your choice settles; Use suggested goes back to the
+  recommendation. A comparison against another session names that session.
 - Laps from the same session that were not pre-classified are checked by the
-  comparison itself, and any caveat is shown with the result.
+  comparison itself, and any caveat or refusal is shown with the result while
+  the lap keeps playing.
+- Laps a flashback abandoned are left out; laps known only from lap timing
+  are labelled and cannot be compared.
 
 Windows continues to use the explicitly unsigned direct-download installer.
 Android retains the existing signing identity.

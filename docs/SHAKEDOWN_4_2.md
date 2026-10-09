@@ -73,9 +73,10 @@ exact screen text or log line, not a paraphrase.
 21. [ ] Fully close Pit Wall. Turn the console off. Restart Pit Wall.
 22. [ ] Open **Library**. Confirm the session you just drove is listed with
         correct track, type, duration and lap count.
-23. [ ] Open **Session Review**. Run **Analyze / reprocess** and wait for it.
-24. [ ] Open **Lap Lab**. Compare your deliberately-early-braking lap against
-        your best clean lap.
+23. [ ] Open **Session Review**. Run **Reprocess** and wait for it.
+24. [ ] Open **Lap Lab**. Choose yourself, then your deliberately-early-braking
+        lap, and compare it against your best clean lap (pick that lap as the
+        reference if it is not the suggestion).
 25. [ ] Confirm the segments covering that corner now produce **real deltas**,
         not Unavailable. This is the key check that 4.2-native capture is dense
         enough for segment analysis - see the legacy-session note in
