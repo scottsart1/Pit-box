@@ -286,6 +286,48 @@ def _packet_player_index(packet: Any, values: Any) -> int | None:
     return index if 0 <= index < count else None
 
 
+def final_classification_payload(packet: Any, player_index: int | None) -> dict[str, Any]:
+    """Every classified car from the final-classification packet, by car index.
+
+    Statuses are the game's (3 finished, 4 did not finish, 5 disqualified,
+    6 not classified, 7 retired); the race time excludes penalties, which
+    are listed separately, exactly as the game reports them.
+    """
+    entries = list(packet.classification_data)
+    count = int(getattr(packet, "num_cars", 0) or 0) or len(entries)
+    cars: list[dict[str, Any]] = []
+    for index, item in enumerate(entries[: max(0, min(count, len(entries)))]):
+        position = int(getattr(item, "position", 0) or 0)
+        if position <= 0:
+            continue
+        stints = int(getattr(item, "num_tyre_stints", 0) or 0)
+        actual = list(getattr(item, "tyre_stints_actual", []) or [])
+        visual = list(getattr(item, "tyre_stints_visual", []) or [])
+        ends = list(getattr(item, "tyre_stints_end_laps", []) or [])
+        stints = max(0, min(stints, len(actual), len(visual), len(ends)))
+        cars.append(
+            {
+                "car_index": index,
+                "position": position,
+                "laps": int(getattr(item, "num_laps", 0) or 0),
+                "grid_position": int(getattr(item, "grid_position", 0) or 0),
+                "points": int(getattr(item, "points", 0) or 0),
+                "pit_stops": int(getattr(item, "num_pit_stops", 0) or 0),
+                "result_status": int(getattr(item, "result_status", 0) or 0),
+                "result_reason": int(getattr(item, "result_reason", 0) or 0),
+                "best_lap_ms": int(getattr(item, "best_lap_time_in_ms", 0) or 0),
+                "total_race_time_s": round(float(getattr(item, "total_race_time", 0.0) or 0.0), 3),
+                "penalties_s": int(getattr(item, "penalties_time", 0) or 0),
+                "penalties": int(getattr(item, "num_penalties", 0) or 0),
+                "tyre_stints": [
+                    {"actual": int(actual[i]), "visual": int(visual[i]), "end_lap": int(ends[i])}
+                    for i in range(stints)
+                ],
+            }
+        )
+    return {"player_car_index": player_index, "cars": cars}
+
+
 @dataclass(frozen=True, slots=True)
 class ReceivedDatagram:
     """Immutable input handed from the socket callback to parser consumers."""
@@ -365,6 +407,10 @@ class F1DatagramProtocol(asyncio.DatagramProtocol):
         # screen is shown, which previously re-appended CHQF and re-wrote the
         # session row on every repeat.
         self._classified_sessions: set[str] = set()
+        # The lap chart last saved: (session uid, first lap, number of laps).
+        # The game repeats the packet about once a second; it is saved again
+        # only when its laps change.
+        self._saved_lap_chart: tuple[int, int, int] | None = None
         self._qualifying_debrief_laps: set[tuple[int, int]] = set()
         self._briefing_tasks: set[asyncio.Task[Any]] = set()
         self._live_uid = 0
@@ -2148,6 +2194,38 @@ class F1DatagramProtocol(asyncio.DatagramProtocol):
                     state.drivers[vehicle_index].position_history = history
 
         await self.store.mutate(apply)
+        await self._save_lap_chart(packet, lap_start, num_laps, values, min(active_cars, 24))
+
+    async def _save_lap_chart(
+        self, packet: Any, lap_start: int, num_laps: int, values: list[Any], cars: int
+    ) -> None:
+        """Save the game's lap chart with the session.
+
+        Row 0 is the grid (when lap_start is 0) and row N each car's position
+        at the end of lap N; 0 means no position (not there yet, or out of the
+        race). It is saved each time the number of laps changes, about once a
+        lap: the newest row is still filling as the rest of the field crosses
+        the line, and each later copy completes the rows before it. A
+        flashback that rewinds past the line changes the number of laps and
+        is saved too; readers keep the latest copy of each row.
+        """
+        session_uid = int(getattr(packet.header, "session_uid", 0) or 0)
+        signature = (session_uid, lap_start, num_laps)
+        if signature == self._saved_lap_chart:
+            return
+        rows = [
+            [
+                int(values[offset * 24 + car]) if offset * 24 + car < len(values) else 0
+                for car in range(cars)
+            ]
+            for offset in range(max(0, min(num_laps, 50)))
+        ]
+        if not any(any(row) for row in rows):
+            return
+        self._saved_lap_chart = signature
+        await self.store.append_event(
+            "LPOS", {"lap_start": lap_start, "positions": rows}, remember=False
+        )
 
     async def handle_PacketFinalClassificationData(self, packet: Any) -> None:
         player_index = _packet_player_index(packet, packet.classification_data)
@@ -2183,6 +2261,12 @@ class F1DatagramProtocol(asyncio.DatagramProtocol):
         if already_recorded:
             return
         await self.store.append_event("CHQF", {"position": int(result.position)})
+        # Every car's result, not only the player's: the game's own
+        # classification, with penalties, statuses and laps, that Session
+        # Analysis uses as the finishing order.
+        await self.store.append_event(
+            "FCLS", final_classification_payload(packet, player_index), remember=False
+        )
         if self.on_final_classification:
             await self.on_final_classification()
 

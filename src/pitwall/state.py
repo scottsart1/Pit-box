@@ -1371,13 +1371,21 @@ class StateStore:
             self.usage_event("engineer")
         return True
 
-    async def append_event(self, event_type: str, payload: dict[str, Any]) -> None:
+    async def append_event(self, event_type: str, payload: dict[str, Any], *, remember: bool = True) -> None:
+        """Queue an event for the session record.
+
+        ``remember=False`` stores it without adding it to the in-memory events
+        log: bulky records (the full classification, the lap chart) belong in
+        the saved session, not in every dashboard refresh or the engineer's
+        recent-events context.
+        """
         queued: dict[str, Any]
         async with self._lock:
             now = time.time()
-            event = {"time": now, "lap": self.state.current_lap, "type": event_type, "payload": copy.deepcopy(payload)}
-            self.state.events_log.append(event)
-            self.state.events_log = self.state.events_log[-200:]
+            if remember:
+                event = {"time": now, "lap": self.state.current_lap, "type": event_type, "payload": copy.deepcopy(payload)}
+                self.state.events_log.append(event)
+                self.state.events_log = self.state.events_log[-200:]
             queued = {
                 "session_uid": int(self.state.session_uid),
                 "track_id": int(self.state.track_id),
