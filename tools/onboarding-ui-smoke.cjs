@@ -41,7 +41,7 @@ const settle = async () => { for (let i = 0; i < 8; i++) await new Promise(resol
   try {
     id('bootOverlay').classList.add('done');
     // Exercise the app's real workspace selectors, with external data loaders stubbed.
-    w.eval("const $=id=>document.getElementById(id); const ANALYSIS_VIEWS=['library','session-review','lap-lab','field','review']; function loadTracks(){} function loadHistory(){} function loadAppSettings(){}\n" +
+    w.eval("const $=id=>document.getElementById(id); const ANALYSIS_VIEWS=['library','session-analysis','session-review','lap-lab','field','review']; function loadTracks(){} function loadHistory(){} function loadAppSettings(){}\n" +
       ['selectPage', 'selectAnalysisView'].map(name => html.match(new RegExp(`^function ${name}\\([^\\n]+`, 'm'))[0]).join('\n'));
     w.document.querySelectorAll('.tab').forEach(button => { button.onclick = () => w.selectPage(button.dataset.page); });
     w.document.querySelectorAll('.analysis-subnav .field-tab').forEach(button => { button.onclick = () => w.selectAnalysisView(button.dataset.page); });

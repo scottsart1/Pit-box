@@ -2,8 +2,8 @@
 <html lang="en">
 <head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Your Pit Box 5.3.4</title>
-<link rel="icon" href="/static/driver-dashboard/icon.svg?v=5.3.4" type="image/svg+xml">
+<title>Your Pit Box 5.4.0</title>
+<link rel="icon" href="/static/driver-dashboard/icon.svg?v=5.4.0" type="image/svg+xml">
 <style>
 :root{color-scheme:dark;font-family:Segoe UI,system-ui,sans-serif;--bg:#070b0f;--panel:#0c1218;--card:#121b24;--line:#263542;--muted:#91a6b8;--green:#49d17d;--blue:#3f86ff;--red:#ff6969;--amber:#ffc15c}*{box-sizing:border-box}body{margin:0;background:var(--bg);color:#eef4f8;overflow:hidden}.app{height:100vh;display:grid;grid-template-rows:50px 44px 1fr 44px}.top,.tabs,.bottom{display:flex;align-items:center;gap:18px;background:#111820;border-bottom:1px solid var(--line);padding:0 16px}.bottom{border-top:1px solid var(--line);border-bottom:0;color:#9eb2c2;font-size:12px}.brand{font-weight:900;letter-spacing:.09em}.dot{width:9px;height:9px;border-radius:50%;display:inline-block;background:var(--red)}.dot.on{background:var(--green)}.dot.pause{background:var(--amber)}.status{margin-left:auto}.pill,.tag{background:#263542;border-radius:14px;padding:5px 10px}.tabs{gap:5px;padding:5px 12px}.tab{border:0;background:transparent;color:var(--muted);font-weight:800;padding:8px 15px;border-radius:8px;cursor:pointer}.tab.active{background:#233545;color:white}.page{display:none;min-height:0}.page.active{display:block}.live-grid{display:grid;grid-template-columns:23% 54% 23%;height:100%;min-height:0}.review-grid,.setup-grid{display:grid;grid-template-columns:44% 56%;height:100%;min-height:0}.panel{padding:14px;overflow:auto;border-right:1px solid var(--line)}.panel:last-child{border:0}.label{font-size:11px;letter-spacing:.12em;color:#8fa4b7;text-transform:uppercase}.big{font-size:38px;font-weight:900}.hero{font-size:22px;font-weight:850}.card{background:var(--card);border:1px solid var(--line);border-radius:11px;padding:12px;margin:10px 0}.row{display:flex;justify-content:space-between;gap:12px;align-items:center}.muted{color:var(--muted)}.small{font-size:12px}.good{color:var(--green)}.warn{color:var(--amber)}.error{color:#ff8080}.timing{display:grid;grid-template-columns:42px 1fr auto;gap:8px;align-items:center;padding:9px 7px;border-bottom:1px solid #202b35}.timing.me{background:#1b303e;border-radius:7px}.tyre{font-size:11px;background:#263542;border-radius:10px;padding:2px 6px}.canvas{width:100%;background:#0b1117;border:1px solid #202d38;border-radius:10px}.trace{height:180px}.map{height:250px}.grid2{display:grid;grid-template-columns:1fr 1fr;gap:10px}.grid3{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}.metric{background:#0c131a;padding:9px;border-radius:8px}.radio{height:150px;overflow:auto;white-space:pre-wrap;line-height:1.42}.controls{display:flex;gap:8px}.controls input,.select{flex:1;min-width:0;background:#0a1016;color:white;border:1px solid #3a4a58;border-radius:8px;padding:10px}.button{border:0;border-radius:8px;padding:10px 14px;font-weight:800;cursor:pointer;background:#e7eef4;color:#081018}.button.primary{background:var(--blue);color:white}.button.ghost{background:#263542;color:white}.quad{display:grid;grid-template-columns:1fr 1fr;gap:8px}.strategy-main{font-size:17px;font-weight:850}.strategy-plan{padding:7px 0;border-bottom:1px solid var(--line)}.table{width:100%;border-collapse:collapse;font-size:13px}.table th,.table td{padding:8px;text-align:left;border-bottom:1px solid var(--line)}.change{display:grid;grid-template-columns:1fr auto auto;gap:10px;padding:7px;border-bottom:1px solid var(--line)}.empty{text-align:center;padding:22px;color:var(--muted)}pre{white-space:pre-wrap}.setup-fields{columns:2;column-gap:20px}.setup-fields .row{break-inside:avoid;border-bottom:1px solid #202c36;padding:4px 0}.diag{font-family:Consolas,monospace;font-size:11px}.nowrap{white-space:nowrap}.radio-rail{position:fixed;left:0;top:0;bottom:0;width:4px;background:transparent;z-index:1000;transition:background .12s ease,box-shadow .12s ease}.radio-rail.listening{background:#ffd21f;box-shadow:0 0 10px rgba(255,210,31,.55)}.radio-rail.processing{background:#49d17d;box-shadow:0 0 10px rgba(73,209,125,.55)}.radio-rail.speaking{background:#3f86ff;box-shadow:0 0 10px rgba(63,134,255,.55)}.radio-rail.error{background:#ff6969}.latency-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:6px}.latency-grid .metric{font-size:11px}@media(max-width:1150px){.live-grid{grid-template-columns:25% 50% 25%}.panel{padding:10px}.big{font-size:31px}.setup-fields{columns:1}}
 /* Race-control blip. The engineer cannot always speak a flag the instant it
@@ -33,12 +33,12 @@
 @keyframes bootspin{to{transform:rotate(360deg)}}
 .brutal-toggle{color:var(--muted)}.brutal-on .brutal-toggle{color:var(--red);font-weight:800;text-transform:uppercase;letter-spacing:.06em}.brutal-on{border-color:var(--red)}
 </style>
-<link rel="stylesheet" href="/static/css/v42.css?v=5.3.4">
-<link rel="stylesheet" href="/static/css/transfers.css?v=5.3.4">
-<link rel="stylesheet" href="/static/css/onboarding.css?v=5.3.4">
+<link rel="stylesheet" href="/static/css/v42.css?v=5.4.0">
+<link rel="stylesheet" href="/static/css/transfers.css?v=5.4.0">
+<link rel="stylesheet" href="/static/css/onboarding.css?v=5.4.0">
 </head>
 <body><div id="bootOverlay" aria-live="polite"><div style="text-align:center"><div style="font-weight:800;letter-spacing:3px;font-size:22px;margin-bottom:18px">YOUR PIT BOX</div><div class="boot-ring"></div><div id="bootNote" class="small muted" style="margin-top:16px">Starting your pit box…</div></div></div><div id="radioRail" class="radio-rail"></div><div id="dashPopover" role="dialog" aria-label="Dashboard cards"><div class="label">Dashboard cards</div><div id="dashList"></div></div><div id="raceControlBlip" class="rc-blip" role="status" aria-live="assertive" hidden></div><div class="app">
-<header class="top"><span class="brand">YOUR PIT BOX 5.3.4</span><span><i id="udpDot" class="dot"></i> <span id="udp">Waiting for UDP</span></span><span id="session">—</span><span id="track">—</span><span id="eng" class="status pill">standing by</span><button id="dashConfig" class="button ghost" style="margin-left:10px;padding:6px 12px" title="Choose which dashboard cards are shown, and drag to rearrange them.">⚙ Dashboard</button><button id="quitApp" class="button ghost" style="margin-left:10px;padding:6px 12px" title="Your Pit Box keeps running after you close this tab. Use this to stop it.">Quit Your Pit Box</button></header>
+<header class="top"><span class="brand">YOUR PIT BOX 5.4.0</span><span><i id="udpDot" class="dot"></i> <span id="udp">Waiting for UDP</span></span><span id="session">—</span><span id="track">—</span><span id="eng" class="status pill">standing by</span><button id="dashConfig" class="button ghost" style="margin-left:10px;padding:6px 12px" title="Choose which dashboard cards are shown, and drag to rearrange them.">⚙ Dashboard</button><button id="quitApp" class="button ghost" style="margin-left:10px;padding:6px 12px" title="Your Pit Box keeps running after you close this tab. Use this to stop it.">Quit Your Pit Box</button></header>
 <nav class="tabs" role="tablist" aria-label="Your Pit Box workspaces"><button id="tab-live" class="tab active" type="button" role="tab" aria-controls="live" aria-selected="true" tabindex="0" data-page="live">DRIVE</button><button id="tab-driver-dashboard" class="tab" type="button" role="tab" aria-controls="driver-dashboard" aria-selected="false" tabindex="-1" data-page="driver-dashboard">DRIVER DASHBOARD</button><button id="tab-strategy" class="tab" type="button" role="tab" aria-controls="strategy" aria-selected="false" tabindex="-1" data-page="strategy">STRATEGY</button><button id="tab-connection" class="tab" type="button" role="tab" aria-controls="connection" aria-selected="false" tabindex="-1" data-page="connection">CONNECTION</button><button id="tab-analysis" class="tab" type="button" role="tab" aria-controls="analysis" aria-selected="false" tabindex="-1" data-page="analysis">ANALYSIS</button><button id="tab-setup" class="tab" type="button" role="tab" aria-controls="setup" aria-selected="false" tabindex="-1" data-page="setup">SETUP LAB</button><button id="tab-settings" class="tab" type="button" role="tab" aria-controls="settings" aria-selected="false" tabindex="-1" data-page="settings">SETTINGS</button></nav>
 <main id="driver-dashboard" class="page" role="tabpanel" aria-labelledby="tab-driver-dashboard" hidden><iframe id="driverDashboardFrame" title="Driver Dashboard" allow="screen-wake-lock"></iframe></main>
 <main id="settings" class="page" role="tabpanel" aria-labelledby="tab-settings" tabindex="0" hidden><div style="max-width:860px;margin:0 auto;padding:14px;overflow:auto;height:100%"><div class="label">Settings</div><div class="small muted" style="margin-bottom:6px">Saved on this machine and applied over the installation defaults. Fields marked ⟳ take effect after the app restarts.</div><div id="settingsRestart" class="small" style="display:none;color:#ffbf47;margin-bottom:8px"></div><div id="settingsStatus" class="small muted" style="margin-bottom:8px"></div><div id="settingsGroups"></div></div></main>
@@ -289,7 +289,7 @@
   </div>
 </main>
 <main id="analysis" class="page workspace-page" role="tabpanel" aria-labelledby="tab-analysis" tabindex="0" hidden>
-<div class="analysis-subnav" role="tablist" aria-label="Analysis views"><button id="tab-library" class="field-tab active" type="button" role="tab" aria-controls="library" aria-selected="true" data-page="library">LIBRARY</button><button id="tab-test-engineer" class="field-tab" type="button" role="tab" aria-controls="test-engineer" aria-selected="false" data-page="test-engineer">TEST ENGINEER</button><button id="tab-session-review" class="field-tab" type="button" role="tab" aria-controls="session-review" aria-selected="false" data-page="session-review">SESSION REVIEW</button><button id="tab-lap-lab" class="field-tab" type="button" role="tab" aria-controls="lap-lab" aria-selected="false" data-page="lap-lab">LAP LAB</button><button id="tab-field" class="field-tab" type="button" role="tab" aria-controls="field" aria-selected="false" data-page="field">FIELD</button><button id="tab-review" class="field-tab" type="button" role="tab" aria-controls="review" aria-selected="false" data-page="review">HISTORY</button></div>
+<div class="analysis-subnav" role="tablist" aria-label="Analysis views"><button id="tab-library" class="field-tab active" type="button" role="tab" aria-controls="library" aria-selected="true" data-page="library">LIBRARY</button><button id="tab-session-analysis" class="field-tab" type="button" role="tab" aria-controls="session-analysis" aria-selected="false" data-page="session-analysis">SESSION ANALYSIS</button><button id="tab-test-engineer" class="field-tab" type="button" role="tab" aria-controls="test-engineer" aria-selected="false" data-page="test-engineer">TEST ENGINEER</button><button id="tab-session-review" class="field-tab" type="button" role="tab" aria-controls="session-review" aria-selected="false" data-page="session-review">SESSION REVIEW</button><button id="tab-lap-lab" class="field-tab" type="button" role="tab" aria-controls="lap-lab" aria-selected="false" data-page="lap-lab">LAP LAB</button><button id="tab-field" class="field-tab" type="button" role="tab" aria-controls="field" aria-selected="false" data-page="field">FIELD</button><button id="tab-review" class="field-tab" type="button" role="tab" aria-controls="review" aria-selected="false" data-page="review">HISTORY</button></div>
 <div id="test-engineer" class="analysis-view" role="tabpanel" aria-labelledby="tab-test-engineer" hidden>
   <div class="workspace-shell engineering-workspace">
     <header class="workspace-header panel-surface"><div><div class="eyebrow">Practice / Test Engineer</div><h1 id="engineeringTitle">Practice / Test Engineer</h1><p class="workspace-lede">Compare runs or your own lap groups, within one session or across saved sessions at the same track.</p></div><div class="workspace-actions"><label for="engineeringSession">Session A — edit and compare<select id="engineeringSession"><option value="">Current live session</option></select></label><button id="engineeringRefresh" class="button ghost" type="button">Refresh</button></div></header>
@@ -332,11 +332,105 @@
       <div class="load-more-row"><button id="libraryLoadMore" class="button ghost" type="button" hidden>Load more sessions</button></div>
     </section>
   </div>
-</div><div id="session-review" class="analysis-view" role="tabpanel" aria-labelledby="tab-session-review" hidden>
+</div><div id="session-analysis" class="analysis-view" role="tabpanel" aria-labelledby="tab-session-analysis" hidden>
+  <div class="workspace-shell sa-shell">
+    <header class="workspace-header panel-surface sa-header">
+      <div>
+        <div class="eyebrow">Session analysis</div>
+        <h1 id="analysisTitle">Session analysis</h1>
+        <p id="analysisSubtitle" class="workspace-lede">Race pace, race trace, positions, tyre strategy, lap times and the timelapse for one saved session.</p>
+      </div>
+      <div class="workspace-actions">
+        <label class="sr-only" for="analysisSessionSelect">Session to analyse</label><select id="analysisSessionSelect"><option value="">Choose a saved session</option></select>
+        <button id="analysisRefresh" class="button ghost" type="button">Refresh</button>
+        <button id="analysisOpenBest" class="button ghost" type="button" disabled>Open my best lap in Lap Lab</button>
+      </div>
+    </header>
+    <div id="analysisStatus" class="inline-notice workspace-wide" role="status" aria-live="polite">Choose a saved session, or press Analyze session in Library or Session Review.</div>
+    <section id="analysisKpis" class="summary-grid sa-kpis workspace-wide" aria-label="Key results"></section>
+    <section class="sa-filters workspace-wide" aria-label="Chart filters">
+      <span class="field-label">Focus drivers</span>
+      <div id="analysisFocus" class="sa-focus" role="group" aria-label="Focus drivers; press a driver to remove them"></div>
+      <label class="sr-only" for="analysisAddDriver">Add a driver to focus</label><select id="analysisAddDriver" disabled><option value="">Add driver…</option></select>
+      <button id="analysisResetFocus" class="button ghost" type="button" disabled>Reset</button>
+      <span class="sa-spacer"></span>
+      <label class="sa-check"><input id="analysisHideOutliers" type="checkbox" checked> Hide laps over 107%</label>
+      <label class="sa-inline" for="analysisReference" data-analysis-order-only>Gap to <select id="analysisReference" disabled><option value="leader">Race leader</option></select></label>
+    </section>
+    <p id="analysisRaceOnlyNote" class="field-help workspace-wide" hidden>Race trace, positions and the timelapse need a race; this session shows pace, tyres and laps.</p>
+    <section class="panel-surface sa-card workspace-wide" aria-labelledby="analysisPaceHeading">
+      <div class="section-heading"><div><div class="eyebrow">Race pace</div><h2 id="analysisPaceHeading">Lap-time spread per driver, fastest median first</h2></div></div>
+      <div id="analysisPaceChart" class="sa-chart"><div class="empty">No session analysed.</div></div>
+      <p class="field-help"><span id="analysisPaceBasis">Pace uses representative laps only; laps over 107% of the driver's median are hidden unless you turn that off.</span> <span id="analysisPaceThin"></span></p>
+      <div id="analysisPaceTable"></div>
+    </section>
+    <div class="sa-pair workspace-wide" data-analysis-order-only>
+      <section class="panel-surface sa-card" aria-labelledby="analysisTraceHeading">
+        <div class="section-heading"><div><div class="eyebrow">Race trace</div><h2 id="analysisTraceHeading">Gap per lap</h2></div></div>
+        <div id="analysisTraceChart" class="sa-chart"><div class="empty">No session analysed.</div></div>
+        <p class="field-help">Amber bands: safety car (SC) or virtual safety car (VSC). Red bands (RED): race suspended; gaps restart from the grid after a red flag. <span id="analysisTraceNote"></span></p>
+        <div id="analysisTraceTable"></div>
+      </section>
+      <section class="panel-surface sa-card" aria-labelledby="analysisPositionsHeading">
+        <div class="section-heading"><div><div class="eyebrow">Positions</div><h2 id="analysisPositionsHeading">Position at the end of every lap</h2></div></div>
+        <div id="analysisPositionsChart" class="sa-chart"><div class="empty">No session analysed.</div></div>
+        <p class="field-help">Each line ends with the finishing place; "+1 lap" marks a lapped finisher and "out" a retirement.</p>
+        <div id="analysisPositionsTable"></div>
+      </section>
+    </div>
+    <section class="panel-surface sa-card workspace-wide" aria-labelledby="analysisStrategyHeading">
+      <div class="section-heading"><div><div class="eyebrow">Tyre strategy</div><h2 id="analysisStrategyHeading">Stints in finishing order</h2></div>
+        <div class="sa-legend" aria-label="Compounds"><span><i class="sa-swatch" data-compound="SOFT">S</i>Soft</span><span><i class="sa-swatch" data-compound="MEDIUM">M</i>Medium</span><span><i class="sa-swatch" data-compound="HARD">H</i>Hard</span><span><i class="sa-swatch" data-compound="INTER">I</i>Intermediate</span><span><i class="sa-swatch" data-compound="WET">W</i>Wet</span><span><i class="sa-swatch" data-compound="UNKNOWN">?</i>No tyre data</span></div></div>
+      <div id="analysisStrategyChart" class="sa-chart"><div class="empty">No session analysed.</div></div>
+      <p class="field-help">"?" stints had no tyre data recorded<span data-analysis-race-only> (cars without full traces in a race)</span>.<span data-analysis-race-only> A tyre change while the race was suspended starts a new stint.</span></p>
+      <div id="analysisStrategyTable"></div>
+    </section>
+    <div class="sa-pair workspace-wide">
+      <section class="panel-surface sa-card" aria-labelledby="analysisLapTimesHeading">
+        <div class="section-heading"><div><div class="eyebrow">Lap times</div><h2 id="analysisLapTimesHeading">Pace laps for focus drivers</h2></div></div>
+        <div id="analysisLapTimesChart" class="sa-chart"><div class="empty">No session analysed.</div></div>
+        <p class="field-help">Select a lap to read it; select it again to open it in Lap Lab.</p>
+        <div id="analysisLapTimesTable"></div>
+      </section>
+      <section class="panel-surface sa-card" aria-labelledby="analysisHeatmapHeading">
+        <div class="section-heading"><div><div class="eyebrow">Lap-time heatmap</div><h2 id="analysisHeatmapHeading">Each lap against the driver's own median</h2></div></div>
+        <div class="sa-heat-legend" aria-hidden="true"><span class="sa-heat-key">Faster<span class="sa-heat-scale"><i></i><i></i><i></i><i></i><i></i></span>Slower</span><span>Dark: not a pace lap</span><span>Dashed: not recorded</span></div>
+        <div id="analysisHeatmapChart" class="sa-chart sa-heat"><div class="empty">No session analysed.</div></div>
+        <p class="field-help">Select a lap to read it, then Open in Lap Lab. The data table lists each driver's laps with an Open in Lap Lab button for every lap recorded with telemetry.</p>
+        <div id="analysisHeatmapTable"></div>
+      </section>
+    </div>
+    <section class="panel-surface sa-card workspace-wide" aria-labelledby="analysisLapseHeading" data-analysis-order-only>
+      <div class="section-heading sa-lapse-head"><div><div class="eyebrow">Race timelapse</div><h2 id="analysisLapseHeading">The field lap by lap</h2></div>
+        <div class="sa-lapse-controls">
+          <button id="analysisLapsePlay" class="button primary" type="button" aria-pressed="false" disabled>Play</button>
+          <label class="sa-lapse-range" for="analysisLapseRange"><span id="analysisLapseLabel">No laps</span><input id="analysisLapseRange" type="range" min="1" max="1" step="1" value="1" disabled></label>
+          <label class="sr-only" for="analysisLapseSpeed">Timelapse speed</label><select id="analysisLapseSpeed"><option value="0.5">½ lap/s</option><option value="1" selected>1 lap/s</option><option value="2">2 laps/s</option><option value="4">4 laps/s</option></select>
+        </div>
+      </div>
+      <div id="analysisLapseChart" class="sa-chart"><div class="empty">No session analysed.</div></div>
+      <p class="field-help">Gap to the leader in seconds; "+1 lap" marks a lapped car. While a race is suspended the order is frozen and no gap is shown.</p>
+      <div id="analysisLapseTable"></div>
+    </section>
+    <div class="sa-pair workspace-wide">
+      <section class="panel-surface sa-card" aria-labelledby="analysisFastestHeading">
+        <div class="section-heading"><div><div class="eyebrow">Fastest and ideal laps</div><h2 id="analysisFastestHeading">Best lap behind the fastest; tick = best sectors combined</h2></div></div>
+        <div id="analysisFastestChart" class="sa-chart"><div class="empty">No session analysed.</div></div>
+        <div id="analysisFastestTable"></div>
+      </section>
+      <section class="panel-surface sa-card" aria-labelledby="analysisStopsHeading">
+        <div class="section-heading"><div><div class="eyebrow">Pit stops</div><h2 id="analysisStopsHeading">Stops and tyre changes</h2></div></div>
+        <div class="table-scroll" tabindex="0" aria-label="Pit stops and tyre changes"><table class="table workspace-table sa-table"><caption class="sr-only">Pit stops and tyre changes</caption><thead><tr><th scope="col">Driver</th><th scope="col">Lap</th><th scope="col">Tyres</th><th scope="col">Kind</th><th scope="col">Time lost</th></tr></thead><tbody id="analysisStopsRows"><tr><td colspan="5" class="empty">No session analysed.</td></tr></tbody></table></div>
+        <p class="field-help">Time lost: in-lap and out-lap against the driver's median pace lap, an estimate.<span data-analysis-race-only> Stops under a safety car or red flag have none.</span> "Stop not recorded": the tyres changed without a recorded stop, so the time lost is unknown.</p>
+      </section>
+    </div>
+  </div>
+</div>
+<div id="session-review" class="analysis-view" role="tabpanel" aria-labelledby="tab-session-review" hidden>
   <div class="workspace-shell review-workspace">
     <header class="workspace-header panel-surface">
       <div><div class="eyebrow">Offline engineering review</div><h1 id="sessionReviewTitle">Session Review</h1><p id="sessionReviewContext" class="workspace-lede">Choose a saved session from Library or the selector below.</p></div>
-      <div class="workspace-actions"><label class="sr-only" for="reviewSessionSelect">Review session</label><select id="reviewSessionSelect"><option value="">Choose session</option></select><button id="reviewEngineering" class="button ghost" type="button" disabled>Review runs / export report</button><button id="reviewReprocess" class="button ghost" type="button" disabled>Analyze / reprocess</button></div>
+      <div class="workspace-actions"><label class="sr-only" for="reviewSessionSelect">Review session</label><select id="reviewSessionSelect"><option value="">Choose session</option></select><button id="reviewEngineering" class="button ghost" type="button" disabled>Review runs / export report</button><button id="reviewAnalyze" class="button primary" type="button" disabled>Analyze session</button><button id="reviewReprocess" class="button ghost" type="button" disabled title="Rebuild this session&#39;s derived lap analysis from its stored recording">Reprocess</button></div>
     </header>
     <section class="panel-surface workspace-wide" aria-labelledby="reviewOverviewHeading">
       <div class="section-heading"><div><div class="eyebrow">Coverage &amp; context</div><h2 id="reviewOverviewHeading">Session overview</h2></div><span id="reviewQualityBadge" class="state-chip" data-state="neutral">Unavailable</span></div>
@@ -355,12 +449,22 @@
   </div>
 </div><div id="lap-lab" class="analysis-view" role="tabpanel" aria-labelledby="tab-lap-lab" hidden>
   <div class="lap-lab-shell">
-    <div class="lab-session-bar panel-surface"><span class="field-label">Session</span><label class="sr-only" for="lapLabSessionSelect">Lap Lab session</label><select id="lapLabSessionSelect"><option value="">Choose session</option></select><span class="field-help">Pick a session and lap to play. Add a reference to compare.</span></div>
+    <div class="lab-session-bar panel-surface"><span class="field-label">Session</span><label class="sr-only" for="lapLabSessionSelect">Lap Lab session</label><select id="lapLabSessionSelect"><option value="">Choose session</option></select><span class="field-help">Pick a driver, then a lap. A comparable reference is suggested and compared automatically; choose another driver and lap at any time.</span></div>
     <header class="comparison-header panel-surface">
-      <div class="comparison-card"><span class="field-label">Candidate lap</span><label class="sr-only" for="candidateLapSelect">Candidate lap</label><select id="candidateLapSelect"><option value="">Choose a lap</option></select><strong id="candidateLapMeta">Unavailable</strong></div>
+      <div class="comparison-card lap-picker"><span class="field-label">Lap to study</span>
+        <div class="picker-pair">
+          <label class="picker-field" for="candidateDriverSelect"><span>Driver<span class="sr-only"> to study</span></span><select id="candidateDriverSelect" disabled><option value="">Choose a session first</option></select></label>
+          <label class="picker-field" for="candidateLapSelect"><span>Lap<span class="sr-only"> to study</span></span><select id="candidateLapSelect"><option value="">Choose a lap</option></select></label>
+        </div>
+        <strong id="candidateLapMeta">Unavailable</strong></div>
       <div class="comparison-delta"><span class="field-label">Candidate loss</span><output id="comparisonDelta">Unavailable</output><span id="comparisonSign" class="field-help">Positive means the candidate arrived later.</span></div>
-      <div class="comparison-card"><span class="field-label">Reference lap</span><label class="sr-only" for="referenceLapSelect">Reference lap</label><select id="referenceLapSelect" disabled><option value="">Choose candidate first</option></select><strong id="referenceLapMeta">Unavailable</strong></div>
-      <button id="createComparison" class="button primary" type="button" disabled>Compare laps</button>
+      <div class="comparison-card lap-picker"><div class="picker-head"><span class="field-label">Compare against</span><span id="referenceChoice" class="choice-chip" data-choice="none">No reference yet</span><button id="referenceUseSuggested" class="button ghost compact-button" type="button" hidden>Use suggested</button></div>
+        <div class="picker-pair">
+          <label class="picker-field" for="referenceDriverSelect"><span><span class="sr-only">Reference </span>Driver</span><select id="referenceDriverSelect" disabled><option value="">Choose a lap first</option></select></label>
+          <label class="picker-field" for="referenceLapSelect"><span><span class="sr-only">Reference </span>Lap</span><select id="referenceLapSelect" disabled><option value="">Choose candidate first</option></select></label>
+        </div>
+        <strong id="referenceLapMeta">Unavailable</strong></div>
+      <button id="createComparison" class="button primary" type="button" disabled>Compare again</button>
       <button id="analyzeLapAlone" class="button ghost" type="button" disabled title="Measure this lap on its own — no reference lap, no delta">Analyze this lap alone</button>
       <div id="comparisonCompatibility" class="state-chip" data-state="neutral">Compatibility unavailable</div>
     </header>
@@ -1171,7 +1275,7 @@ let ws,wsRetryTimer;
 async function bootstrapLiveState(){try{const response=await fetch('/api/state',{headers:{Accept:'application/json'}});if(!response.ok)throw new Error('State request failed');render(await response.json())}catch(error){renderCompactFooter(lastState||{},false);$('error').textContent=`Live state unavailable: ${error}`}}
 function connect(){const protocol=location.protocol==='https:'?'wss:':'ws:';try{ws=new WebSocket(`${protocol}//${location.host}/ws`)}catch(error){renderCompactFooter(lastState||{},false);bootstrapLiveState();wsRetryTimer=setTimeout(connect,1000);return}ws.onopen=()=>{clearTimeout(wsRetryTimer)};ws.onmessage=e=>{try{render(JSON.parse(e.data))}catch(error){$('error').textContent=`Live update unavailable: ${error}`}finally{/* Acknowledge AFTER rendering, so the server only sends the next frame once this one is on screen. Without this the server queued frames faster than a loaded browser could draw them and the buffer grew until the process ran out of memory. Sent in finally so a render error still lets state flow. */try{ws.send('.')}catch(ignored){}}};ws.onerror=()=>ws.close();ws.onclose=()=>{renderCompactFooter(lastState||{},false);renderLiveCar({...lastState,connected:false,telemetry_stale:true});bootstrapLiveState();wsRetryTimer=setTimeout(connect,1000)}}
 bootstrapLiveState();connect();loadTracks();loadProviderStatus();
-const ANALYSIS_VIEWS=['test-engineer','library','session-review','lap-lab','field','review'];
+const ANALYSIS_VIEWS=['test-engineer','library','session-analysis','session-review','lap-lab','field','review'];
 function selectAnalysisView(name){document.querySelectorAll('.analysis-subnav .field-tab').forEach(b=>{const on=b.dataset.page===name;b.classList.toggle('active',on);b.setAttribute('aria-selected',String(on))});document.querySelectorAll('.analysis-view').forEach(v=>{v.hidden=v.id!==name});try{localStorage.setItem('pitwall.analysis.view',name)}catch(e){}if(name==='review')loadHistory();window.dispatchEvent(new CustomEvent('pitwall:pagechange',{detail:{page:name}}))}
 function selectPage(name){if(ANALYSIS_VIEWS.includes(name)){selectPage('analysis');selectAnalysisView(name);return}var btn=document.querySelector('.tab[data-page="'+name+'"]');if(!btn)return;document.querySelectorAll('.tab').forEach(x=>{const selected=x===btn;x.classList.toggle('active',selected);x.setAttribute('aria-selected',String(selected));x.tabIndex=selected?0:-1});document.querySelectorAll('.page').forEach(x=>{const selected=x.id===name;x.classList.toggle('active',selected);x.hidden=!selected;x.setAttribute('aria-hidden',String(!selected))});if(name==='setup')loadTracks();if(name==='settings')loadAppSettings();if(name==='analysis'){let view='library';try{view=localStorage.getItem('pitwall.analysis.view')||'library'}catch(e){}selectAnalysisView(view);return}window.dispatchEvent(new CustomEvent('pitwall:pagechange',{detail:{page:name}}))}
 document.querySelectorAll('.analysis-subnav .field-tab').forEach(b=>b.onclick=()=>{const hash='#'+b.dataset.page;if(location.hash!==hash)history_pushState(hash);selectAnalysisView(b.dataset.page)});function history_pushState(hash){try{history.pushState(null,'',hash)}catch(e){}}
@@ -1250,14 +1354,15 @@ $('rivalCompare').ontoggle=()=>{lastRivalKey='';loadRivals()};$('objectiveDown')
      install can run the previous release's JS against the new backend. The
      navigated document (this file) is revalidated, so versioned subresource
      URLs bust reliably on upgrade. Keep in step with the app version. -->
-<script type="module" src="/static/js/connection.js?v=5.3.4"></script>
-<script type="module" src="/static/js/workspaces.js?v=5.3.4"></script>
-<script type="module" src="/static/js/engineering.js?v=5.3.4"></script>
-<script type="module" src="/static/js/transfers.js?v=5.3.4"></script>
-<script type="module" src="/static/js/strategy.js?v=5.3.4"></script>
-<script src="/static/js/usage.js?v=5.3.4" defer></script>
-<script src="/static/js/updates.js?v=5.3.4" defer></script>
-<script src="/static/js/onboarding.js?v=5.3.4" defer></script>
-<script src="/static/js/app-tour.js?v=5.3.4" defer></script>
-<script src="/static/js/driver-dashboard.js?v=5.3.4" defer></script>
+<script type="module" src="/static/js/connection.js?v=5.4.0"></script>
+<script type="module" src="/static/js/workspaces.js?v=5.4.0"></script>
+<script type="module" src="/static/js/session-analysis.js?v=5.4.0"></script>
+<script type="module" src="/static/js/engineering.js?v=5.4.0"></script>
+<script type="module" src="/static/js/transfers.js?v=5.4.0"></script>
+<script type="module" src="/static/js/strategy.js?v=5.4.0"></script>
+<script src="/static/js/usage.js?v=5.4.0" defer></script>
+<script src="/static/js/updates.js?v=5.4.0" defer></script>
+<script src="/static/js/onboarding.js?v=5.4.0" defer></script>
+<script src="/static/js/app-tour.js?v=5.4.0" defer></script>
+<script src="/static/js/driver-dashboard.js?v=5.4.0" defer></script>
 </body></html>

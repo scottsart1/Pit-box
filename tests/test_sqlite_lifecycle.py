@@ -15,6 +15,7 @@ from pitwall.database import PitWallDatabase
 from pitwall.field_service import FieldAnalysisService
 from pitwall.full_field_archive import FullFieldArchiveService
 from pitwall.network_profiles import NetworkProfileRepository
+from pitwall.session_analysis import SessionAnalysisService
 from pitwall.settings_service import PREFERENCE_KEY, load_saved
 from pitwall.storage_service import StorageService
 from pitwall.track_model_service import TrackModelService
@@ -27,6 +28,7 @@ FACTORIES = [
     FieldAnalysisService._connect,
     FullFieldArchiveService._connect,
     NetworkProfileRepository._connect,
+    SessionAnalysisService._connect,
     StorageService._connect,
     TrackModelService._connect,
 ]

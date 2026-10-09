@@ -72,6 +72,7 @@ from .race_plan import (
     normalise_plan,
 )
 from .realtime import RealtimeRadio
+from .session_analysis import SessionAnalysisService
 from .session_assembler import SessionAssembler
 from .session_guard import SessionChangedError
 from .settings_service import (
@@ -116,6 +117,7 @@ trace_store = TraceStore(
 trace_archive = TraceArchiveService(database, trace_store)
 comparison_service = ComparisonService(database.path, trace_store)
 field_service = FieldAnalysisService(database.path, trace_store=trace_store)
+session_analysis_service = SessionAnalysisService(database.path)
 track_model_service = TrackModelService(database.path, trace_store, settings.data_dir)
 analysis_jobs = AnalysisJobService(
     database.path,
@@ -787,7 +789,7 @@ app.include_router(
     )
 )
 app.include_router(create_analysis_router(comparison_service, usage_record=usage_reporting.record))
-app.include_router(create_field_router(field_service))
+app.include_router(create_field_router(field_service, session_analysis_service))
 app.include_router(create_engineering_router(engineering, store))
 app.include_router(create_storage_router(storage_service))
 app.include_router(create_track_models_router(track_model_service))

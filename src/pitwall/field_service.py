@@ -210,11 +210,15 @@ class FieldAnalysisService:
             JOIN session_cars c ON c.id=l.session_car_id
             LEFT JOIN laps old ON old.id=l.legacy_lap_id
             WHERE c.session_id=?
+              -- The active flashback branch only: abandoned rows are flagged
+              -- in place (bit 2) rather than superseded by a newer epoch.
+              AND (l.invalid_reason_mask & 2)=0
               AND NOT EXISTS (
                   SELECT 1 FROM recorded_laps newer
                   WHERE newer.session_car_id=l.session_car_id
                     AND newer.lap_number=l.lap_number
                     AND newer.timeline_epoch>l.timeline_epoch
+                    AND (newer.invalid_reason_mask & 2)=0
               )
             ORDER BY c.car_index, c.identity_revision, l.lap_number
             LIMIT ?

@@ -1,4 +1,8 @@
-/* Populated analysis geometry: long recorded options, caveats and event data. */
+/* Populated analysis geometry: long recorded options, caveats and event data.
+   The Lap Lab header holds four pickers (driver then lap, to study and as the
+   reference), the reference-choice chip and Use suggested, filled with the
+   longest real labels, at phone, tablet portrait, 1181-1365 px (four-column
+   header), the 1691x879 touch tablet and a tall portrait window. */
 const assert=require('node:assert/strict');
 const fs=require('node:fs'),path=require('node:path');
 const {chromium}=require('playwright');
@@ -8,8 +12,8 @@ const out=path.resolve(process.env.PITBOX_LAP_LAYOUT_EVIDENCE||path.join(root,'.
  fs.mkdirSync(out,{recursive:true});
  const browser=await chromium.launch({...(process.env.PITBOX_BROWSER_CHANNEL?{channel:process.env.PITBOX_BROWSER_CHANNEL}:{}),headless:true});
  const results=[];
- try{for(const width of [390,800,1366]){
-  const page=await browser.newPage({viewport:{width,height:1000}}),errors=[];
+ try{for(const [width,height,hasTouch] of [[390,1000,true],[800,1000,true],[1200,900,false],[1366,1000,false],[1691,879,true],[1056,1691,true]]){
+  const page=await browser.newPage({viewport:{width,height},hasTouch}),errors=[];
   page.on('pageerror',error=>errors.push(error.message));
   await page.route('**/*',route=>{
    const url=new URL(route.request().url());
@@ -23,10 +27,17 @@ const out=path.resolve(process.env.PITBOX_LAP_LAYOUT_EVIDENCE||path.join(root,'.
    document.getElementById('bootOverlay')?.remove();
    document.querySelectorAll('.page').forEach(el=>{el.hidden=el.id!=='analysis';el.classList.toggle('active',el.id==='analysis');});
    document.querySelectorAll('.analysis-view').forEach(el=>{el.hidden=el.id!=='lap-lab';});
-   for(const id of ['candidateLapSelect','referenceLapSelect']){
+   for(const [id,label] of [
+    ['candidateDriverSelect','KIMI ANTONELLI (you) · 31 laps'],
+    ['candidateLapSelect','Lap 31 · 1:34.556 · fastest · invalid · timeline 7 · unconfirmed after flashback · timing only, no telemetry'],
+    ['referenceDriverSelect','ALEXANDER ALBON · Qualifying 1 · 08/10/2026, 14:22:37'],
+    ['referenceLapSelect','Suggested · Lap 31 · 1:34.556 · fastest · invalid · comparable with caveats'],
+   ]){
     const select=document.getElementById(id);select.disabled=false;
-    select.replaceChildren(new Option('Suggested · Player · Lap 2 · 1:31.665 · comparable_with_caveats','recorded'));
+    select.replaceChildren(new Option(label,'recorded'));
    }
+   const chip=document.getElementById('referenceChoice');chip.dataset.choice='manual';chip.textContent='Your choice';
+   document.getElementById('referenceUseSuggested').hidden=false;
    document.getElementById('candidateLapMeta').textContent='1:34.338 · MEDIUM · 100%';
    document.getElementById('referenceLapMeta').textContent='1:31.665 · same track/layout · valid lap · typed trace';
    document.getElementById('comparisonCompatibility').textContent='comparable with caveats reference · fuel loads differ materially';
@@ -38,6 +49,16 @@ const out=path.resolve(process.env.PITBOX_LAP_LAYOUT_EVIDENCE||path.join(root,'.
   results.push({view:'lap-lab',width,geometry,errors});
   assert(geometry.scroll<=geometry.width+1,`Populated Lap Lab overflows at ${width}: ${geometry.scroll}`);
   assert(geometry.controls.every(control=>control.left>=0&&control.right<=width),JSON.stringify(geometry.controls));
+  // Every picker keeps a readable width and a 44 px target.
+  const pickers=geometry.controls.filter(control=>/Select$/.test(control.id));
+  assert.equal(pickers.length,4,JSON.stringify(geometry.controls));
+  assert(pickers.every(control=>control.width>=120&&control.height>=44),`Lap Lab pickers too small at ${width}: ${JSON.stringify(pickers)}`);
+  // Nothing in the header covers playback or the instruments.
+  for(const id of ['playbackToggle','instrumentGrid']){
+   await page.locator('#'+id).scrollIntoViewIfNeeded();
+   const hit=await page.locator('#'+id).evaluate(el=>{const r=el.getBoundingClientRect(),x=r.left+Math.min(r.width/2,20),y=r.top+Math.min(r.height/2,20),top=document.elementFromPoint(x,y);return Boolean(top)&&(top===el||el.contains(top));});
+   assert(hit,`${id} is covered at ${width}`);
+  }
   assert.equal(await page.locator('#comparisonCompatibility').innerText(),'comparable with caveats reference · fuel loads differ materially');
   await page.addScriptTag({content:fs.readFileSync(path.join(root,'static/js/workspaces.js'),'utf8')
    .replace(/^const HAS_DOM =[^\n]+/m,'const HAS_DOM = false;').replace(/^export \{[^\n]+\};?\s*$/m,'')+

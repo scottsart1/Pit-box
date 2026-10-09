@@ -14,6 +14,8 @@ from ..field_service import (
     FieldServiceError,
     SessionNotFoundError,
 )
+from ..session_analysis import SessionAnalysisError, SessionAnalysisService
+from ..session_analysis import SessionNotFoundError as AnalysisSessionNotFoundError
 
 Availability = Literal["observed", "derived", "estimated", "stale", "unavailable"]
 
@@ -245,10 +247,35 @@ def _raise_service_error(exc: FieldServiceError) -> None:
     ) from exc
 
 
-def create_field_router(service: FieldAnalysisService) -> APIRouter:
+def create_field_router(
+    service: FieldAnalysisService,
+    analysis_service: SessionAnalysisService | None = None,
+) -> APIRouter:
     """Create a router without importing or mutating application globals."""
 
     router = APIRouter(prefix="/api/v1/sessions", tags=["field"])
+
+    if analysis_service is not None:
+
+        @router.get("/{session_id}/analysis")
+        async def session_analysis(
+            session_id: str, hide_outliers: bool = True
+        ) -> dict[str, Any]:
+            """Post-session analysis: pace, race order, stints, stops, fastest laps."""
+            try:
+                return await analysis_service.analysis(
+                    session_id, hide_outliers=hide_outliers
+                )
+            except AnalysisSessionNotFoundError as exc:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail={"code": "session_not_found", "message": str(exc)},
+                ) from exc
+            except SessionAnalysisError as exc:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail={"code": "analysis_unavailable", "message": str(exc)},
+                ) from exc
 
     async def field_summary(session_id: str) -> dict[str, Any]:
         try:

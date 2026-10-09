@@ -1,8 +1,8 @@
-# Your Pit Box 5.3.4 — AI race engineer and driver dashboard
+# Your Pit Box 5.4.0 — AI race engineer and driver dashboard
 
 [Download Windows or Android](https://yourpitbox.com/#download),
 [try the Driver Dashboard](https://your-pit-box-driver-dashboard.sarthakvij123450.chatgpt.site/),
-or read the [release notes](docs/release-notes-5.3.4.md).
+or read the [release notes](docs/release-notes-5.4.0.md).
 
 Your Pit Box receives **F1 26** telemetry (UDP format **2026**) from a PS5, runs deterministic
 strategy/corner/setup analysis locally, keeps persistent SQLite history, answers spoken questions,
@@ -105,6 +105,37 @@ Only enable `PITWALL_WEB_LAN_ACCESS=true` when a phone/tablet needs the
 dashboard. Bind the web host to `0.0.0.0`, set a long
 `PITWALL_WEB_ACCESS_TOKEN`, and keep it on a trusted LAN. Your Pit Box never opens a
 router or firewall to the public internet automatically.
+
+## What changed in 5.4.0
+
+**Session Analysis.** *Analyze session*, on every Library row and in Session
+Review, opens the post-race charts drivers know from race-analysis sites: a
+race-pace box plot per driver, the race trace (gap to the leader or any
+driver), positions lap by lap, tyre strategy with S/M/H/I/W letters, lap times,
+a lap-time heatmap (a cell opens that lap in Lap Lab), a race timelapse you can
+play and scrub, fastest and ideal laps, and pit stops with estimated time lost.
+Every chart has a data table and works on phone, tablet and desktop.
+
+The figures come from the stored lap record of the timeline that counts: laps a
+flashback abandoned never count, and race order is rebuilt from lap times
+segment by segment, because the game's lap timer stops during a red flag and
+the restart is timed from lights out. On a recorded Singapore race with a red
+flag this matches the game's own classification for every car's position, laps
+and best lap, with gaps within 10 ms. Safety-car and VSC laps come from the
+game's race-control messages. Where the record cannot say - a car whose
+telemetry was not kept, a stop nobody recorded, a session that did not finish
+recording, a partial field - the analysis says so instead of showing a zero or
+a winner. The derived order applies no penalties and is checked against your
+official result when the game reported one.
+
+**Lap Lab** picks a driver, then a lap. The best comparable reference is
+compared as soon as the lap has loaded; choose any other driver and lap, from
+this session or another at the track, and it is compared once your choice
+settles. Laps known only from lap timing are labelled and never compared, and
+a refusal is shown with its reason while the lap keeps playing.
+
+Windows remains an explicitly unsigned direct-download installer, and Android
+keeps the existing signing identity.
 
 ## What changed in 5.3.4
 
