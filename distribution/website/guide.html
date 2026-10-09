@@ -54,7 +54,7 @@
         <div><strong>Your Pit Box runs beside the game, not inside it.</strong> Keep the app running on your chosen Android device or Windows PC. That device receives telemetry, computes the race data and keeps the recordings. Its microphone captures your questions; its speakers or headset play the engineer's replies.</div>
       </div>
       <h2>Start with the in-app walkthrough</h2>
-      <p>Version 5.4.0 uses GPT-6 Luna and Sol plus updated speech recognition. Realtime radio is an optional switch under Settings → Engineer. It starts a live voice session on your next wake phrase or push-to-talk, closes after 25 seconds idle or 5 minutes, and ends when switched off. It may increase OpenAI API costs. The app also guides you through your API key, game UDP address and port, L3 mapping and Mark's radio. Every step is skippable. Choose <strong>Begin app tour</strong> to explore the features, or reopen either guide from Settings.</p>
+      <p>Version 5.4.1 uses GPT-6 Luna and Sol plus updated speech recognition. Realtime radio is an optional switch under Settings → Engineer. It starts a live voice session on your next wake phrase or push-to-talk, closes after 25 seconds idle or 5 minutes, and ends when switched off. It may increase OpenAI API costs. The app also guides you through your API key, game UDP address and port, L3 mapping and Mark's radio. Every step is skippable. Choose <strong>Begin app tour</strong> to explore the features, or reopen either guide from Settings.</p>
       <p>New installs use proactive calls, all-car recording and full trace detail. Upgrades preserve your choices. Privacy &amp; usage reporting and App updates are at the bottom of Settings.</p>
       <h2>Have these ready</h2>
       <div class="guide-checklist">
@@ -105,7 +105,7 @@
       <p>Future updates to the release app use the same permanent signing identity. Install a verified release update over the release app; do not remove its saved data.</p>
       <p>Before a full-length race, check your microphone, selected speaker or headset, wake phrase and background settings on the device you will use. A short radio check verifies that setup, not every Bluetooth device or power-saving mode.</p>
       <div class="guide-warning"><strong>Keep the Android app visible and the screen awake during live racing.</strong> Screen-off reception is best-effort: Android Doze and manufacturer battery management can suspend network access even while the app's running notification is present. If you choose background use, review the app's battery restrictions in Android Settings and test a full session on your device first. Do not rely on a short packet check as proof of uninterrupted screen-off recording.</div>
-      <p id="android-wireless-note"><strong>Bluetooth stability on Galaxy Tab S11 Ultra (Android 16):</strong> a combined Wi-Fi/Bluetooth disconnect was reproduced with Bluetooth audio connected during a 60 Hz telemetry test. The cause is under investigation; version 5.4.0 does not yet resolve this observed condition. A successful test using the tablet speakers does not verify your Bluetooth headset.</p>
+      <p id="android-wireless-note"><strong>Bluetooth stability on Galaxy Tab S11 Ultra (Android 16):</strong> a combined Wi-Fi/Bluetooth disconnect was reproduced with Bluetooth audio connected during a 60 Hz telemetry test. The cause is under investigation; version 5.4.1 does not yet resolve this observed condition. A successful test using the tablet speakers does not verify your Bluetooth headset.</p>
     </div>
   </section>
 
@@ -295,7 +295,7 @@
 
   <section id="session-analysis" class="guide-help">
     <div class="wrap">
-      <div class="eyebrow">Post-session analysis · 5.4.0</div>
+      <div class="eyebrow">Post-session analysis · 5.4.1</div>
       <h2>Read a race back</h2>
       <p>Choose <strong>Analyze session</strong> on a session in <strong>Analysis → Library</strong>, or in <strong>Session Review</strong>. <strong>Session Analysis</strong> opens with the session's headline, your result, the fastest and ideal laps and the neutralised laps, then the charts: race pace (a box plot of each driver's pace laps), race trace (the gap to the leader or to a driver you choose), positions at the end of every lap, tyre strategy, lap times for the drivers in focus, a lap-time heatmap, a race timelapse you can play or scrub, fastest and ideal laps, and pit stops with an estimated time lost.</p>
       <ul class="guide-checks">
@@ -311,7 +311,7 @@
 
   <section id="test-engineer" class="guide-help soft">
     <div class="wrap">
-      <div class="eyebrow">Practice and session review · 5.4.0</div>
+      <div class="eyebrow">Practice and session review · 5.4.1</div>
       <h2>Compare the laps you choose</h2>
       <p>Open <strong>Setup Lab → Open Test Engineer</strong>, or <strong>Analysis → Test Engineer</strong>. Choose the current session or a saved session. Automatic runs remain available alongside your own named lap groups.</p>
       <h3>Define Stint A, B and C</h3>
@@ -344,7 +344,7 @@
 
   <section id="setup-scope" class="guide-help soft">
     <div class="wrap">
-      <div class="eyebrow">Setup Lab · 5.4.0</div>
+      <div class="eyebrow">Setup Lab · 5.4.1</div>
       <h2>Choose a baseline, then test it</h2>
       <p>Open <strong>Setup Lab</strong>, choose your circuit and conditions, then select <strong>Stable</strong> or <strong>More rotation</strong>. Both references cover all 24 calendar circuits for <strong>F1 25: 2026 Season Pack</strong>. Choose Race, Quali or Mixed; qualifying uses separate published values where supplied, while Mixed uses race values. Settings are grouped like the game garage. Open <strong>Sources &amp; setup details</strong> for the original references, review date and adaptations.</p>
       <p><strong>Circuit baseline</strong> preserves the selected source values. Choose <strong>Personalise for me</strong> to apply your preferences and applicable live feedback: <strong>Small adjustments</strong> makes small changes to your current car, <strong>Moderate changes</strong> blends toward the reference, and <strong>Start fresh</strong> starts from it. Personal changes are suggestions to test, not proof of a pace gain. Old aggregate setup scores and universal tyre-temperature rules no longer alter the reference.</p>
