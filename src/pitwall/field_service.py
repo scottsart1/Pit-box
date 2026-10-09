@@ -14,7 +14,7 @@ import json
 import math
 import sqlite3
 from collections import defaultdict
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator
 from contextlib import closing, contextmanager
 from dataclasses import dataclass
 from enum import IntFlag
@@ -791,13 +791,25 @@ class FieldAnalysisService:
         return await asyncio.to_thread(self._corners_sync, session_id)
 
     def _stored_position(self, lap: _StoredLap) -> int | None:
-        if self.trace_store is None or not lap.trace_manifest_id:
+        return self.lap_end_position(lap.trace_manifest_id)
+
+    def lap_end_positions(self, manifest_ids: Iterable[str]) -> dict[str, int | None]:
+        """The game's race position at the end of each traced lap, by manifest id.
+
+        Shared with Session Analysis, so whichever view opens a session first
+        pays for reading the traces.
+        """
+        return {manifest_id: self.lap_end_position(manifest_id) for manifest_id in manifest_ids}
+
+    def lap_end_position(self, manifest_id: str | None) -> int | None:
+        """The last valid position sample in a lap's lap_data trace."""
+        if self.trace_store is None or not manifest_id:
             return None
-        if lap.trace_manifest_id in self._stored_positions:
-            return self._stored_positions[lap.trace_manifest_id]
+        if manifest_id in self._stored_positions:
+            return self._stored_positions[manifest_id]
         try:
             trace = self.trace_store.read_range(
-                lap.trace_manifest_id,
+                manifest_id,
                 fields=("position",),
                 sample_group="lap_data",
             )
@@ -819,7 +831,7 @@ class FieldAnalysisService:
         position = round(float(values[usable[-1]])) if usable.size else None
         if len(self._stored_positions) >= _STORED_POSITION_LIMIT:
             self._stored_positions.clear()
-        self._stored_positions[lap.trace_manifest_id] = position
+        self._stored_positions[manifest_id] = position
         return position
 
     def _positions_sync(self, session_id: str) -> dict[str, Any]:
