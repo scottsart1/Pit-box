@@ -274,7 +274,9 @@ export function raceTraceModel(analysis, { focus = [], reference = "leader", wid
   const margin = { l: 56, r: 12, t: 12, b: 28 };
   const x = scale(1, Math.max(2, total), margin.l, width - margin.r);
   const y = scale(Math.max(-clip, minGap), maxGap, margin.t, height - margin.b);
-  const toPoints = (run) => run.map((p) => `${x(p.lap).toFixed(1)},${y(Math.max(Math.max(-clip, minGap), Math.min(p.gap / 1000, maxGap))).toFixed(1)}`).join(" ");
+  // Values beyond the axis are drawn where they fall and clipped to the plot
+  // by the renderer; clamping them would draw a flat line that reads as data.
+  const toPoints = (run) => run.map((p) => `${x(p.lap).toFixed(1)},${y(p.gap / 1000).toFixed(1)}`).join(" ");
   const lines = [];
   for (const [carIndex, points] of series) {
     const style = styles.get(carIndex) || { colour: CONTEXT_STROKE, dash: "" };
@@ -282,7 +284,7 @@ export function raceTraceModel(analysis, { focus = [], reference = "leader", wid
       car_index: carIndex, code: drivers.get(carIndex)?.code, focus: focus.includes(carIndex),
       colour: focus.includes(carIndex) ? style.colour : CONTEXT_STROKE, dash: focus.includes(carIndex) ? style.dash : "",
       runs: continuousRuns(analysis, points).map(toPoints).filter((s) => s.includes(" ")),
-      singles: continuousRuns(analysis, points).filter((r) => r.length === 1).map((r) => ({ x: x(r[0].lap), y: y(Math.min(r[0].gap / 1000, maxGap)) })),
+      singles: continuousRuns(analysis, points).filter((r) => r.length === 1 && r[0].gap / 1000 <= maxGap).map((r) => ({ x: x(r[0].lap), y: y(r[0].gap / 1000) })),
     });
   }
   lines.sort((a, b) => Number(a.focus) - Number(b.focus));
