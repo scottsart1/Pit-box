@@ -407,10 +407,12 @@ class F1DatagramProtocol(asyncio.DatagramProtocol):
         # screen is shown, which previously re-appended CHQF and re-wrote the
         # session row on every repeat.
         self._classified_sessions: set[str] = set()
-        # The lap chart last saved: (session uid, first lap, number of laps).
-        # The game repeats the packet about once a second; it is saved again
-        # only when its laps change.
-        self._saved_lap_chart: tuple[int, int, int] | None = None
+        # The game's lap chart: the latest received (session uid, first lap,
+        # number of laps, rows) and the last saved ((uid, first lap, laps),
+        # rows). The game repeats the packet about once a second; it is saved
+        # again only when its laps change, and once more at the flag.
+        self._latest_lap_chart: tuple[int, int, int, list[list[int]]] | None = None
+        self._saved_lap_chart: tuple[tuple[int, int, int], list[list[int]]] | None = None
         self._qualifying_debrief_laps: set[tuple[int, int]] = set()
         self._briefing_tasks: set[asyncio.Task[Any]] = set()
         self._live_uid = 0
@@ -419,6 +421,9 @@ class F1DatagramProtocol(asyncio.DatagramProtocol):
         self._assembler_laps = [0] * 24
         self._assembler_distances = [0.0] * 24
         self._assembler_active_cars = 0
+        # Car slots in use this session: one past the highest index seen with
+        # a lap. See _archive_slot_count.
+        self._assembler_slots = 0
         self._assembler_restricted: set[int] = set()
         self._assembler_context: list[dict[str, Any]] = [{} for _ in range(24)]
         self._assembler_invalid = [False] * 24
@@ -444,6 +449,7 @@ class F1DatagramProtocol(asyncio.DatagramProtocol):
         self._assembler_laps = [0] * 24
         self._assembler_distances = [0.0] * 24
         self._assembler_active_cars = 0
+        self._assembler_slots = 0
         self._assembler_restricted.clear()
         self._assembler_context = [{} for _ in range(24)]
         self._assembler_invalid = [False] * 24
@@ -729,6 +735,19 @@ class F1DatagramProtocol(asyncio.DatagramProtocol):
         if sealed is not None and current_id != sealed:
             self._assembler_sealed_session_id = None
 
+    def _archive_slot_count(self, available: int) -> int:
+        """How many car slots to read from a per-car packet.
+
+        num_active_cars is a count, not an index bound: when cars retire the
+        game lowers it but keeps every other car's index, so bounding by it
+        stopped recording the highest-index cars for the rest of the race (in
+        a real 22-car race, two cars that finished lost every trace and all
+        pit and flag context from lap 3). Every slot that has had a lap this
+        session is read.
+        """
+        slots = max(self._assembler_active_cars, self._assembler_slots)
+        return min(24, available, slots) if slots else min(24, available)
+
     def _archive_lap_number(self, index: int) -> int:
         return max(0, int(self._assembler_laps[index]))
 
@@ -793,8 +812,9 @@ class F1DatagramProtocol(asyncio.DatagramProtocol):
         if name == "PacketParticipantsData":
             count = min(24, int(getattr(packet, "num_active_cars", 0)))
             self._assembler_active_cars = count
+            self._assembler_slots = max(self._assembler_slots, count)
             restricted: set[int] = set()
-            for index, participant in enumerate(list(packet.participants)[:count]):
+            for index, participant in enumerate(list(packet.participants)[: self._assembler_slots]):
                 is_restricted = (
                     int(getattr(participant, "your_telemetry", 0)) == 0
                     and index != player_index
@@ -827,9 +847,12 @@ class F1DatagramProtocol(asyncio.DatagramProtocol):
 
         if name == "PacketLapData":
             entries = list(packet.lap_data)
-            count = self._assembler_active_cars or min(24, len(entries))
-            for index, lap in enumerate(entries[:count]):
+            # Every slot: a slot with no lap is skipped below, and the slots
+            # that have one define how many the other packets are read for.
+            for index, lap in enumerate(entries[:24]):
                 current_lap = int(getattr(lap, "current_lap_num", 0))
+                if current_lap > 0:
+                    self._assembler_slots = max(self._assembler_slots, index + 1)
                 previous_lap = self._assembler_laps[index]
                 lap_invalid = bool(getattr(lap, "current_lap_invalid", False))
                 pit_status = int(getattr(lap, "pit_status", 0))
@@ -911,7 +934,7 @@ class F1DatagramProtocol(asyncio.DatagramProtocol):
 
         if name == "PacketCarTelemetryData":
             entries = list(packet.car_telemetry_data)
-            count = self._assembler_active_cars or min(24, len(entries))
+            count = self._archive_slot_count(len(entries))
             for index, telemetry in enumerate(entries[:count]):
                 lap_number = self._archive_lap_number(index)
                 if lap_number <= 0:
@@ -972,7 +995,7 @@ class F1DatagramProtocol(asyncio.DatagramProtocol):
 
         if name == "PacketMotionData":
             entries = list(packet.car_motion_data)
-            count = self._assembler_active_cars or min(24, len(entries))
+            count = self._archive_slot_count(len(entries))
             for index, motion in enumerate(entries[:count]):
                 lap_number = self._archive_lap_number(index)
                 if lap_number <= 0:
@@ -1028,7 +1051,7 @@ class F1DatagramProtocol(asyncio.DatagramProtocol):
 
         if name == "PacketCarStatusData":
             entries = list(packet.car_status_data)
-            count = self._assembler_active_cars or min(24, len(entries))
+            count = self._archive_slot_count(len(entries))
             for index, status in enumerate(entries[:count]):
                 # Keep the latest flag separately from the lap's accumulated
                 # context. A yellow/red can persist across the start line and
@@ -1109,7 +1132,7 @@ class F1DatagramProtocol(asyncio.DatagramProtocol):
 
         if name == "PacketCarTelemetry2Data":
             entries = list(packet.car_telemetry2_data)
-            count = self._assembler_active_cars or min(24, len(entries))
+            count = self._archive_slot_count(len(entries))
             for index, telemetry in enumerate(entries[:count]):
                 lap_number = self._archive_lap_number(index)
                 if lap_number <= 0:
@@ -1149,7 +1172,7 @@ class F1DatagramProtocol(asyncio.DatagramProtocol):
 
         if name == "PacketCarDamageData":
             entries = list(packet.car_damage_data)
-            count = self._assembler_active_cars or min(24, len(entries))
+            count = self._archive_slot_count(len(entries))
             for index, damage in enumerate(entries[:count]):
                 lap_number = self._archive_lap_number(index)
                 if lap_number <= 0:
@@ -2172,33 +2195,38 @@ class F1DatagramProtocol(asyncio.DatagramProtocol):
         )
 
     async def handle_PacketLapPositionsData(self, packet: Any) -> None:
-        num_laps = int(packet.num_laps)
+        num_laps = max(0, min(int(packet.num_laps), 50))
         lap_start = int(packet.lap_start)
         values = list(packet.position_for_vehicle_idx)
-        snapshot = await self.store.peek("active_cars")
-        active_cars = int(snapshot.get("active_cars", 0) or 0) or 24
+        # Every car slot (the packet holds 24 per lap). The active-car count is
+        # not an index bound: cars keep their index when others retire.
+        rows = [
+            [
+                int(values[offset * 24 + car]) if offset * 24 + car < len(values) else 0
+                for car in range(24)
+            ]
+            for offset in range(num_laps)
+        ]
 
         def apply(state):  # type: ignore[no-untyped-def]
-            for vehicle_index in range(min(active_cars, 24)):
-                history = []
-                for offset in range(num_laps):
-                    flattened = offset * 24 + vehicle_index
-                    if flattened >= len(values):
-                        break
-                    position = int(values[flattened])
-                    if position:
-                        history.append(
-                            {"lap": lap_start + offset, "position": position}
-                        )
+            for vehicle_index in range(min(24, len(state.drivers))):
+                history = [
+                    {"lap": lap_start + offset, "position": row[vehicle_index]}
+                    for offset, row in enumerate(rows)
+                    if row[vehicle_index]
+                ]
                 if history:
                     state.drivers[vehicle_index].position_history = history
 
         await self.store.mutate(apply)
-        await self._save_lap_chart(packet, lap_start, num_laps, values, min(active_cars, 24))
+        width = max((car + 1 for row in rows for car, value in enumerate(row) if value), default=0)
+        session_uid = int(getattr(packet.header, "session_uid", 0) or 0)
+        self._latest_lap_chart = (
+            (session_uid, lap_start, num_laps, [row[:width] for row in rows]) if width else None
+        )
+        await self._save_lap_chart()
 
-    async def _save_lap_chart(
-        self, packet: Any, lap_start: int, num_laps: int, values: list[Any], cars: int
-    ) -> None:
+    async def _save_lap_chart(self, *, final_uid: int | None = None) -> None:
         """Save the game's lap chart with the session.
 
         Row 0 is the grid (when lap_start is 0) and row N each car's position
@@ -2207,22 +2235,22 @@ class F1DatagramProtocol(asyncio.DatagramProtocol):
         lap: the newest row is still filling as the rest of the field crosses
         the line, and each later copy completes the rows before it. A
         flashback that rewinds past the line changes the number of laps and
-        is saved too; readers keep the latest copy of each row.
+        is saved too; readers keep the latest copy of each row. At the final
+        classification (``final_uid``) the latest chart of that session is
+        saved if it gained anything since, which completes the last laps.
         """
-        session_uid = int(getattr(packet.header, "session_uid", 0) or 0)
+        latest = self._latest_lap_chart
+        if latest is None:
+            return
+        session_uid, lap_start, num_laps, rows = latest
         signature = (session_uid, lap_start, num_laps)
-        if signature == self._saved_lap_chart:
+        saved = self._saved_lap_chart
+        if final_uid is not None:
+            if session_uid != final_uid or (saved is not None and saved == (signature, rows)):
+                return
+        elif saved is not None and saved[0] == signature:
             return
-        rows = [
-            [
-                int(values[offset * 24 + car]) if offset * 24 + car < len(values) else 0
-                for car in range(cars)
-            ]
-            for offset in range(max(0, min(num_laps, 50)))
-        ]
-        if not any(any(row) for row in rows):
-            return
-        self._saved_lap_chart = signature
+        self._saved_lap_chart = (signature, rows)
         await self.store.append_event(
             "LPOS", {"lap_start": lap_start, "positions": rows}, remember=False
         )
@@ -2260,6 +2288,7 @@ class F1DatagramProtocol(asyncio.DatagramProtocol):
         )
         if already_recorded:
             return
+        await self._save_lap_chart(final_uid=session_uid)
         await self.store.append_event("CHQF", {"position": int(result.position)})
         # Every car's result, not only the player's: the game's own
         # classification, with penalties, statuses and laps, that Session
