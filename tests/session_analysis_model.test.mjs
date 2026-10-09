@@ -81,6 +81,11 @@ test('race pace boxes follow the API order and keep thin samples out of the boxe
   assert.equal(horizontal.horizontal, true);
   for (const box of horizontal.boxes) assert.ok(box.whiskerLow <= box.q1 && box.q1 <= box.median && box.median <= box.q3 && box.q3 <= box.whiskerHigh);
   assert.deepEqual(racePaceModel({ race_pace: [] }).boxes, []);
+  // A driver with laps but no pace lap at all is listed, not silently dropped
+  // (the real Singapore race: BOT and VER had every lap excluded).
+  const unpaced = { ...race, race_pace: race.race_pace.filter((r) => code(race, r.car_index) !== 'ALB') };
+  assert.ok(racePaceModel(unpaced, { width: 1200 }).thin.some((t) => t.code === 'ALB' && t.n === 0));
+  assert.ok(!racePaceModel(race, { width: 1200 }).thin.some((t) => t.n === 0 && code(race, t.car_index) === 'LEC'));
 });
 
 test('race trace never draws a line across the red flag and resets at the restart', () => {

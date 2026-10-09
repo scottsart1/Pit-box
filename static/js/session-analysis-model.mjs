@@ -455,9 +455,17 @@ export function racePaceModel(analysis, { width = 1200, height = 340, minLaps = 
   const styles = driverStyles(analysis);
   const usable = (analysis?.race_pace || []).filter((row) => isNumber(row.median_ms) && isNumber(row.whisker_low_ms) && isNumber(row.whisker_high_ms));
   const rows = usable.filter((row) => Number(row.n) >= minLaps);
-  const thin = (analysis?.race_pace || []).filter((row) => !(Number(row.n) >= minLaps)).map((row) => ({
-    car_index: row.car_index, code: drivers.get(row.car_index)?.code || `#${row.car_index}`, n: Number(row.n) || 0,
-  }));
+  const paced = new Set((analysis?.race_pace || []).map((row) => row.car_index));
+  const thin = [
+    ...(analysis?.race_pace || []).filter((row) => !(Number(row.n) >= minLaps)).map((row) => ({
+      car_index: row.car_index, code: drivers.get(row.car_index)?.code || `#${row.car_index}`, n: Number(row.n) || 0,
+    })),
+    // A driver who completed laps without a single pace lap (every lap left
+    // out: no telemetry context, flags, lap 1) is listed too, never dropped.
+    ...(analysis?.drivers || []).filter((d) => !paced.has(d.car_index) && Number(d.laps_completed) > 0).map((d) => ({
+      car_index: d.car_index, code: d.code || `#${d.car_index}`, n: 0,
+    })),
+  ];
   if (!rows.length) return { boxes: [], ticks: [], thin, domain: null, width, height: 0, horizontal };
   const whiskerLow = Math.min(...rows.map((r) => Number(r.whisker_low_ms)));
   const whiskerHigh = Math.max(...rows.map((r) => Number(r.whisker_high_ms)));
