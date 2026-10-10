@@ -99,7 +99,7 @@ checkpoint.
 | 9 | Production release (5.4.0, Android revision 37) | superseded - 5.4.0 was installed on a test tablet only; the public release is 5.4.1 |
 | 10 | Race classification on imperfect recordings (5.4.1) | done - see below |
 | 11 | Production release (5.4.1, Android revision 38) | done - see Release record |
-| 12 | Website screenshots refreshed, site copy made concise | pending - after 11 |
+| 12 | Website screenshots refreshed, site copy made concise | done - Session Analysis stills 23/24, home page 4,317 -> 3,249 words, guide 4,945 -> 4,375 |
 
 ## Race classification on imperfect recordings (5.4.1)
 
@@ -173,7 +173,7 @@ Done (branch `wf/race-classification`, then `release/5.4.0`):
   verified; Worker deployed; website deployed with the checksums; update
   manifests published for Windows and Android.
 
-Remaining: the website screenshot and copy pass (row 12).
+All checkpoints are done.
 
 ## Backend contract (schema_version 2)
 
