@@ -1,8 +1,8 @@
-# Your Pit Box 5.4.0 — AI race engineer and driver dashboard
+# Your Pit Box 5.4.1 — AI race engineer and driver dashboard
 
 [Download Windows or Android](https://yourpitbox.com/#download),
 [try the Driver Dashboard](https://your-pit-box-driver-dashboard.sarthakvij123450.chatgpt.site/),
-or read the [release notes](docs/release-notes-5.4.0.md).
+or read the [release notes](docs/release-notes-5.4.1.md).
 
 Your Pit Box receives **F1 26** telemetry (UDP format **2026**) from a PS5, runs deterministic
 strategy/corner/setup analysis locally, keeps persistent SQLite history, answers spoken questions,
@@ -105,6 +105,21 @@ Only enable `PITWALL_WEB_LAN_ACCESS=true` when a phone/tablet needs the
 dashboard. Bind the web host to `0.0.0.0`, set a long
 `PITWALL_WEB_ACCESS_TOKEN`, and keep it on a trusted LAN. Your Pit Box never opens a
 router or firewall to the public internet automatically.
+
+## What changed in 5.4.1
+
+**Race results you can trust.** Races recorded from 5.4.1 keep the game's final
+classification for every car, and Session Analysis uses it as the finishing
+order, with penalties, DNFs and disqualifications. Older recordings lost lap
+rows for much of the field; instead of ranking the few complete records as if
+they were the whole field, the order now comes from the game's own race
+position at each lap end, and a finish is placed only on settled evidence -
+otherwise it reads unknown, with the reason. Retirements come from the game's
+messages, a recording that stops early claims no finish, and the player is
+identified from their own lap rows.
+
+**Recording.** A retirement no longer stops the recording of the
+highest-numbered cars, and the game's lap chart is saved with each session.
 
 ## What changed in 5.4.0
 

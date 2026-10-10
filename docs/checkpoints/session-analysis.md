@@ -92,11 +92,69 @@ checkpoint.
 | 5 | Frontend view, charts, Analyze session entry points | done (first version) |
 | 6 | Lap Lab driver -> lap pickers, auto + manual reference | done (first version) |
 | 7a | Regression pressure tests and fixes, backend | done |
-| 7b | Regression fixes, Session Analysis UI | in progress on branch `wf/session-analysis-ui` (separate worktree), to be merged |
+| 7b | Regression fixes, Session Analysis UI | done - merged |
 | 7c | Regression fixes, Lap Lab pickers and auto-run | done - reviewed adversarially, all findings fixed |
-| 7d | Browser smokes locally and on a PR; screenshots | pending - Remaining work 4 |
-| 8 | Squash-merge to `main`, CI builds | pending |
-| 9 | Production release (5.4.0, Android revision 37) | pending |
+| 7d | Browser smokes locally and on a PR; screenshots | done - local and CI |
+| 8 | Squash-merge to `main`, CI builds | done - both installer workflows green |
+| 9 | Production release (5.4.0, Android revision 37) | superseded - 5.4.0 was installed on a test tablet only; the public release is 5.4.1 |
+| 10 | Race classification on imperfect recordings (5.4.1) | done - see below |
+| 11 | Production release (5.4.1, Android revision 38) | pending |
+| 12 | Website screenshots refreshed, site copy made concise | pending - after 11 |
+
+## Race classification on imperfect recordings (5.4.1)
+
+Field check of 5.4.0 against the test tablet's real history (103 races, most
+recorded by versions before 5.3.4) found the derived race order unusable on
+most of them:
+
+- Older versions wrote a field car's lap row only when its full-field trace
+  batch completed, so many laps are missing for most of the field at once
+  (Singapore Race 2: lap 5 for 18 cars after the red flag). A single hole
+  left a car unplaced, so cars with continuous records were ranked among
+  themselves as if they were the whole field: four cars that stopped after
+  lap 2 were shown P1-P4 "finished" while the 18 cars that ran 31 laps were
+  unplaced.
+- Two cars can be flagged as the player (a phantom car 0 plus the real car).
+  Only the real player's rows carry legacy lap ids.
+- The player's final lap and every finisher's final-lap time are often
+  missing; some recordings stop before the race distance.
+- The recorder bounded per-car loops by the game's active-car count, which
+  drops when a car retires while every other car keeps its index: the two
+  highest-index cars stopped being recorded from that lap on.
+
+Done (branch `wf/race-classification`, then `release/5.4.0`):
+
+- The recorder saves every car's final classification (`FCLS` session event)
+  and the game's lap chart (`LPOS`), not only the player's result
+  (`tests/test_session_record_classification.py`).
+- The recorder keeps recording every car slot that has had a lap after a
+  retirement (`tests/test_recording_after_retirements.py`). On a 10x replay of
+  the Singapore capture the two highest-index cars went from 2-3 to 15-16 laps
+  with telemetry context.
+- `classify_race` in `session_analysis.py` orders the field from the best
+  evidence: the game's classification; lap times when the record is
+  sufficient (unchanged, no trace read); otherwise the game's recorded
+  lap-end positions (lap chart, the player's legacy rows, the last trace
+  sample), with strict finish rules (settled final-lap position; the lap
+  before only when free at the finish and the car behind is still behind;
+  retired cars and records that simply end are not placed; a recording that
+  stops early claims no finish). Without positions, a lap-time place is kept
+  only when no car with a hole could be ahead (lower bound: missing laps at
+  97% of the session's fastest). `tests/test_session_analysis_imperfect_records.py`.
+- Player identity from legacy lap rows; official result compared only with
+  such a player. Session-event window ignores an end time equal to the start.
+- Validation: on the tablet's 59 races 522 cars placed (214 before), no
+  placed position contradicting an official result; both Singapore replays
+  (lap-time path and classification path) equal the official classification
+  for every car. Harness: `race-dataset` + `harness/` in the job scratch
+  folder (not in the repo).
+- UI: headline names the order's source; DNF/DSQ/NC results; timelapse
+  labels use the game's positions.
+- Version 5.4.1, Android revision 38; `docs/release-notes-5.4.1.md`.
+
+Remaining: CI builds of 5.4.1, tablet upgrade and survey of its history with
+the new build, R2 upload, Worker, website checksums, update manifests; then
+the website screenshot and copy pass.
 
 ## Backend contract (schema_version 2)
 
