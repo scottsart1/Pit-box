@@ -56,7 +56,9 @@ def test_order_laps_best_laps_and_gaps_match_the_official_classification(analysi
             gap = (result["total_race_time"] - winner_time) * 1000
             assert driver["gap_to_winner_ms"] is not None
             assert abs(driver["gap_to_winner_ms"] - gap) <= 10, driver["code"]
-    assert analysis["official_result"] == {"player_position": 1, "derived_player_position": 1, "agrees": True}
+    assert {key: analysis["official_result"][key] for key in ("player_position", "derived_player_position", "agrees")} == {
+        "player_position": 1, "derived_player_position": 1, "agrees": True,
+    }
 
 
 def test_the_lap_record_flags_and_suspension_are_read_from_the_recording(analysis: dict) -> None:

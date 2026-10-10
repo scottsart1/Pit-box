@@ -125,9 +125,10 @@ def test_only_the_lead_lap_car_having_a_hole_is_reported_not_a_key_error() -> No
     rows = drivers(result)
     assert rows["LEC"]["status"] == "incomplete_record"
     assert rows["LEC"]["finish_position"] is None
-    assert rows["NOR"]["finish_position"] == 1
-    assert rows["NOR"]["status"] == "finished"
-    assert result["winner_car_index"] == 1
+    # LECLERC ran a lap further than NORRIS: NORRIS is not the winner of a
+    # field that only it could be timed in.
+    assert rows["NOR"]["finish_position"] is None
+    assert result["winner_car_index"] is None
 
 
 @pytest.mark.parametrize("seed", range(120))
@@ -473,7 +474,9 @@ def test_a_penalty_that_changes_the_official_result_is_surfaced() -> None:
     cars = [car(0, "LECLERC", player=True), car(1, "NORRIS"), car(2, "PIASTRI")]
     laps = [lap(index, number, 92_000 + index * 300) for index in range(3) for number in range(1, 11)]
     result = build_session_analysis(RACE, cars, laps, events=NO_MESSAGES, official_player_position=3)
-    assert result["official_result"] == {"player_position": 3, "derived_player_position": 1, "agrees": False}
+    assert result["official_result"] == {
+        "player_position": 3, "derived_player_position": 1, "agrees": False, "player_identity": None,
+    }
     assert any("official result is P3" in warning for warning in result["warnings"])
     assert "penalties are not applied" in result["basis"]["finish_order"]
     unknown = build_session_analysis(RACE, cars, laps, events=NO_MESSAGES)
@@ -594,6 +597,8 @@ async def test_service_reads_race_control_official_result_and_library_track_name
         for number in range(1, 11):
             _insert_lap(db, player, number, 92_000)
             _insert_lap(db, rival, number, 91_900)
+        # The player's laps are linked to its legacy lap rows, as the recorder does.
+        db.execute("UPDATE recorded_laps SET legacy_lap_id=lap_number WHERE session_car_id=?", (player,))
         db.execute("INSERT INTO sessions(session_uid, track_id, track_name, session_type, mode_profile, started_at, "
                    "ended_at, result_position, total_laps, setup_json) VALUES (?, 0, '—', 'Race', 'race', ?, ?, 2, 10, '{}')",
                    (_legacy_session_uid(uid), start, start + 3600))
@@ -611,7 +616,9 @@ async def test_service_reads_race_control_official_result_and_library_track_name
     assert result["race_control"]["available"] is True
     assert result["race_control"]["vsc_laps"] == [4, 5]
     assert result["race_control"]["safety_car_laps"] == []
-    assert result["official_result"] == {"player_position": 2, "derived_player_position": 2, "agrees": True}
+    assert result["official_result"] == {
+        "player_position": 2, "derived_player_position": 2, "agrees": True, "player_identity": "legacy_laps",
+    }
 
 
 @pytest.mark.asyncio

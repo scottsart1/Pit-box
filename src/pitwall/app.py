@@ -117,7 +117,9 @@ trace_store = TraceStore(
 trace_archive = TraceArchiveService(database, trace_store)
 comparison_service = ComparisonService(database.path, trace_store)
 field_service = FieldAnalysisService(database.path, trace_store=trace_store)
-session_analysis_service = SessionAnalysisService(database.path)
+session_analysis_service = SessionAnalysisService(
+    database.path, lap_end_positions=field_service.lap_end_positions
+)
 track_model_service = TrackModelService(database.path, trace_store, settings.data_dir)
 analysis_jobs = AnalysisJobService(
     database.path,
