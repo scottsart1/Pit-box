@@ -177,9 +177,13 @@ export function stopsText(driver) {
   return countText(driver.pit_stops, "stop");
 }
 
+// The game's own result statuses, from its final classification.
+const RESULT_TEXT = Object.freeze({ dnf: "DNF", dsq: "Disqualified", nc: "Not classified", retired: "Retired" });
+
 // The classified result in a table cell.
 export function resultText(driver) {
   const place = positionText(driver?.finish_position);
+  if (RESULT_TEXT[driver?.result]) return RESULT_TEXT[driver.result];
   switch (driver?.status) {
     case "finished": return place;
     case "lapped": return [place === "—" ? null : place, lapsDownText(driver.laps_down)].filter(Boolean).join(" · ") || STATUS_TEXT.lapped;
@@ -379,7 +383,7 @@ export function defaultFocus(analysis, limit = 4) {
 // its retirement and blank the trace.
 export function referenceOptions(analysis) {
   return (analysis?.drivers || [])
-    .filter((d) => ["finished", "lapped", "running"].includes(d.status) && Number(d.laps_completed) > 0)
+    .filter((d) => ["finished", "lapped", "running"].includes(d.status) && Number(d.laps_completed ?? d.laps_recorded) > 0)
     .map((d) => ({
       value: String(d.car_index),
       label: [`${d.code}${d.is_player ? " (you)" : ""}`, d.status === "lapped" ? lapsDownText(d.laps_down) : null].filter(Boolean).join(" · "),
@@ -462,7 +466,7 @@ export function racePaceModel(analysis, { width = 1200, height = 340, minLaps = 
     })),
     // A driver who completed laps without a single pace lap (every lap left
     // out: no telemetry context, flags, lap 1) is listed too, never dropped.
-    ...(analysis?.drivers || []).filter((d) => !paced.has(d.car_index) && Number(d.laps_completed) > 0).map((d) => ({
+    ...(analysis?.drivers || []).filter((d) => !paced.has(d.car_index) && Number(d.laps_completed ?? d.laps_recorded) > 0).map((d) => ({
       car_index: d.car_index, code: d.code || `#${d.car_index}`, n: 0,
     })),
   ];
@@ -900,7 +904,7 @@ export function timelapseFrames(analysis) {
   // still running when an unfinished recording stopped. A retirement or an
   // unplaced record ends where its record does.
   const staysInField = (driver) => Boolean(driver) && isNumber(driver.finish_position)
-    && (driver.status === "lapped" || (driver.status === "running" && Number(driver.laps_down) > 0));
+    && (driver.status === "lapped" || driver.status === "finished" || (driver.status === "running" && Number(driver.laps_down) > 0));
   const frames = [];
   for (let lap = 1; lap <= total; lap += 1) {
     const final = lap === total;
@@ -931,7 +935,8 @@ export function timelapseFrames(analysis) {
         const finish = finishOf(e.car_index);
         const out = drivers.get(e.car_index)?.status === "retired" && lastPlaced.get(e.car_index) === lap;
         return {
-          car_index: e.car_index, position: i + 1, label: final && Number.isFinite(finish) ? `P${finish}` : `P${i + 1}`,
+          car_index: e.car_index, position: i + 1,
+          label: final && Number.isFinite(finish) ? `P${finish}` : Number.isFinite(e.order) ? `P${e.order}` : `P${i + 1}`,
           gap_ms: e.gap_ms, laps_down: e.laps_down, compound: e.compound, pit: e.pit, out,
         };
       }),
@@ -1056,7 +1061,8 @@ export function headline(analysis) {
   const place = [session.track_name || session.display_name, session.session_type].filter(Boolean).join(" · ");
   let title = place || "Session analysis";
   if (isRace && winner && !single) {
-    const settled = !provisional && !partial && !disputed;
+    const official = analysis?.basis?.finish_source === "classification";
+    const settled = !provisional && (official || (!partial && !disputed));
     if (settled) {
       title = second && isNumber(second.gap_to_winner_ms) && second.status === "finished"
         ? `${named(winner)} wins by ${formatSeconds(second.gap_to_winner_ms)}`
@@ -1110,13 +1116,22 @@ export function headline(analysis) {
     !recorded ? "safety cars not recorded" : coveredFrom ? `race control recorded from lap ${coveredFrom}` : null,
     single ? (recordedCars === 1 || drivers.some((d) => d.status === "unranked") ? "only one car recorded" : "no completed laps recorded")
       : partial && isNumber(field.cars_with_laps) && isNumber(field.cars) ? `${field.cars_with_laps} of ${field.cars} cars recorded` : null,
-    single ? null : provisional ? "provisional order: the recording did not finish" : "order derived from lap times; penalties not applied",
+    single ? null : provisional ? "provisional order: the recording did not finish" : orderSourceText(analysis),
   ] : [
     session.display_name && session.display_name !== session.track_name ? session.display_name : null,
     drivers.length ? countText(drivers.length, "driver") : null,
     provisional ? "the recording did not finish" : null,
   ]).filter(Boolean).join(" · ");
   return { title, subtitle, kpis };
+}
+
+// Where the finishing order comes from, for the headline.
+export function orderSourceText(analysis) {
+  switch (analysis?.basis?.finish_source) {
+    case "classification": return "the game's final classification, penalties applied";
+    case "game_positions": return "order from the game's recorded positions; penalties not applied";
+    default: return "order derived from lap times; penalties not applied";
+  }
 }
 
 function playerResult(analysis, player, { provisional, single }) {
@@ -1135,7 +1150,8 @@ function playerResult(analysis, player, { provisional, single }) {
     detail.push("only recorded car: no order");
   } else if (isNumber(player.finish_position)) {
     value = `P${player.finish_position}`;
-    label = provisional ? "Your position (provisional)" : "Your result (derived)";
+    label = provisional ? "Your position (provisional)"
+      : analysis?.basis?.finish_source === "game_positions" ? "Your result (recorded order)" : "Your result (derived)";
   } else if (player.status === "incomplete_record") {
     detail.push("record incomplete: no position");
   }

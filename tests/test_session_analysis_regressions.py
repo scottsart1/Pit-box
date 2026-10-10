@@ -125,9 +125,9 @@ def test_only_the_lead_lap_car_having_a_hole_is_reported_not_a_key_error() -> No
     rows = drivers(result)
     assert rows["LEC"]["status"] == "incomplete_record"
     assert rows["LEC"]["finish_position"] is None
-    # LECLERC ran a lap further than NORRIS: NORRIS is not the winner of a
-    # field that only it could be timed in.
-    assert rows["NOR"]["finish_position"] is None
+    # LECLERC timed a lap further than NORRIS, so it is ahead: NORRIS is P2,
+    # never the winner, and LECLERC's own place cannot be timed.
+    assert rows["NOR"]["finish_position"] == 2
     assert result["winner_car_index"] is None
 
 

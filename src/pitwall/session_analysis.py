@@ -1168,21 +1168,57 @@ def classify_race(
             # an unplaced car that ran as far could be ahead of anyone: a place
             # is only kept when every car that could be ahead of it is placed.
             unplaced = [index for index in by_car if index not in derived_finish and completed.get(index, 0)]
-            for index in derived_finish:
+            fastest = min(
+                (int(lap.lap_time_ms or 0) for lap in rows.values() if _timed(lap) and lap.lap_number not in suspended),
+                default=0,
+            )
+
+            def least_time(other: int, number: int) -> int | None:
+                # The least race time the car could have at lap `number` in that
+                # lap's segment: its recorded laps, and a lap at 97% of the
+                # session's fastest for each one missing.
+                segment = _segment_of(own_segments.get(other, []), number)
+                if segment is None:
+                    return None
+                first = own_segments[other][segment][0]
+                total = 0
+                for lap_number in range(first, number + 1):
+                    lap = rows.get((other, lap_number))
+                    total += int(lap.lap_time_ms or 0) if _timed(lap) else int(fastest * 0.97)
+                return total
+
+            def certainly_behind(other: int, index: int) -> bool:
                 classified_lap = order_lap(index) or 0
-                if any(last_row[other] >= classified_lap for other in unplaced):
+                if last_row[other] < classified_lap:
+                    return True
+                if last_row[other] > classified_lap or not fastest:
+                    return False
+                bound = least_time(other, classified_lap)
+                own = elapsed.get(index, {}).get(classified_lap)
+                return (
+                    bound is not None
+                    and own is not None
+                    and _segment_of(own_segments[index], classified_lap) == _segment_of(own_segments[other], classified_lap)
+                    and own < bound
+                )
+
+            def certainly_ahead(other: int, index: int) -> bool:
+                # It timed a lap beyond the one this car is classified on.
+                return completed.get(other, 0) > (order_lap(index) or 0)
+
+            for index in derived_finish:
+                if not all(certainly_behind(other, index) or certainly_ahead(other, index) for other in unplaced):
                     uncertain.add(index)
-            if uncertain:
-                first = min(derived_finish.index(index) for index in uncertain)
-                uncertain = set(derived_finish[first:])
-                if derived_finish[0] in uncertain:
-                    winner, winner_laps, winner_time = None, None, None
-        for position, index in enumerate(derived_finish, 1):
+        for rank, index in enumerate(derived_finish, 1):
             if index in uncertain:
                 continue
-            finish[index] = position
+            ahead = sum(1 for other in by_car if other not in derived_finish and completed.get(other, 0)
+                        and certainly_ahead(other, index)) if not derived_sufficient else 0
+            finish[index] = rank + ahead
             finish_source[index] = "lap_times"
             finish_lap[index] = order_lap(index) or 0
+        if winner is not None and finish.get(winner) != 1:
+            winner, winner_laps, winner_time = None, None, None
         for index in all_indices:
             car_laps = by_car.get(index, [])
             done = completed.get(index, 0)
