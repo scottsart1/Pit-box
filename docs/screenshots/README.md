@@ -57,6 +57,18 @@ overtaking is hard enough that track position is worth defending.
 | `09-hungaroring-field.png` | Field | The field during the same moment |
 | `15-promo-poster.png` | Drive | The opening frame of the captioned 45-second cut, caption bar included; it is the poster for that video, not a documentation shot |
 
+## Session Analysis (5.4.1)
+
+`23` and `24` are the real Session Analysis view rendered from a synthetic
+60-lap Silverstone race (`tests/session_analysis_fixture.py --large`, with every
+lap timed and observed so the result is complete). The page's own scripts and
+styles draw them; only the analysis payload is supplied.
+
+| File | Screen | Notable |
+|---|---|---|
+| `23-session-analysis.png` | Session Analysis | Winner and margin, your result, fastest and ideal laps, neutralised laps, race pace per driver |
+| `24-session-analysis-strategy.png` | Session Analysis | Every driver's tyre stints in finishing order |
+
 ## Workspace captures
 
 `19`–`22` are produced by the same `tools/capture_screens.py` run as the

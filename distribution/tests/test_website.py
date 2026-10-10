@@ -710,24 +710,19 @@ def test_unsigned_windows_notice_remains_without_removed_installation_wording():
     assert re.search(r'SHA-256: <code>[a-f0-9]{64}</code>', card)
 
 
-def test_current_release_describes_skippable_setup_tour_and_manual_updates():
+def test_current_release_leads_with_session_analysis_and_keeps_its_disclosures():
     from pitwall import __version__
 
     gradle = (DIST.parent / 'android' / 'app' / 'build.gradle.kts').read_text(encoding='utf-8')
     revision = re.search(r'val androidRevision = (\d+)', gradle).group(1)
     release = INDEX.split('id="new"', 1)[1].split('</section>', 1)[0]
-    assert release.split('<p class="section-lede">', 1)[1].startswith('Find your setup values')
-    for text in ('Test Engineer', 'A/B comparison', 'projected finish gap', 'sector differences', 'system file picker'):
-        assert text in release
-    assert 'Realtime radio in Settings' in release and 'off by default' in release
-    assert 'Labelled sample values' in release and 'without UDP' in release
-    assert 'swipe-to-reveal system bars' in release
-    assert 'tyre pace trend' in release
+    assert 'Analyze session' in release and 'guide.html#session-analysis' in release
+    assert 'img/23-session-analysis.png' in release
+    assert 'Realtime radio in Settings' in release and 'off by default' in release and 'API costs' in release
+    assert 'nothing installs automatically' in release
+    assert 'penalties included' in release and 'unknown instead of guessing' in release
     assert f'Windows {__version__} and Android {__version__} (revision {revision}).' in release
     assert f'{__version__}-android.{revision}.apk' in INDEX
-    for text in (__version__, 'skippable setup', 'UDP IP and port', 'guided app tour',
-                 'Existing preferences stay unchanged', 'Nothing installs automatically'):
-        assert text in release
     assert 'Install this update manually once' in INDEX
     assert 'setup step 2 open' in GUIDE
     assert 'Every step is skippable' in GUIDE
