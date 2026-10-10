@@ -98,7 +98,7 @@ checkpoint.
 | 8 | Squash-merge to `main`, CI builds | done - both installer workflows green |
 | 9 | Production release (5.4.0, Android revision 37) | superseded - 5.4.0 was installed on a test tablet only; the public release is 5.4.1 |
 | 10 | Race classification on imperfect recordings (5.4.1) | done - see below |
-| 11 | Production release (5.4.1, Android revision 38) | pending |
+| 11 | Production release (5.4.1, Android revision 38) | done - see Release record |
 | 12 | Website screenshots refreshed, site copy made concise | pending - after 11 |
 
 ## Race classification on imperfect recordings (5.4.1)
@@ -152,9 +152,28 @@ Done (branch `wf/race-classification`, then `release/5.4.0`):
   labels use the game's positions.
 - Version 5.4.1, Android revision 38; `docs/release-notes-5.4.1.md`.
 
-Remaining: CI builds of 5.4.1, tablet upgrade and survey of its history with
-the new build, R2 upload, Worker, website checksums, update manifests; then
-the website screenshot and copy pass.
+### Release record (5.4.1)
+
+- `main` at the release: CI Windows installer run 38070822153 (passed on a
+  re-run; the first attempt failed a 0.2 s event-loop timing check by 1 ms)
+  and Android run 38070819649, both green.
+- Windows `PitWall-Setup.exe` SHA-256
+  `6538bd5fd586c639ee940dc50e3d9a8b255d0287fb1ce32f959218449b226365`,
+  35,296,141 bytes, identical to the CI install smoke's installer.
+- Android `YourPitBox-5.4.1-android.38.apk` SHA-256
+  `67719e84a9ff17d31978d2985a00375b5b7e52ffaaeecfd15258082cefcee439`,
+  73,341,578 bytes, signed with the existing production certificate.
+- Test tablet upgraded in place from 5.4.0: 160 sessions and 28,177 lap rows
+  preserved with an identical fingerprint. With 5.4.1 on the tablet's own
+  data: 520 cars placed over 59 races, Singapore Race 2's 18 placed cars all
+  equal to the official classification, no player result contradicting an
+  official one, no impossible output; a first open takes up to 3.5 s (traces
+  read once), repeats 0.12 s. The race engineer answers on the tablet.
+- Both artifacts uploaded to R2; public `/installer` and `/android` hashes
+  verified; Worker deployed; website deployed with the checksums; update
+  manifests published for Windows and Android.
+
+Remaining: the website screenshot and copy pass (row 12).
 
 ## Backend contract (schema_version 2)
 
