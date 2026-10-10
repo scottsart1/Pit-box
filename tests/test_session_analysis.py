@@ -296,7 +296,10 @@ def test_a_hole_in_the_record_is_reported_not_papered_over() -> None:
     assert drivers["HAD"]["record_gap_from_lap"] == 4
     assert lap_row(result, 1, 6)["position"] is None
     assert any("HADJAR" in warning and "lap 4" in warning for warning in result["warnings"])
-    assert drivers["LAW"]["finish_position"] == 1
+    # HADJAR is a second a lap faster: even with its missing lap at record
+    # pace it could be ahead, so LAWSON is not called the winner.
+    assert drivers["LAW"]["finish_position"] is None
+    assert result["winner_car_index"] is None
 
 
 def test_fastest_lap_and_ideal_lap_use_valid_laps_only() -> None:
