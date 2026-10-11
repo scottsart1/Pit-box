@@ -42,7 +42,9 @@ CATALOGS = {
         tuple(
             path for path in sorted((STATIC / "js").glob("*"))
             if path.suffix in {".js", ".mjs"} and path.name != "i18n.js"
-        ),
+        )
+        # The stream overlay renders text from the Driver Dashboard's model.
+        + (DASHBOARD / "model.mjs",),
     ),
     "dashboard": (
         DASHBOARD / "i18n",
@@ -55,7 +57,8 @@ CATALOGS = {
 }
 LANGUAGES = ("fr", "de", "es")
 TRANSLATED_ATTRIBUTES = ("placeholder", "title", "aria-label", "alt")
-SKIP_TAGS = {"script", "style", "textarea", "code", "pre", "noscript", "template"}
+# <title> carries the brand and the version, so it stays as written.
+SKIP_TAGS = {"script", "style", "textarea", "code", "pre", "noscript", "template", "title"}
 VOID_TAGS = {
     "area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta",
     "source", "track", "wbr",

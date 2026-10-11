@@ -15,8 +15,8 @@
     toggle.checked = enabled;
     prompt.hidden = data.decided === true;
     status.textContent = enabled
-      ? `Sharing is on. ${data.last_sent_at ? "Last report: " + new Date(data.last_sent_at).toLocaleString() + "." : "Reports wait safely when offline."}`
-      : "Sharing is off. No usage reports are sent.";
+      ? (data.last_sent_at ? i18n.t("Sharing is on. Last report: {time}.", {time: new Date(data.last_sent_at).toLocaleString()}) : i18n.t("Sharing is on. Reports wait safely when offline."))
+      : i18n.t("Sharing is off. No usage reports are sent.");
   }
   async function refresh() {
     try {
@@ -25,7 +25,7 @@
       render(await response.json());
       toggle.disabled = false;
     } catch {
-      status.textContent = "Usage settings unavailable. Nothing has been enabled here.";
+      status.textContent = i18n.t("Usage settings unavailable. Nothing has been enabled here.");
       toggle.disabled = true;
     }
   }
@@ -34,8 +34,8 @@
     busy = true;
     const controls = [toggle, byId("usageYes"), byId("usageNo")];
     controls.forEach(control => { control.disabled = true; });
-    status.textContent = "Saving your choice…";
-    byId("usagePromptStatus").textContent = "Saving…";
+    status.textContent = i18n.t("Saving your choice…");
+    byId("usagePromptStatus").textContent = i18n.t("Saving…");
     try {
       const response = await fetch("/api/v1/usage", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({enabled: value})});
       if (!response.ok) throw new Error("not saved");
@@ -44,8 +44,8 @@
       if (enabled) active();
     } catch {
       toggle.checked = enabled;
-      status.textContent = "Choice was not saved. Please try again.";
-      byId("usagePromptStatus").textContent = "Choice was not saved. Please try again.";
+      status.textContent = i18n.t("Choice was not saved. Please try again.");
+      byId("usagePromptStatus").textContent = i18n.t("Choice was not saved. Please try again.");
     } finally {
       busy = false;
       controls.forEach(control => { control.disabled = false; });

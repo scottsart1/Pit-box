@@ -13,19 +13,19 @@
     const release = data.release;
     const safe = release && ["https://yourpitbox.com/#windows-release", "https://yourpitbox.com/#android-release"].includes(release.download_url);
     banner.hidden = !(safe && data.available && !data.dismissed);
-    if (safe) { banner.href = release.download_url; banner.textContent = `Update ${release.version} available`; }
+    if (safe) { banner.href = release.download_url; banner.textContent = i18n.t("Update {version} available", {version: `${release.version}`}); }
     else { banner.removeAttribute("href"); banner.textContent = ""; }
     get("updateDownload").hidden = !(safe && data.available);
     if (safe) get("updateDownload").href = release.download_url;
     else get("updateDownload").removeAttribute("href");
     get("updateDismiss").hidden = !(safe && data.available && !data.dismissed);
     get("updateNotes").textContent = safe && data.available ? release.notes : "";
-    status.textContent = data.outcome === "unavailable" ? "Update service unavailable. Your app still works normally; try later."
-      : data.available && safe ? `Version ${release.version} is available. You have ${data.current_version}. Install when you are not racing.`
-      : data.outcome === "ok" ? `You have ${data.current_version}. No newer release is published for this platform.`
-      : data.outcome === "unsupported" ? "Automatic updates are checked for packaged Windows and Android apps."
-      : data.outcome === "not_published" ? "No release announcement is published for this platform yet."
-      : "No update check yet. Your app starts without waiting for the update service.";
+    status.textContent = data.outcome === "unavailable" ? i18n.t("Update service unavailable. Your app still works normally; try later.")
+      : data.available && safe ? i18n.t("Version {version} is available. You have {current}. Install when you are not racing.", {version: `${release.version}`, current: `${data.current_version}`})
+      : data.outcome === "ok" ? i18n.t("You have {current}. No newer release is published for this platform.", {current: `${data.current_version}`})
+      : data.outcome === "unsupported" ? i18n.t("Automatic updates are checked for packaged Windows and Android apps.")
+      : data.outcome === "not_published" ? i18n.t("No release announcement is published for this platform yet.")
+      : i18n.t("No update check yet. Your app starts without waiting for the update service.");
   }
   async function request(path = "", body) {
     if (busy) return;
@@ -34,7 +34,7 @@
       const response = await fetch("/api/v1/updates" + path, {cache: "no-store", ...(body === undefined ? {} : {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)})});
       if (!response.ok) throw new Error("Update controls unavailable. Please try again.");
       render(await response.json());
-    } catch { status.textContent = "Update controls unavailable. Your app still works normally."; }
+    } catch { status.textContent = i18n.t("Update controls unavailable. Your app still works normally."); }
     finally { busy = false; toggle.disabled = get("updateCheck").disabled = false; }
   }
   toggle.addEventListener("change", () => request("", {enabled: toggle.checked}));

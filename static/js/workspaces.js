@@ -86,7 +86,7 @@ async function api(path, options = {}) {
   try {
     response = await fetch(`${API_ROOT}${path}`, { ...options, headers });
   } catch (error) {
-    throw new Error(`Pit Wall's local API is unavailable: ${formatError(error)}`);
+    throw new Error(i18n.t("Pit Wall's local API is unavailable: {error}", { error: formatError(error) }));
   }
   const text = await response.text();
   let payload = null;
@@ -115,7 +115,7 @@ function navigate(page) {
 }
 
 function formatLapTime(milliseconds) {
-  if (milliseconds === null || milliseconds === undefined || Number(milliseconds) <= 0) return "Unavailable";
+  if (milliseconds === null || milliseconds === undefined || Number(milliseconds) <= 0) return i18n.t("Unavailable");
   const value = Math.round(Number(milliseconds));
   const minutes = Math.floor(value / 60000);
   const seconds = Math.floor((value % 60000) / 1000);
@@ -124,36 +124,128 @@ function formatLapTime(milliseconds) {
 }
 
 function formatSeconds(value, signed = false) {
-  if (value === null || value === undefined || !Number.isFinite(Number(value))) return "Unavailable";
+  if (value === null || value === undefined || !Number.isFinite(Number(value))) return i18n.t("Unavailable");
   const number = Number(value);
   return `${signed && number >= 0 ? "+" : ""}${number.toFixed(3)} s`;
 }
 
 function formatPercent(value) {
-  if (value === null || value === undefined || !Number.isFinite(Number(value))) return "Unavailable";
+  if (value === null || value === undefined || !Number.isFinite(Number(value))) return i18n.t("Unavailable");
   return `${Math.round(Number(value) * 100)}%`;
 }
 
 function formatBytes(value) {
   const bytes = Number(value);
-  if (!Number.isFinite(bytes) || bytes <= 0) return "No trace files";
+  if (!Number.isFinite(bytes) || bytes <= 0) return i18n.t("No trace files");
   const units = ["B", "KB", "MB", "GB", "TB"];
   const index = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1);
   return `${(bytes / 1024 ** index).toFixed(index > 1 ? 1 : 0)} ${units[index]}`;
 }
 
 function formatDate(value) {
-  if (!value) return "Date unavailable";
+  if (!value) return i18n.t("Date unavailable");
   const date = new Date(value);
   return Number.isNaN(date.valueOf()) ? String(value) : date.toLocaleString();
 }
 
+// Fixed codes the server sends (availability, session and job states), in
+// the page's language; a code this page does not know is shown as sent.
+function codeLabel(code) {
+  switch (code) {
+    case "observed": return i18n.t("observed");
+    case "derived": return i18n.t("derived");
+    case "estimated": return i18n.t("estimated");
+    case "stale": return i18n.t("stale");
+    case "unavailable": return i18n.t("unavailable");
+    case "recording": return i18n.t("recording");
+    case "complete": return i18n.t("complete");
+    case "incomplete": return i18n.t("incomplete");
+    case "queued": return i18n.t("queued");
+    case "running": return i18n.t("running");
+    case "failed": return i18n.t("failed");
+    default: return code;
+  }
+}
+
+// A reference's compatibility class in words.
+function classificationLabel(classification) {
+  switch (classification) {
+    case "strict": return i18n.t("strict");
+    case "comparable_with_caveats": return i18n.t("comparable with caveats");
+    case "context_only": return i18n.t("context only");
+    case "incompatible": return i18n.t("incompatible");
+    default: return codeLabel(classification.replaceAll("_", " "));
+  }
+}
+
+// A coaching finding's type in words.
+function findingTypeLabel(type) {
+  switch (type || "finding") {
+    case "brake_too_early": return i18n.t("brake too early");
+    case "brake_too_late": return i18n.t("brake too late");
+    case "minimum_speed_too_early": return i18n.t("minimum speed too early");
+    case "minimum_speed_too_late": return i18n.t("minimum speed too late");
+    case "minimum_speed_too_low": return i18n.t("minimum speed too low");
+    case "throttle_too_late": return i18n.t("throttle too late");
+    case "line_displacement": return i18n.t("line displacement");
+    case "steering_correction": return i18n.t("steering correction");
+    case "gear_mismatch": return i18n.t("gear mismatch");
+    case "inconsistent_execution": return i18n.t("inconsistent execution");
+    case "strength": return i18n.t("strength");
+    case "finding": return i18n.t("finding");
+    default: return type.replaceAll("_", " ");
+  }
+}
+
+// The comparison's sign convention as the server words it.
+function signConventionLabel(text) {
+  switch (text) {
+    case "positive means candidate arrived later": return i18n.t("positive means candidate arrived later");
+    case "positive delta means candidate arrived later": return i18n.t("positive delta means candidate arrived later");
+    default: return text;
+  }
+}
+
+// A trace signal's name in words.
+function signalLabel(name) {
+  switch (name) {
+    case "speed": return i18n.t("speed");
+    case "delta": return i18n.t("delta");
+    case "throttle": return i18n.t("throttle");
+    case "brake": return i18n.t("brake");
+    case "steering": return i18n.t("steering");
+    case "gear": return i18n.t("gear");
+    case "line_n": return i18n.t("line n");
+    default: return name.replaceAll("_", " ");
+  }
+}
+
+// A Field view's name in words.
+function fieldViewLabel(view) {
+  switch (view) {
+    case "classification": return i18n.t("classification");
+    case "pace": return i18n.t("pace");
+    case "corners": return i18n.t("corners");
+    case "positions": return i18n.t("positions");
+    case "stints": return i18n.t("stints");
+    default: return view.replaceAll("_", " ");
+  }
+}
+
+function carLabel(carIndex) {
+  return i18n.t("Car {number}", { number: Number(carIndex ?? 0) + 1 });
+}
+
+function lapTimeLabel(lapNumber, milliseconds) {
+  return i18n.t("Lap {lap} · {time}", { lap: String(lapNumber ?? "—"), time: formatLapTime(milliseconds) });
+}
+
 function sessionLabel(session) {
-  return session.display_name || `${session.session_type || "Session"} · ${session.track_name || `Track ${session.track_id ?? "unavailable"}`}`;
+  return session.display_name || `${session.session_type || i18n.t("Session")} · ${session.track_name || (session.track_id != null ? i18n.t("Track {id}", { id: session.track_id }) : i18n.t("Track unavailable"))}`;
 }
 
 function lapLabel(lap) {
-  return `${lap.display_name || `Car ${Number(lap.car_index ?? 0) + 1}`} · Lap ${lap.lap_number ?? "—"} · ${formatLapTime(lap.lap_time_ms)}`;
+  return `${lap.display_name || carLabel(lap.car_index)} · ${lapTimeLabel(lap.lap_number, lap.lap_time_ms)}`;
 }
 
 // Lap Lab picks a driver, then one of their laps. A driver is one car in the
@@ -163,7 +255,7 @@ function lapDriverKey(lap) {
 }
 
 function driverName(lap) {
-  return lap.display_name || `Car ${Number(lap.car_index ?? 0) + 1}`;
+  return lap.display_name || carLabel(lap.car_index);
 }
 
 // A row a flashback abandoned (bit 2 of invalid_reason_mask) was never raced
@@ -271,24 +363,24 @@ function sessionLapDrivers() {
 
 function lapChoiceLabel(lap, fastestId) {
   const tags = [];
-  if (lap.id === fastestId) tags.push("fastest");
-  if (!lap.valid) tags.push("invalid");
-  if (Number(lap.pit_context)) tags.push("pit");
-  if (Number(lap.flag_context)) tags.push("flag");
-  if (Number(lap.timeline_epoch) > 0) tags.push(`timeline ${lap.timeline_epoch}`);
-  if (isUnconfirmed(lap)) tags.push("unconfirmed after flashback");
-  if (!hasTelemetry(lap)) tags.push("timing only, no telemetry");
-  return `Lap ${lap.lap_number ?? "—"} · ${formatLapTime(lap.lap_time_ms)}${tags.length ? ` · ${tags.join(" · ")}` : ""}`;
+  if (lap.id === fastestId) tags.push(i18n.t("fastest"));
+  if (!lap.valid) tags.push(i18n.t("invalid"));
+  if (Number(lap.pit_context)) tags.push(i18n.t("pit"));
+  if (Number(lap.flag_context)) tags.push(i18n.t("flag"));
+  if (Number(lap.timeline_epoch) > 0) tags.push(i18n.t("timeline {epoch}", { epoch: lap.timeline_epoch }));
+  if (isUnconfirmed(lap)) tags.push(i18n.t("unconfirmed after flashback"));
+  if (!hasTelemetry(lap)) tags.push(i18n.t("timing only, no telemetry"));
+  return `${lapTimeLabel(lap.lap_number, lap.lap_time_ms)}${tags.length ? ` · ${tags.join(" · ")}` : ""}`;
 }
 
 function metricText(metric, formatter = (value) => String(value)) {
-  if (!metric || metric.value === null || metric.value === undefined || metric.availability === "unavailable") return "Unavailable";
+  if (!metric || metric.value === null || metric.value === undefined || metric.availability === "unavailable") return i18n.t("Unavailable");
   return formatter(metric.value);
 }
 
 function availabilityTitle(metric) {
-  if (!metric) return "Availability metadata not supplied.";
-  const parts = [metric.availability || "unavailable"];
+  if (!metric) return i18n.t("Availability metadata not supplied.");
+  const parts = [codeLabel(metric.availability || "unavailable")];
   if (metric.n) parts.push(`n=${metric.n}`);
   if (metric.reason) parts.push(metric.reason);
   return parts.join(" · ");
@@ -316,12 +408,12 @@ function refreshSessionSelectors() {
   if (state.selectedSessionId && !sessions.some((session) => session.id === state.selectedSessionId)) {
     sessions.unshift(state.sessionDetail?.id === state.selectedSessionId
       ? state.sessionDetail
-      : { id: state.selectedSessionId, display_name: state.lapsStatus === "failed" ? "Session unavailable" : "Loading session…" });
+      : { id: state.selectedSessionId, display_name: state.lapsStatus === "failed" ? i18n.t("Session unavailable") : i18n.t("Loading session…") });
   }
   const options = sessions.map((session) => ({ value: session.id, label: `${sessionLabel(session)}${session.started_at ? ` · ${formatDate(session.started_at)}` : ""}` }));
-  replaceOptions(byId("reviewSessionSelect"), options, "Choose session", state.selectedSessionId);
-  replaceOptions(byId("fieldSessionSelect"), options, "Choose session", state.selectedSessionId);
-  replaceOptions(byId("lapLabSessionSelect"), options, "Choose session", state.selectedSessionId);
+  replaceOptions(byId("reviewSessionSelect"), options, i18n.t("Choose session"), state.selectedSessionId);
+  replaceOptions(byId("fieldSessionSelect"), options, i18n.t("Choose session"), state.selectedSessionId);
+  replaceOptions(byId("lapLabSessionSelect"), options, i18n.t("Choose session"), state.selectedSessionId);
 }
 
 function renderSessionRows() {
@@ -329,7 +421,7 @@ function renderSessionRows() {
   clear(body);
   if (!state.sessions.length) {
     const row = element("tr");
-    const cell = element("td", "empty", "No saved sessions match these filters.");
+    const cell = element("td", "empty", i18n.t("No saved sessions match these filters."));
     cell.colSpan = 7;
     row.append(cell);
     body.append(row);
@@ -339,30 +431,30 @@ function renderSessionRows() {
     row.dataset.selected = String(session.id === state.selectedSessionId);
     const identity = element("td");
     const name = element("strong", "session-name", `${session.starred ? "★ " : ""}${sessionLabel(session)}`);
-    identity.append(name, element("span", "field-help", `Track ID ${session.track_id ?? "unavailable"} · ${session.status || "status unavailable"}`));
+    identity.append(name, element("span", "field-help", i18n.t("Track ID {id} · {status}", { id: session.track_id ?? i18n.t("unavailable"), status: session.status ? codeLabel(session.status) : i18n.t("status unavailable") })));
     const tags = element("div", "session-tags");
     (session.tags || []).forEach((tag) => tags.append(element("span", "tag-chip", tag)));
     identity.append(tags);
     row.append(identity);
     row.append(element("td", "", formatDate(session.started_at)));
-    row.append(element("td", "", session.session_type || "Unavailable"));
-    row.append(element("td", "", `${session.drivers_observed ?? 0} drivers · ${session.lap_count ?? 0} laps`));
-    row.append(element("td", "", session.quality_score == null ? "Unavailable" : formatPercent(session.quality_score)));
+    row.append(element("td", "", session.session_type || i18n.t("Unavailable")));
+    row.append(element("td", "", i18n.t("{drivers} drivers · {laps} laps", { drivers: session.drivers_observed ?? 0, laps: session.lap_count ?? 0 })));
+    row.append(element("td", "", session.quality_score == null ? i18n.t("Unavailable") : formatPercent(session.quality_score)));
     row.append(element("td", "", formatBytes(session.size_bytes)));
     const actions = element("td");
     const group = element("div", "table-actions");
     group.append(
-      button("Analyze", () => analyzeSession(session.id), "button primary"),
-      button("Review", () => openSession(session.id, "session-review")),
-      button("Field", () => openSession(session.id, "field")),
-      button(session.starred ? "Unstar" : "Star", () => toggleStar(session)),
-      button("Delete", () => deleteSession(session), "button ghost danger-button"),
+      button(i18n.t("Analyze"), () => analyzeSession(session.id), "button primary"),
+      button(i18n.t("Review"), () => openSession(session.id, "session-review")),
+      button(i18n.t("Field"), () => openSession(session.id, "field")),
+      button(session.starred ? i18n.t("Unstar") : i18n.t("Star"), () => toggleStar(session)),
+      button(i18n.t("Delete"), () => deleteSession(session), "button ghost danger-button"),
     );
     actions.append(group);
     row.append(actions);
     body.append(row);
   });
-  byId("libraryCount").textContent = `${state.sessions.length} session${state.sessions.length === 1 ? "" : "s"}`;
+  byId("libraryCount").textContent = i18n.tp(state.sessions.length, "{count} session", "{count} sessions", { count: state.sessions.length });
   byId("libraryLoadMore").hidden = !state.nextCursor;
 }
 
@@ -389,7 +481,7 @@ async function loadSessions({ append = false, quiet = false } = {}) {
   state.libraryLoading = true;
   byId("libraryLoadMore").disabled = true;
   if (!append) state.nextCursor = null;
-  if (!quiet) setNotice("libraryStatus", append ? "Loading more sessions…" : "Loading saved sessions…");
+  if (!quiet) setNotice("libraryStatus", append ? i18n.t("Loading more sessions…") : i18n.t("Loading saved sessions…"));
   try {
     const payload = await api(`/sessions?${buildSessionQuery(append ? state.nextCursor : null)}`);
     if (state.libraryRequest !== request) return;
@@ -400,7 +492,7 @@ async function loadSessions({ append = false, quiet = false } = {}) {
     state.libraryQuery = query;
     renderSessionRows();
     refreshSessionSelectors();
-    setNotice("libraryStatus", state.sessions.length ? `Loaded ${state.sessions.length} saved session${state.sessions.length === 1 ? "" : "s"}.` : "No saved sessions match these filters.", state.sessions.length ? "success" : "");
+    setNotice("libraryStatus", state.sessions.length ? i18n.tp(state.sessions.length, "Loaded {count} saved session.", "Loaded {count} saved sessions.", { count: state.sessions.length }) : i18n.t("No saved sessions match these filters."), state.sessions.length ? "success" : "");
   } catch (error) {
     if (state.libraryRequest !== request) return;
     setNotice("libraryStatus", formatError(error), "error");
@@ -429,10 +521,10 @@ function lapRecordingQuality(lap, sampleCoverage = null) {
   const mismatch = context.telemetry_timing_mismatch === true;
   const coverage = mismatch ? 0 : canonical === null ? null : samples === null ? canonical : Math.min(canonical, samples);
   const warning = mismatch
-    ? "Official lap timing was corrected from session history; the retained trace does not reliably cover that timing. Partial recording: measurements describe only recorded samples."
-    : coverage === null ? "Whole-lap recording coverage is unavailable; measurements describe only recorded samples."
-    : coverage < 1 || context.trace_incomplete === true ? "Partial recording: measurements describe only recorded samples. Missing values are unavailable." : "";
-  return { coverage, warning, label: mismatch ? "Lap coverage unverified" : coverage === null ? "Lap coverage unavailable" : `${formatPercent(coverage)} recorded lap coverage` };
+    ? i18n.t("Official lap timing was corrected from session history; the retained trace does not reliably cover that timing. Partial recording: measurements describe only recorded samples.")
+    : coverage === null ? i18n.t("Whole-lap recording coverage is unavailable; measurements describe only recorded samples.")
+    : coverage < 1 || context.trace_incomplete === true ? i18n.t("Partial recording: measurements describe only recorded samples. Missing values are unavailable.") : "";
+  return { coverage, warning, label: mismatch ? i18n.t("Lap coverage unverified") : coverage === null ? i18n.t("Lap coverage unavailable") : i18n.t("{percent} recorded lap coverage", { percent: formatPercent(coverage) }) };
 }
 
 async function loadStorageStatus() {
@@ -446,15 +538,16 @@ async function loadStorageStatus() {
     const budget = Number(status.policy?.max_bytes || 0);
     const free = Number(status.disk_free_bytes || 0);
     const parts = [
-      `Telemetry storage: ${formatBytes(managed)} managed` +
-        (budget ? ` of a ${formatBytes(budget)} budget` : ""),
-      `${formatBytes(free)} free on disk`,
+      budget
+        ? i18n.t("Telemetry storage: {managed} managed of a {budget} budget", { managed: formatBytes(managed), budget: formatBytes(budget) })
+        : i18n.t("Telemetry storage: {managed} managed", { managed: formatBytes(managed) }),
+      i18n.t("{free} free on disk", { free: formatBytes(free) }),
     ];
     const warningText = {
       free_disk_below_configured_minimum:
-        "free disk is below the configured minimum",
+        i18n.t("free disk is below the configured minimum"),
       capture_budget_exceeded:
-        "the capture budget is exceeded — nothing is deleted automatically; review old sessions in the table below",
+        i18n.t("the capture budget is exceeded — nothing is deleted automatically; review old sessions in the table below"),
     };
     const warnings = (status.warnings || []).map((w) => warningText[w] || w);
     host.textContent = parts.join(" · ") + (warnings.length ? ` — ${warnings.join("; ")}` : "");
@@ -466,31 +559,31 @@ async function loadStorageStatus() {
 }
 
 async function toggleStar(session) {
-  setNotice("libraryStatus", `${session.starred ? "Removing" : "Adding"} star for ${sessionLabel(session)}…`);
+  setNotice("libraryStatus", session.starred ? i18n.t("Removing star for {session}…", { session: sessionLabel(session) }) : i18n.t("Adding star for {session}…", { session: sessionLabel(session) }));
   try {
     const payload = await api(`/sessions/${encodeURIComponent(session.id)}`, { method: "PATCH", body: JSON.stringify({ starred: !session.starred }) });
     const changed = payload.session;
     const index = state.sessions.findIndex((item) => item.id === session.id);
     if (index >= 0) state.sessions[index] = { ...state.sessions[index], ...changed };
     renderSessionRows();
-    setNotice("libraryStatus", `${sessionLabel(session)} ${session.starred ? "unstarred" : "starred"}.`, "success");
+    setNotice("libraryStatus", session.starred ? i18n.t("{session} unstarred.", { session: sessionLabel(session) }) : i18n.t("{session} starred.", { session: sessionLabel(session) }), "success");
   } catch (error) {
     setNotice("libraryStatus", formatError(error), "error");
   }
 }
 
 async function deleteSession(session) {
-  setNotice("libraryStatus", `Preparing an exact deletion preview for ${sessionLabel(session)}…`);
+  setNotice("libraryStatus", i18n.t("Preparing an exact deletion preview for {session}…", { session: sessionLabel(session) }));
   try {
     const preview = await api(`/sessions/${encodeURIComponent(session.id)}`, { method: "DELETE" });
     const records = preview.impact?.records || {};
     const artifacts = preview.impact?.artifacts || [];
-    const summary = `${records.laps ?? 0} laps, ${records.comparisons ?? 0} comparisons, and ${artifacts.length} linked files`;
+    const summary = i18n.t("{laps} laps, {comparisons} comparisons, and {files} linked files", { laps: records.laps ?? 0, comparisons: records.comparisons ?? 0, files: artifacts.length });
     const sharedOwners = preview.impact?.retained_shared_legacy_session_ids || [];
     const retainsHistory = sharedOwners.length > 0 && Object.values(preview.impact?.retained_shared_legacy_tables || {}).some(count => Number(count) > 0);
-    const retained = retainsHistory ? `\n\nShared history will be kept for ${sharedOwners.length} other recording${sharedOwners.length === 1 ? "" : "s"}.` : "";
-    if (!window.confirm(`Delete “${sessionLabel(session)}”?\n\nThis removes ${summary}. The operation is irreversible.${retained}`)) {
-      setNotice("libraryStatus", "Deletion cancelled.");
+    const retained = retainsHistory ? `\n\n${i18n.tp(sharedOwners.length, "Shared history will be kept for {count} other recording.", "Shared history will be kept for {count} other recordings.", { count: sharedOwners.length })}` : "";
+    if (!window.confirm(`${i18n.t("Delete “{session}”?", { session: sessionLabel(session) })}\n\n${i18n.t("This removes {summary}. The operation is irreversible.", { summary })}${retained}`)) {
+      setNotice("libraryStatus", i18n.t("Deletion cancelled."));
       return;
     }
     await api(`/sessions/${encodeURIComponent(session.id)}`, { method: "DELETE", headers: { "X-Pitwall-Delete-Token": preview.confirmation_token } });
@@ -501,7 +594,7 @@ async function deleteSession(session) {
     if (state.selectedSessionId === session.id) resetSelectedSession();
     else if (state.candidateLapId) forgetReferencesFrom(session.id);
     await loadSessions();
-    setNotice("libraryStatus", `${sessionLabel(session)} deleted.`, "success");
+    setNotice("libraryStatus", i18n.t("{session} deleted.", { session: sessionLabel(session) }), "success");
   } catch (error) {
     setNotice("libraryStatus", formatError(error), "error");
   }
@@ -576,8 +669,8 @@ async function openLapFromAnalysis(sessionId, lapId) {
   if (!state.laps.some((lap) => lap.id === lapId)) {
     navigate("lap-lab");
     setNotice("lapLabStatus", state.lapsStatus === "failed"
-      ? `That session could not be opened: ${state.lapsError}`
-      : "That lap is no longer in the saved session.", "error");
+      ? i18n.t("That session could not be opened: {error}", { error: state.lapsError })
+      : i18n.t("That lap is no longer in the saved session."), "error");
     return;
   }
   await openLap(lapId);
@@ -611,8 +704,8 @@ async function selectSession(sessionId, { handoff = false } = {}) {
   populateLapSelectors();
   renderFieldSummary(null);
   renderFieldClassification(null);
-  setNotice("sessionReviewStatus", "Loading recorded session, quality, and laps…");
-  setNotice("fieldStatus", "Loading saved field summary…");
+  setNotice("sessionReviewStatus", i18n.t("Loading recorded session, quality, and laps…"));
+  setNotice("fieldStatus", i18n.t("Loading saved field summary…"));
   const loading = (async () => {
     try {
       const [detail, quality, laps, field] = await Promise.all([
@@ -665,26 +758,26 @@ function renderSessionReview() {
   byId("reviewReprocess").disabled = !selected;
   if (byId("reviewAnalyze")) byId("reviewAnalyze").disabled = !selected;
   byId("reviewOpenField").disabled = !selected;
-  byId("sessionReviewTitle").textContent = selected ? sessionLabel(session) : "Session Review";
-  byId("sessionReviewContext").textContent = selected ? `${session.session_type || "Session type unavailable"} · ${formatDate(session.started_at)} · ${session.status || "status unavailable"}` : "Choose a saved session from Library or the selector below.";
+  byId("sessionReviewTitle").textContent = selected ? sessionLabel(session) : i18n.t("Session Review");
+  byId("sessionReviewContext").textContent = selected ? `${session.session_type || i18n.t("Session type unavailable")} · ${formatDate(session.started_at)} · ${session.status ? codeLabel(session.status) : i18n.t("status unavailable")}` : i18n.t("Choose a saved session from Library or the selector below.");
   const badge = byId("reviewQualityBadge");
-  badge.textContent = quality?.quality_score == null ? "Quality unavailable" : `${formatPercent(quality.quality_score)} quality`;
+  badge.textContent = quality?.quality_score == null ? i18n.t("Quality unavailable") : i18n.t("{percent} quality", { percent: formatPercent(quality.quality_score) });
   badge.dataset.state = quality?.quality_score == null ? "warning" : Number(quality.quality_score) >= 0.8 ? "healthy" : "warning";
   const stats = byId("reviewStats");
   clear(stats);
   if (!selected) {
-    stats.append(summaryMetric("Drivers observed", "Unavailable"), summaryMetric("Recorded laps", "Unavailable"), summaryMetric("Trace coverage", "Unavailable"), summaryMetric("Derived comparisons", "Unavailable"));
-    setNotice("sessionReviewStatus", "No session selected.");
+    stats.append(summaryMetric(i18n.t("Drivers observed"), i18n.t("Unavailable")), summaryMetric(i18n.t("Recorded laps"), i18n.t("Unavailable")), summaryMetric(i18n.t("Trace coverage"), i18n.t("Unavailable")), summaryMetric(i18n.t("Derived comparisons"), i18n.t("Unavailable")));
+    setNotice("sessionReviewStatus", i18n.t("No session selected."));
   } else {
     const lapQuality = quality?.laps || {};
     stats.append(
-      summaryMetric("Drivers observed", String(quality?.participants_observed ?? session.participants?.length ?? 0), "Observed identities; revisions may be separate rows."),
-      summaryMetric("Recorded laps", String(lapQuality.total ?? state.laps.length), `${lapQuality.valid ?? 0} valid`),
-      summaryMetric("Trace coverage", lapQuality.mean_coverage == null ? "Unavailable" : formatPercent(lapQuality.mean_coverage), `${lapQuality.with_trace ?? 0} laps with typed traces`),
-      summaryMetric("Derived comparisons", String(session.derived?.comparisons ?? 0), `${session.derived?.jobs?.length ?? 0} analysis jobs`),
+      summaryMetric(i18n.t("Drivers observed"), String(quality?.participants_observed ?? session.participants?.length ?? 0), i18n.t("Observed identities; revisions may be separate rows.")),
+      summaryMetric(i18n.t("Recorded laps"), String(lapQuality.total ?? state.laps.length), i18n.t("{count} valid", { count: lapQuality.valid ?? 0 })),
+      summaryMetric(i18n.t("Trace coverage"), lapQuality.mean_coverage == null ? i18n.t("Unavailable") : formatPercent(lapQuality.mean_coverage), i18n.t("{count} laps with typed traces", { count: lapQuality.with_trace ?? 0 })),
+      summaryMetric(i18n.t("Derived comparisons"), String(session.derived?.comparisons ?? 0), i18n.t("{count} analysis jobs", { count: session.derived?.jobs?.length ?? 0 })),
     );
     const warnings = quality?.warnings || [];
-    setNotice("sessionReviewStatus", warnings.length ? warnings.join(" ") : "Session catalog, quality report, and lap inventory loaded.", warnings.length ? "" : "success");
+    setNotice("sessionReviewStatus", warnings.length ? warnings.join(" ") : i18n.t("Session catalog, quality report, and lap inventory loaded."), warnings.length ? "" : "success");
   }
   populateReviewDriverFilter();
   renderReviewLaps();
@@ -694,19 +787,19 @@ function renderSessionReview() {
 function populateReviewDriverFilter() {
   const selected = byId("reviewDriverFilter")?.value || "";
   const participants = state.sessionDetail?.participants || [];
-  replaceOptions(byId("reviewDriverFilter"), participants.map((driver) => ({ value: driver.id, label: driver.display_name || `Car ${Number(driver.car_index ?? 0) + 1}` })), "All drivers", selected);
+  replaceOptions(byId("reviewDriverFilter"), participants.map((driver) => ({ value: driver.id, label: driver.display_name || carLabel(driver.car_index) })), i18n.t("All drivers"), selected);
 }
 
 function lapContext(lap) {
   const labels = [];
-  if (isAbandoned(lap)) labels.push("Abandoned by a flashback");
-  if (isUnconfirmed(lap)) labels.push("Unconfirmed after a flashback");
-  if (!hasTelemetry(lap)) labels.push("Timing only");
-  if (!Boolean(lap.valid)) labels.push("Invalid lap");
-  if (Number(lap.pit_context)) labels.push("Pit context");
-  if (Number(lap.flag_context)) labels.push("Flag context");
-  if (Number(lap.timeline_epoch) > 0) labels.push(`Timeline ${lap.timeline_epoch}`);
-  return labels.length ? labels.join(" · ") : "Comparable context";
+  if (isAbandoned(lap)) labels.push(i18n.t("Abandoned by a flashback"));
+  if (isUnconfirmed(lap)) labels.push(i18n.t("Unconfirmed after a flashback"));
+  if (!hasTelemetry(lap)) labels.push(i18n.t("Timing only"));
+  if (!Boolean(lap.valid)) labels.push(i18n.t("Invalid lap"));
+  if (Number(lap.pit_context)) labels.push(i18n.t("Pit context"));
+  if (Number(lap.flag_context)) labels.push(i18n.t("Flag context"));
+  if (Number(lap.timeline_epoch) > 0) labels.push(i18n.t("Timeline {epoch}", { epoch: lap.timeline_epoch }));
+  return labels.length ? labels.join(" · ") : i18n.t("Comparable context");
 }
 
 function renderReviewLaps() {
@@ -716,7 +809,7 @@ function renderReviewLaps() {
   const laps = state.laps.filter((lap) => !filter || lap.session_car_id === filter);
   if (!laps.length) {
     const row = element("tr");
-    const cell = element("td", "empty", state.selectedSessionId ? "No laps match this driver filter." : "Choose a session to inspect its laps.");
+    const cell = element("td", "empty", state.selectedSessionId ? i18n.t("No laps match this driver filter.") : i18n.t("Choose a session to inspect its laps."));
     cell.colSpan = 6;
     row.append(cell);
     body.append(row);
@@ -725,13 +818,13 @@ function renderReviewLaps() {
   laps.forEach((lap) => {
     const row = element("tr");
     row.dataset.selected = String(lap.id === state.candidateLapId);
-    row.append(element("td", "", lap.display_name || `Car ${Number(lap.car_index ?? 0) + 1}`));
-    row.append(element("td", "", String(lap.lap_number ?? "Unavailable")));
+    row.append(element("td", "", lap.display_name || carLabel(lap.car_index)));
+    row.append(element("td", "", String(lap.lap_number ?? i18n.t("Unavailable"))));
     row.append(element("td", "", formatLapTime(lap.lap_time_ms)));
     row.append(element("td", Boolean(lap.valid) ? "good" : "warn", lapContext(lap)));
-    row.append(element("td", "", lap.coverage_ratio == null ? "Unavailable" : formatPercent(lap.coverage_ratio)));
+    row.append(element("td", "", lap.coverage_ratio == null ? i18n.t("Unavailable") : formatPercent(lap.coverage_ratio)));
     const action = element("td");
-    const open = button("Open in Lap Lab", () => openLap(lap.id));
+    const open = button(i18n.t("Open in Lap Lab"), () => openLap(lap.id));
     open.disabled = !lap.id;
     action.append(open);
     row.append(action);
@@ -743,10 +836,10 @@ async function requestReprocess() {
   if (!state.selectedSessionId) return;
   const action = byId("reviewReprocess");
   action.disabled = true;
-  setNotice("sessionReviewStatus", "Queueing deterministic reprocessing…");
+  setNotice("sessionReviewStatus", i18n.t("Queueing deterministic reprocessing…"));
   try {
     const result = await api(`/sessions/${encodeURIComponent(state.selectedSessionId)}/reprocess`, { method: "POST" });
-    setNotice("sessionReviewStatus", result.reused ? `Analysis job ${result.job.id} is already ${result.job.state}.` : `Analysis job ${result.job.id} queued.`, "success");
+    setNotice("sessionReviewStatus", result.reused ? i18n.t("Analysis job {id} is already {state}.", { id: String(result.job.id), state: String(codeLabel(result.job.state)) }) : i18n.t("Analysis job {id} queued.", { id: String(result.job.id) }), "success");
   } catch (error) {
     setNotice("sessionReviewStatus", formatError(error), "error");
   } finally {
@@ -769,18 +862,21 @@ function populateLapSelectors() {
     state.candidateDriver = (drivers.find((driver) => driver.isPlayer) || drivers[0])?.key || "";
   }
   const driverSelect = byId("candidateDriverSelect");
-  const emptyText = !state.selectedSessionId ? "Choose a session first"
-    : state.lapsStatus === "loading" ? "Loading laps…"
-      : state.lapsStatus === "failed" ? "Laps unavailable"
-        : state.laps.length ? "No laps on the current timeline"
-          : "No recorded laps";
+  const emptyText = !state.selectedSessionId ? i18n.t("Choose a session first")
+    : state.lapsStatus === "loading" ? i18n.t("Loading laps…")
+      : state.lapsStatus === "failed" ? i18n.t("Laps unavailable")
+        : state.laps.length ? i18n.t("No laps on the current timeline")
+          : i18n.t("No recorded laps");
   replaceOptions(
     driverSelect,
-    drivers.map((driver) => ({
-      value: driver.key,
-      label: `${driver.name}${driver.isPlayer ? " (you)" : ""} · ${driver.laps.length} lap${driver.laps.length === 1 ? "" : "s"}${driver.laps.some(hasTelemetry) ? "" : ", timing only"}`,
-    })),
-    drivers.length ? "Choose a driver" : emptyText,
+    drivers.map((driver) => {
+      const laps = i18n.tp(driver.laps.length, "{count} lap", "{count} laps", { count: driver.laps.length });
+      return {
+        value: driver.key,
+        label: `${driver.isPlayer ? i18n.t("{name} (you)", { name: driver.name }) : driver.name} · ${driver.laps.some(hasTelemetry) ? laps : i18n.t("{laps}, timing only", { laps })}`,
+      };
+    }),
+    drivers.length ? i18n.t("Choose a driver") : emptyText,
     state.candidateDriver,
   );
   if (driverSelect) driverSelect.disabled = !drivers.length;
@@ -792,8 +888,8 @@ function populateLapSelectors() {
   const fastest = fastestOf(laps.filter((lap) => !isAbandoned(lap)), (lap) => lap.id);
   replaceOptions(byId("candidateLapSelect"), laps.map((lap) => ({
     value: lap.id,
-    label: `${lapChoiceLabel(lap, fastest)}${isAbandoned(lap) ? " · abandoned by a flashback" : ""}`,
-  })), driver ? "Choose a lap" : "Choose a driver first", state.candidateLapId);
+    label: `${lapChoiceLabel(lap, fastest)}${isAbandoned(lap) ? ` · ${i18n.t("abandoned by a flashback")}` : ""}`,
+  })), driver ? i18n.t("Choose a lap") : i18n.t("Choose a driver first"), state.candidateLapId);
   updateCandidateMeta();
   byId("analyzeLapAlone").disabled = !state.candidateLapId;
 }
@@ -808,7 +904,7 @@ function selectCandidateDriver(key) {
 
 function updateCandidateMeta() {
   const lap = state.laps.find((item) => item.id === state.candidateLapId);
-  byId("candidateLapMeta").textContent = lap ? `${formatLapTime(lap.lap_time_ms)} · ${lap.tyre_compound || "compound unavailable"} · ${formatPercent(lap.coverage_ratio)}` : "Unavailable";
+  byId("candidateLapMeta").textContent = lap ? `${formatLapTime(lap.lap_time_ms)} · ${lap.tyre_compound || i18n.t("compound unavailable")} · ${formatPercent(lap.coverage_ratio)}` : i18n.t("Unavailable");
 }
 
 async function openLap(lapId) {
@@ -863,15 +959,15 @@ function resetLapSelection() {
   state.comparing = false;
   byId("soloAnalysisPane").hidden = true;
   byId("analyzeLapAlone").disabled = true;
-  replaceOptions(byId("referenceLapSelect"), [], "Choose candidate first");
+  replaceOptions(byId("referenceLapSelect"), [], i18n.t("Choose candidate first"));
   byId("referenceLapSelect").disabled = true;
-  replaceOptions(byId("referenceDriverSelect"), [], "Choose a lap first");
+  replaceOptions(byId("referenceDriverSelect"), [], i18n.t("Choose a lap first"));
   if (byId("referenceDriverSelect")) byId("referenceDriverSelect").disabled = true;
   updateReferenceMeta();
   updateReferenceChoice();
   configurePlayback();
   renderComparison();
-  setNotice("lapLabStatus", "Choose a recorded lap to see its playback.");
+  setNotice("lapLabStatus", i18n.t("Choose a recorded lap to see its playback."));
 }
 
 async function selectCandidateLap(lapId) {
@@ -881,11 +977,11 @@ async function selectCandidateLap(lapId) {
   renderReviewLaps();
   renderReviewFindings();
   if (!lapId) {
-    setNotice("lapLabStatus", "Choose a recorded lap to see its playback.");
+    setNotice("lapLabStatus", i18n.t("Choose a recorded lap to see its playback."));
     return;
   }
   const request = state.lapRequest;
-  setNotice("lapLabStatus", "Loading recorded lap playback…");
+  setNotice("lapLabStatus", i18n.t("Loading recorded lap playback…"));
   const query = new URLSearchParams({ fields: "speed,brake,throttle,steering,gear,world_x,world_z,line_n", max_points: "2400" });
   // Playback never waits for a comparison. The trace's own status line is
   // written only while no comparison has been asked for: a late trace must
@@ -903,7 +999,7 @@ async function selectCandidateLap(lapId) {
       }
       if (state.comparisonStatus === "idle") {
         const quality = lapRecordingQuality(state.laps.find(lap => lap.id === lapId), trace.coverage);
-        setNotice("lapLabStatus", playable ? `Lap playback ready. A reference is optional.${quality.warning ? ` ${quality.warning}` : ""}` : "No recorded samples are available for this lap.", playable ? (quality.warning ? "warning" : "success") : "");
+        setNotice("lapLabStatus", playable ? `${i18n.t("Lap playback ready. A reference is optional.")}${quality.warning ? ` ${quality.warning}` : ""}` : i18n.t("No recorded samples are available for this lap."), playable ? (quality.warning ? "warning" : "success") : "");
       }
       return playable;
     } catch (error) {
@@ -942,10 +1038,10 @@ async function loadReferences(lapId) {
     state.referenceSuggestion = "";
     setReferenceSelection("");
     if (byId("referenceDriverSelect")) byId("referenceDriverSelect").disabled = true;
-    byId("referenceLapMeta").textContent = "This lap was recorded from lap timing only, so there is no telemetry to compare.";
+    byId("referenceLapMeta").textContent = i18n.t("This lap was recorded from lap timing only, so there is no telemetry to compare.");
     return;
   }
-  byId("referenceLapMeta").textContent = "Loading compatible references…";
+  byId("referenceLapMeta").textContent = i18n.t("Loading compatible references…");
   let failure = "";
   try {
     const payload = await api(`/laps/${encodeURIComponent(lapId)}/references`);
@@ -962,10 +1058,10 @@ async function loadReferences(lapId) {
   if (!state.referenceSuggestion) {
     const comparable = [...state.referenceOptions.values()].some((option) => option.telemetry);
     byId("referenceLapMeta").textContent = failure
-      ? `References unavailable: ${failure}.${comparable ? " You can still choose a driver and lap from this session." : ""}`
+      ? `${i18n.t("References unavailable: {error}.", { error: failure })}${comparable ? ` ${i18n.t("You can still choose a driver and lap from this session.")}` : ""}`
       : comparable
-        ? "No comparable reference was suggested. Choose a driver and lap to compare anyway; the comparison names any caveats."
-        : "No other lap with telemetry to compare with. This lap can still be played and analyzed alone.";
+        ? i18n.t("No comparable reference was suggested. Choose a driver and lap to compare anyway; the comparison names any caveats.")
+        : i18n.t("No other lap with telemetry to compare with. This lap can still be played and analyzed alone.");
   }
 }
 
@@ -994,7 +1090,7 @@ function buildReferenceOptions() {
     options.set(reference.lap_id, {
       lap_id: reference.lap_id,
       driverKey: sameSession ? `name:${reference.driver}` : `session:${reference.session_id}:${reference.driver}`,
-      driver: reference.driver || "Driver", isPlayer: Boolean(reference.is_player),
+      driver: reference.driver || i18n.t("Driver"), isPlayer: Boolean(reference.is_player),
       lap_number: reference.lap_number, lap_time_ms: reference.lap_time_ms,
       valid: !(reference.reasons || []).includes("invalid/context lap"),
       session_id: reference.session_id, sameSession, telemetry: true,
@@ -1049,13 +1145,13 @@ function referenceDriverGroups() {
 
 function otherSessionLabel(sessionId) {
   const session = state.sessions.find((item) => item.id === sessionId) || state.sessionLabels.get(sessionId);
-  return session ? `${session.session_type || "Session"} · ${formatDate(session.started_at)}` : "another session";
+  return session ? `${session.session_type || i18n.t("Session")} · ${formatDate(session.started_at)}` : i18n.t("another session");
 }
 
 function compatibilityText(option) {
   const classification = option.compatibility?.class || option.compatibility?.classification;
-  if (!classification) return option.sameSession ? "checked when compared" : "compatibility unavailable";
-  return classification.replaceAll("_", " ");
+  if (!classification) return option.sameSession ? i18n.t("checked when compared") : i18n.t("compatibility unavailable");
+  return classificationLabel(classification);
 }
 
 function populateReferenceSelectors(selectedLapId = byId("referenceLapSelect")?.value || "") {
@@ -1063,7 +1159,7 @@ function populateReferenceSelectors(selectedLapId = byId("referenceLapSelect")?.
   const driverSelect = byId("referenceDriverSelect");
   if (!driverSelect) return;
   clear(driverSelect);
-  const placeholder = element("option", "", groups.length ? "Choose a driver" : "No other laps");
+  const placeholder = element("option", "", groups.length ? i18n.t("Choose a driver") : i18n.t("No other laps"));
   placeholder.value = "";
   driverSelect.append(placeholder);
   const addGroup = (label, items) => {
@@ -1073,7 +1169,7 @@ function populateReferenceSelectors(selectedLapId = byId("referenceLapSelect")?.
     for (const item of items) {
       const comparable = item.options.filter((option) => option.telemetry).length;
       const option = element("option", "", item.sameSession
-        ? `${item.name}${item.isPlayer ? " (you)" : ""} · ${comparable ? `${comparable} lap${comparable === 1 ? "" : "s"}` : "timing only, no telemetry"}`
+        ? `${item.isPlayer ? i18n.t("{name} (you)", { name: item.name }) : item.name} · ${comparable ? i18n.tp(comparable, "{count} lap", "{count} laps", { count: comparable }) : i18n.t("timing only, no telemetry")}`
         : `${item.name} · ${otherSessionLabel(item.session_id)}`);
       option.value = item.key;
       // Laps known only from lap timing cannot be compared.
@@ -1082,17 +1178,17 @@ function populateReferenceSelectors(selectedLapId = byId("referenceLapSelect")?.
     }
     driverSelect.append(group);
   };
-  addGroup("This session", groups.filter((group) => group.sameSession));
-  addGroup("Other sessions at this track", groups.filter((group) => !group.sameSession));
+  addGroup(i18n.t("This session"), groups.filter((group) => group.sameSession));
+  addGroup(i18n.t("Other sessions at this track"), groups.filter((group) => !group.sameSession));
   driverSelect.value = groups.some((group) => group.key === state.referenceDriver) ? state.referenceDriver : "";
   driverSelect.disabled = !groups.some((group) => group.options.some((option) => option.telemetry));
   const current = groups.find((group) => group.key === state.referenceDriver);
   const fastest = current ? fastestOf(current.options.filter((option) => option.telemetry), (option) => option.lap_id) : "";
   replaceOptions(byId("referenceLapSelect"), (current?.options || []).map((option) => ({
     value: option.lap_id,
-    label: `${option.suggested ? "Suggested · " : ""}Lap ${option.lap_number ?? "—"} · ${formatLapTime(option.lap_time_ms)}${option.lap_id === fastest ? " · fastest" : ""}${option.valid ? "" : " · invalid"} · ${option.telemetry ? compatibilityText(option) : "timing only, no telemetry"}`,
+    label: `${option.suggested ? `${i18n.t("Suggested")} · ` : ""}${lapTimeLabel(option.lap_number, option.lap_time_ms)}${option.lap_id === fastest ? ` · ${i18n.t("fastest")}` : ""}${option.valid ? "" : ` · ${i18n.t("invalid")}`} · ${option.telemetry ? compatibilityText(option) : i18n.t("timing only, no telemetry")}`,
     disabled: !option.telemetry,
-  })), current ? "Choose a lap" : "Choose a driver first", selectedLapId);
+  })), current ? i18n.t("Choose a lap") : i18n.t("Choose a driver first"), selectedLapId);
   byId("referenceLapSelect").disabled = !current;
 }
 
@@ -1123,13 +1219,13 @@ function updateReferenceChoice() {
   if (chip) {
     if (!selected) {
       chip.dataset.choice = "none";
-      chip.textContent = state.referenceSuggestion ? "Choose a lap" : state.candidateLapId ? "No suggestion" : "No reference yet";
+      chip.textContent = state.referenceSuggestion ? i18n.t("Choose a lap") : state.candidateLapId ? i18n.t("No suggestion") : i18n.t("No reference yet");
     } else if (selected === state.referenceSuggestion) {
       chip.dataset.choice = "suggested";
-      chip.textContent = "Suggested";
+      chip.textContent = i18n.t("Suggested");
     } else {
       chip.dataset.choice = "manual";
-      chip.textContent = "Your choice";
+      chip.textContent = i18n.t("Your choice");
     }
   }
   if (reset) reset.hidden = !state.referenceSuggestion || selected === state.referenceSuggestion;
@@ -1146,19 +1242,19 @@ async function analyzeLapAlone() {
   const action = byId("analyzeLapAlone");
   const pane = byId("soloAnalysisPane");
   action.disabled = true;
-  setNotice("lapLabStatus", "Measuring this lap from its own trace…");
+  setNotice("lapLabStatus", i18n.t("Measuring this lap from its own trace…"));
   try {
     const payload = await api(`/laps/${encodeURIComponent(lapId)}/analysis`);
     if (state.lapRequest !== request) return;
     pane.hidden = false;
-    byId("soloAnalysisMeta").textContent = `Lap ${payload.lap_number ?? "—"} · ${formatLapTime(payload.lap_time_ms)} · ${payload.tyre_compound || "compound unavailable"}`;
+    byId("soloAnalysisMeta").textContent = `${lapTimeLabel(payload.lap_number, payload.lap_time_ms)} · ${payload.tyre_compound || i18n.t("compound unavailable")}`;
     const summary = byId("soloAnalysisSummary");
-    const measurement = (value, unit) => value == null || !Number.isFinite(Number(value)) ? "Unavailable" : `${value}${unit}`;
+    const measurement = (value, unit) => value == null || !Number.isFinite(Number(value)) ? i18n.t("Unavailable") : `${value}${unit}`;
     summary.replaceChildren(
-      summaryMetric("Top speed", measurement(payload.top_speed_kph, " kph"), "Fastest point on the lap"),
-      summaryMetric("Slowest point", measurement(payload.minimum_speed_kph, " kph"), "Tightest corner of the lap"),
-      summaryMetric("Full throttle", payload.full_throttle_pct == null ? "Unavailable" : `${payload.full_throttle_pct}%`, "Share of lap time"),
-      summaryMetric("Braking", payload.braking_pct == null ? "Unavailable" : `${payload.braking_pct}%`, payload.braking_events == null ? "Braking events unavailable" : `${payload.braking_events} braking events`),
+      summaryMetric(i18n.t("Top speed"), measurement(payload.top_speed_kph, " kph"), i18n.t("Fastest point on the lap")),
+      summaryMetric(i18n.t("Slowest point"), measurement(payload.minimum_speed_kph, " kph"), i18n.t("Tightest corner of the lap")),
+      summaryMetric(i18n.t("Full throttle"), payload.full_throttle_pct == null ? i18n.t("Unavailable") : `${payload.full_throttle_pct}%`, i18n.t("Share of lap time")),
+      summaryMetric(i18n.t("Braking"), payload.braking_pct == null ? i18n.t("Unavailable") : `${payload.braking_pct}%`, payload.braking_events == null ? i18n.t("Braking events unavailable") : i18n.t("{count} braking events", { count: payload.braking_events })),
     );
     const rows = byId("soloAnalysisRows");
     rows.replaceChildren();
@@ -1181,8 +1277,8 @@ async function analyzeLapAlone() {
     }
     const quality = lapRecordingQuality({ ...state.laps.find(lap => lap.id === lapId), coverage_ratio: payload.coverage_ratio });
     const partial = Object.values(payload.metric_coverage || {}).some(value => typeof value !== "number" || !Number.isFinite(value) || value < 1);
-    const warning = quality.warning || (partial ? "Partial recording: missing values are unavailable." : "");
-    setNotice("lapLabStatus", `Single-lap analysis ready · ${(payload.segments || []).length} segments.${warning ? ` ${warning}` : ""}`, warning ? "warning" : "success");
+    const warning = quality.warning || (partial ? i18n.t("Partial recording: missing values are unavailable.") : "");
+    setNotice("lapLabStatus", `${i18n.t("Single-lap analysis ready · {count} segments.", { count: (payload.segments || []).length })}${warning ? ` ${warning}` : ""}`, warning ? "warning" : "success");
   } catch (error) {
     if (state.lapRequest !== request) return;
     setNotice("lapLabStatus", formatError(error), "error");
@@ -1195,16 +1291,16 @@ function updateReferenceMeta() {
   const id = byId("referenceLapSelect")?.value || "";
   const reference = state.referenceOptions.get(id);
   byId("referenceLapMeta").textContent = reference
-    ? `${reference.driver} · Lap ${reference.lap_number ?? "—"} · ${formatLapTime(reference.lap_time_ms)} · ${(reference.reasons || []).join(" · ") || (reference.sameSession ? "same session" : "context unavailable")}`
-    : "Unavailable";
+    ? `${reference.driver} · ${lapTimeLabel(reference.lap_number, reference.lap_time_ms)} · ${(reference.reasons || []).join(" · ") || (reference.sameSession ? i18n.t("same session") : i18n.t("context unavailable"))}`
+    : i18n.t("Unavailable");
   byId("createComparison").disabled = !state.candidateLapId || !id;
   if (!state.comparing) byId("createComparison").removeAttribute("aria-disabled");
   const compatibility = reference?.compatibility;
   const badge = byId("comparisonCompatibility");
   const classification = compatibility?.class || compatibility?.classification;
   badge.textContent = classification
-    ? `${classification.replaceAll("_", " ")} reference${compatibility?.caveats?.length ? ` · ${compatibility.caveats.join(" · ")}` : ""}`
-    : reference ? "Compatibility checked when compared" : "Compatibility unavailable";
+    ? `${i18n.t("{classification} reference", { classification: classificationLabel(classification) })}${compatibility?.caveats?.length ? ` · ${compatibility.caveats.join(" · ")}` : ""}`
+    : reference ? i18n.t("Compatibility checked when compared") : i18n.t("Compatibility unavailable");
   badge.dataset.state = classification === "strict" ? "healthy" : classification ? "warning" : "neutral";
 }
 
@@ -1232,8 +1328,8 @@ async function createComparison() {
   // classified by the comparison itself; an incompatible one is refused there.
   const allowCaveat = classification !== "strict";
   const caveatNote = classification && classification !== "strict"
-    ? ` Caveated reference (${classification.replaceAll("_", " ")}${compatibility?.caveats?.length ? `: ${compatibility.caveats.join(" · ")}` : ""}); coaching is limited to what those caveats allow.`
-    : classification ? "" : " Compatibility was checked by the comparison itself.";
+    ? ` ${i18n.t("Caveated reference ({classification}); coaching is limited to what those caveats allow.", { classification: `${classificationLabel(classification)}${compatibility?.caveats?.length ? `: ${compatibility.caveats.join(" · ")}` : ""}` })}`
+    : classification ? "" : ` ${i18n.t("Compatibility was checked by the comparison itself.")}`;
   const action = byId("createComparison");
   // A focused button that becomes disabled drops keyboard focus to the page;
   // it is marked busy instead and ignores clicks until the result lands.
@@ -1249,7 +1345,7 @@ async function createComparison() {
   state.readyNotice = null;
   state.comparing = true;
   state.comparisonStatus = "pending";
-  setNotice("lapLabStatus", "Aligning laps by distance and calculating deterministic segment evidence…");
+  setNotice("lapLabStatus", i18n.t("Aligning laps by distance and calculating deterministic segment evidence…"));
   try {
     const comparison = await api("/comparisons", {
       method: "POST",
@@ -1274,11 +1370,11 @@ async function createComparison() {
     renderReviewFindings();
     // The warning states how much of the lap lined up; a second figure beside
     // it rounds differently ("1%" against "less than 1%").
-    const coverage = comparison.coverage_warning ? "" : ` · ${formatPercent(comparison.coverage_ratio)} aligned coverage`;
+    const coverage = comparison.coverage_warning ? "" : ` · ${i18n.t("{percent} aligned coverage", { percent: formatPercent(comparison.coverage_ratio) })}`;
     const coverageNote = comparison.coverage_warning ? ` ${comparison.coverage_warning}` : "";
     state.comparisonStatus = "ready";
     state.readyNotice = {
-      text: `Comparison ready${coverage} · ${comparison.algorithm_bundle}.${caveatNote}`,
+      text: `${i18n.t("Comparison ready")}${coverage} · ${comparison.algorithm_bundle}.${caveatNote}`,
       coverageNote,
       sessionId: reference && !reference.sameSession ? reference.session_id : "",
       tone: comparison.coverage_warning ? "warning" : "success",
@@ -1293,7 +1389,7 @@ async function createComparison() {
     });
     state.comparisonStatus = "failed";
     // Playback of the lap itself stays available; say so with the reason.
-    setNotice("lapLabStatus", `${formatError(error)}${state.lapTrace?.axis?.values?.length ? " The lap can still be played on its own." : ""}`, "error");
+    setNotice("lapLabStatus", `${formatError(error)}${state.lapTrace?.axis?.values?.length ? ` ${i18n.t("The lap can still be played on its own.")}` : ""}`, "error");
   } finally {
     if (current()) {
       state.comparing = false;
@@ -1315,8 +1411,8 @@ function writeReadyNotice() {
   if (!notice || state.comparisonStatus !== "ready") return;
   const session = notice.sessionId ? state.sessions.find((item) => item.id === notice.sessionId) || state.sessionLabels.get(notice.sessionId) : null;
   const sessionNote = !notice.sessionId ? ""
-    : session ? ` The reference is from another session (${session.session_type || "Session"} · ${formatDate(session.started_at)}); its setup, fuel and conditions may differ.`
-      : " The reference is from another session; its setup, fuel and conditions may differ.";
+    : session ? ` ${i18n.t("The reference is from another session ({session}); its setup, fuel and conditions may differ.", { session: `${session.session_type || i18n.t("Session")} · ${formatDate(session.started_at)}` })}`
+      : ` ${i18n.t("The reference is from another session; its setup, fuel and conditions may differ.")}`;
   const tone = sessionNote ? "warning" : notice.tone === "warning" ? "warning" : "success";
   setNotice("lapLabStatus", `${notice.text}${sessionNote}${notice.coverageNote}`, tone);
 }
@@ -1339,18 +1435,18 @@ function renderComparison() {
   const badge = byId("comparisonCompatibility");
   if (!comparison) {
     const standalone = Boolean(state.lapTrace);
-    byId("comparisonDelta").textContent = "Unavailable";
+    byId("comparisonDelta").textContent = i18n.t("Unavailable");
     byId("comparisonDelta").className = "";
-    byId("comparisonSign").textContent = standalone ? "Choose a reference for a lap delta." : "Positive means the candidate arrived later.";
+    byId("comparisonSign").textContent = standalone ? i18n.t("Choose a reference for a lap delta.") : i18n.t("Positive means the candidate arrived later.");
     const quality = lapRecordingQuality(state.laps.find(lap => lap.id === state.candidateLapId), state.lapTrace?.coverage);
-    byId("traceCoverage").textContent = standalone ? quality.label : "Coverage unavailable";
+    byId("traceCoverage").textContent = standalone ? quality.label : i18n.t("Coverage unavailable");
     byId("traceCoverage").dataset.state = standalone ? (quality.warning ? "warning" : "healthy") : "neutral";
-    badge.textContent = standalone ? "Single-lap playback" : "Compatibility unavailable";
+    badge.textContent = standalone ? i18n.t("Single-lap playback") : i18n.t("Compatibility unavailable");
     badge.dataset.state = "neutral";
     clear(byId("segmentRail"));
-    byId("segmentRail").append(element("div", "empty", standalone ? "Analyze this lap alone for segment measurements." : "No lap loaded."));
+    byId("segmentRail").append(element("div", "empty", standalone ? i18n.t("Analyze this lap alone for segment measurements.") : i18n.t("No lap loaded.")));
     clear(byId("coachingFindings"));
-    byId("coachingFindings").append(element("div", "empty", standalone ? "Compare a compatible reference for coaching findings." : "No lap loaded."));
+    byId("coachingFindings").append(element("div", "empty", standalone ? i18n.t("Compare a compatible reference for coaching findings.") : i18n.t("No lap loaded.")));
     drawComparisonTrace();
     drawComparisonMap();
     updateInstruments();
@@ -1358,16 +1454,16 @@ function renderComparison() {
   }
   byId("comparisonDelta").textContent = formatSeconds(comparison.lap_delta_s, true);
   byId("comparisonDelta").className = Number(comparison.lap_delta_s) > 0 ? "error" : Number(comparison.lap_delta_s) < 0 ? "good" : "";
-  const deltaSource = comparison.lap_delta_source === "lap_times" ? "Official lap times" : comparison.lap_delta_source === "telemetry" ? "From telemetry" : "";
-  const signConvention = comparison.sign_convention || "Positive means the candidate arrived later.";
+  const deltaSource = comparison.lap_delta_source === "lap_times" ? i18n.t("Official lap times") : comparison.lap_delta_source === "telemetry" ? i18n.t("From telemetry") : "";
+  const signConvention = signConventionLabel(comparison.sign_convention) || i18n.t("Positive means the candidate arrived later.");
   byId("comparisonSign").textContent = deltaSource ? `${deltaSource} · ${signConvention}` : signConvention;
   const compatibility = comparison.compatibility || {};
   const classification = compatibility.class || compatibility.classification || "unavailable";
-  badge.textContent = `${classification.replaceAll("_", " ")} · ${compatibility.allows_coaching === false ? "visual comparison only" : "coaching permitted"}`;
+  badge.textContent = `${classificationLabel(classification)} · ${compatibility.allows_coaching === false ? i18n.t("visual comparison only") : i18n.t("coaching permitted")}`;
   badge.dataset.state = classification === "strict" ? "healthy" : "warning";
-  byId("candidateLapMeta").textContent = `${comparison.candidate.driver || "Candidate"} · Lap ${comparison.candidate.lap_number} · ${formatLapTime(comparison.candidate.lap_time_ms)}`;
-  byId("referenceLapMeta").textContent = `${comparison.reference.driver || "Reference"} · Lap ${comparison.reference.lap_number} · ${formatLapTime(comparison.reference.lap_time_ms)}`;
-  byId("traceCoverage").textContent = `${formatPercent(comparison.coverage_ratio)} coverage`;
+  byId("candidateLapMeta").textContent = `${comparison.candidate.driver || i18n.t("Candidate")} · ${i18n.t("Lap {lap} · {time}", { lap: String(comparison.candidate.lap_number), time: formatLapTime(comparison.candidate.lap_time_ms) })}`;
+  byId("referenceLapMeta").textContent = `${comparison.reference.driver || i18n.t("Reference")} · ${i18n.t("Lap {lap} · {time}", { lap: String(comparison.reference.lap_number), time: formatLapTime(comparison.reference.lap_time_ms) })}`;
+  byId("traceCoverage").textContent = i18n.t("{percent} coverage", { percent: formatPercent(comparison.coverage_ratio) });
   byId("traceCoverage").dataset.state = Number(comparison.coverage_ratio) >= 0.9 ? "healthy" : "warning";
   renderSegments();
   renderCoachingFindings();
@@ -1381,7 +1477,7 @@ function renderSegments() {
   clear(rail);
   const segments = state.comparison?.segments || [];
   if (!segments.length) {
-    rail.append(element("div", "empty", "No segment timing is available for this comparison."));
+    rail.append(element("div", "empty", i18n.t("No segment timing is available for this comparison.")));
     return;
   }
   segments.forEach((segment) => {
@@ -1390,8 +1486,8 @@ function renderSegments() {
     const delta = Number(segment.delta_s);
     control.dataset.result = segment.delta_s == null ? "neutral" : delta > 0.005 ? "loss" : delta < -0.005 ? "gain" : "neutral";
     control.setAttribute("aria-pressed", "false");
-    control.setAttribute("aria-label", `${segment.label}, ${segment.delta_s == null ? "delta unavailable" : formatSeconds(delta, true)}, ${formatPercent(segment.coverage)} coverage`);
-    control.append(element("strong", "", segment.label), element("span", delta > 0.005 ? "error" : delta < -0.005 ? "good" : "muted", segment.delta_s == null ? "Unavailable" : formatSeconds(delta, true)), element("small", "availability-note", `${Math.round(segment.start_m)}–${Math.round(segment.end_m)} m · ${formatPercent(segment.coverage)}`));
+    control.setAttribute("aria-label", `${segment.label}, ${segment.delta_s == null ? i18n.t("delta unavailable") : formatSeconds(delta, true)}, ${i18n.t("{percent} coverage", { percent: formatPercent(segment.coverage) })}`);
+    control.append(element("strong", "", segment.label), element("span", delta > 0.005 ? "error" : delta < -0.005 ? "good" : "muted", segment.delta_s == null ? i18n.t("Unavailable") : formatSeconds(delta, true)), element("small", "availability-note", `${Math.round(segment.start_m)}–${Math.round(segment.end_m)} m · ${formatPercent(segment.coverage)}`));
     control.addEventListener("click", () => {
       rail.querySelectorAll(".segment-cell").forEach((item) => item.setAttribute("aria-pressed", String(item === control)));
       const axis = state.comparisonTrace?.axis?.values || [];
@@ -1410,7 +1506,7 @@ function renderCoachingFindings() {
   const findings = state.comparison?.findings || [];
   if (!findings.length) {
     const sparse = Boolean(state.comparison?.coverage_warning);
-    container.append(element("div", "empty", sparse ? "No coaching: no segment was measured in both laps over at least half its length. The recorded stretches remain available for inspection." : "No prescriptive finding passed the current evidence threshold. The aligned traces remain available for inspection."));
+    container.append(element("div", "empty", sparse ? i18n.t("No coaching: no segment was measured in both laps over at least half its length. The recorded stretches remain available for inspection.") : i18n.t("No prescriptive finding passed the current evidence threshold. The aligned traces remain available for inspection.")));
     return;
   }
   findings.forEach((finding) => {
@@ -1418,21 +1514,21 @@ function renderCoachingFindings() {
     card.tabIndex = -1;
     card.dataset.findingId = finding.finding_id;
     card.dataset.positive = String(Boolean(finding.positive));
-    const title = element("h3", "", `${finding.segment_label || "Segment"} · ${(finding.type || "finding").replaceAll("_", " ")}`);
+    const title = element("h3", "", `${finding.segment_label || i18n.t("Segment")} · ${findingTypeLabel(finding.type)}`);
     // One lap pair cannot show whether a habit repeats; the service records
     // that as zero, which read as "0% repeatability", a verdict never made.
-    const repeatability = finding.repeatability == null || Number(finding.repeatability) === 0 ? "repeatability not measured (one lap pair)" : `${Math.round(Number(finding.repeatability) * 100)}% repeatability`;
-    const metadata = element("div", "field-help", `${Math.round(Number(finding.confidence || 0) * 100)}% confidence · ${repeatability} · rank ${finding.rank ?? "—"}`);
-    const measured = element("p", "", finding.measured_loss_s == null ? "Measured local time loss unavailable." : `Measured: ${formatSeconds(finding.measured_loss_s)} through this segment.`);
-    const action = element("p", "", `Try: ${finding.action || "No prescriptive action available."}`);
+    const repeatability = finding.repeatability == null || Number(finding.repeatability) === 0 ? i18n.t("repeatability not measured (one lap pair)") : i18n.t("{percent} repeatability", { percent: `${Math.round(Number(finding.repeatability) * 100)}%` });
+    const metadata = element("div", "field-help", `${i18n.t("{percent} confidence", { percent: `${Math.round(Number(finding.confidence || 0) * 100)}%` })} · ${repeatability} · ${i18n.t("rank {rank}", { rank: String(finding.rank ?? "—") })}`);
+    const measured = element("p", "", finding.measured_loss_s == null ? i18n.t("Measured local time loss unavailable.") : i18n.t("Measured: {time} through this segment.", { time: formatSeconds(finding.measured_loss_s) }));
+    const action = element("p", "", i18n.t("Try: {action}", { action: finding.action || i18n.t("No prescriptive action available.") }));
     card.append(title, metadata, measured, action);
     const facts = finding.facts || [];
     if (facts.length) {
       const list = element("ul", "finding-facts");
-      facts.forEach((fact) => list.append(element("li", "", fact.label ? `${fact.label}: ${fact.candidate ?? "unavailable"}${fact.unit ? ` ${fact.unit}` : ""}` : JSON.stringify(fact))));
+      facts.forEach((fact) => list.append(element("li", "", fact.label ? `${fact.label}: ${fact.candidate ?? i18n.t("unavailable")}${fact.unit ? ` ${fact.unit}` : ""}` : JSON.stringify(fact))));
       card.append(list);
     }
-    const zoom = button("Zoom to evidence", () => {
+    const zoom = button(i18n.t("Zoom to evidence"), () => {
       const segment = (state.comparison.segments || []).find((item) => item.segment_id === finding.segment_id);
       if (segment) setCursor(nearestIndex(state.comparisonTrace?.axis?.values || [], Number(segment.start_m)));
       byId("comparisonTrace")?.focus?.();
@@ -1448,13 +1544,13 @@ function renderReviewFindings() {
   const findings = state.comparison?.findings || [];
   const belongsToSession = state.comparison?.candidate?.session_id === state.selectedSessionId;
   if (!findings.length || !belongsToSession) {
-    container.append(element("div", "empty", "Open a compatible lap comparison in Lap Lab to see deterministic findings."));
+    container.append(element("div", "empty", i18n.t("Open a compatible lap comparison in Lap Lab to see deterministic findings.")));
     return;
   }
   findings.slice(0, 3).forEach((finding) => {
     const card = element("article", "finding-card");
     card.dataset.positive = String(Boolean(finding.positive));
-    card.append(element("strong", "", `${finding.segment_label || "Segment"} · ${(finding.type || "finding").replaceAll("_", " ")}`), element("p", "", finding.action || "Action unavailable."), element("span", "field-help", `${Math.round(Number(finding.confidence || 0) * 100)}% confidence${finding.measured_loss_s == null ? " · time attribution unavailable" : ` · ${formatSeconds(finding.measured_loss_s)} measured`}`));
+    card.append(element("strong", "", `${finding.segment_label || i18n.t("Segment")} · ${findingTypeLabel(finding.type)}`), element("p", "", finding.action || i18n.t("Action unavailable.")), element("span", "field-help", `${i18n.t("{percent} confidence", { percent: `${Math.round(Number(finding.confidence || 0) * 100)}%` })}${finding.measured_loss_s == null ? ` · ${i18n.t("time attribution unavailable")}` : ` · ${i18n.t("{time} measured", { time: formatSeconds(finding.measured_loss_s) })}`}`));
     container.append(card);
   });
 }
@@ -1499,7 +1595,7 @@ function startPlayback() {
   if (state.playbackTimer) { stopPlayback(); return; }
   const action = byId("playbackToggle");
   if (state.cursorIndex >= activeTrace().axis.values.length - 1) setCursor(0);
-  action.textContent = "Pause";
+  action.textContent = i18n.t("Pause");
   action.setAttribute("aria-pressed", "true");
   state.playbackTimer = window.setInterval(() => {
     const speed = Number(byId("playbackSpeed").value || 1);
@@ -1517,7 +1613,7 @@ function stopPlayback() {
   state.playbackTimer = null;
   const action = HAS_DOM ? byId("playbackToggle") : null;
   if (action) {
-    action.textContent = "Play";
+    action.textContent = i18n.t("Play");
     action.setAttribute("aria-pressed", "false");
   }
 }
@@ -1539,14 +1635,14 @@ function updateInstruments() {
   const brake = seriesValue("candidate", "brake");
   const steering = seriesValue("candidate", "steering");
   const delta = seriesValue("candidate", "delta");
-  byId("gaugeSpeed").textContent = speed.value == null ? "Unavailable" : `${(speed.value * 3.6).toFixed(1)} km/h`;
-  byId("gaugeGear").textContent = gear.value == null ? "Unavailable" : String(Math.round(gear.value));
+  byId("gaugeSpeed").textContent = speed.value == null ? i18n.t("Unavailable") : `${(speed.value * 3.6).toFixed(1)} km/h`;
+  byId("gaugeGear").textContent = gear.value == null ? i18n.t("Unavailable") : String(Math.round(gear.value));
   byId("gaugeThrottle").value = throttle.value ?? 0;
-  byId("gaugeThrottleText").textContent = throttle.value == null ? "Unavailable" : `${Math.round(throttle.value * 100)}%`;
+  byId("gaugeThrottleText").textContent = throttle.value == null ? i18n.t("Unavailable") : `${Math.round(throttle.value * 100)}%`;
   byId("gaugeBrake").value = brake.value ?? 0;
-  byId("gaugeBrakeText").textContent = brake.value == null ? "Unavailable" : `${Math.round(brake.value * 100)}%`;
-  byId("gaugeSteering").textContent = steering.value == null ? "Unavailable" : `${steering.value >= 0 ? "+" : ""}${steering.value.toFixed(3)}`;
-  byId("gaugeDelta").textContent = delta.value == null ? "Unavailable" : formatSeconds(delta.value, true);
+  byId("gaugeBrakeText").textContent = brake.value == null ? i18n.t("Unavailable") : `${Math.round(brake.value * 100)}%`;
+  byId("gaugeSteering").textContent = steering.value == null ? i18n.t("Unavailable") : `${steering.value >= 0 ? "+" : ""}${steering.value.toFixed(3)}`;
+  byId("gaugeDelta").textContent = delta.value == null ? i18n.t("Unavailable") : formatSeconds(delta.value, true);
   byId("gaugeDelta").className = delta.value == null ? "" : delta.value > 0 ? "error" : delta.value < 0 ? "good" : "";
   renderCursorTable({ speed, gear, throttle, brake, steering, delta });
 }
@@ -1557,7 +1653,7 @@ function renderCursorTable(values) {
   Object.entries(values).forEach(([name, candidate]) => {
     const reference = seriesValue("reference", name);
     const row = element("tr");
-    row.append(element("th", "", name), element("td", "", candidate.value == null ? "Unavailable" : String(candidate.value)), element("td", "", reference.value == null ? "Unavailable" : String(reference.value)), element("td", "", candidate.availability));
+    row.append(element("th", "", signalLabel(name)), element("td", "", candidate.value == null ? i18n.t("Unavailable") : String(candidate.value)), element("td", "", reference.value == null ? i18n.t("Unavailable") : String(reference.value)), element("td", "", codeLabel(candidate.availability)));
     body.append(row);
   });
 }
@@ -1597,7 +1693,7 @@ function drawComparisonTrace() {
   const candidate = trace?.candidate?.series?.[state.traceLayer];
   const reference = trace?.reference?.series?.[state.traceLayer];
   if (!axis.length || (!candidate || candidate.availability === "unavailable") && (!reference || reference.availability === "unavailable")) {
-    canvasMessage(context, canvas, state.traceLayer === "delta" && state.lapTrace && !state.comparison ? "Choose a reference lap to see a delta." : `${state.traceLayer.replaceAll("_", " ")} unavailable for this lap.`);
+    canvasMessage(context, canvas, state.traceLayer === "delta" && state.lapTrace && !state.comparison ? i18n.t("Choose a reference lap to see a delta.") : i18n.t("{signal} unavailable for this lap.", { signal: signalLabel(state.traceLayer) }));
     return;
   }
   const pad = { left: 62, right: 20, top: 24, bottom: 40 };
@@ -1605,7 +1701,7 @@ function drawComparisonTrace() {
   const plotHeight = canvas.height - pad.top - pad.bottom;
   const values = [...(candidate?.values || []), ...(reference?.values || [])];
   const bounds = numericBounds(values);
-  if (!bounds) { canvasMessage(context, canvas, "No finite samples are available for this signal."); return; }
+  if (!bounds) { canvasMessage(context, canvas, i18n.t("No finite samples are available for this signal.")); return; }
   const [minY, maxY] = bounds;
   const minX = Number(axis[0]);
   const maxX = Number(axis[axis.length - 1]);
@@ -1641,9 +1737,9 @@ function drawComparisonTrace() {
   context.strokeStyle = "#ffffff";
   context.lineWidth = 2;
   context.beginPath(); context.moveTo(cursorX, pad.top); context.lineTo(cursorX, canvas.height - pad.bottom); context.stroke();
-  context.fillStyle = "#4cc2ff"; context.fillText("Candidate", pad.left, 16);
-  if (reference) { context.fillStyle = "#f6c85f"; context.fillText("Reference", pad.left + 90, 16); }
-  context.fillStyle = "#aeb8c7"; context.fillText(`Distance (m) · ${candidate?.unit || reference?.unit || "unit unavailable"}`, canvas.width / 2 - 80, canvas.height - 10);
+  context.fillStyle = "#4cc2ff"; context.fillText(i18n.t("Candidate"), pad.left, 16);
+  if (reference) { context.fillStyle = "#f6c85f"; context.fillText(i18n.t("Reference"), pad.left + 90, 16); }
+  context.fillStyle = "#aeb8c7"; context.fillText(i18n.t("Distance (m) · {unit}", { unit: candidate?.unit || reference?.unit || i18n.t("unit unavailable") }), canvas.width / 2 - 80, canvas.height - 10);
 }
 
 function mapPoints(trace) {
@@ -1683,7 +1779,7 @@ function drawComparisonMap() {
   const reference = mapPoints(state.mapTraces.reference);
   const points = [...candidate, ...reference].filter(hasMapPosition);
   if (points.length < 2) {
-    canvasMessage(context, canvas, "World-position track map unavailable; aligned telemetry remains usable.");
+    canvasMessage(context, canvas, i18n.t("World-position track map unavailable; aligned telemetry remains usable."));
     return;
   }
   const pad = 28;
@@ -1714,16 +1810,16 @@ function drawComparisonMap() {
   [{ line: reference, color: "#f6c85f", label: "R" }, { line: candidate, color: "#4cc2ff", label: "C" }].forEach(({ line, color, label }) => {
     if (!line.length) return;
     const point = mapPositionAtDistance(line, distance);
-    if (!point) { missingPositions.push(label === "C" ? "Candidate" : "Reference"); return; }
+    if (!point) { missingPositions.push(label === "C" ? i18n.t("Candidate") : i18n.t("Reference")); return; }
     const projected = project(point);
     context.fillStyle = color; context.beginPath(); context.arc(projected.x, projected.y, 9, 0, Math.PI * 2); context.fill();
     context.fillStyle = "#081018"; context.font = "800 11px Segoe UI"; context.textAlign = "center"; context.fillText(label, projected.x, projected.y + 4); context.textAlign = "left";
   });
-  context.fillStyle = "#4cc2ff"; context.font = "14px Segoe UI"; context.fillText("Candidate", 14, 20);
-  if (reference.length) { context.fillStyle = "#f6c85f"; context.fillText("Reference", 100, 20); }
+  context.fillStyle = "#4cc2ff"; context.font = "14px Segoe UI"; context.fillText(i18n.t("Candidate"), 14, 20);
+  if (reference.length) { context.fillStyle = "#f6c85f"; context.fillText(i18n.t("Reference"), 100, 20); }
   if (missingPositions.length) {
     context.fillStyle = "#aeb8c7";
-    context.fillText(`${missingPositions.join(" / ")} position unavailable here`, 14, canvas.height - 12);
+    context.fillText(i18n.t("{which} position unavailable here", { which: missingPositions.join(" / ") }), 14, canvas.height - 12);
   }
 }
 
@@ -1753,18 +1849,18 @@ function renderFieldSummary(payload) {
   const container = byId("fieldSummary");
   clear(container);
   if (!payload || payload._error) {
-    container.append(summaryMetric("Cars observed", "Unavailable"), summaryMetric("Lap rows", "Unavailable"), summaryMetric("Session quality", "Unavailable"), summaryMetric("Official classification", "Unavailable"));
-    setNotice("fieldStatus", payload?._error || "Choose a saved session to inspect the field.", payload?._error ? "error" : "");
+    container.append(summaryMetric(i18n.t("Cars observed"), i18n.t("Unavailable")), summaryMetric(i18n.t("Lap rows"), i18n.t("Unavailable")), summaryMetric(i18n.t("Session quality"), i18n.t("Unavailable")), summaryMetric(i18n.t("Official classification"), i18n.t("Unavailable")));
+    setNotice("fieldStatus", payload?._error || i18n.t("Choose a saved session to inspect the field."), payload?._error ? "error" : "");
     return;
   }
   container.append(
-    summaryMetric("Cars observed", String(payload.cars_observed ?? 0), `${payload.classification?.length ?? 0} identity rows shown`),
-    summaryMetric("Lap rows", String(payload.lap_rows ?? 0), payload.truncated ? "Safety bound reached" : "Complete bounded response"),
-    summaryMetric("Session quality", payload.session?.quality_score == null ? "Unavailable" : formatPercent(payload.session.quality_score), payload.session?.status || "status unavailable"),
-    summaryMetric("Official classification", payload.classification_availability === "unavailable" ? "Unavailable" : payload.classification_availability, payload.classification_reason || "Availability supplied by saved telemetry"),
+    summaryMetric(i18n.t("Cars observed"), String(payload.cars_observed ?? 0), i18n.t("{count} identity rows shown", { count: payload.classification?.length ?? 0 })),
+    summaryMetric(i18n.t("Lap rows"), String(payload.lap_rows ?? 0), payload.truncated ? i18n.t("Safety bound reached") : i18n.t("Complete bounded response")),
+    summaryMetric(i18n.t("Session quality"), payload.session?.quality_score == null ? i18n.t("Unavailable") : formatPercent(payload.session.quality_score), payload.session?.status ? codeLabel(payload.session.status) : i18n.t("status unavailable")),
+    summaryMetric(i18n.t("Official classification"), payload.classification_availability === "unavailable" ? i18n.t("Unavailable") : codeLabel(payload.classification_availability), payload.classification_reason || i18n.t("Availability supplied by saved telemetry")),
   );
   const warnings = payload.warnings || [];
-  setNotice("fieldStatus", warnings.length ? warnings.join(" ") : `${payload.cars_observed ?? 0} cars loaded. Metrics retain availability and sample size.`, warnings.length ? "" : "success");
+  setNotice("fieldStatus", warnings.length ? warnings.join(" ") : i18n.t("{count} cars loaded. Metrics retain availability and sample size.", { count: payload.cars_observed ?? 0 }), warnings.length ? "" : "success");
 }
 
 function renderFieldClassification(payload) {
@@ -1773,7 +1869,7 @@ function renderFieldClassification(payload) {
   const entries = payload?.classification || [];
   if (!entries.length) {
     const row = element("tr");
-    const cell = element("td", "empty", payload?._error || payload?.classification_reason || "No field data loaded.");
+    const cell = element("td", "empty", payload?._error || payload?.classification_reason || i18n.t("No field data loaded."));
     cell.colSpan = 8;
     row.append(cell);
     body.append(row);
@@ -1782,7 +1878,7 @@ function renderFieldClassification(payload) {
   entries.forEach((driver) => {
     const row = element("tr");
     const name = element("td");
-    name.append(element("strong", "", `${driver.is_player ? "YOU · " : ""}${driver.display_name}`), element("span", "field-help", `Car ${driver.car_index + 1} · identity revision ${driver.identity_revision}`));
+    name.append(element("strong", "", `${driver.is_player ? `${i18n.t("YOU")} · ` : ""}${driver.display_name}`), element("span", "field-help", i18n.t("Car {number} · identity revision {revision}", { number: String(driver.car_index + 1), revision: String(driver.identity_revision) })));
     row.append(name);
     const position = element("td", "", metricText(driver.position, (value) => `P${value}`)); position.title = availabilityTitle(driver.position); row.append(position);
     const last = element("td", "", metricText(driver.last_lap_ms, formatLapTime)); last.title = availabilityTitle(driver.last_lap_ms); row.append(last);
@@ -1790,14 +1886,14 @@ function renderFieldClassification(payload) {
     const medianPace = element("td", "", metricText(driver.median_clean_pace_ms, formatLapTime)); medianPace.title = availabilityTitle(driver.median_clean_pace_ms); row.append(medianPace);
     const compound = element("td", "", metricText(driver.compound)); compound.title = availabilityTitle(driver.compound); row.append(compound);
     const laps = element("td", "", metricText(driver.laps_recorded)); laps.title = availabilityTitle(driver.laps_recorded); row.append(laps);
-    const action = element("td"); action.append(button("Lap Lab", () => openDriverBestLap(driver.car_id))); row.append(action);
+    const action = element("td"); action.append(button(i18n.t("Lap Lab"), () => openDriverBestLap(driver.car_id))); row.append(action);
     body.append(row);
   });
 }
 
 async function loadFieldView(view, { force = false } = {}) {
   if (!state.selectedSessionId) {
-    setNotice("fieldStatus", "Choose a saved session before opening a field analysis view.");
+    setNotice("fieldStatus", i18n.t("Choose a saved session before opening a field analysis view."));
     return null;
   }
   const key = `${state.selectedSessionId}:${view}`;
@@ -1808,7 +1904,7 @@ async function loadFieldView(view, { force = false } = {}) {
   }
   const suffix = { classification: "field", pace: "field/pace", corners: "field/corners", positions: "field/positions", stints: "field/stints" }[view];
   if (!suffix) return null;
-  setNotice("fieldStatus", `Loading ${view.replaceAll("_", " ")} with data-quality context…`);
+  setNotice("fieldStatus", i18n.t("Loading {view} with data-quality context…", { view: fieldViewLabel(view) }));
   try {
     const payload = await api(`/sessions/${encodeURIComponent(state.selectedSessionId)}/${suffix}`);
     if (state.sessionRequest !== request) return null;
@@ -1816,7 +1912,7 @@ async function loadFieldView(view, { force = false } = {}) {
     if (state.fieldView !== view) return payload;
     renderFieldView(view, payload);
     if (view === "classification") renderFieldSummary(payload);
-    else setNotice("fieldStatus", payload.reason || `${view[0].toUpperCase()}${view.slice(1)} loaded. Sample sizes remain visible in the view.`, payload.availability === "unavailable" ? "" : "success");
+    else setNotice("fieldStatus", payload.reason || i18n.t("{view} loaded. Sample sizes remain visible in the view.", { view: `${fieldViewLabel(view)[0].toUpperCase()}${fieldViewLabel(view).slice(1)}` }), payload.availability === "unavailable" ? "" : "success");
     return payload;
   } catch (error) {
     if (state.sessionRequest !== request || state.fieldView !== view) return null;
@@ -1836,7 +1932,7 @@ function renderFieldView(view, payload) {
 
 function matrixTable(headers) {
   const table = element("table", "matrix-table");
-  const caption = element("caption", "sr-only", "Field comparison matrix; each header includes the comparable sample size.");
+  const caption = element("caption", "sr-only", i18n.t("Field comparison matrix; each header includes the comparable sample size."));
   const head = element("thead");
   const row = element("tr");
   headers.forEach((header) => row.append(element("th", "", header)));
@@ -1856,21 +1952,21 @@ function renderPaceMatrix(payload) {
   const container = byId("fieldPaceMatrix");
   clear(container);
   if (!payload || payload._error || payload.availability === "unavailable" || !(payload.drivers || []).length) {
-    container.append(element("div", "empty", payload?._error || payload?.reason || "Pace matrix unavailable because no comparable field laps were stored."));
+    container.append(element("div", "empty", payload?._error || payload?.reason || i18n.t("Pace matrix unavailable because no comparable field laps were stored.")));
     return;
   }
-  const table = matrixTable(["Driver", ...(payload.lap_numbers || []).map((lap, index) => `Lap ${lap} · n=${payload.n_by_lap?.[index] ?? 0}`)]);
+  const table = matrixTable([i18n.t("Driver"), ...(payload.lap_numbers || []).map((lap, index) => `${i18n.t("Lap {lap}", { lap: String(lap) })} · n=${payload.n_by_lap?.[index] ?? 0}`)]);
   const body = table.tBodies[0];
   payload.drivers.forEach((driver, rowIndex) => {
     const row = element("tr");
-    row.append(element("td", "", `${driver.display_name} · ${formatPercent(payload.coverage_by_driver?.[driver.car_id])} coverage`));
+    row.append(element("td", "", `${driver.display_name} · ${i18n.t("{percent} coverage", { percent: formatPercent(payload.coverage_by_driver?.[driver.car_id]) })}`));
     (payload.cells?.[rowIndex] || []).forEach((cell) => {
       const tableCell = element("td", "matrix-cell");
       tableCell.dataset.result = cell.included ? resultForDelta(cell.delta_to_lap_median_s) : "unavailable";
-      const label = cell.included ? `${formatSeconds(cell.delta_to_lap_median_s, true)} · ${formatLapTime(Number(cell.lap_time_s) * 1000)}` : "Unavailable";
+      const label = cell.included ? `${formatSeconds(cell.delta_to_lap_median_s, true)} · ${formatLapTime(Number(cell.lap_time_s) * 1000)}` : i18n.t("Unavailable");
       if (cell.lap_id) {
         const control = button(label, () => openLap(cell.lap_id), "");
-        control.title = cell.included ? `Open ${driver.display_name}, lap ${payload.lap_numbers[row.children.length - 1]} in Lap Lab` : `${cell.reason || "Excluded context"}. Open trace in Lap Lab.`;
+        control.title = cell.included ? i18n.t("Open {driver}, lap {lap} in Lap Lab", { driver: String(driver.display_name), lap: String(payload.lap_numbers[row.children.length - 1]) }) : i18n.t("{reason}. Open trace in Lap Lab.", { reason: cell.reason || i18n.t("Excluded context") });
         tableCell.append(control);
       } else tableCell.textContent = label;
       if (cell.reason) tableCell.title = cell.reason;
@@ -1885,22 +1981,22 @@ function renderCornerMatrix(payload) {
   const container = byId("fieldCornerMatrix");
   clear(container);
   if (!payload || payload._error || payload.availability === "unavailable" || !(payload.segments || []).length) {
-    container.append(element("div", "empty", payload?._error || payload?.reason || "Corner matrix unavailable. Persisted absolute segment times are required; relative deltas alone are not promoted to field ranks."));
+    container.append(element("div", "empty", payload?._error || payload?.reason || i18n.t("Corner matrix unavailable. Persisted absolute segment times are required; relative deltas alone are not promoted to field ranks.")));
     return;
   }
-  const table = matrixTable(["Driver", ...payload.segments.map((segment, index) => `${segment.label} · n=${payload.n_by_segment?.[index] ?? 0}`)]);
+  const table = matrixTable([i18n.t("Driver"), ...payload.segments.map((segment, index) => `${segment.label} · n=${payload.n_by_segment?.[index] ?? 0}`)]);
   const body = table.tBodies[0];
   payload.drivers.forEach((driver, rowIndex) => {
     const row = element("tr");
-    row.append(element("td", "", `${driver.display_name} · ${formatPercent(payload.coverage_by_driver?.[driver.car_id])} coverage`));
+    row.append(element("td", "", `${driver.display_name} · ${i18n.t("{percent} coverage", { percent: formatPercent(payload.coverage_by_driver?.[driver.car_id]) })}`));
     payload.segments.forEach((segment, columnIndex) => {
       const valid = Boolean(payload.valid_mask?.[rowIndex]?.[columnIndex]);
       const delta = payload.delta_to_field_median_s?.[rowIndex]?.[columnIndex];
       const rank = payload.rank?.[rowIndex]?.[columnIndex];
       const samples = payload.sample_count?.[rowIndex]?.[columnIndex] ?? 0;
-      const cell = element("td", "matrix-cell", valid ? `${formatSeconds(delta, true)} · P${rank ?? "—"}` : "Unavailable");
+      const cell = element("td", "matrix-cell", valid ? `${formatSeconds(delta, true)} · P${rank ?? "—"}` : i18n.t("Unavailable"));
       cell.dataset.result = valid ? resultForDelta(delta) : "unavailable";
-      cell.title = valid ? `${segment.label}: ${formatSeconds(payload.median_time_s?.[rowIndex]?.[columnIndex])} median over ${samples} stored sample${samples === 1 ? "" : "s"}; field n=${payload.n_by_segment?.[columnIndex] ?? 0}` : `${segment.label}: insufficient absolute segment-time evidence.`;
+      cell.title = valid ? i18n.tp(samples, "{segment}: {time} median over {count} stored sample; field n={n}", "{segment}: {time} median over {count} stored samples; field n={n}", { segment: String(segment.label), time: formatSeconds(payload.median_time_s?.[rowIndex]?.[columnIndex]), count: samples, n: payload.n_by_segment?.[columnIndex] ?? 0 }) : i18n.t("{segment}: insufficient absolute segment-time evidence.", { segment: String(segment.label) });
       row.append(cell);
     });
     body.append(row);
@@ -1915,7 +2011,7 @@ function renderPositions(payload) {
   if (!context) return;
   const usable = (payload?.series || []).filter((series) => series.availability !== "unavailable" && (series.points || []).length);
   if (!payload || payload._error || payload.availability === "unavailable" || !usable.length) {
-    const reason = payload?._error || payload?.reason || "Saved position history is unavailable; zero is not substituted.";
+    const reason = payload?._error || payload?.reason || i18n.t("Saved position history is unavailable; zero is not substituted.");
     canvasMessage(context, canvas, reason);
     description.textContent = reason;
     return;
@@ -1936,7 +2032,7 @@ function renderPositions(payload) {
     series.points.forEach((point, pointIndex) => { if (pointIndex) context.lineTo(x(point.lap_number), y(point.position)); else context.moveTo(x(point.lap_number), y(point.position)); });
     context.stroke();
   });
-  description.textContent = `${usable.length} of ${payload.cars_observed ?? usable.length} observed cars have stored position samples. Position 1 is at the top; context events remain available in the response.`;
+  description.textContent = i18n.t("{count} of {total} observed cars have stored position samples. Position 1 is at the top; context events remain available in the response.", { count: usable.length, total: payload.cars_observed ?? usable.length });
 }
 
 function renderStints(payload) {
@@ -1944,18 +2040,18 @@ function renderStints(payload) {
   clear(container);
   const drivers = payload?.drivers || [];
   if (!payload || payload._error || payload.availability === "unavailable" || !drivers.length) {
-    container.append(element("div", "empty", payload?._error || payload?.reason || "Stint sequences are unavailable for this session."));
+    container.append(element("div", "empty", payload?._error || payload?.reason || i18n.t("Stint sequences are unavailable for this session.")));
     return;
   }
   drivers.forEach((driver) => {
     const card = element("article", "stint-card");
     const stints = driver.stints || [];
-    card.append(element("h3", "", `${driver.is_player ? "YOU · " : ""}${driver.display_name}`), element("span", "field-help", `${stints.length} stint${stints.length === 1 ? "" : "s"} · ${driver.availability}`));
-    if (!stints.length) card.append(element("div", "empty", driver.reason || "No observed compound sequence."));
+    card.append(element("h3", "", `${driver.is_player ? `${i18n.t("YOU")} · ` : ""}${driver.display_name}`), element("span", "field-help", `${i18n.tp(stints.length, "{count} stint", "{count} stints", { count: stints.length })} · ${codeLabel(driver.availability)}`));
+    if (!stints.length) card.append(element("div", "empty", driver.reason || i18n.t("No observed compound sequence.")));
     stints.forEach((stint) => {
       const row = element("div", "stint-row");
       const identity = element("div");
-      identity.append(element("strong", "", `Stint ${stint.ordinal} · ${stint.compound}`), element("span", "availability-note", `Laps ${stint.start_lap}–${stint.end_lap} · ${stint.clean_lap_count}/${stint.lap_count} clean`));
+      identity.append(element("strong", "", `${i18n.t("Stint {number}", { number: String(stint.ordinal) })} · ${stint.compound}`), element("span", "availability-note", i18n.t("Laps {start}–{end} · {clean}/{total} clean", { start: String(stint.start_lap), end: String(stint.end_lap), clean: String(stint.clean_lap_count), total: String(stint.lap_count) })));
       const pace = element("div", "", metricText(stint.median_clean_pace_s, (value) => formatLapTime(Number(value) * 1000)));
       pace.title = availabilityTitle(stint.median_clean_pace_s);
       row.append(identity, pace);
@@ -1968,13 +2064,13 @@ function renderStints(payload) {
 async function openDriverBestLap(carId) {
   if (!state.selectedSessionId) return;
   const request = state.sessionRequest;
-  setNotice("fieldStatus", "Loading this driver's saved laps and strengths…");
+  setNotice("fieldStatus", i18n.t("Loading this driver's saved laps and strengths…"));
   try {
     const payload = await api(`/sessions/${encodeURIComponent(state.selectedSessionId)}/field/drivers/${encodeURIComponent(carId)}`);
     if (state.sessionRequest !== request) return;
     const best = (payload.laps || []).filter((lap) => lap.valid && lap.lap_time_ms).sort((a, b) => Number(a.lap_time_ms) - Number(b.lap_time_ms))[0];
     if (!best) {
-      const reason = payload.strengths?.reason || "This driver has no valid recorded lap suitable for Lap Lab.";
+      const reason = payload.strengths?.reason || i18n.t("This driver has no valid recorded lap suitable for Lap Lab.");
       setNotice("fieldStatus", reason);
       return;
     }
@@ -2097,8 +2193,8 @@ function bindEvents() {
     // A lap trace arriving now must not replace this line.
     state.comparisonStatus = state.candidateLapId && referenceLapId ? "pending" : "idle";
     setNotice("lapLabStatus", state.candidateLapId
-      ? (referenceLapId ? "Reference changed. Comparing against it…" : "Reference changed. Choose a lap to compare against.")
-      : "Choose a recorded lap to see its playback.");
+      ? (referenceLapId ? i18n.t("Reference changed. Comparing against it…") : i18n.t("Reference changed. Choose a lap to compare against."))
+      : i18n.t("Choose a recorded lap to see its playback."));
     updateReferenceChoice();
     // A chosen reference is compared once the choice settles; Compare again
     // repeats it at once.
@@ -2118,9 +2214,9 @@ function bindEvents() {
     setCursor(step > 0 ? Math.max(state.cursorIndex + 1, nearest) : Math.min(state.cursorIndex - 1, nearest));
   };
   byId("playbackPrevious").textContent = "≈ −10 m";
-  byId("playbackPrevious").title = "Back about 10 m, at least one recorded sample";
+  byId("playbackPrevious").title = i18n.t("Back about 10 m, at least one recorded sample");
   byId("playbackNext").textContent = "≈ +10 m";
-  byId("playbackNext").title = "Forward about 10 m, at least one recorded sample";
+  byId("playbackNext").title = i18n.t("Forward about 10 m, at least one recorded sample");
   byId("playbackPrevious")?.addEventListener("click", () => stepDistance(-10));
   byId("playbackNext")?.addEventListener("click", () => stepDistance(10));
   byId("playbackRange")?.addEventListener("input", (event) => setCursor(Number(event.target.value)));

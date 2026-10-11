@@ -1,4 +1,6 @@
 /** Read-only adapter for /api/state and /ws. Missing packet fields remain unavailable. */
+// Screen text uses the page's global i18n runtime, loaded before any call:
+// i18n.mjs in the dashboard, /static/js/i18n.js in the stream overlay.
 export const finite=value=>typeof value==='number'&&Number.isFinite(value)?value:null;
 export const positive=value=>finite(value)>0?value:null;
 export const escapeHTML=value=>String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -9,26 +11,26 @@ const makeFlag=(id,color,title,instruction,extra='')=>({id,color,title,instructi
 export function raceFlag(s,{fresh=true}={}) {
   // Packet 8 confirms the result even after live car packets stop. The
   // backend clears this flat result when the current session changes.
-  if(positive(s?.final_classification?.position)!==null)return makeFlag('finish','#eef4f8','CHEQUERED FLAG','Session complete. Follow race control.');
-  if(!fresh||!s)return makeFlag('stale','#ff6969','TELEMETRY UNAVAILABLE','Awaiting current race data.');
+  if(positive(s?.final_classification?.position)!==null)return makeFlag('finish','#eef4f8',i18n.t('CHEQUERED FLAG'),i18n.t('Session complete. Follow race control.'));
+  if(!fresh||!s)return makeFlag('stale','#ff6969',i18n.t('TELEMETRY UNAVAILABLE'),i18n.t('Awaiting current race data.'));
   const p=String(s.race_control_phase||''),f=String(s.fia_flag||'');
-  if(s.red_flag_active||p==='red_flag'||f==='red')return makeFlag('red','#ff6969','RED FLAG','Session suspended. Follow race control.');
-  if(s.driving_wrong_way)return makeFlag('wrong-way','#ff6969','WRONG WAY','Check your direction of travel.');
-  if(p==='safety_car'||p==='safety_car_ending'||s.safety_car==='full')return makeFlag('sc','#ffc15c',p.endsWith('ending')?'SAFETY CAR ENDING':'SAFETY CAR','No overtaking. Follow race control.',s.safety_car_delta_valid?'SC delta '+signed(s.safety_car_delta_s)+' s':'');
-  if(p==='vsc'||p==='vsc_ending'||s.safety_car==='virtual')return makeFlag('vsc','#ffc15c',p.endsWith('ending')?'VSC ENDING':'VIRTUAL SAFETY CAR','Reduce speed. Keep the delta positive.',s.safety_car_delta_valid?'VSC delta '+signed(s.safety_car_delta_s)+' s':'');
-  if(f==='double_yellow')return makeFlag('double-yellow','#ffc15c','DOUBLE YELLOW','Reduce speed. Be prepared to stop.');
-  if(f==='yellow')return makeFlag('yellow','#ffc15c','YELLOW FLAG','Slow down. No overtaking.');
-  if(f==='black')return makeFlag('black','#eef4f8','BLACK FLAG','Follow race control instructions.');
-  if(f==='chequered')return makeFlag('finish','#eef4f8','CHEQUERED FLAG','Session complete. Follow race control.');
-  if(s.unserved_drive_through_penalties>0)return makeFlag('penalty','#ffc15c','DRIVE-THROUGH','Serve the outstanding drive-through penalty.');
-  if(s.unserved_stop_go_penalties>0)return makeFlag('penalty','#ffc15c','STOP-GO PENALTY','Serve the outstanding stop-go penalty.');
-  if(s.game_paused)return makeFlag('paused','#91a6b8','GAME PAUSED','Showing the last received state.');
-  if(f==='blue')return makeFlag('blue','#559aff','BLUE FLAG','Faster car approaching. Follow race control.');
-  if(s.pit_status>0)return makeFlag('pit','#559aff','PIT LANE','Observe the pit-lane speed limit.',positive(s.pit_speed_limit_kph)?`${s.pit_speed_limit_kph} km/h LIMIT`:'');
-  if(p.startsWith('formation'))return makeFlag('formation','#559aff','FORMATION LAP','Build temperature. Hold position.');
+  if(s.red_flag_active||p==='red_flag'||f==='red')return makeFlag('red','#ff6969',i18n.t('RED FLAG'),i18n.t('Session suspended. Follow race control.'));
+  if(s.driving_wrong_way)return makeFlag('wrong-way','#ff6969',i18n.t('WRONG WAY'),i18n.t('Check your direction of travel.'));
+  if(p==='safety_car'||p==='safety_car_ending'||s.safety_car==='full')return makeFlag('sc','#ffc15c',p.endsWith('ending')?i18n.t('SAFETY CAR ENDING'):i18n.t('SAFETY CAR'),i18n.t('No overtaking. Follow race control.'),s.safety_car_delta_valid?i18n.t('SC delta {delta} s',{delta:signed(s.safety_car_delta_s)}):'');
+  if(p==='vsc'||p==='vsc_ending'||s.safety_car==='virtual')return makeFlag('vsc','#ffc15c',p.endsWith('ending')?i18n.t('VSC ENDING'):i18n.t('VIRTUAL SAFETY CAR'),i18n.t('Reduce speed. Keep the delta positive.'),s.safety_car_delta_valid?i18n.t('VSC delta {delta} s',{delta:signed(s.safety_car_delta_s)}):'');
+  if(f==='double_yellow')return makeFlag('double-yellow','#ffc15c',i18n.t('DOUBLE YELLOW'),i18n.t('Reduce speed. Be prepared to stop.'));
+  if(f==='yellow')return makeFlag('yellow','#ffc15c',i18n.t('YELLOW FLAG'),i18n.t('Slow down. No overtaking.'));
+  if(f==='black')return makeFlag('black','#eef4f8',i18n.t('BLACK FLAG'),i18n.t('Follow race control instructions.'));
+  if(f==='chequered')return makeFlag('finish','#eef4f8',i18n.t('CHEQUERED FLAG'),i18n.t('Session complete. Follow race control.'));
+  if(s.unserved_drive_through_penalties>0)return makeFlag('penalty','#ffc15c',i18n.t('DRIVE-THROUGH'),i18n.t('Serve the outstanding drive-through penalty.'));
+  if(s.unserved_stop_go_penalties>0)return makeFlag('penalty','#ffc15c',i18n.t('STOP-GO PENALTY'),i18n.t('Serve the outstanding stop-go penalty.'));
+  if(s.game_paused)return makeFlag('paused','#91a6b8',i18n.t('GAME PAUSED'),i18n.t('Showing the last received state.'));
+  if(f==='blue')return makeFlag('blue','#559aff',i18n.t('BLUE FLAG'),i18n.t('Faster car approaching. Follow race control.'));
+  if(s.pit_status>0)return makeFlag('pit','#559aff',i18n.t('PIT LANE'),i18n.t('Observe the pit-lane speed limit.'),positive(s.pit_speed_limit_kph)?i18n.t('{speed} km/h LIMIT',{speed:s.pit_speed_limit_kph}):'');
+  if(p.startsWith('formation'))return makeFlag('formation','#559aff',i18n.t('FORMATION LAP'),i18n.t('Build temperature. Hold position.'));
   // Unknown phases/flags must never be silently advertised as a clear track.
-  if((!p&&!f)||(p&&!['green','racing'].includes(p))||(f&&!['none','green'].includes(f)))return makeFlag('unknown','#91a6b8','RACE CONTROL','Status unavailable. Follow in-game race control.');
-  return makeFlag('green','#49d17d','GREEN FLAG','Track clear. Racing.');
+  if((!p&&!f)||(p&&!['green','racing'].includes(p))||(f&&!['none','green'].includes(f)))return makeFlag('unknown','#91a6b8',i18n.t('RACE CONTROL'),i18n.t('Status unavailable. Follow in-game race control.'));
+  return makeFlag('green','#49d17d',i18n.t('GREEN FLAG'),i18n.t('Track clear. Racing.'));
 }
 export function normalizeState(s,{ageMs=0,transport='live',now=Date.now()}={}) {
   if(!s||typeof s!=='object')s={};
@@ -53,7 +55,7 @@ export function normalizeState(s,{ageMs=0,transport='live',now=Date.now()}={}) {
   const drivers=Array.isArray(s.drivers)?s.drivers:[];
   const player=drivers.find(d=>d.car_idx===s.player_car_index)||{};
   const active=drivers.filter(d=>d.car_idx!==s.player_car_index&&d.active!==false&&![4,5,6].includes(d.result_status));
-  const car=d=>d?{...d,name:String(d.name||'Unknown driver').slice(0,80),gap:lapData?finite(d.gap_to_player_s):null,position:lapData?positive(d.position):null,number:positive(d.race_number),last:positive(d.last_lap_ms),best:positive(d.best_lap_ms),compound:statusData?String(d.tyre_compound||'UNKNOWN'):'UNKNOWN',tyreAge:statusData?finite(d.tyre_age):null}:null;
+  const car=d=>d?{...d,name:String(d.name||i18n.t('Unknown driver')).slice(0,80),gap:lapData?finite(d.gap_to_player_s):null,position:lapData?positive(d.position):null,number:positive(d.race_number),last:positive(d.last_lap_ms),best:positive(d.best_lap_ms),compound:statusData?String(d.tyre_compound||'UNKNOWN'):'UNKNOWN',tyreAge:statusData?finite(d.tyre_age):null}:null;
   // gap_to_player_s is negative ahead and positive behind in the UDP adapter.
   const ahead=lapData?active.filter(d=>finite(d.gap_to_player_s)!==null&&d.gap_to_player_s<0).sort((a,b)=>b.gap_to_player_s-a.gap_to_player_s)[0]:null;
   const behind=lapData?active.filter(d=>finite(d.gap_to_player_s)!==null&&d.gap_to_player_s>0).sort((a,b)=>a.gap_to_player_s-b.gap_to_player_s)[0]:null;
@@ -74,8 +76,8 @@ export function normalizeState(s,{ageMs=0,transport='live',now=Date.now()}={}) {
   const input=v=>finite(v)===null?null:Math.min(1,Math.max(0,v));
   const mapValues=(obj,keys)=>Object.fromEntries(keys.map(k=>[k,damageData?percent(obj?.[k]):null]));
   const flagState=lapData?s:{...s,driving_wrong_way:undefined,pit_status:undefined,unserved_drive_through_penalties:undefined,unserved_stop_go_penalties:undefined,safety_car_delta_valid:false};
-  const flag=completedFlag||(provisionalRestart?makeFlag('red','#ff6969','LAST CONFIRMED RED FLAG','Live telemetry unavailable. Confirm suspension, tyre sets and track conditions in game.'):fresh&&(!freshGroup('1')||!freshGroup('7'))?makeFlag('unknown','#91a6b8','RACE CONTROL UNAVAILABLE','Follow in-game race control. Awaiting current flag data.'):raceFlag(flagState,{fresh}));
-  return {fresh,transport,provenance,regulations2026,paused:!!s.game_paused,flag,track:String(s.track_name||'Waiting for session'),session:String(s.session_type||'No session'),
+  const flag=completedFlag||(provisionalRestart?makeFlag('red','#ff6969',i18n.t('LAST CONFIRMED RED FLAG'),i18n.t('Live telemetry unavailable. Confirm suspension, tyre sets and track conditions in game.')):fresh&&(!freshGroup('1')||!freshGroup('7'))?makeFlag('unknown','#91a6b8',i18n.t('RACE CONTROL UNAVAILABLE'),i18n.t('Follow in-game race control. Awaiting current flag data.')):raceFlag(flagState,{fresh}));
+  return {fresh,transport,provenance,regulations2026,paused:!!s.game_paused,flag,track:String(s.track_name||i18n.t('Waiting for session')),session:String(s.session_type||i18n.t('No session')),
     lap:lapData?positive(s.current_lap):null,total:positive(s.total_laps),position:lapData?positive(s.player_position):null,field:positive(s.active_cars)||drivers.length||null,player:car(player),ahead:car(ahead),behind:car(behind),
     drivers:drivers.filter(d=>d.active!==false||d.car_idx===s.player_car_index).sort((a,b)=>lapData?(a.position||999)-(b.position||999):(a.car_idx??0)-(b.car_idx??0)).map(car),
     current:lapData?positive(s.current_lap_time_ms):null,last:positive(s.last_lap_ms),best,delta,reference,invalid:lapData&&!!s.current_lap_invalid,sector:lapData?finite(s.sector):null,
@@ -86,12 +88,12 @@ export function normalizeState(s,{ageMs=0,transport='live',now=Date.now()}={}) {
     compound:statusData?String(s.tyre?.compound||'UNKNOWN'):'UNKNOWN',tyreAge:statusData?finite(s.tyre?.age_laps):null,temps:carData?array(s.tyre?.surface_temps_c):[null,null,null,null],wear:damageData?array(s.tyre?.wear):[null,null,null,null],
     penalties:lapData?finite(s.penalties_s):null,warnings:lapData?finite(s.corner_cutting_warnings):null,nextStop:positive(nextStop),nextCompound:suspended?restart?.primary?.compound||null:recommendation?.compounds?.[1]||null,
     suspended,provisionalRestart,restartAlternative:restart?.alternative?.instruction||'',
-    plan:String(completedFlag?'Session complete. Review recorded laps in Analysis.':suspended?restart?.primary?.instruction||restart?.instruction||'Session suspended. Prepare fresh restart tyres while stopped; checking available sets.':!planContext?'Current strategy unavailable':recommendation?.instruction||s.strategy?.reason||'Waiting for strategy'),recent,average,spread:times.length>1?Math.max(...times)-Math.min(...times):null,
+    plan:String(completedFlag?i18n.t('Session complete. Review recorded laps in Analysis.'):suspended?restart?.primary?.instruction||restart?.instruction||i18n.t('Session suspended. Prepare fresh restart tyres while stopped; checking available sets.'):!planContext?i18n.t('Current strategy unavailable'):recommendation?.instruction||s.strategy?.reason||i18n.t('Waiting for strategy')),recent,average,spread:times.length>1?Math.max(...times)-Math.min(...times):null,
     radio:String((Array.isArray(s.radio_log)?s.radio_log:[]).filter(r=>r.role==='engineer').at(-1)?.text||''),air:sessionData?finite(s.air_temp_c):null,trackTemp:sessionData?finite(s.track_temp_c):null,
     inner:carData?array(s.tyre?.inner_temps_c):array(null),pressures:carData?array(s.tyre?.pressures_psi):array(null),
     throttle:carData?input(s.throttle):null,brake:carData?input(s.brake):null,steer:carData&&finite(s.steer)!==null?Math.min(1,Math.max(-1,s.steer)):null,
     lateral:motionData?finite(s.lateral_g):null,longitudinal:motionData?finite(s.longitudinal_g):null,
-    weather:sessionData?String(s.weather||'Unavailable'):'Unavailable',timeLeft:sessionData?finite(s.session_time_left_s):null,
+    weather:sessionData?String(s.weather||i18n.t('Unavailable')):i18n.t('Unavailable'),timeLeft:sessionData?finite(s.session_time_left_s):null,
     progress:lapData&&positive(s.track_length_m)!==null&&finite(s.lap_distance_m)!==null?Math.min(100,Math.max(0,s.lap_distance_m/s.track_length_m*100)):null,
     damage:mapValues(s.damage,['front_left_wing','front_right_wing','rear_wing','floor','diffuser','sidepod','engine','gearbox']),
     components:{...mapValues(s.component_wear,['ice','tc','mguk','mguh','es','ce']),mguh:damageData&&regulations2026===false?percent(s.component_wear?.mguh):null},

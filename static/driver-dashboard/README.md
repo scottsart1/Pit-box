@@ -64,6 +64,22 @@ Unavailable RPM or other unsupported values remain blank. Race gaps represent
 race order, not physical on-track proximity. Rival comparisons use completed
 last laps. Predictions use the stated delta reference, including recorded PBs.
 
+## Screen language
+
+The screens can show English, French, German or Spanish; the engineer's radio
+and race data such as driver, track and session names stay as sent. A `?lang=`
+link decides first, which is how the racing app passes its own screen language
+to the embedded dashboard (Customize then shows the language as set by the
+app). Otherwise the **Language** choice in Customize applies, saved with the
+other dashboard preferences. Automatic follows a French, German or Spanish
+browser when the dashboard is opened on its own, and English inside the app.
+Changing the language reloads the dashboard once the choice is saved.
+
+Each catalog, `i18n/<lang>.json`, maps the English text to its translation;
+`python tools/i18n_extract.py` lists the keys. A missing or unreadable catalog
+shows English. `i18n.mjs` is the app's `static/js/i18n.js` runtime with a module
+export added, so the dashboard keeps working on its own.
+
 ## Public demo and offline download
 
 The standalone public page uses clearly labelled sample data, with eleven race
@@ -84,9 +100,10 @@ capture, changing source, a disconnect or leaving the window cancels the drag.
 
 `python tools/build_driver_dashboard.py` builds a self-contained
 `static/driver-dashboard/downloads/driver-dashboard.html` plus PWA icons using
-only the Python standard library. The HTML can be downloaded and opened without
-Node, Python, a local server or an internet connection. Browser storage policy
-may limit persistence for locally opened files.
+only the Python standard library. The French, German and Spanish catalogs are
+embedded in that file, so it never fetches them. The HTML can be downloaded and
+opened without Node, Python, a local server or an internet connection. Browser
+storage policy may limit persistence for locally opened files.
 
 Run `node --test tests/driver_dashboard.test.mjs` for the display, data,
 flag-priority, stale-state, escaping, widget/preset coverage, preference

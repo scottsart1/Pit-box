@@ -3,6 +3,8 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import vm from 'node:vm';
 
+await import('../static/js/i18n.js');
+
 // Execute the shipped DRIVE functions, including their call from render38.
 const html = fs.readFileSync(new URL('../static/index.html', import.meta.url), 'utf8');
 const start = html.indexOf('function tyreDegradationInsight(');
@@ -14,7 +16,7 @@ const context = vm.createContext({
   $: id => { assert.ok(nodes.has(id), `Missing shipped element ${id}`); return nodes.get(id); },
   dashVisible: () => false, drawPace: () => {}, damageText: () => '',
   loadRivals: () => {}, lastAuxLap: 10,
-  esc: value => String(value),
+  esc: value => String(value), i18n: globalThis.i18n,
 });
 vm.runInContext(html.slice(start, end), context);
 vm.runInContext(html.slice(html.indexOf('function renderStrategy38('), html.indexOf('/* ---- Pre-race plan panel')), context);

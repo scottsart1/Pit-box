@@ -24,7 +24,8 @@
 
   const FORMAT = /\{([A-Za-z0-9_]+)\}/g;
   const ATTRIBUTES = ['placeholder', 'title', 'aria-label', 'alt'];
-  const SKIP_TAGS = new Set(['SCRIPT', 'STYLE', 'TEXTAREA', 'CODE', 'PRE', 'NOSCRIPT', 'TEMPLATE']);
+  // <title> carries the brand and the version, so it stays as written.
+  const SKIP_TAGS = new Set(['SCRIPT', 'STYLE', 'TEXTAREA', 'CODE', 'PRE', 'NOSCRIPT', 'TEMPLATE', 'TITLE']);
   const VOID_TAGS = new Set(['area', 'base', 'br', 'col', 'embed', 'hr', 'img', 'input', 'link', 'meta', 'source', 'track', 'wbr']);
 
   let lang = 'en';

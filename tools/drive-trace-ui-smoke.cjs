@@ -12,6 +12,8 @@ const context = { clearRect() { lines.length = 0; }, beginPath() {}, stroke() {}
   moveTo(x, y) { lines.push(['move', x, y]); }, lineTo(x, y) { lines.push(['line', x, y]); } };
 window.HTMLCanvasElement.prototype.getContext = () => context;
 try {
+  // The renderers below write through the screen-language runtime.
+  window.eval(fs.readFileSync(path.resolve(__dirname, '../static/js/i18n.js'), 'utf8'));
   window.eval('function $(id){return document.getElementById(id)}\n' +
     ['drawTrace', 'traceLiveLabel', 'renderDriveTrace'].map(name => {
       const match = source.match(new RegExp(`^function ${name}\\([^\\n]+`, 'm'));

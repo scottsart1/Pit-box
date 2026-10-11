@@ -4,6 +4,7 @@ const {chromium}=require('playwright');
 const root=path.resolve(__dirname,'..');
 const html=fs.readFileSync(path.join(root,'static/index.html'),'utf8').replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi,'');
 const script=fs.readFileSync(path.join(root,'static/js/onboarding.js'),'utf8');
+const i18nScript=fs.readFileSync(path.join(root,'static/js/i18n.js'),'utf8');
 const KEY='pitwall.onboarding.v1';
 (async()=>{
  const browser=await chromium.launch({headless:true,...(process.env.PITBOX_BROWSER_CHANNEL?{channel:process.env.PITBOX_BROWSER_CHANNEL}:{})});
@@ -48,6 +49,7 @@ const KEY='pitwall.onboarding.v1';
    if(local)localStorage.setItem(key,local);
    if(blockStorage)Object.defineProperty(window,'localStorage',{get(){throw new Error('Storage blocked');}});
   },{key:KEY,local:options.local,blockStorage:options.blockStorage});
+  await page.addScriptTag({content:i18nScript});
   await page.addScriptTag({content:script});
   return page;
  };

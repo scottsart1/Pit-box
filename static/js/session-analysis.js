@@ -13,11 +13,11 @@ const API_ROOT = "/api/v1";
 const SVG_NS = "http://www.w3.org/2000/svg";
 const MAX_FOCUS = 6;
 const STORAGE_SESSION = "pitwall.analysis.session";
-const CHOOSE_MESSAGE = "Choose a saved session, or press Analyze session in Library or Session Review.";
-const DEFAULT_TITLE = "Session analysis";
-const DEFAULT_SUBTITLE = "Race pace, race trace, positions, tyre strategy, lap times and the timelapse for one saved session.";
-const DEFAULT_PACE_BASIS = "Pace uses representative laps only; laps over 107% of the driver's median are hidden unless you turn that off.";
-const STRATEGY_HEADING = "Stints in finishing order";
+const CHOOSE_MESSAGE = i18n.t("Choose a saved session, or press Analyze session in Library or Session Review.");
+const DEFAULT_TITLE = i18n.t("Session analysis");
+const DEFAULT_SUBTITLE = i18n.t("Race pace, race trace, positions, tyre strategy, lap times and the timelapse for one saved session.");
+const DEFAULT_PACE_BASIS = i18n.t("Pace uses representative laps only; laps over 107% of the driver's median are hidden unless you turn that off.");
+const STRATEGY_HEADING = i18n.t("Stints in finishing order");
 const CHARTS = ["analysisPaceChart", "analysisTraceChart", "analysisPositionsChart", "analysisStrategyChart", "analysisLapTimesChart", "analysisHeatmapChart", "analysisLapseChart", "analysisFastestChart"];
 const TABLES = ["analysisPaceTable", "analysisTraceTable", "analysisPositionsTable", "analysisStrategyTable", "analysisLapTimesTable", "analysisHeatmapTable", "analysisLapseTable", "analysisFastestTable"];
 const NOTES = ["analysisPaceThin", "analysisTraceNote"];
@@ -101,7 +101,7 @@ async function api(path) {
   try {
     response = await fetch(`${API_ROOT}${path}`, { headers: { Accept: "application/json" } });
   } catch (error) {
-    throw Object.assign(new Error(`The local API is unavailable: ${errorText(error)}`), { status: 0 });
+    throw Object.assign(new Error(i18n.t("The local API is unavailable: {error}", { error: errorText(error) })), { status: 0 });
   }
   const text = await response.text();
   let payload = null;
@@ -185,7 +185,7 @@ function showTip(container, anchor, lines, { key = "", sticky = false, live = fa
   const tip = tipOf(container);
   const nodes = lines.map((line, i) => (typeof line === "string" ? element(i === 0 ? "strong" : "div", "", line) : line));
   if (lapId) {
-    const open = element("button", "button ghost sa-tip-open", "Open in Lap Lab");
+    const open = element("button", "button ghost sa-tip-open", i18n.t("Open in Lap Lab"));
     open.type = "button";
     open.dataset.lapId = lapId;
     if (openLabel) open.setAttribute("aria-label", openLabel);
@@ -316,7 +316,7 @@ function markTip(container, mark, { sticky = false, live = false } = {}) {
   const lapId = mark.getAttribute("data-lap-id") || "";
   showTip(container, markAnchor(mark), [mark.getAttribute("data-tip") || mark.getAttribute("aria-label") || ""], {
     key: mark.getAttribute("data-key"), sticky, live, lapId: sticky && lapId ? lapId : "",
-    openLabel: lapId ? `Open ${mark.getAttribute("data-tip")} in Lap Lab` : "",
+    openLabel: lapId ? i18n.t("Open {lap} in Lap Lab", { lap: String(mark.getAttribute("data-tip")) }) : "",
   });
 }
 
@@ -341,7 +341,7 @@ function crosshairTip(container, config, lap, { sticky = false, live = false } =
     row.append(key, element("b", "", item.value), element("span", "", item.label));
     return row;
   });
-  showTip(container, { left: x, right: x, top, bottom: top }, [element("strong", "", `Lap ${point.lap}`), ...(rows.length ? rows : [element("div", "", "Add a focus driver to read values.")])], { key: `lap-${point.lap}`, sticky, live });
+  showTip(container, { left: x, right: x, top, bottom: top }, [element("strong", "", i18n.t("Lap {lap}", { lap: point.lap })), ...(rows.length ? rows : [element("div", "", i18n.t("Add a focus driver to read values."))])], { key: `lap-${point.lap}`, sticky, live });
 }
 
 function lapFromPointer(config, event) {
@@ -492,7 +492,7 @@ function tableCell(cell) {
 
 function dataTable(table, { before = [] } = {}) {
   const details = element("details", "sa-table-details");
-  const summary = element("summary", "", "Data table");
+  const summary = element("summary", "", i18n.t("Data table"));
   summary.append(element("span", "sr-only", `: ${table.caption}`));
   const wrap = element("div", "table-scroll");
   const node = element("table", "table workspace-table sa-table");
@@ -582,10 +582,10 @@ function renderPace() {
   const horizontal = width < 600 || (width - 76) / Math.max(1, boxed) < 46;
   const model = M.racePaceModel(state.analysis, { width, height: clamp(Math.round(width * 0.34), 260, 340), horizontal });
   const thin = byId("analysisPaceThin");
-  if (thin) thin.textContent = model.thin.length ? `Too few pace laps to box: ${model.thin.map((t) => `${t.code} (${t.n})`).join(", ")}.` : "";
+  if (thin) thin.textContent = model.thin.length ? i18n.t("Too few pace laps to box: {drivers}.", { drivers: model.thin.map((t) => `${t.code} (${t.n})`).join(", ") }) : "";
   placeTable("analysisPaceTable", M.paceTable(state.analysis));
-  if (!model.boxes.length) { mount(container, emptyNote("Not enough pace laps to show a spread for any driver.")); bindChart(container, { kind: "none" }); return; }
-  const svg = svgRoot(model.width, model.height, "Race pace: lap-time spread per driver, fastest median first. Arrow keys move between drivers.", { interactive: true });
+  if (!model.boxes.length) { mount(container, emptyNote(i18n.t("Not enough pace laps to show a spread for any driver."))); bindChart(container, { kind: "none" }); return; }
+  const svg = svgRoot(model.width, model.height, i18n.t("Race pace: lap-time spread per driver, fastest median first. Arrow keys move between drivers."), { interactive: true });
   const plot = model.plot;
   if (horizontal) {
     for (const tick of model.ticks) {
@@ -638,8 +638,8 @@ function renderPace() {
 function raceControlNote() {
   const rc = state.analysis?.race_control;
   if (!isRace() || !rc) return "";
-  if (rc.available !== true) return "Safety cars were not recorded for this session.";
-  if (Number(rc.covered_from_lap) > 1) return `Safety cars before lap ${rc.covered_from_lap} were not recorded.`;
+  if (rc.available !== true) return i18n.t("Safety cars were not recorded for this session.");
+  if (Number(rc.covered_from_lap) > 1) return i18n.t("Safety cars before lap {lap} were not recorded.", { lap: `${rc.covered_from_lap}` });
   return "";
 }
 
@@ -651,8 +651,11 @@ function renderTrace() {
   const note = byId("analysisTraceNote");
   if (note) note.textContent = [M.referenceNote(state.analysis, state.reference), raceControlNote()].filter(Boolean).join(" ");
   placeTable("analysisTraceTable", M.traceTable(state.analysis, { focus: state.focus, reference: state.reference }));
-  if (!model.laps.length) { mount(container, emptyNote("No laps to trace.")); bindChart(container, { kind: "none" }); return; }
-  const svg = svgRoot(model.width, model.height, `Race trace: gap per lap to ${model.reference}, positive is behind. Arrow keys step through laps.`, { interactive: true, focusable: true });
+  if (!model.laps.length) { mount(container, emptyNote(i18n.t("No laps to trace."))); bindChart(container, { kind: "none" }); return; }
+  const chartLabel = state.reference === "leader"
+    ? i18n.t("Race trace: gap per lap to the leader, positive is behind. Arrow keys step through laps.")
+    : i18n.t("Race trace: gap per lap to {reference}, positive is behind. Arrow keys step through laps.", { reference: model.reference });
+  const svg = svgRoot(model.width, model.height, chartLabel, { interactive: true, focusable: true });
   drawBands(svg, model.bands, model.plot);
   drawAxes(svg, { plot: model.plot, xTicks: model.xTicks, yTicks: model.yTicks });
   // Cars beyond the axis leave the plot at its edge instead of lying along it.
@@ -691,8 +694,8 @@ function renderPositions() {
   const field = Math.max(2, ...(state.analysis.laps || []).map((l) => Number(l.position) || 0));
   const model = M.positionsModel(state.analysis, { focus: state.focus, width, height: clamp(field * 18 + 48, 200, 460), measure: labelMeasure(container) });
   placeTable("analysisPositionsTable", M.positionsTable(state.analysis));
-  if (!model.lines.length) { mount(container, emptyNote("No lap positions could be derived for this session.")); bindChart(container, { kind: "none" }); return; }
-  const svg = svgRoot(model.width, model.height, "Position at the end of every lap; lapped finishers keep their place. Arrow keys step through laps.", { interactive: true, focusable: true });
+  if (!model.lines.length) { mount(container, emptyNote(i18n.t("No lap positions could be derived for this session."))); bindChart(container, { kind: "none" }); return; }
+  const svg = svgRoot(model.width, model.height, i18n.t("Position at the end of every lap; lapped finishers keep their place. Arrow keys step through laps."), { interactive: true, focusable: true });
   drawBands(svg, model.bands, model.plot);
   drawAxes(svg, { plot: model.plot, xTicks: model.xTicks, yTicks: model.yTicks, horizontalGrid: false });
   for (const line of model.lines) for (const points of line.runs) svg.append(svgElement("polyline", { class: line.focus ? "sa-line sa-line-focus" : "sa-line", points, stroke: line.colour, "stroke-dasharray": line.dash || null }));
@@ -712,8 +715,10 @@ function renderPositions() {
 
 // Drivers come in finishing order in a race with an order, otherwise most
 // laps first (the backend's order).
-function strategyOrderText() {
-  return hasOrder() ? "in finishing order" : "most laps first";
+function strategyLabel() {
+  return hasOrder()
+    ? i18n.t("Tyre strategy: stints per driver, in finishing order. Arrow keys move between stints and drivers.")
+    : i18n.t("Tyre strategy: stints per driver, most laps first. Arrow keys move between stints and drivers.");
 }
 
 function renderStrategy() {
@@ -722,8 +727,8 @@ function renderStrategy() {
   const width = widthOf(container);
   const model = M.strategyModel(state.analysis, { width, rowHeight: 24 });
   placeTable("analysisStrategyTable", M.strategyTable(state.analysis));
-  if (!model.rows.some((r) => r.stints.length)) { mount(container, emptyNote("No tyre data was stored for this session.")); bindChart(container, { kind: "none" }); return; }
-  const svg = svgRoot(model.width, model.height, `Tyre strategy: stints per driver, ${strategyOrderText()}. Arrow keys move between stints and drivers.`, { interactive: true });
+  if (!model.rows.some((r) => r.stints.length)) { mount(container, emptyNote(i18n.t("No tyre data was stored for this session."))); bindChart(container, { kind: "none" }); return; }
+  const svg = svgRoot(model.width, model.height, strategyLabel(), { interactive: true });
   model.rows.forEach((row, r) => {
     svg.append(svgElement("text", { class: row.player ? "sa-label sa-label-player" : "sa-label", x: model.left - 6, y: row.labelY, "text-anchor": "end" }, row.code));
     row.stints.forEach((stint, s) => {
@@ -744,8 +749,8 @@ function renderLapTimes() {
   const width = widthOf(container);
   const model = M.lapTimesModel(state.analysis, { focus: state.focus, width, height: clamp(Math.round(width * 0.48), 220, 320) });
   placeTable("analysisLapTimesTable", M.lapTimesTable(state.analysis, { focus: state.focus }));
-  if (model.empty) { mount(container, emptyNote(state.focus.length ? "No pace laps for the focus drivers." : "Add a focus driver to see lap times.")); bindChart(container, { kind: "none" }); return; }
-  const svg = svgRoot(model.width, model.height, "Lap times of pace laps for the focus drivers. Arrow keys move between laps and drivers; Enter opens a lap in Lap Lab.", { interactive: true });
+  if (model.empty) { mount(container, emptyNote(state.focus.length ? i18n.t("No pace laps for the focus drivers.") : i18n.t("Add a focus driver to see lap times."))); bindChart(container, { kind: "none" }); return; }
+  const svg = svgRoot(model.width, model.height, i18n.t("Lap times of pace laps for the focus drivers. Arrow keys move between laps and drivers; Enter opens a lap in Lap Lab."), { interactive: true });
   drawBands(svg, model.bands, model.plot);
   drawAxes(svg, { plot: model.plot, xTicks: model.xTicks, yTicks: model.yTicks });
   for (const series of model.series) {
@@ -756,7 +761,7 @@ function renderLapTimes() {
       svg.append(svgElement("circle", {
         class: point.openable ? "sa-dot sa-mark sa-link" : "sa-dot sa-mark", cx: point.x, cy: point.y, r: 4.5, fill: series.colour, tabindex: -1,
         role: point.openable ? "button" : "img", "data-key": `lt-${series.car_index}-${point.lap}`, "data-row": point.row, "data-col": point.lap,
-        "aria-label": point.openable ? `${point.text}. Press Enter to open in Lap Lab` : point.text, "data-tip": point.text, "data-lap-id": point.openable ? point.lap_id : null,
+        "aria-label": point.openable ? i18n.t("{lap}. Press Enter to open in Lap Lab", { lap: point.text }) : point.text, "data-tip": point.text, "data-lap-id": point.openable ? point.lap_id : null,
       }));
     }
   }
@@ -770,7 +775,7 @@ function renderHeatmap() {
   if (!container) return;
   const model = M.heatmapModel(state.analysis);
   placeHeatTable();
-  if (!model.rows.length || !model.total) { mount(container, emptyNote("No laps to map.")); bindChart(container, { kind: "none" }); return; }
+  if (!model.rows.length || !model.total) { mount(container, emptyNote(i18n.t("No laps to map."))); bindChart(container, { kind: "none" }); return; }
   const width = widthOf(container);
   const labelWidth = 46;
   const cell = clamp(Math.floor((width - labelWidth - 10) / model.total) - 2, 14, 28);
@@ -778,14 +783,14 @@ function renderHeatmap() {
   const height = model.rows.length * pitch + 26;
   const gridWidth = model.total * (cell + 2) + 8;
   const labels = svgElement("svg", { width: labelWidth, height, viewBox: `0 0 ${labelWidth} ${height}`, class: "sa-svg sa-heat-labels", "aria-hidden": "true" });
-  const svg = svgRoot(gridWidth, height, "Lap-time heatmap: each lap against the driver's own median. Arrow keys move between laps and drivers; Enter opens a recorded lap in Lap Lab.", { interactive: true });
+  const svg = svgRoot(gridWidth, height, i18n.t("Lap-time heatmap: each lap against the driver's own median. Arrow keys move between laps and drivers; Enter opens a recorded lap in Lap Lab."), { interactive: true });
   model.rows.forEach((row, r) => {
     const y = 4 + r * pitch;
     labels.append(svgElement("text", { class: row.player ? "sa-label sa-label-player" : "sa-label", x: labelWidth - 6, y: y + 13, "text-anchor": "end" }, row.code));
     row.cells.forEach((c, i) => {
       if (c.state === "none") return;
       const missing = c.state === "missing";
-      const label = c.openable ? `${c.text}. Select again or press Enter to open in Lap Lab` : c.text;
+      const label = c.openable ? i18n.t("{lap}. Select again or press Enter to open in Lap Lab", { lap: c.text }) : c.text;
       svg.append(svgElement("rect", {
         class: `sa-cell sa-mark${c.openable ? " sa-link" : ""}${missing ? " sa-cell-missing" : c.state === "excluded" ? " sa-cell-excluded" : ""}`,
         x: 2 + i * (cell + 2), y, width: cell, height: 18, rx: 2, fill: missing ? null : c.fill, tabindex: -1,
@@ -815,14 +820,14 @@ function placeHeatTable() {
   if (!drivers.length) { placeTable("analysisHeatmapTable", null); return; }
   if (!drivers.some((d) => d.car_index === state.heatDriver)) state.heatDriver = (drivers.find((d) => d.is_player) || drivers.find((d) => state.focus.includes(d.car_index)) || drivers[0]).car_index;
   const table = M.heatmapTable(state.analysis, state.heatDriver);
-  const picker = element("label", "sa-inline sa-heat-picker", "Driver ");
+  const picker = element("label", "sa-inline sa-heat-picker", `${i18n.t("Driver")} `);
   const select = element("select");
   select.id = "analysisHeatmapDriver";
-  for (const d of drivers) select.append(new Option(`${d.code}${d.is_player ? " (you)" : ""}`, String(d.car_index)));
+  for (const d of drivers) select.append(new Option(d.is_player ? i18n.t("{code} (you)", { code: `${d.code}` }) : `${d.code}`, String(d.car_index)));
   select.value = String(state.heatDriver);
   select.addEventListener("change", () => { state.heatDriver = Number(select.value); placeHeatTable(); });
   picker.append(select);
-  placeTable("analysisHeatmapTable", { ...table, rows: table.rows.length ? table.rows : [["—", "No laps", "—", "—", "—"]] }, { before: [picker] });
+  placeTable("analysisHeatmapTable", { ...table, rows: table.rows.length ? table.rows : [["—", i18n.t("No laps"), "—", "—", "—"]] }, { before: [picker] });
 }
 
 function renderFastest() {
@@ -831,8 +836,8 @@ function renderFastest() {
   const width = widthOf(container);
   const model = M.fastestModel(state.analysis, { width, rowHeight: 24 });
   placeTable("analysisFastestTable", M.fastestTable(state.analysis));
-  if (!model.rows.length) { mount(container, emptyNote("No valid timed laps.")); bindChart(container, { kind: "none" }); return; }
-  const svg = svgRoot(model.width, model.height, "Best lap per driver behind the fastest; the tick marks the best sectors combined. Arrow keys move between drivers.", { interactive: true });
+  if (!model.rows.length) { mount(container, emptyNote(i18n.t("No valid timed laps."))); bindChart(container, { kind: "none" }); return; }
+  const svg = svgRoot(model.width, model.height, i18n.t("Best lap per driver behind the fastest; the tick marks the best sectors combined. Arrow keys move between drivers."), { interactive: true });
   model.rows.forEach((row, i) => {
     const g = svgElement("g", { tabindex: -1, role: "img", class: "sa-bar sa-mark", "data-key": `best-${row.car_index}`, "data-row": 0, "data-col": i, "aria-label": row.text, "data-tip": row.text });
     g.append(svgElement("text", { class: row.player ? "sa-label sa-label-player" : "sa-label", x: model.left - 6, y: row.y + 13, "text-anchor": "end" }, row.code));
@@ -852,7 +857,7 @@ function renderStops() {
   body.replaceChildren();
   if (!rows.length) {
     const tr = element("tr");
-    const td = element("td", "empty", "No pit stops or tyre changes were recorded.");
+    const td = element("td", "empty", i18n.t("No pit stops or tyre changes were recorded."));
     td.colSpan = 5;
     tr.append(td);
     body.append(tr);
@@ -883,11 +888,11 @@ function renderLapse() {
   const label = byId("analysisLapseLabel");
   const lap = Math.min(total, Math.max(1, Math.floor(state.lapse.t)));
   if (range && document.activeElement !== range) range.value = String(lap);
-  const context = frame.suspended ? " · suspended" : frame.neutralised === "SC" ? " · safety car" : frame.neutralised === "VSC" ? " · VSC" : "";
-  if (label) label.textContent = total ? `Lap ${lap} of ${total}${context}` : "No laps";
+  const context = frame.suspended ? ` · ${i18n.t("suspended")}` : frame.neutralised === "SC" ? ` · ${i18n.t("safety car")}` : frame.neutralised === "VSC" ? " · VSC" : "";
+  if (label) label.textContent = total ? `${i18n.t("Lap {lap} of {total}", { lap, total })}${context}` : i18n.t("No laps");
   if (!frame.entries?.length) {
     state.lapse.view = null;
-    mount(container, emptyNote(state.analysis ? "No running order to replay." : "No session analysed."));
+    mount(container, emptyNote(state.analysis ? i18n.t("No running order to replay.") : i18n.t("No session analysed.")));
     return;
   }
   const width = widthOf(container);
@@ -906,9 +911,9 @@ function buildLapse(container, width) {
   const height = head + rows * rowHeight + 28;
   const left = 96;
   const right = width - 92;
-  const svg = svgRoot(width, height, "Race timelapse");
+  const svg = svgRoot(width, height, i18n.t("Race timelapse"));
   const grid = svgElement("g");
-  const note = svgElement("text", { class: "sa-suspended-note", x: 8, y: 16, visibility: "hidden" }, "Race suspended · order frozen");
+  const note = svgElement("text", { class: "sa-suspended-note", x: 8, y: 16, visibility: "hidden" }, i18n.t("Race suspended · order frozen"));
   svg.append(grid, note);
   const styles = M.driverStyles(analysis);
   const cars = new Map();
@@ -946,7 +951,7 @@ function updateLapse(view, frame) {
     const ticks = frame.suspended ? [] : M.niceTicks(0, span, Math.max(2, Math.floor((view.right - view.left) / 70)));
     view.grid.replaceChildren(...ticks.flatMap((tick) => [
       svgElement("line", { class: "sa-grid", x1: x(tick), x2: x(tick), y1: view.head, y2: view.height - 22 }),
-      svgElement("text", { class: "sa-tick", x: x(tick), y: view.height - 6, "text-anchor": "middle" }, tick === 0 ? "Leader" : `+${tick} s`),
+      svgElement("text", { class: "sa-tick", x: x(tick), y: view.height - 6, "text-anchor": "middle" }, tick === 0 ? i18n.t("Leader") : `+${tick} s`),
     ]));
   }
   view.note.setAttribute("visibility", frame.suspended ? "visible" : "hidden");
@@ -971,7 +976,7 @@ function updateLapse(view, frame) {
       car.letter.setAttribute("fill", compound.ink);
       car.letter.textContent = compound.letter;
     });
-    const gapText = entry.laps_down > 0 ? M.lapsDownText(entry.laps_down) : gap === null ? "" : gap === 0 ? "Leader" : `+${gap.toFixed(1)}`;
+    const gapText = entry.laps_down > 0 ? M.lapsDownText(entry.laps_down) : gap === null ? "" : gap === 0 ? i18n.t("Leader") : `+${gap.toFixed(1)}`;
     setOnce(car, "gap", gapText, (text) => { car.gap.textContent = text; });
     setOnce(car, "place", entry.label || `P${Math.round(entry.position)}`, (text) => { car.place.textContent = text; });
   }
@@ -979,13 +984,15 @@ function updateLapse(view, frame) {
     if (!seen.has(carIndex)) setOnce(car, "visible", false, () => car.g.setAttribute("visibility", "hidden"));
   }
   const leaders = frame.entries.slice(0, 3).map((e) => `${e.label || `P${Math.round(e.position)}`} ${codeOf(e.car_index)}`).join(", ");
-  view.svg.setAttribute("aria-label", `Race timelapse at lap ${frame.lap}${frame.suspended ? ", race suspended" : ""}: ${leaders}. The data table lists the order for every lap.`);
+  view.svg.setAttribute("aria-label", frame.suspended
+    ? i18n.t("Race timelapse at lap {lap}, race suspended: {leaders}. The data table lists the order for every lap.", { lap: `${frame.lap}`, leaders })
+    : i18n.t("Race timelapse at lap {lap}: {leaders}. The data table lists the order for every lap.", { lap: `${frame.lap}`, leaders }));
 }
 
 function playButton(playing) {
   const button = byId("analysisLapsePlay");
   if (!button) return;
-  button.textContent = playing ? "Pause" : "Play";
+  button.textContent = playing ? i18n.t("Pause") : i18n.t("Play");
   button.setAttribute("aria-pressed", String(playing));
 }
 
@@ -1046,7 +1053,7 @@ function resetLapse(frames) {
     range.disabled = !frames.length;
   }
   const label = byId("analysisLapseLabel");
-  if (label && !frames.length) label.textContent = "No laps";
+  if (label && !frames.length) label.textContent = i18n.t("No laps");
   const play = byId("analysisLapsePlay");
   if (play) play.disabled = !frames.length;
   placeTable("analysisLapseTable", frames.length && state.analysis ? M.lapseTable(state.analysis, frames) : null);
@@ -1068,7 +1075,7 @@ function renderHeader() {
     const player = (state.analysis?.drivers || []).find((d) => d.is_player);
     const ready = Boolean(player?.best_lap_id && player.best_lap_traced !== false);
     best.disabled = !ready;
-    best.title = ready ? "" : player ? "Your best lap has no telemetry trace to play." : "No player car was recorded in this session.";
+    best.title = ready ? "" : player ? i18n.t("Your best lap has no telemetry trace to play.") : i18n.t("No player car was recorded in this session.");
   }
 }
 
@@ -1083,15 +1090,15 @@ function renderFocus() {
     const chip = element("button", "sa-chip");
     chip.type = "button";
     chip.dataset.car = String(carIndex);
-    chip.setAttribute("aria-label", `Remove ${driver.code || codeOf(carIndex)} from focus`);
+    chip.setAttribute("aria-label", i18n.t("Remove {code} from focus", { code: driver.code || codeOf(carIndex) }));
     const key = element("span", "sa-key-line");
     key.style.background = styles.get(carIndex)?.colour || M.CONTEXT_STROKE;
     if (styles.get(carIndex)?.dashed) key.classList.add("sa-key-dashed");
-    chip.append(key, element("span", "", `${driver.code || codeOf(carIndex)}${driver.is_player ? " · you" : ""}`), element("span", "sa-chip-x", "×"));
+    chip.append(key, element("span", "", driver.is_player ? i18n.t("{code} · you", { code: driver.code || codeOf(carIndex) }) : `${driver.code || codeOf(carIndex)}`), element("span", "sa-chip-x", "×"));
     chip.addEventListener("click", () => removeFocus(carIndex));
     return chip;
   }));
-  add.replaceChildren(new Option(state.focus.length >= MAX_FOCUS ? `Focus is full (${MAX_FOCUS})` : "Add driver…", ""));
+  add.replaceChildren(new Option(state.focus.length >= MAX_FOCUS ? i18n.t("Focus is full ({max})", { max: MAX_FOCUS }) : i18n.t("Add driver…"), ""));
   for (const driver of state.analysis?.drivers || []) {
     if (state.focus.includes(driver.car_index)) continue;
     const extra = isRace() ? (driver.status === "finished" ? M.positionText(driver.finish_position) : M.resultText(driver)) : "";
@@ -1103,7 +1110,7 @@ function renderFocus() {
   const reference = byId("analysisReference");
   if (reference) {
     const options = M.referenceOptions(state.analysis);
-    reference.replaceChildren(new Option("Race leader", "leader"), ...options.map((o) => new Option(o.label, o.value)));
+    reference.replaceChildren(new Option(i18n.t("Race leader"), "leader"), ...options.map((o) => new Option(o.label, o.value)));
     if (!options.some((o) => o.value === String(state.reference))) state.reference = "leader";
     reference.value = String(state.reference);
     reference.disabled = !hasOrder();
@@ -1147,7 +1154,7 @@ function renderCharts() {
 
 function paceCaption(analysis) {
   const basis = String(analysis?.basis?.pace_laps || "").trim();
-  return basis ? `Pace ${basis}.` : DEFAULT_PACE_BASIS;
+  return basis ? i18n.t("Pace {basis}.", { basis }) : DEFAULT_PACE_BASIS;
 }
 
 // Race-only captions need a race; the race trace, positions, timelapse and
@@ -1164,7 +1171,7 @@ function showSections(analysis) {
     note.hidden = ordered;
   }
   const strategy = byId("analysisStrategyHeading");
-  if (strategy) strategy.textContent = ordered ? STRATEGY_HEADING : "Stints per driver, most laps first";
+  if (strategy) strategy.textContent = ordered ? STRATEGY_HEADING : i18n.t("Stints per driver, most laps first");
 }
 
 function renderAll() {
@@ -1181,7 +1188,7 @@ function renderAll() {
   const drivers = (analysis.drivers || []).length;
   const laps = (analysis.laps || []).length;
   if (warnings.length) setStatus(warnings.join(" "), "warning");
-  else setStatus(`Analysis of ${M.countText(drivers, "car")} and ${M.countText(laps, "lap")}.`, "success");
+  else setStatus(i18n.t("Analysis of {cars} and {laps}.", { cars: i18n.tp(drivers, "{count} car", "{count} cars", { count: drivers }), laps: i18n.tp(laps, "{count} lap", "{count} laps", { count: laps }) }), "success");
 }
 
 // Every chart, table, note and headline back to its empty state, so nothing
@@ -1189,9 +1196,9 @@ function renderAll() {
 function clearView({ loading = false } = {}) {
   stopLapse();
   hideAllTips();
-  const placeholder = loading ? "Loading…" : "No session analysed.";
+  const placeholder = loading ? i18n.t("Loading…") : i18n.t("No session analysed.");
   const title = byId("analysisTitle");
-  if (title) title.textContent = loading ? "Loading session analysis…" : DEFAULT_TITLE;
+  if (title) title.textContent = loading ? i18n.t("Loading session analysis…") : DEFAULT_TITLE;
   const subtitle = byId("analysisSubtitle");
   if (subtitle) subtitle.textContent = loading ? "" : DEFAULT_SUBTITLE;
   byId("analysisKpis")?.replaceChildren();
@@ -1238,17 +1245,17 @@ function openLapInLapLab(lapId) {
 }
 
 function sessionLabel(session) {
-  return [session.display_name || session.track_name || "Saved session", session.session_type, session.started_at ? new Date(session.started_at).toLocaleDateString() : null].filter(Boolean).join(" · ");
+  return [session.display_name || session.track_name || i18n.t("Saved session"), session.session_type, session.started_at ? new Date(session.started_at).toLocaleDateString() : null].filter(Boolean).join(" · ");
 }
 
 function populateSessions() {
   const select = byId("analysisSessionSelect");
   if (!select) return;
   const current = state.sessionId;
-  select.replaceChildren(new Option("Choose a saved session", ""));
+  select.replaceChildren(new Option(i18n.t("Choose a saved session"), ""));
   for (const session of state.sessions) select.append(new Option(sessionLabel(session), String(session.id)));
   if (current && ![...select.options].some((o) => o.value === current)) {
-    const known = state.analysis?.session ? sessionLabel(state.analysis.session) : "Selected session";
+    const known = state.analysis?.session ? sessionLabel(state.analysis.session) : i18n.t("Selected session");
     select.append(new Option(known, current));
   }
   select.value = current;
@@ -1264,7 +1271,7 @@ async function loadSessions() {
     populateSessions();
   } catch (error) {
     if (request !== state.sessionsRequest) return;
-    if (!state.analysis && !state.sessionId) setStatus(`Saved sessions are unavailable: ${errorText(error)}`, "error");
+    if (!state.analysis && !state.sessionId) setStatus(i18n.t("Saved sessions are unavailable: {error}", { error: errorText(error) }), "error");
   }
 }
 
@@ -1292,7 +1299,7 @@ export async function openAnalysis(sessionId) {
   }
   root?.classList.add("sa-loading");
   root?.setAttribute("aria-busy", "true");
-  setStatus(sameSession ? "Updating the analysis…" : "Analysing the session…");
+  setStatus(sameSession ? i18n.t("Updating the analysis…") : i18n.t("Analysing the session…"));
   try {
     const query = new URLSearchParams({ hide_outliers: String(state.hideOutliers) });
     const analysis = await api(`/sessions/${encodeURIComponent(id)}/analysis?${query}`);
@@ -1300,7 +1307,7 @@ export async function openAnalysis(sessionId) {
     if (!M.schemaSupported(analysis)) {
       state.analysis = null;
       clearView();
-      setStatus("This analysis was made by a different version of the app. Reload the app to view this analysis.", "error");
+      setStatus(i18n.t("This analysis was made by a different version of the app. Reload the app to view this analysis."), "error");
       return;
     }
     const keepFocus = sameSession && String(state.analysis?.session_id) === String(analysis.session_id);
@@ -1323,12 +1330,12 @@ export async function openAnalysis(sessionId) {
       state.sessions = state.sessions.filter((s) => String(s.id) !== id);
       populateSessions();
       clearView();
-      setStatus("That session is no longer saved. Choose another saved session.", "error");
+      setStatus(i18n.t("That session is no longer saved. Choose another saved session."), "error");
       loadSessions();
       return;
     }
     clearView();
-    setStatus(`${errorText(error)} Press Refresh to try again.`, "error");
+    setStatus(i18n.t("{error} Press Refresh to try again.", { error: errorText(error) }), "error");
   } finally {
     if (request === state.request) {
       root?.classList.remove("sa-loading");
@@ -1379,7 +1386,7 @@ function sessionDeleted(sessionId) {
     byId("session-analysis")?.classList.remove("sa-loading");
     byId("session-analysis")?.removeAttribute("aria-busy");
     clearView();
-    setStatus("The analysed session was deleted. Choose another saved session.");
+    setStatus(i18n.t("The analysed session was deleted. Choose another saved session."));
   }
   populateSessions();
   if (state.sessionsLoaded) loadSessions();

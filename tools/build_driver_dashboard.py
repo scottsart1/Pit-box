@@ -1,12 +1,15 @@
 """Build the public dashboard's self-contained offline HTML and PWA icons."""
 from pathlib import Path
 import base64
+import json
 import re
 import struct
 import tempfile
 import zlib
 
 ROOT = Path(__file__).resolve().parents[1] / 'static' / 'driver-dashboard'
+# Screen languages whose catalogs travel inside the offline download.
+LANGUAGES = ('fr', 'de', 'es')
 
 def write_generated(path: Path, content: bytes) -> None:
     """Avoid rewriting unchanged assets; publish complete files to readers."""
@@ -22,9 +25,28 @@ def write_generated(path: Path, content: bytes) -> None:
         if temporary is not None and temporary.exists():
             temporary.unlink()
 
+def bundled_catalogs() -> str:
+    """The translation catalogs as JSON that is safe inside a script element.
+
+    The offline file cannot fetch i18n/<lang>.json, so the dashboard reads
+    these instead. A missing or unreadable catalog leaves that language out,
+    which shows the dashboard in English.
+    """
+    catalogs = {}
+    for lang in LANGUAGES:
+        try:
+            catalog = json.loads((ROOT / 'i18n' / f'{lang}.json').read_text(encoding='utf-8'))
+        except (OSError, ValueError):
+            continue
+        if isinstance(catalog, dict):
+            catalogs[lang] = catalog
+    payload = json.dumps(catalogs, ensure_ascii=False, sort_keys=True, separators=(',', ':'))
+    # No "<" at all, so the text can never close or comment out its element.
+    return payload.replace('<', '\\u003c')
+
 def build():
     modules = []
-    for name in ('display.mjs', 'model.mjs', 'render.mjs', 'preferences.mjs', 'dashboard.js'):
+    for name in ('i18n.mjs', 'display.mjs', 'model.mjs', 'render.mjs', 'preferences.mjs', 'dashboard.js'):
         js = (ROOT / name).read_text(encoding='utf-8')
         js = re.sub(r'^import .*?;\s*', '', js, flags=re.M)
         js = re.sub(r'^export ', '', js, flags=re.M)
@@ -33,7 +55,9 @@ def build():
         modules.append(js)
     html = (ROOT / 'index.html').read_text(encoding='utf-8')
     html = html.replace('<link rel="stylesheet" href="dashboard.css">', '<style>' + (ROOT / 'dashboard.css').read_text(encoding='utf-8') + '</style>')
-    html = html.replace('<script type="module" src="dashboard.js"></script>', '<script>\n(()=>{\n' + '\n'.join(modules) + '\n})();\n</script>')
+    html = html.replace('<script type="module" src="dashboard.js"></script>',
+                        '<script type="application/json" id="dashboardCatalogs">' + bundled_catalogs() + '</script>'
+                        '<script>\n(()=>{\n' + '\n'.join(modules) + '\n})();\n</script>')
     html = html.replace('<link rel="manifest" href="manifest.webmanifest">', '')
     icon = base64.b64encode((ROOT / 'icon.svg').read_bytes()).decode('ascii')
     html = html.replace('href="icon.svg"', 'href="data:image/svg+xml;base64,' + icon + '"')

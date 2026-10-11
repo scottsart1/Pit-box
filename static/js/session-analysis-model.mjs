@@ -3,7 +3,8 @@
 // version 2) into plain numbers and strings; nothing touches the DOM, so Node
 // tests cover it. Unknown stays unknown: a null renders as "—" or as words,
 // never as 0, "P0", "0:00.000" or "0 stops", and enum keys always map to
-// driver-facing text.
+// driver-facing text. That text goes through the page's screen-language
+// runtime, the global `i18n` from static/js/i18n.js, which loads first.
 
 export const SCHEMA_VERSION = 2;
 
@@ -12,13 +13,13 @@ export function schemaSupported(analysis) {
 }
 
 export const COMPOUNDS = Object.freeze({
-  SOFT: { fill: "#ff6969", ink: "#070b0f", letter: "S", label: "Soft" },
-  MEDIUM: { fill: "#ffc15c", ink: "#070b0f", letter: "M", label: "Medium" },
-  HARD: { fill: "#e6edf3", ink: "#070b0f", letter: "H", label: "Hard" },
-  INTER: { fill: "#49d17d", ink: "#070b0f", letter: "I", label: "Intermediate" },
+  SOFT: { fill: "#ff6969", ink: "#070b0f", letter: "S", label: i18n.t("Soft") },
+  MEDIUM: { fill: "#ffc15c", ink: "#070b0f", letter: "M", label: i18n.t("Medium") },
+  HARD: { fill: "#e6edf3", ink: "#070b0f", letter: "H", label: i18n.t("Hard") },
+  INTER: { fill: "#49d17d", ink: "#070b0f", letter: "I", label: i18n.t("Intermediate") },
   // Dark ink: white on this blue is 3.5:1, the dark letter is 5.7:1.
-  WET: { fill: "#3f86ff", ink: "#070b0f", letter: "W", label: "Wet" },
-  UNKNOWN: { fill: "#2a3744", ink: "#93a4b5", letter: "?", label: "No tyre data" },
+  WET: { fill: "#3f86ff", ink: "#070b0f", letter: "W", label: i18n.t("Wet") },
+  UNKNOWN: { fill: "#2a3744", ink: "#93a4b5", letter: "?", label: i18n.t("No tyre data") },
 });
 // The game's C1-C6 labels are real recorded compounds whose dry/wet family is
 // not known here: they keep their own label on a neutral fill.
@@ -51,7 +52,7 @@ const isNumber = (value) => value !== null && value !== undefined && value !== "
 export function compoundInfo(compound) {
   const key = String(compound ?? "").trim().toUpperCase();
   if (key !== "UNKNOWN" && COMPOUNDS[key]) return COMPOUNDS[key];
-  if (LABELLED_COMPOUND.test(key)) return { fill: LABELLED_FILL, ink: "#070b0f", letter: key, label: `${key} compound` };
+  if (LABELLED_COMPOUND.test(key)) return { fill: LABELLED_FILL, ink: "#070b0f", letter: key, label: i18n.t("{label} compound", { label: key }) };
   return COMPOUNDS.UNKNOWN;
 }
 
@@ -75,7 +76,7 @@ export function formatSeconds(ms, digits = 3) {
 }
 
 // Compact signed gap for axes and the timelapse: positive is behind.
-export function formatGap(ms, { leader = "Leader" } = {}) {
+export function formatGap(ms, { leader = i18n.t("Leader") } = {}) {
   if (!isNumber(ms)) return "—";
   if (Number(ms) === 0) return leader;
   const seconds = Number(ms) / 1000;
@@ -86,17 +87,28 @@ export function formatGap(ms, { leader = "Leader" } = {}) {
 export function gapWords(ms, { reference = "", digits = 3 } = {}) {
   if (!isNumber(ms)) return "—";
   const value = Number(ms);
-  if (value === 0) return reference ? `level with ${reference}` : "level";
-  if (value > 0) return `${formatSeconds(value, digits)} behind${reference ? ` ${reference}` : ""}`;
-  return `${formatSeconds(value, digits)} ahead${reference ? ` of ${reference}` : ""}`;
+  if (value === 0) return reference ? i18n.t("level with {reference}", { reference }) : i18n.t("level");
+  const gap = formatSeconds(value, digits);
+  if (value > 0) return reference ? i18n.t("{gap} behind {reference}", { gap, reference }) : i18n.t("{gap} behind", { gap });
+  return reference ? i18n.t("{gap} ahead of {reference}", { gap, reference }) : i18n.t("{gap} ahead", { gap });
 }
 
 // A lap against the driver's own median, in seconds.
 export function deltaWords(deltaSeconds) {
   if (!isNumber(deltaSeconds)) return "—";
   const value = Number(deltaSeconds);
-  if (value === 0) return "at the median";
-  return `${Math.abs(value).toFixed(3)} s ${value > 0 ? "slower" : "faster"} than median`;
+  if (value === 0) return i18n.t("at the median");
+  const delta = Math.abs(value).toFixed(3);
+  return value > 0 ? i18n.t("{delta} s slower than median", { delta }) : i18n.t("{delta} s faster than median", { delta });
+}
+
+// The same in a table column headed "Against median".
+function shortDeltaWords(deltaSeconds) {
+  if (!isNumber(deltaSeconds)) return "—";
+  const value = Number(deltaSeconds);
+  if (value === 0) return i18n.t("at median");
+  const delta = Math.abs(value).toFixed(3);
+  return value > 0 ? i18n.t("{delta} s slower", { delta }) : i18n.t("{delta} s faster", { delta });
 }
 
 export function positionText(position) {
@@ -108,59 +120,71 @@ export function countText(count, singular, plural = `${singular}s`) {
   return `${Number(count)} ${Number(count) === 1 ? singular : plural}`;
 }
 
+// A count of laps in words; "—" when unknown.
+function lapsText(count) {
+  return isNumber(count) ? i18n.tp(Number(count), "{count} lap", "{count} laps", { count: Number(count) }) : "—";
+}
+
 export function lapsDownText(lapsDown) {
-  return isNumber(lapsDown) && Number(lapsDown) > 0 ? `+${countText(lapsDown, "lap")}` : "";
+  return isNumber(lapsDown) && Number(lapsDown) > 0 ? i18n.tp(Number(lapsDown), "+{count} lap", "+{count} laps", { count: Number(lapsDown) }) : "";
 }
 
 export const PACE_EXCLUSION_TEXT = Object.freeze({
-  missing_time: "No lap time",
-  lap_one: "Lap 1",
-  suspended: "Race suspended",
-  restart: "Restart lap",
-  safety_car: "Safety car",
-  vsc: "Virtual safety car",
-  unconfirmed: "Awaiting confirmation after a flashback",
-  driver_reported: "Excluded in a lap note",
-  no_context: "Timing only, no pit or flag data",
-  pit: "Pit lap",
-  flags: "Flag shown",
-  invalid: "Invalid lap",
-  outlier: "Over 107% of median",
+  missing_time: i18n.t("No lap time"),
+  lap_one: i18n.t("Lap 1"),
+  suspended: i18n.t("Race suspended"),
+  restart: i18n.t("Restart lap"),
+  safety_car: i18n.t("Safety car"),
+  vsc: i18n.t("Virtual safety car"),
+  unconfirmed: i18n.t("Awaiting confirmation after a flashback"),
+  driver_reported: i18n.t("Excluded in a lap note"),
+  no_context: i18n.t("Timing only, no pit or flag data"),
+  pit: i18n.t("Pit lap"),
+  flags: i18n.t("Flag shown"),
+  invalid: i18n.t("Invalid lap"),
+  outlier: i18n.t("Over 107% of median"),
 });
 
 export function exclusionText(reason) {
   if (!reason) return "";
-  return PACE_EXCLUSION_TEXT[reason] || "Left out of pace";
+  return PACE_EXCLUSION_TEXT[reason] || i18n.t("Left out of pace");
 }
 
 export const STOP_KIND_TEXT = Object.freeze({
-  pit_stop: "Pit stop",
-  tyre_change: "Tyre change while suspended",
-  unrecorded_stop: "Stop not recorded",
+  pit_stop: i18n.t("Pit stop"),
+  tyre_change: i18n.t("Tyre change while suspended"),
+  unrecorded_stop: i18n.t("Stop not recorded"),
 });
 
 export function stopKindText(stop) {
   if (stop?.kind === "tyre_change") return STOP_KIND_TEXT.tyre_change;
   if (stop?.kind === "unrecorded_stop") return STOP_KIND_TEXT.unrecorded_stop;
-  if (stop?.kind === "pit_stop") return stop.under_neutralisation ? "Pit stop · neutralised" : STOP_KIND_TEXT.pit_stop;
-  return "Tyre change";
+  if (stop?.kind === "pit_stop") return stop.under_neutralisation ? i18n.t("Pit stop · neutralised") : STOP_KIND_TEXT.pit_stop;
+  return i18n.t("Tyre change");
 }
 
 export function stopLossText(stop) {
-  if (stop?.kind === "unrecorded_stop") return "Unknown";
+  if (stop?.kind === "unrecorded_stop") return i18n.t("Unknown");
   const ms = stop?.estimated_loss_ms;
   if (!isNumber(ms)) return "—";
   return `${Number(ms) < 0 ? "−" : ""}${(Math.abs(Number(ms)) / 1000).toFixed(1)} s`;
 }
 
 export const STATUS_TEXT = Object.freeze({
-  finished: "Finished",
-  lapped: "Lapped",
-  retired: "Retired",
-  incomplete_record: "Record incomplete",
-  running: "Running",
-  unranked: "Only recorded car",
-  no_data: "No laps recorded",
+  finished: i18n.t("Finished"),
+  lapped: i18n.t("Lapped"),
+  retired: i18n.t("Retired"),
+  incomplete_record: i18n.t("Record incomplete"),
+  running: i18n.t("Running"),
+  unranked: i18n.t("Only recorded car"),
+  no_data: i18n.t("No laps recorded"),
+});
+// The statuses a runner-up can have beyond a gap, laps down or a
+// retirement, as they read inside a sentence.
+const STATUS_INLINE_TEXT = Object.freeze({
+  incomplete_record: i18n.t("record incomplete"),
+  unranked: i18n.t("only recorded car"),
+  no_data: i18n.t("no laps recorded"),
 });
 
 export function statusText(driver) {
@@ -172,13 +196,13 @@ export function statusText(driver) {
 // counted as a stop by the game, so retired cars show no count at all.
 export function stopsText(driver) {
   if (!driver) return "—";
-  if (driver.status === "retired") return "Retired";
-  if (!isNumber(driver.pit_stops)) return "Stops unknown";
-  return countText(driver.pit_stops, "stop");
+  if (driver.status === "retired") return i18n.t("Retired");
+  if (!isNumber(driver.pit_stops)) return i18n.t("Stops unknown");
+  return i18n.tp(Number(driver.pit_stops), "{count} stop", "{count} stops", { count: Number(driver.pit_stops) });
 }
 
 // The game's own result statuses, from its final classification.
-const RESULT_TEXT = Object.freeze({ dnf: "DNF", dsq: "Disqualified", nc: "Not classified", retired: "Retired" });
+const RESULT_TEXT = Object.freeze({ dnf: i18n.t("DNF"), dsq: i18n.t("Disqualified"), nc: i18n.t("Not classified"), retired: i18n.t("Retired") });
 
 // The classified result in a table cell.
 export function resultText(driver) {
@@ -188,7 +212,7 @@ export function resultText(driver) {
     case "finished": return place;
     case "lapped": return [place === "—" ? null : place, lapsDownText(driver.laps_down)].filter(Boolean).join(" · ") || STATUS_TEXT.lapped;
     case "retired": return STATUS_TEXT.retired;
-    case "running": return place === "—" ? STATUS_TEXT.running : `${place} (provisional)`;
+    case "running": return place === "—" ? STATUS_TEXT.running : i18n.t("{place} (provisional)", { place });
     default: return STATUS_TEXT[driver?.status] || place;
   }
 }
@@ -350,9 +374,9 @@ export function hasRaceOrder(analysis) {
 // Why the race trace, positions and timelapse are not shown; "" when they are.
 export function raceOrderNote(analysis) {
   if (!analysis || hasRaceOrder(analysis)) return "";
-  if (!analysis.session?.is_race) return "Race trace, positions and the timelapse need a race; this session shows pace, tyres and laps.";
-  if (carsWithLaps(analysis) === 0 && !(analysis.drivers || []).some((d) => d.status === "unranked")) return "No car completed a lap, so there is no race order to show.";
-  return "Only one car was recorded, so there is no race order: race trace, positions and the timelapse need two or more cars.";
+  if (!analysis.session?.is_race) return i18n.t("Race trace, positions and the timelapse need a race; this session shows pace, tyres and laps.");
+  if (carsWithLaps(analysis) === 0 && !(analysis.drivers || []).some((d) => d.status === "unranked")) return i18n.t("No car completed a lap, so there is no race order to show.");
+  return i18n.t("Only one car was recorded, so there is no race order: race trace, positions and the timelapse need two or more cars.");
 }
 
 // A lap Lap Lab can play: it has a time and a telemetry trace.
@@ -386,7 +410,7 @@ export function referenceOptions(analysis) {
     .filter((d) => ["finished", "lapped", "running"].includes(d.status) && Number(d.laps_completed ?? d.laps_recorded) > 0)
     .map((d) => ({
       value: String(d.car_index),
-      label: [`${d.code}${d.is_player ? " (you)" : ""}`, d.status === "lapped" ? lapsDownText(d.laps_down) : null].filter(Boolean).join(" · "),
+      label: [d.is_player ? i18n.t("{code} (you)", { code: `${d.code}` }) : `${d.code}`, d.status === "lapped" ? lapsDownText(d.laps_down) : null].filter(Boolean).join(" · "),
     }));
 }
 
@@ -398,8 +422,8 @@ export function referenceNote(analysis, reference) {
   const total = lastLap(analysis);
   const last = byLap ? Math.max(...[...byLap.values()].filter((l) => isNumber(l.segment_time_ms)).map((l) => l.lap_number), 0) : 0;
   const code = codeOf(analysis, carIndex);
-  if (!last) return `${code} has no timed laps to compare against.`;
-  return last < total ? `Gaps to ${code} end at lap ${last}, its last timed lap.` : "";
+  if (!last) return i18n.t("{code} has no timed laps to compare against.", { code });
+  return last < total ? i18n.t("Gaps to {code} end at lap {lap}, its last timed lap.", { code, lap: last }) : "";
 }
 
 // ------------------------------------------------------------- lap bands
@@ -419,10 +443,14 @@ export function formatLapRanges(laps) {
   return lapRanges(laps).map(([a, b]) => (a === b ? `${a}` : `${a}–${b}`)).join(", ");
 }
 
-function onLaps(laps) {
+// "red flag on lap 5", "safety car on laps 5–7, 12": `kind` is red, sc or vsc.
+function onLaps(kind, laps) {
   const runs = lapRanges(laps);
   const plural = runs.length > 1 || runs.some(([a, b]) => a !== b);
-  return `on ${plural ? "laps" : "lap"} ${formatLapRanges(laps)}`;
+  const params = { laps: formatLapRanges(laps) };
+  if (kind === "red") return plural ? i18n.t("red flag on laps {laps}", params) : i18n.t("red flag on lap {laps}", params);
+  if (kind === "sc") return plural ? i18n.t("safety car on laps {laps}", params) : i18n.t("safety car on lap {laps}", params);
+  return plural ? i18n.t("VSC on laps {laps}", params) : i18n.t("VSC on lap {laps}", params);
 }
 
 // Safety-car and VSC laps come from race control (field-wide message laps).
@@ -492,10 +520,13 @@ export function racePaceModel(analysis, { width = 1200, height = 340, minLaps = 
       car_index: row.car_index, code, player: Boolean(driver.is_player), colour: styles.get(row.car_index)?.colour || CONTEXT_STROKE,
       q1: at(Number(row.q1_ms)), q3: at(Number(row.q3_ms)), median: at(Number(row.median_ms)),
       whiskerLow: at(Number(row.whisker_low_ms)), whiskerHigh: at(Number(row.whisker_high_ms)),
-      label, row, n: Number(row.n), nText: countText(row.n, "lap"), outliers,
-      text: `${code} · median ${formatLapTime(row.median_ms)} · middle half ${formatLapTime(row.q1_ms)}–${formatLapTime(row.q3_ms)} · ${countText(row.n, "pace lap")}`
-        + (outliers.length ? ` · ${countText(outliers.length, "outlier")}` : "")
-        + (offScale.length ? ` (${offScale.map((o) => `lap ${o.lap} ${formatLapTime(o.ms)}`).join(", ")} beyond the scale)` : ""),
+      label, row, n: Number(row.n), nText: lapsText(row.n), outliers,
+      text: i18n.t("{code} · median {median} · middle half {q1}–{q3} · {laps}", {
+        code, median: formatLapTime(row.median_ms), q1: formatLapTime(row.q1_ms), q3: formatLapTime(row.q3_ms),
+        laps: isNumber(row.n) ? i18n.tp(Number(row.n), "{count} pace lap", "{count} pace laps", { count: Number(row.n) }) : "—",
+      })
+        + (outliers.length ? ` · ${i18n.tp(outliers.length, "{count} outlier", "{count} outliers", { count: outliers.length })}` : "")
+        + (offScale.length ? ` (${i18n.t("{laps} beyond the scale", { laps: offScale.map((o) => i18n.t("lap {lap} {time}", { lap: `${o.lap}`, time: formatLapTime(o.ms) })).join(", ") })})` : ""),
     };
   };
   if (horizontal) {
@@ -579,7 +610,7 @@ export function continuousRuns(analysis, points) {
 }
 
 function referenceName(analysis, reference) {
-  return reference === "leader" ? "the leader" : codeOf(analysis, Number(reference));
+  return reference === "leader" ? i18n.t("the leader") : codeOf(analysis, Number(reference));
 }
 
 export function raceTraceModel(analysis, { focus = [], reference = "leader", width = 640, height = 320, clipSeconds = null } = {}) {
@@ -620,7 +651,7 @@ export function raceTraceModel(analysis, { focus = [], reference = "leader", wid
   }
   lines.sort((a, b) => Number(a.focus) - Number(b.focus));
   spreadLabels(endLabels, 13, plot.top + 4, plot.bottom);
-  const zero = reference === "leader" ? "Leader" : drivers.get(Number(reference))?.code || "Ref";
+  const zero = reference === "leader" ? i18n.t("Leader") : drivers.get(Number(reference))?.code || i18n.t("Ref");
   return {
     width, height, clip: maxGap, plot, reference: referenceName(analysis, reference),
     bands: lapBands(analysis, x).map((b) => ({ ...b, y: plot.top, height: plot.bottom - plot.top })),
@@ -640,8 +671,8 @@ export function traceReading(analysis, { focus = [], reference = "leader", lap }
   return focus.map((carIndex) => {
     const point = (series.get(carIndex) || []).find((p) => p.lap === lap);
     let value = "—";
-    if (point) value = point.gap === 0 ? (reference === "leader" ? "Leader" : String(reference) === String(carIndex) ? "Reference" : `level with ${name}`) : gapWords(point.gap, { reference: reference === "leader" ? "" : name });
-    else if (suspended) value = "Race suspended";
+    if (point) value = point.gap === 0 ? (reference === "leader" ? i18n.t("Leader") : String(reference) === String(carIndex) ? i18n.t("Reference") : i18n.t("level with {reference}", { reference: name })) : gapWords(point.gap, { reference: reference === "leader" ? "" : name });
+    else if (suspended) value = i18n.t("Race suspended");
     return { car_index: carIndex, code: codeOf(analysis, carIndex), value };
   });
 }
@@ -656,9 +687,9 @@ export function finishLabel(driver, lastLapNumber, total) {
   switch (driver?.status) {
     case "finished": return `${place}${code}`;
     case "lapped": return `${place}${code} ${lapsDownText(driver.laps_down)}`.trim();
-    case "retired": return `${code} · out L${lastLapNumber}`;
-    case "incomplete_record": return `${code} · record ends L${lastLapNumber}`;
-    case "running": return lastLapNumber < total ? `${place}${code} · L${lastLapNumber}` : `${place}${code}`;
+    case "retired": return i18n.t("{code} · out L{lap}", { code, lap: `${lastLapNumber}` });
+    case "incomplete_record": return i18n.t("{code} · record ends L{lap}", { code, lap: `${lastLapNumber}` });
+    case "running": return lastLapNumber < total ? `${place}${code} · ${i18n.t("L{lap}", { lap: `${lastLapNumber}` })}` : `${place}${code}`;
     default: return code;
   }
 }
@@ -758,7 +789,7 @@ export function strategyModel(analysis, { width = 1200, rowHeight = 24, minLabel
         const fits = w >= Math.max(minLabelWidth, info.letter.length * 8 + 6);
         return {
           ...stint, x: left, width: w, centre: left + w / 2, fill: info.fill, ink: info.ink, letter: fits ? info.letter : "", label: info.label,
-          text: `${code} · ${info.label} · laps ${stint.start_lap}–${stint.end_lap} (${countText(stint.laps, "lap")})${isNumber(stint.tyre_age_start) && Number(stint.tyre_age_start) > 0 ? ` · ${countText(stint.tyre_age_start, "lap")} old at the start` : ""}`,
+          text: `${code} · ${info.label} · ${i18n.t("laps {first}–{last} ({laps})", { first: `${stint.start_lap}`, last: `${stint.end_lap}`, laps: lapsText(stint.laps) })}${isNumber(stint.tyre_age_start) && Number(stint.tyre_age_start) > 0 ? ` · ${i18n.tp(Number(stint.tyre_age_start), "{count} lap old at the start", "{count} laps old at the start", { count: Number(stint.tyre_age_start) })}` : ""}`,
         };
       }),
     };
@@ -792,7 +823,7 @@ export function lapTimesModel(analysis, { focus = [], width = 640, height = 300 
       .map((l) => ({
         lap: l.lap_number, ms: l.lap_time_ms, x: x(l.lap_number), y: y(l.lap_time_ms), compound: l.compound, lap_id: l.lap_id || null,
         openable: lapOpenable(l), row,
-        text: `${code} lap ${l.lap_number} · ${formatLapTime(l.lap_time_ms)} · ${compoundInfo(l.compound).label}${l.traced === false ? " · timing only — no telemetry" : ""}`,
+        text: `${i18n.t("{code} lap {lap}", { code, lap: `${l.lap_number}` })} · ${formatLapTime(l.lap_time_ms)} · ${compoundInfo(l.compound).label}${l.traced === false ? ` · ${i18n.t("timing only — no telemetry")}` : ""}`,
       }));
     const runs = continuousRuns(analysis, points).filter((r) => r.length > 1).map((r) => r.map((p) => `${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(" "));
     const last = points[points.length - 1];
@@ -831,23 +862,23 @@ function heatCell(code, lapNumber, lap, median, range) {
   if (!lap) {
     // Inside the laps the car completed, a missing row is a gap in the
     // recording, not a lap the car skipped.
-    if (lapNumber <= range) return { ...base, state: "missing", fill: "none", note: "not recorded", text: `${code} lap ${lapNumber} · not recorded` };
-    return { ...base, state: "none", fill: "transparent", note: "not driven", text: `${code} lap ${lapNumber} · not driven` };
+    if (lapNumber <= range) return { ...base, state: "missing", fill: "none", note: i18n.t("not recorded"), text: `${i18n.t("{code} lap {lap}", { code, lap: lapNumber })} · ${i18n.t("not recorded")}` };
+    return { ...base, state: "none", fill: "transparent", note: i18n.t("not driven"), text: `${i18n.t("{code} lap {lap}", { code, lap: lapNumber })} · ${i18n.t("not driven")}` };
   }
   const hasTime = timed(lap);
   const delta = !lap.pace_excluded && hasTime && isNumber(median) ? (Number(lap.lap_time_ms) - Number(median)) / 1000 : null;
   const notes = [];
   if (delta === null) {
     if (lap.pace_excluded && lap.pace_excluded !== "missing_time") notes.push(exclusionText(lap.pace_excluded));
-    else if (hasTime && !lap.pace_excluded) notes.push("no pace median to compare");
+    else if (hasTime && !lap.pace_excluded) notes.push(i18n.t("no pace median to compare"));
   }
-  if (hasTime && lap.traced === false) notes.push("timing only — no telemetry");
-  const parts = [`${code} lap ${lapNumber}`, hasTime ? formatLapTime(lap.lap_time_ms) : "no lap time"];
+  if (hasTime && lap.traced === false) notes.push(i18n.t("timing only — no telemetry"));
+  const parts = [i18n.t("{code} lap {lap}", { code, lap: lapNumber }), hasTime ? formatLapTime(lap.lap_time_ms) : i18n.t("no lap time")];
   if (delta !== null) parts.push(deltaWords(delta));
   return {
     ...base, state: delta === null ? "excluded" : "pace", fill: heatColour(delta), delta,
     lap_id: lap.lap_id || null, openable: lapOpenable(lap), traced: lap.traced !== false,
-    time: hasTime ? formatLapTime(lap.lap_time_ms) : "no lap time", note: notes.join(" · "),
+    time: hasTime ? formatLapTime(lap.lap_time_ms) : i18n.t("no lap time"), note: notes.join(" · "),
     text: [...parts, ...notes].join(" · "),
   };
 }
@@ -999,9 +1030,9 @@ export function fastestModel(analysis, { width = 640, rowHeight = 24 } = {}) {
         barEnd: Math.max(x(delta), margin.l + 3),
         idealX: isNumber(row.ideal_lap_ms) ? x(Math.max(0, row.ideal_lap_ms - fastest)) : null,
         label: delta === 0 ? formatLapTime(row.lap_time_ms) : `+${(delta / 1000).toFixed(3)} s`,
-        text: `${code} · best ${formatLapTime(row.lap_time_ms)} (lap ${row.lap_number})${delta ? ` · ${formatSeconds(delta)} behind the fastest` : " · fastest"}`
-          + (isNumber(row.ideal_lap_ms) ? ` · ideal ${formatLapTime(row.ideal_lap_ms)}` : "")
-          + (row.traced === false ? " · timing only — no telemetry" : ""),
+        text: `${code} · ${i18n.t("best {time} (lap {lap})", { time: formatLapTime(row.lap_time_ms), lap: `${row.lap_number}` })}${delta ? ` · ${i18n.t("{gap} behind the fastest", { gap: formatSeconds(delta) })}` : ` · ${i18n.t("fastest")}`}`
+          + (isNumber(row.ideal_lap_ms) ? ` · ${i18n.t("ideal {time}", { time: formatLapTime(row.ideal_lap_ms) })}` : "")
+          + (row.traced === false ? ` · ${i18n.t("timing only — no telemetry")}` : ""),
       };
     }),
   };
@@ -1014,7 +1045,7 @@ export function pitStopRows(analysis) {
     code: drivers.get(stop.car_index)?.code || `#${stop.car_index}`,
     lapText: isNumber(stop.lap_number) ? String(stop.lap_number) : "—",
     tyres: `${compoundInfo(stop.from_compound).letter} → ${compoundInfo(stop.to_compound).letter}`,
-    tyresText: `${compoundInfo(stop.from_compound).label} to ${compoundInfo(stop.to_compound).label}`,
+    tyresText: i18n.t("{from} to {to}", { from: compoundInfo(stop.from_compound).label, to: compoundInfo(stop.to_compound).label }),
     kindText: stopKindText(stop),
     lossText: stopLossText(stop),
   }));
@@ -1032,8 +1063,8 @@ function runnerUpText(second) {
     case "finished": return isNumber(second.gap_to_winner_ms) ? `${code} ${gapWords(second.gap_to_winner_ms)}` : code;
     case "lapped":
     case "running": return [code, lapsDownText(second.laps_down)].filter(Boolean).join(" ");
-    case "retired": return `${code} retired`;
-    default: return [code, STATUS_TEXT[second.status] ? STATUS_TEXT[second.status].toLowerCase() : null].filter(Boolean).join(" ");
+    case "retired": return i18n.t("{code} retired", { code });
+    default: return [code, STATUS_INLINE_TEXT[second.status] || null].filter(Boolean).join(" ");
   }
 }
 
@@ -1059,68 +1090,70 @@ export function headline(analysis) {
   const named = (d) => d.display_name || d.code || "—";
   const kpis = [];
   const place = [session.track_name || session.display_name, session.session_type].filter(Boolean).join(" · ");
-  let title = place || "Session analysis";
+  let title = place || i18n.t("Session analysis");
   if (isRace && winner && !single) {
     const official = analysis?.basis?.finish_source === "classification";
     const settled = !provisional && (official || (!partial && !disputed));
     if (settled) {
       title = second && isNumber(second.gap_to_winner_ms) && second.status === "finished"
-        ? `${named(winner)} wins by ${formatSeconds(second.gap_to_winner_ms)}`
-        : `${named(winner)} wins`;
-    } else if (provisional) title = `Provisional order · ${named(winner)} leads`;
-    else if (partial) title = `${named(winner)} leads the recorded cars`;
-    else title = `${named(winner)} first on lap times`;
+        ? i18n.t("{driver} wins by {gap}", { driver: named(winner), gap: formatSeconds(second.gap_to_winner_ms) })
+        : i18n.t("{driver} wins", { driver: named(winner) });
+    } else if (provisional) title = i18n.t("Provisional order · {driver} leads", { driver: named(winner) });
+    else if (partial) title = i18n.t("{driver} leads the recorded cars", { driver: named(winner) });
+    else title = i18n.t("{driver} first on lap times", { driver: named(winner) });
     kpis.push({
-      label: settled ? "Winner" : provisional ? "Provisional order" : partial ? "Leading recorded car" : "First on lap times",
+      label: settled ? i18n.t("Winner") : provisional ? i18n.t("Provisional order") : partial ? i18n.t("Leading recorded car") : i18n.t("First on lap times"),
       value: winner.code || "—",
-      detail: [runnerUpText(second), isNumber(winner.classified_at_lap) ? `order at lap ${winner.classified_at_lap}` : null].filter(Boolean).join(" · "),
+      detail: [runnerUpText(second), isNumber(winner.classified_at_lap) ? i18n.t("order at lap {lap}", { lap: `${winner.classified_at_lap}` }) : null].filter(Boolean).join(" · "),
     });
   }
   if (player) kpis.push(isRace ? playerResult(analysis, player, { provisional, single }) : {
-    label: "Your best", value: formatLapTime(player.best_lap_ms),
-    detail: isNumber(player.best_lap_ms) ? `${countText(player.laps_recorded, "lap")} recorded` : "no timed lap",
+    label: i18n.t("Your best"), value: formatLapTime(player.best_lap_ms),
+    detail: isNumber(player.best_lap_ms) ? (isNumber(player.laps_recorded)
+      ? i18n.tp(Number(player.laps_recorded), "{count} lap recorded", "{count} laps recorded", { count: Number(player.laps_recorded) })
+      : i18n.t("{laps} recorded", { laps: "—" })) : i18n.t("no timed lap"),
   });
   if (fastest) {
     // Only the recorded laps can be compared when the record has gaps, the
     // field is partial or the recording stopped early.
     kpis.push({
-      label: analysis?.record_complete === false || partial || provisional ? "Fastest recorded lap" : "Fastest lap",
+      label: analysis?.record_complete === false || partial || provisional ? i18n.t("Fastest recorded lap") : i18n.t("Fastest lap"),
       value: formatLapTime(fastest.lap_time_ms),
-      detail: [fastestDriver?.code, isNumber(fastest.lap_number) ? `lap ${fastest.lap_number}` : null, fastest.traced === false ? "timing only" : null].filter(Boolean).join(" · "),
+      detail: [fastestDriver?.code, isNumber(fastest.lap_number) ? i18n.t("lap {lap}", { lap: `${fastest.lap_number}` }) : null, fastest.traced === false ? i18n.t("timing only") : null].filter(Boolean).join(" · "),
     });
   }
-  if (isNumber(analysis?.ideal_lap?.best_sectors_ms)) kpis.push({ label: "Ideal lap", value: formatLapTime(analysis.ideal_lap.best_sectors_ms), detail: "best sectors in the session" });
+  if (isNumber(analysis?.ideal_lap?.best_sectors_ms)) kpis.push({ label: i18n.t("Ideal lap"), value: formatLapTime(analysis.ideal_lap.best_sectors_ms), detail: i18n.t("best sectors in the session") });
   const { sc, vsc } = neutralLaps(analysis);
   const suspendedLaps = analysis?.suspended_laps || [];
   const recorded = rc.available === true;
   const coveredFrom = isNumber(rc.covered_from_lap) && Number(rc.covered_from_lap) > 1 ? Number(rc.covered_from_lap) : null;
   if (isRace) {
     const parts = [];
-    if (suspendedLaps.length) parts.push(`red flag ${formatLapRanges(suspendedLaps)}`);
-    if (sc.length) parts.push(`safety car ${formatLapRanges(sc)}`);
+    if (suspendedLaps.length) parts.push(i18n.t("red flag {laps}", { laps: formatLapRanges(suspendedLaps) }));
+    if (sc.length) parts.push(i18n.t("safety car {laps}", { laps: formatLapRanges(sc) }));
     if (vsc.length) parts.push(`VSC ${formatLapRanges(vsc)}`);
-    if (!recorded) parts.push("safety cars not recorded");
-    else if (coveredFrom) parts.push(`race control from lap ${coveredFrom}`);
+    if (!recorded) parts.push(i18n.t("safety cars not recorded"));
+    else if (coveredFrom) parts.push(i18n.t("race control from lap {lap}", { lap: coveredFrom }));
     const count = new Set([...suspendedLaps, ...sc, ...vsc]).size;
     kpis.push({
-      label: "Neutralised",
-      value: count ? countText(count, "lap") : recorded ? "None" : "Unknown",
-      detail: parts.join(" · ") || "green all race",
+      label: i18n.t("Neutralised"),
+      value: count ? i18n.tp(count, "{count} lap", "{count} laps", { count }) : recorded ? i18n.t("None") : i18n.t("Unknown"),
+      detail: parts.join(" · ") || i18n.t("green all race"),
     });
   }
   const subtitle = (isRace ? [
-    isNumber(session.leader_laps) && Number(session.leader_laps) > 0 ? countText(session.leader_laps, "lap") : null,
-    suspendedLaps.length ? `red flag ${onLaps(suspendedLaps)}` : null,
-    sc.length ? `safety car ${onLaps(sc)}` : null,
-    vsc.length ? `VSC ${onLaps(vsc)}` : null,
-    !recorded ? "safety cars not recorded" : coveredFrom ? `race control recorded from lap ${coveredFrom}` : null,
-    single ? (recordedCars === 1 || drivers.some((d) => d.status === "unranked") ? "only one car recorded" : "no completed laps recorded")
-      : partial && isNumber(field.cars_with_laps) && isNumber(field.cars) ? `${field.cars_with_laps} of ${field.cars} cars recorded` : null,
-    single ? null : provisional ? "provisional order: the recording did not finish" : orderSourceText(analysis),
+    isNumber(session.leader_laps) && Number(session.leader_laps) > 0 ? lapsText(session.leader_laps) : null,
+    suspendedLaps.length ? onLaps("red", suspendedLaps) : null,
+    sc.length ? onLaps("sc", sc) : null,
+    vsc.length ? onLaps("vsc", vsc) : null,
+    !recorded ? i18n.t("safety cars not recorded") : coveredFrom ? i18n.t("race control recorded from lap {lap}", { lap: coveredFrom }) : null,
+    single ? (recordedCars === 1 || drivers.some((d) => d.status === "unranked") ? i18n.t("only one car recorded") : i18n.t("no completed laps recorded"))
+      : partial && isNumber(field.cars_with_laps) && isNumber(field.cars) ? i18n.t("{recorded} of {cars} cars recorded", { recorded: `${field.cars_with_laps}`, cars: `${field.cars}` }) : null,
+    single ? null : provisional ? i18n.t("provisional order: the recording did not finish") : orderSourceText(analysis),
   ] : [
     session.display_name && session.display_name !== session.track_name ? session.display_name : null,
-    drivers.length ? countText(drivers.length, "driver") : null,
-    provisional ? "the recording did not finish" : null,
+    drivers.length ? i18n.tp(drivers.length, "{count} driver", "{count} drivers", { count: drivers.length }) : null,
+    provisional ? i18n.t("the recording did not finish") : null,
   ]).filter(Boolean).join(" · ");
   return { title, subtitle, kpis };
 }
@@ -1128,9 +1161,9 @@ export function headline(analysis) {
 // Where the finishing order comes from, for the headline.
 export function orderSourceText(analysis) {
   switch (analysis?.basis?.finish_source) {
-    case "classification": return "the game's final classification, penalties applied";
-    case "game_positions": return "order from the game's recorded positions; penalties not applied";
-    default: return "order derived from lap times; penalties not applied";
+    case "classification": return i18n.t("the game's final classification, penalties applied");
+    case "game_positions": return i18n.t("order from the game's recorded positions; penalties not applied");
+    default: return i18n.t("order derived from lap times; penalties not applied");
   }
 }
 
@@ -1138,22 +1171,22 @@ function playerResult(analysis, player, { provisional, single }) {
   const official = analysis?.official_result || {};
   const officialPosition = isNumber(official.player_position) && Number(official.player_position) > 0 ? Number(official.player_position) : null;
   const detail = [];
-  let label = "Your result";
+  let label = i18n.t("Your result");
   let value = "—";
   if (officialPosition) {
     value = `P${officialPosition}`;
-    if (official.agrees === false) detail.push("derived order differs (penalties not applied)");
-    else detail.push("official result");
+    if (official.agrees === false) detail.push(i18n.t("derived order differs (penalties not applied)"));
+    else detail.push(i18n.t("official result"));
   } else if (player.status === "retired") {
-    value = "DNF";
+    value = i18n.t("DNF");
   } else if (player.status === "unranked" || (single && Number(player.laps_completed) > 0)) {
-    detail.push("only recorded car: no order");
+    detail.push(i18n.t("only recorded car: no order"));
   } else if (isNumber(player.finish_position)) {
     value = `P${player.finish_position}`;
-    label = provisional ? "Your position (provisional)"
-      : analysis?.basis?.finish_source === "game_positions" ? "Your result (recorded order)" : "Your result (derived)";
+    label = provisional ? i18n.t("Your position (provisional)")
+      : analysis?.basis?.finish_source === "game_positions" ? i18n.t("Your result (recorded order)") : i18n.t("Your result (derived)");
   } else if (player.status === "incomplete_record") {
-    detail.push("record incomplete: no position");
+    detail.push(i18n.t("record incomplete: no position"));
   }
   if (player.status === "lapped") detail.push(lapsDownText(player.laps_down));
   detail.push(stopsText(player));
@@ -1168,17 +1201,17 @@ export function paceTable(analysis) {
   const rows = (analysis?.race_pace || []).map((row) => [
     codeOf(analysis, row.car_index), isNumber(row.n) ? String(row.n) : "—", formatLapTime(row.median_ms),
     `${formatLapTime(row.q1_ms)}–${formatLapTime(row.q3_ms)}`, formatLapTime(row.min_ms), formatLapTime(row.max_ms),
-    Object.entries(row.excluded || {}).filter(([, v]) => Number(v) > 0).map(([k, v]) => `${exclusionText(k)} (${v})`).join(", ") || "None",
+    Object.entries(row.excluded || {}).filter(([, v]) => Number(v) > 0).map(([k, v]) => `${exclusionText(k)} (${v})`).join(", ") || i18n.t("None"),
   ]);
-  return { caption: "Race pace per driver", headers: ["Driver", "Pace laps", "Median", "Middle half", "Fastest", "Slowest kept", "Left out"], rows };
+  return { caption: i18n.t("Race pace per driver"), headers: [i18n.t("Driver"), i18n.t("Pace laps"), i18n.t("Median"), i18n.t("Middle half"), i18n.t("Fastest"), i18n.t("Slowest kept"), i18n.t("Left out")], rows };
 }
 
 export function traceTable(analysis, { focus = [], reference = "leader" } = {}) {
   const total = lastLap(analysis);
   const name = referenceName(analysis, reference);
   return {
-    caption: `Gap per lap to ${name} for the focus drivers`,
-    headers: ["Lap", ...focus.map((c) => codeOf(analysis, c))],
+    caption: reference === "leader" ? i18n.t("Gap per lap to the leader for the focus drivers") : i18n.t("Gap per lap to {reference} for the focus drivers", { reference: name }),
+    headers: [i18n.t("Lap"), ...focus.map((c) => codeOf(analysis, c))],
     rows: Array.from({ length: total }, (_, i) => [String(i + 1), ...traceReading(analysis, { focus, reference, lap: i + 1 }).map((r) => r.value)]),
   };
 }
@@ -1187,8 +1220,8 @@ export function positionsTable(analysis) {
   const total = lastLap(analysis);
   const laps = lapLookup(analysis);
   return {
-    caption: "Position at the end of every lap",
-    headers: ["Driver", "Result", ...Array.from({ length: total }, (_, i) => `L${i + 1}`)],
+    caption: i18n.t("Position at the end of every lap"),
+    headers: [i18n.t("Driver"), i18n.t("Result"), ...Array.from({ length: total }, (_, i) => i18n.t("L{lap}", { lap: i + 1 }))],
     rows: (analysis?.drivers || []).map((d) => [
       d.code || `#${d.car_index}`, resultText(d),
       ...Array.from({ length: total }, (_, i) => positionText(laps.get(d.car_index)?.get(i + 1)?.position)),
@@ -1199,11 +1232,11 @@ export function positionsTable(analysis) {
 export function strategyTable(analysis) {
   const stints = new Map((analysis?.stints || []).map((row) => [row.car_index, row.stints || []]));
   return {
-    caption: "Tyre stints per driver",
-    headers: ["Driver", "Stops", "Stints"],
+    caption: i18n.t("Tyre stints per driver"),
+    headers: [i18n.t("Driver"), i18n.t("Stops"), i18n.t("Stints")],
     rows: (analysis?.drivers || []).map((d) => [
       d.code || `#${d.car_index}`, stopsText(d),
-      (stints.get(d.car_index) || []).map((s) => `${compoundInfo(s.compound).label} L${s.start_lap}–${s.end_lap}`).join(" · ") || "No tyre data",
+      (stints.get(d.car_index) || []).map((s) => i18n.t("{compound} L{first}–{last}", { compound: compoundInfo(s.compound).label, first: `${s.start_lap}`, last: `${s.end_lap}` })).join(" · ") || i18n.t("No tyre data"),
     ]),
   };
 }
@@ -1212,12 +1245,12 @@ export function lapTimesTable(analysis, { focus = [] } = {}) {
   const total = lastLap(analysis);
   const laps = lapLookup(analysis);
   return {
-    caption: "Lap times of the focus drivers",
-    headers: ["Lap", ...focus.map((c) => codeOf(analysis, c))],
+    caption: i18n.t("Lap times of the focus drivers"),
+    headers: [i18n.t("Lap"), ...focus.map((c) => codeOf(analysis, c))],
     rows: Array.from({ length: total }, (_, i) => [String(i + 1), ...focus.map((carIndex) => {
       const lap = laps.get(carIndex)?.get(i + 1);
       if (!lap) return "—";
-      if (!timed(lap)) return "No lap time";
+      if (!timed(lap)) return i18n.t("No lap time");
       return lap.pace_excluded ? `${formatLapTime(lap.lap_time_ms)} (${exclusionText(lap.pace_excluded)})` : formatLapTime(lap.lap_time_ms);
     })]),
   };
@@ -1229,13 +1262,13 @@ export function heatmapTable(analysis, carIndex) {
   const row = model.rows.find((r) => r.car_index === carIndex) || model.rows[0];
   const code = row?.code || "";
   return {
-    caption: row ? `Laps of ${code} against their median` : "Laps against the driver's median",
+    caption: row ? i18n.t("Laps of {code} against their median", { code }) : i18n.t("Laps against the driver's median"),
     car_index: row ? row.car_index : null,
-    headers: ["Lap", "Time", "Against median", "Note", "Lap Lab"],
+    headers: [i18n.t("Lap"), i18n.t("Time"), i18n.t("Against median"), i18n.t("Note"), i18n.t("Lap Lab")],
     rows: (row?.cells || []).filter((c) => c.state !== "none").map((c) => [
-      String(c.lap), c.state === "missing" ? "—" : c.time, c.delta === null ? "—" : deltaWords(c.delta).replace(/ than median$/, "").replace(/^at the median$/, "at median"),
-      c.state === "missing" ? "Not recorded" : c.note || "—",
-      c.openable ? { text: "Open in Lap Lab", lapId: c.lap_id, label: `Open ${code} lap ${c.lap} in Lap Lab` } : c.state === "missing" ? "—" : c.traced === false ? "Timing only" : "—",
+      String(c.lap), c.state === "missing" ? "—" : c.time, c.delta === null ? "—" : shortDeltaWords(c.delta),
+      c.state === "missing" ? i18n.t("Not recorded") : c.note || "—",
+      c.openable ? { text: i18n.t("Open in Lap Lab"), lapId: c.lap_id, label: i18n.t("Open {code} lap {lap} in Lap Lab", { code, lap: c.lap }) } : c.state === "missing" ? "—" : c.traced === false ? i18n.t("Timing only") : "—",
     ]),
   };
 }
@@ -1243,14 +1276,14 @@ export function heatmapTable(analysis, carIndex) {
 export function lapseTable(analysis, frames) {
   const codes = driversByIndex(analysis);
   // A recording that stopped early ends at its last recorded lap, not a flag.
-  const end = analysis?.session?.provisional ? "Last recorded lap" : "Finish";
+  const end = analysis?.session?.provisional ? i18n.t("Last recorded lap") : i18n.t("Finish");
   return {
-    caption: "Running order at the end of every lap",
-    headers: ["Lap", "Order", "Note"],
+    caption: i18n.t("Running order at the end of every lap"),
+    headers: [i18n.t("Lap"), i18n.t("Order"), i18n.t("Note")],
     rows: (frames || []).map((frame) => [
       String(frame.lap),
       frame.entries.map((e) => [e.label, codes.get(e.car_index)?.code || `#${e.car_index}`, lapsDownText(e.laps_down)].filter(Boolean).join(" ")).join(", ") || "—",
-      [frame.final ? end : null, frame.suspended ? "Race suspended, order frozen" : null, frame.neutralised === "SC" ? "Safety car" : frame.neutralised === "VSC" ? "Virtual safety car" : null].filter(Boolean).join(" · ") || "—",
+      [frame.final ? end : null, frame.suspended ? i18n.t("Race suspended, order frozen") : null, frame.neutralised === "SC" ? i18n.t("Safety car") : frame.neutralised === "VSC" ? i18n.t("Virtual safety car") : null].filter(Boolean).join(" · ") || "—",
     ]),
   };
 }
@@ -1258,11 +1291,11 @@ export function lapseTable(analysis, frames) {
 export function fastestTable(analysis) {
   const model = fastestModel(analysis);
   return {
-    caption: "Fastest and ideal laps",
-    headers: ["Driver", "Best lap", "Lap", "Behind fastest", "Ideal lap", "Telemetry"],
+    caption: i18n.t("Fastest and ideal laps"),
+    headers: [i18n.t("Driver"), i18n.t("Best lap"), i18n.t("Lap"), i18n.t("Behind fastest"), i18n.t("Ideal lap"), i18n.t("Telemetry")],
     rows: model.rows.map((r) => [
       r.code, formatLapTime(r.lap_time_ms), isNumber(r.lap_number) ? String(r.lap_number) : "—",
-      r.label.startsWith("+") ? r.label : "Fastest", formatLapTime(r.ideal_lap_ms), r.traced === false ? "Timing only" : "Recorded",
+      r.label.startsWith("+") ? r.label : i18n.t("Fastest"), formatLapTime(r.ideal_lap_ms), r.traced === false ? i18n.t("Timing only") : i18n.t("Recorded"),
     ]),
   };
 }

@@ -111,6 +111,7 @@ async function touchSwipe(page, cdp, selector) {
         document.getElementById('bootOverlay')?.remove();
       });
       await showView(page, 'lap-lab');
+      await page.addScriptTag({ url: 'http://pitbox.test/static/js/i18n.js' });
       await page.addScriptTag({ type: 'module', url: 'http://pitbox.test/static/js/workspaces.js' });
       await page.waitForFunction(() => window.pitwallWorkspaces);
       await page.evaluate(async () => { await window.pitwallWorkspaces.selectSession('session-a'); await window.pitwallWorkspaces.openLap('lap-a'); });

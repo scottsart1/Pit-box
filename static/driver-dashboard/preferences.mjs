@@ -1,7 +1,15 @@
 import {cleanPreferences} from './display.mjs';
+import { i18n } from './i18n.mjs';
 
 export const PREFERENCE_STORAGE_KEY='ypb-driver-dashboard-v2';
 const PREFERENCE_LIMIT_BYTES=64*1024;
+// Messages are read when shown: the startup issue is found before the screen
+// language is known.
+const ISSUES={
+  device:()=>i18n.t('Device storage is unavailable. Layout changes may not survive an app restart.'),
+  browser:()=>i18n.t('Preferences work for this visit; browser storage is unavailable.'),
+  change:()=>i18n.t('This change works for this visit; preference storage is unavailable.')
+};
 
 export function decodePreferences(raw){
   if(typeof raw!=='string'||new TextEncoder().encode(raw).length>PREFERENCE_LIMIT_BYTES)return null;
@@ -59,17 +67,17 @@ export async function restorePreferences({storage=null,bridge=null,timeoutMs=400
     }catch{
       // A timeout or error must never seed the native record with defaults or
       // an old origin's values. Keep that record untouched for the next launch.
-      issue='Device storage is unavailable. Layout changes may not survive an app restart.';
+      issue='device';
     }
   }else if(!storageReadable||!storage){
-    issue='Preferences work for this visit; browser storage is unavailable.';
+    issue='browser';
   }
   let saveQueue=Promise.resolve();
   return {
     preferences,
     mode:nativeReady?'android':storage&&storageReadable?'browser':'memory',
     nativeAvailable:!!native,
-    issue,
+    get issue(){return issue?ISSUES[issue]():null},
     save(value){
       const serialized=JSON.stringify(cleanPreferences(value));
       let localSaved=false;
@@ -78,9 +86,9 @@ export async function restorePreferences({storage=null,bridge=null,timeoutMs=400
       const work=saveQueue.then(async()=>{
         if(nativeReady){
           try{await native.request('save',serialized);return {saved:true,mode:'android'}}
-          catch{nativeReady=false;return {saved:localSaved,mode:localSaved?'browser':'memory',issue:localSaved?'Device storage is unavailable. Layout changes may not survive an app restart.':'This change works for this visit; preference storage is unavailable.'}}
+          catch{nativeReady=false;return {saved:localSaved,mode:localSaved?'browser':'memory',issue:localSaved?ISSUES.device():ISSUES.change()}}
         }
-        return {saved:localSaved,mode:localSaved?'browser':'memory',issue:localSaved?null:'Preferences work for this visit; browser storage is unavailable.'};
+        return {saved:localSaved,mode:localSaved?'browser':'memory',issue:localSaved?null:ISSUES.browser()};
       });
       saveQueue=work.catch(()=>{});
       return work;

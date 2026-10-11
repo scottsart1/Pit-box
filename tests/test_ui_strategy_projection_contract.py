@@ -17,6 +17,10 @@ pytestmark = pytest.mark.skipif(NODE is None, reason="Strategy DOM behavior requ
 def rendered_sequence(changes, strategy_extra=None):
     harness = r"""
 import fs from 'node:fs';
+import path from 'node:path';
+import {pathToFileURL} from 'node:url';
+// The strategy text goes through the screen-language runtime, a page global.
+await import(pathToFileURL(path.join(path.dirname(process.argv[1]), 'i18n.js')).href);
 const source = fs.readFileSync(process.argv[1], 'utf8');
 const module = await import('data:text/javascript;base64,' + Buffer.from(source).toString('base64'));
 class Element {

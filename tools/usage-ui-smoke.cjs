@@ -21,6 +21,7 @@ const settle = () => new Promise(resolve => setImmediate(resolve));
     }
     return {ok: true, json: async () => state};
   };
+  window.eval(fs.readFileSync(path.join(root, 'static/js/i18n.js'), 'utf8'));
   window.eval(source);
   await settle();
   const id = name => window.document.getElementById(name);

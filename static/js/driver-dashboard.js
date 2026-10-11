@@ -5,7 +5,7 @@
   let latest=null,ready=false;
   const visible=()=>!frame.closest('.page').hidden;
   const send=()=>{if(ready&&latest&&visible())frame.contentWindow.postMessage({type:'pitbox:driver-state',state:latest},location.origin)};
-  const open=()=>{if(!visible())return;if(!frame.hasAttribute('src'))frame.src='/static/driver-dashboard/index.html?mode=embedded';send()};
+  const open=()=>{if(!visible())return;if(!frame.hasAttribute('src'))frame.src='/static/driver-dashboard/index.html?mode=embedded'+(i18n.lang!=='en'?'&lang='+encodeURIComponent(i18n.lang):'');send()};
   window.addEventListener('pitwall:state',e=>{latest=e.detail;send()});
   window.addEventListener('message',e=>{if(e.origin===location.origin&&e.source===frame.contentWindow&&e.data?.type==='pitbox:driver-ready'){ready=true;send()}});
   window.addEventListener('pitwall:pagechange',open);

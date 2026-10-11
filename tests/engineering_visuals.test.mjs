@@ -1,5 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+// The charts' text goes through the screen-language runtime, a page global.
+import '../static/js/i18n.js';
 import {comparisonCohorts,comparisonVisuals} from '../static/js/engineering-visuals.mjs';
 class Element {
   constructor(tag){this.tagName=tag;this.children=[];this.dataset={};this.style={};this.attributes={};this._text='';}

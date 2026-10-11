@@ -267,6 +267,7 @@ def test_strategy_board_updates_when_only_estimates_change():
     js = Path(__file__).parents[1] / "static/js/strategy.js"
     # Execute the shipped module, rather than matching strings in its source.
     code = f"""import fs from 'node:fs';
+      await import({json.dumps(js.with_name("i18n.js").as_uri())});
       const m = await import('data:text/javascript;base64,' + fs.readFileSync({json.dumps(str(js))}).toString('base64'));
       const original = {{stops_remaining:1,compounds:['MEDIUM','HARD'],box_laps:[12],feasible:true,projected_finish_position:5,projected_max_wear_pct:60,monte_carlo:{{p75_s:1500}}}};
       for (const delta of [{{projected_max_wear_pct:70}},{{monte_carlo:{{p75_s:1510}}}},{{projected_points:10}}]) {{

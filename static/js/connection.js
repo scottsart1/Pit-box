@@ -15,12 +15,12 @@ const byId = (id) => (HAS_DOM ? document.getElementById(id) : null);
 
 export function listenerStateLabel(value) {
   return {
-    off: "Off",
-    listening: "Listening — waiting for telemetry",
-    receiving: "Receiving telemetry",
-    stale: "Telemetry stale",
-    error: "Listener error",
-  }[value] || "Unavailable";
+    off: i18n.t("Off"),
+    listening: i18n.t("Listening — waiting for telemetry"),
+    receiving: i18n.t("Receiving telemetry"),
+    stale: i18n.t("Telemetry stale"),
+    error: i18n.t("Listener error"),
+  }[value] || i18n.t("Unavailable");
 }
 
 export function parsePacketIds(value) {
@@ -30,25 +30,25 @@ export function parsePacketIds(value) {
   if (!parts.length) return "all";
   const packetIds = [...new Set(parts.map((part) => Number(part)))].sort((a, b) => a - b);
   if (packetIds.some((packetId) => !Number.isInteger(packetId) || packetId < 0 || packetId > 255)) {
-    throw new Error("Packet IDs must be whole numbers from 0 to 255, or ‘all’.");
+    throw new Error(i18n.t("Packet IDs must be whole numbers from 0 to 255, or ‘all’."));
   }
   return packetIds;
 }
 
 export function formatAge(milliseconds) {
-  if (milliseconds === null || milliseconds === undefined || !Number.isFinite(Number(milliseconds))) return "Unavailable";
+  if (milliseconds === null || milliseconds === undefined || !Number.isFinite(Number(milliseconds))) return i18n.t("Unavailable");
   const value = Math.max(0, Number(milliseconds));
-  if (value < 1000) return `${Math.round(value)} ms ago`;
-  if (value < 60000) return `${(value / 1000).toFixed(value < 10000 ? 1 : 0)} s ago`;
-  return `${Math.floor(value / 60000)} min ago`;
+  if (value < 1000) return i18n.t("{ms} ms ago", { ms: Math.round(value) });
+  if (value < 60000) return i18n.t("{seconds} s ago", { seconds: (value / 1000).toFixed(value < 10000 ? 1 : 0) });
+  return i18n.t("{minutes} min ago", { minutes: Math.floor(value / 60000) });
 }
 
 export function formatCount(value) {
-  if (value === null || value === undefined || !Number.isFinite(Number(value))) return "Unavailable";
+  if (value === null || value === undefined || !Number.isFinite(Number(value))) return i18n.t("Unavailable");
   return new Intl.NumberFormat().format(Number(value));
 }
 
-export function apiErrorMessage(payload, fallback = "The request could not be completed.") {
+export function apiErrorMessage(payload, fallback = i18n.t("The request could not be completed.")) {
   const detail = payload?.detail ?? payload;
   if (typeof detail === "string" && detail.trim()) return detail;
   if (detail && typeof detail.message === "string" && detail.message.trim()) return detail.message;
@@ -63,7 +63,7 @@ async function apiRequest(path, options = {}) {
   try {
     response = await fetch(`${API_BASE}${path}`, { ...options, headers, credentials: "same-origin" });
   } catch (error) {
-    throw new Error(`Connection service is unreachable: ${error instanceof Error ? error.message : String(error)}`);
+    throw new Error(i18n.t("Connection service is unreachable: {error}", { error: error instanceof Error ? error.message : String(error) }));
   }
   let payload = null;
   if (response.status !== 204) {
@@ -75,8 +75,8 @@ async function apiRequest(path, options = {}) {
   }
   if (!response.ok) {
     const unavailable = response.status === 404
-      ? "Connection services are unavailable in this build. Live, Review, and Setup remain available."
-      : `Network request failed (${response.status}).`;
+      ? i18n.t("Connection services are unavailable in this build. Live, Review, and Setup remain available.")
+      : i18n.t("Network request failed ({status}).", { status: response.status });
     const error = new Error(apiErrorMessage(payload, unavailable));
     error.status = response.status;
     error.payload = payload;
@@ -85,7 +85,7 @@ async function apiRequest(path, options = {}) {
   return payload;
 }
 
-function setText(id, value, fallback = "Unavailable") {
+function setText(id, value, fallback = i18n.t("Unavailable")) {
   const element = byId(id);
   if (element) element.textContent = value === null || value === undefined || value === "" ? fallback : String(value);
 }
@@ -122,10 +122,10 @@ function button(text, ariaLabel, handler, className = "button ghost") {
 }
 
 function formatEndpoint(source) {
-  if (!source) return "Unavailable";
+  if (!source) return i18n.t("Unavailable");
   const host = source.ip ?? source.host ?? source.address ?? source.source_ip;
   const port = source.port ?? source.source_port;
-  if (!host) return "Unavailable";
+  if (!host) return i18n.t("Unavailable");
   return port === null || port === undefined ? String(host) : `${host}:${port}`;
 }
 
@@ -135,10 +135,23 @@ function renderWarnings(warnings = []) {
   clearChildren(container);
   const unique = [...new Set(warnings.filter((item) => typeof item === "string" && item.trim()))];
   if (!unique.length) return;
-  const title = textElement("strong", "", unique.length === 1 ? "Connection warning" : "Connection warnings");
+  const title = textElement("strong", "", i18n.tp(unique.length, "Connection warning", "Connection warnings"));
   const list = document.createElement("ul");
   unique.forEach((warning) => list.append(textElement("li", "", warning)));
   container.append(title, list);
+}
+
+// Packet states are server codes; the known ones are shown translated,
+// anything else as sent.
+function packetStateLabel(state) {
+  const labels = {
+    healthy: i18n.t("Healthy"),
+    stale: i18n.t("stale"),
+    degraded: i18n.t("degraded"),
+    provisional_gap: i18n.t("provisional gap"),
+    unavailable: i18n.t("unavailable"),
+  };
+  return Object.prototype.hasOwnProperty.call(labels, state) ? labels[state] : state.replaceAll("_", " ");
 }
 
 function renderPacketHealth(packets = []) {
@@ -147,7 +160,7 @@ function renderPacketHealth(packets = []) {
   clearChildren(body);
   if (!packets.length) {
     const row = document.createElement("tr");
-    const cell = textElement("td", "empty", "No packet data available. Listening alone does not prove that the game is sending telemetry.");
+    const cell = textElement("td", "empty", i18n.t("No packet data available. Listening alone does not prove that the game is sending telemetry."));
     cell.colSpan = 8;
     row.append(cell);
     body.append(row);
@@ -155,13 +168,13 @@ function renderPacketHealth(packets = []) {
   }
   [...packets].sort((a, b) => Number(a.packet_id) - Number(b.packet_id)).forEach((packet) => {
     const row = document.createElement("tr");
-    const packetName = packet.packet_name ? String(packet.packet_name).replaceAll("_", " ") : `packet ${packet.packet_id}`;
+    const packetName = packet.packet_name ? String(packet.packet_name).replaceAll("_", " ") : i18n.t("packet {id}", { id: `${packet.packet_id}` });
     const state = String(packet.status || "unavailable").toLowerCase();
     const stateCell = document.createElement("td");
-    const chip = textElement("span", "state-chip", state === "healthy" ? "Healthy" : state.replaceAll("_", " "));
+    const chip = textElement("span", "state-chip", packetStateLabel(state));
     chip.dataset.state = state === "healthy" ? "healthy" : state.includes("error") || state.includes("invalid") ? "error" : "warning";
     stateCell.append(chip);
-    const hz = Number.isFinite(Number(packet.observed_hz_10s)) ? `${Number(packet.observed_hz_10s).toFixed(1)} Hz` : "Unavailable";
+    const hz = Number.isFinite(Number(packet.observed_hz_10s)) ? `${Number(packet.observed_hz_10s).toFixed(1)} Hz` : i18n.t("Unavailable");
     const gap = `${formatCount(packet.provisional_gap)} / ${formatCount(packet.confirmed_lost)}`;
     [
       textElement("th", "", packetName),
@@ -190,10 +203,10 @@ export function packetReceptionSummary(payload) {
   let message = "";
   if (received > 0 && parsed === 0) {
     message = unsupported
-      ? "UDP packets reached this device, but their game format is unsupported. Select UDP format 2026 in the game (F1 25 + 2026 Season Pack)."
-      : "UDP packets reached this device, but none parsed successfully. Check the game’s UDP format is 2026 and that another app is not sending unrelated traffic to this port.";
+      ? i18n.t("UDP packets reached this device, but their game format is unsupported. Select UDP format 2026 in the game (F1 25 + 2026 Season Pack).")
+      : i18n.t("UDP packets reached this device, but none parsed successfully. Check the game’s UDP format is 2026 and that another app is not sending unrelated traffic to this port.");
   } else if (parsed > 0 && rejected > 0) {
-    message = "Some received packets were rejected. The counters show traffic observed so far; the receiver badge above shows whether valid telemetry is arriving now.";
+    message = i18n.t("Some received packets were rejected. The counters show traffic observed so far; the receiver badge above shows whether valid telemetry is arriving now.");
   }
   return { received, parsed, rejected, message };
 }
@@ -214,18 +227,18 @@ async function refreshAndroidStatus() {
     const payload = await apiRequest("/android");
     if (!payload?.available) {
       notice.hidden = payload?.platform !== "android";
-      if (!notice.hidden) setNotice("androidConnectionStatus", "Android network diagnostics are unavailable. Use the device address and packet counters above to check reception.");
+      if (!notice.hidden) setNotice("androidConnectionStatus", i18n.t("Android network diagnostics are unavailable. Use the device address and packet counters above to check reception."));
       return;
     }
     notice.hidden = false;
     const networks = (payload.networks || []).filter((network) => ["wifi", "ethernet"].includes(network.transport));
     const addresses = networks.flatMap((network) => (network.addresses || []).map((address) => address.address)).filter((address) => typeof address === "string" && /^\d+\.\d+\.\d+\.\d+$/.test(address));
-    const parts = [payload.service_running ? "Android receiver service is running." : "Android receiver service is not running. Reopen the app to start it."];
-    if (addresses.length) parts.push(`Local address${addresses.length > 1 ? "es" : ""}: ${[...new Set(addresses)].join(", ")}.`);
-    else parts.push("Check the network adapter address below; a Wi-Fi or Ethernet connection is needed to receive from the game.");
-    if (payload.internet_permission === false) parts.push("This installation is missing network permission.");
-    if (Number.isInteger(payload.network_losses)) parts.push(`Android reported ${payload.network_losses} network loss event${payload.network_losses === 1 ? "" : "s"} since the receiver started.`);
-    if (Number(payload.thermal_status) >= 3) parts.push("Android reports thermal throttling; processing may slow while the device cools.");
+    const parts = [payload.service_running ? i18n.t("Android receiver service is running.") : i18n.t("Android receiver service is not running. Reopen the app to start it.")];
+    if (addresses.length) parts.push(i18n.tp(addresses.length, "Local address: {addresses}.", "Local addresses: {addresses}.", { addresses: [...new Set(addresses)].join(", ") }));
+    else parts.push(i18n.t("Check the network adapter address below; a Wi-Fi or Ethernet connection is needed to receive from the game."));
+    if (payload.internet_permission === false) parts.push(i18n.t("This installation is missing network permission."));
+    if (Number.isInteger(payload.network_losses)) parts.push(i18n.tp(payload.network_losses, "Android reported {count} network loss event since the receiver started.", "Android reported {count} network loss events since the receiver started.", { count: payload.network_losses }));
+    if (Number(payload.thermal_status) >= 3) parts.push(i18n.t("Android reports thermal throttling; processing may slow while the device cools."));
     if (Array.isArray(payload.warnings)) parts.push(...payload.warnings);
     setNotice("androidConnectionStatus", parts.join(" "), payload.service_running && payload.internet_permission !== false ? "info" : "error");
   } catch {
@@ -233,6 +246,17 @@ async function refreshAndroidStatus() {
     // ordinary listener/packet status remains independently useful.
     notice.hidden = true;
   }
+}
+
+// The recommendation's confidence is a server code: high, medium, low or none.
+function confidenceLabel(level) {
+  const labels = {
+    high: i18n.t("high confidence"),
+    medium: i18n.t("medium confidence"),
+    low: i18n.t("low confidence"),
+    none: i18n.t("none confidence"),
+  };
+  return Object.prototype.hasOwnProperty.call(labels, level) ? labels[level] : i18n.t("{level} confidence", { level: `${level}` });
 }
 
 function renderStatus(payload) {
@@ -251,8 +275,8 @@ function renderStatus(payload) {
   const copyIp = byId("copyRecommendedIp");
   if (copyIp) copyIp.disabled = !recommendationIp;
   const interfaceMatch = uiState.interfaces?.interfaces?.find((item) => item.id === recommendation?.adapter_id);
-  const confidence = recommendation?.confidence ? ` · ${recommendation.confidence} confidence` : "";
-  setText("recommendedAdapter", interfaceMatch ? `${interfaceMatch.name}${confidence}` : recommendation?.adapter_id ? `${recommendation.adapter_id}${confidence}` : "No adapter recommendation yet.");
+  const confidence = recommendation?.confidence ? ` · ${confidenceLabel(recommendation.confidence)}` : "";
+  setText("recommendedAdapter", interfaceMatch ? `${interfaceMatch.name}${confidence}` : recommendation?.adapter_id ? `${recommendation.adapter_id}${confidence}` : i18n.t("No adapter recommendation yet."));
 
   if (document.activeElement !== byId("listenerBindHost")) setControlValue("listenerBindHost", listener.bind_host || "0.0.0.0", "0.0.0.0");
   if (document.activeElement !== byId("listenerPort")) setControlValue("listenerPort", listener.port ?? 20777, "20777");
@@ -263,24 +287,37 @@ function renderStatus(payload) {
 
   const startButton = byId("listenerStart");
   const stopButton = byId("listenerStop");
-  if (startButton) startButton.textContent = listenerState === "off" || listenerState === "error" ? "Start listening" : "Restart listener";
+  if (startButton) startButton.textContent = listenerState === "off" || listenerState === "error" ? i18n.t("Start listening") : i18n.t("Restart listener");
   if (stopButton) stopButton.disabled = listenerState === "off";
 
   const listenerMessages = {
-    off: "Listener is off. Start it when you are ready to receive telemetry.",
-    listening: "Listening successfully, but no recent valid F1 telemetry has arrived yet.",
-    receiving: "Valid F1 telemetry is arriving from the game.",
-    stale: "Telemetry arrived previously but is now older than its freshness budget.",
-    error: listener.error || "The UDP listener reported an error.",
+    off: i18n.t("Listener is off. Start it when you are ready to receive telemetry."),
+    listening: i18n.t("Listening successfully, but no recent valid F1 telemetry has arrived yet."),
+    receiving: i18n.t("Valid F1 telemetry is arriving from the game."),
+    stale: i18n.t("Telemetry arrived previously but is now older than its freshness budget."),
+    error: listener.error || i18n.t("The UDP listener reported an error."),
   };
   const tone = listenerState === "receiving" ? "success" : listenerState === "error" ? "error" : "info";
-  setNotice("connectionApiStatus", listenerMessages[listenerState] || "Connection state unavailable.", tone);
+  setNotice("connectionApiStatus", listenerMessages[listenerState] || i18n.t("Connection state unavailable."), tone);
   renderWarnings([...(payload?.warnings || []), ...(uiState.interfaces?.warnings || [])]);
   renderPacketHealth(payload?.packets || []);
   if (Array.isArray(payload?.forwarders)) {
     uiState.forwarders = payload.forwarders;
     renderForwarders(uiState.forwarders);
   }
+}
+
+// Adapter kinds are server codes. ethernet, wifi and vpn are shown as sent;
+// the descriptive ones are translated.
+function adapterKindLabel(kind) {
+  if (!kind) return i18n.t("adapter");
+  const labels = {
+    virtual: i18n.t("virtual"),
+    cellular: i18n.t("cellular"),
+    loopback: i18n.t("loopback"),
+    unknown: i18n.t("unknown"),
+  };
+  return Object.prototype.hasOwnProperty.call(labels, kind) ? labels[kind] : String(kind);
 }
 
 function renderInterfaces(payload) {
@@ -290,7 +327,7 @@ function renderInterfaces(payload) {
   clearChildren(container);
   const interfaces = [...(payload?.interfaces || [])].sort((a, b) => Number(b.score || 0) - Number(a.score || 0));
   if (!interfaces.length) {
-    container.append(textElement("div", "empty", "No usable IPv4 adapters were reported. Check that Wi-Fi or Ethernet is connected."));
+    container.append(textElement("div", "empty", i18n.t("No usable IPv4 adapters were reported. Check that Wi-Fi or Ethernet is connected.")));
     setText("recommendedIpv4", null);
     const copy = byId("copyRecommendedIp");
     if (copy) copy.disabled = true;
@@ -304,18 +341,18 @@ function renderInterfaces(payload) {
     const header = document.createElement("div");
     header.className = "adapter-head";
     const identity = document.createElement("div");
-    identity.append(textElement("strong", "", item.name || item.description || "Network adapter"));
+    identity.append(textElement("strong", "", item.name || item.description || i18n.t("Network adapter")));
     /* The address is what the user copies into the PS5 and into the bind
        field. Rendering it as "10.234.197.105/24" put a slash-number right
        where a port is expected — a real user read the CIDR prefix as the
        port, started the listener on port 24, and lost telemetry at every
        launch for three days. The prefix is network trivia; label it as such,
        away from the address. */
-    identity.append(textElement("div", "adapter-address", item.ipv4 ? item.ipv4 : "IPv4 unavailable"));
+    identity.append(textElement("div", "adapter-address", item.ipv4 ? item.ipv4 : i18n.t("IPv4 unavailable")));
     if (item.ipv4 && item.prefix_length !== null && item.prefix_length !== undefined) {
-      identity.append(textElement("div", "field-help", `subnet mask /${item.prefix_length} — not a port`));
+      identity.append(textElement("div", "field-help", i18n.t("subnet mask /{prefix} — not a port", { prefix: item.prefix_length })));
     }
-    const stateText = item.operational ? "Active" : "Inactive";
+    const stateText = item.operational ? i18n.t("Active") : i18n.t("Inactive");
     const stateChip = textElement("span", "state-chip", stateText);
     stateChip.dataset.state = item.operational ? "healthy" : "warning";
     header.append(identity, stateChip);
@@ -323,11 +360,11 @@ function renderInterfaces(payload) {
     if (item.description && item.description !== item.name) card.append(textElement("div", "field-help", item.description));
     const tags = document.createElement("div");
     tags.className = "tag-row";
-    if (recommended) tags.append(textElement("span", "tag-chip recommended", "Recommended for PS5 / second PC"));
-    if (item.pinned) tags.append(textElement("span", "tag-chip pinned", "Pinned choice"));
-    if (item.previously_worked) tags.append(textElement("span", "tag-chip", "Valid F1 traffic seen before"));
-    if (item.default_gateway) tags.append(textElement("span", "tag-chip", "Default route"));
-    tags.append(textElement("span", "tag-chip", String(item.kind || "adapter")));
+    if (recommended) tags.append(textElement("span", "tag-chip recommended", i18n.t("Recommended for PS5 / second PC")));
+    if (item.pinned) tags.append(textElement("span", "tag-chip pinned", i18n.t("Pinned choice")));
+    if (item.previously_worked) tags.append(textElement("span", "tag-chip", i18n.t("Valid F1 traffic seen before")));
+    if (item.default_gateway) tags.append(textElement("span", "tag-chip", i18n.t("Default route")));
+    tags.append(textElement("span", "tag-chip", adapterKindLabel(item.kind)));
     card.append(tags);
     if (item.reasons?.length) {
       const reasons = document.createElement("ul");
@@ -342,12 +379,12 @@ function renderInterfaces(payload) {
   const copy = byId("copyRecommendedIp");
   if (copy) copy.disabled = !recommendationIp;
   const recommended = interfaces.find((item) => item.id === payload.recommended_adapter_id && item.ipv4 === payload.recommended_ipv4);
-  setText("recommendedAdapter", recommended ? `${recommended.name}${recommended.pinned ? " · pinned" : ""}` : "No adapter recommendation yet.");
+  setText("recommendedAdapter", recommended ? (recommended.pinned ? i18n.t("{name} · pinned", { name: `${recommended.name}` }) : `${recommended.name}`) : i18n.t("No adapter recommendation yet."));
   renderWarnings([...(payload.warnings || []), ...(uiState.status?.warnings || [])]);
 }
 
 function targetPacketLabel(packetIds) {
-  return packetIds === "all" ? "All known packets" : `Packet IDs ${packetIds.join(", ")}`;
+  return packetIds === "all" ? i18n.t("All known packets") : i18n.t("Packet IDs {ids}", { ids: packetIds.join(", ") });
 }
 
 function renderForwarders(targets = []) {
@@ -355,7 +392,7 @@ function renderForwarders(targets = []) {
   if (!container) return;
   clearChildren(container);
   if (!targets.length) {
-    container.append(textElement("div", "empty", "No forwarding targets configured. Local telemetry ingestion is unaffected."));
+    container.append(textElement("div", "empty", i18n.t("No forwarding targets configured. Local telemetry ingestion is unaffected.")));
     return;
   }
   targets.forEach((target) => {
@@ -366,32 +403,32 @@ function renderForwarders(targets = []) {
     const identity = document.createElement("div");
     identity.append(textElement("strong", "", target.label || target.id));
     identity.append(textElement("div", "adapter-address", `${target.host}:${target.port}`));
-    if (target.resolved_address && target.resolved_address !== target.host) identity.append(textElement("span", "field-help", `Resolves to ${target.resolved_address}`));
-    const status = textElement("span", "state-chip", target.enabled ? "Enabled" : "Disabled");
+    if (target.resolved_address && target.resolved_address !== target.host) identity.append(textElement("span", "field-help", i18n.t("Resolves to {address}", { address: target.resolved_address })));
+    const status = textElement("span", "state-chip", target.enabled ? i18n.t("Enabled") : i18n.t("Disabled"));
     status.dataset.state = target.enabled ? (target.last_error ? "error" : "healthy") : "warning";
     head.append(identity, status);
-    card.append(head, textElement("div", "field-help", `${targetPacketLabel(target.packet_ids)}${target.forward_unknown_packets ? " · unknown packets included" : ""}`));
+    card.append(head, textElement("div", "field-help", target.forward_unknown_packets ? i18n.t("{packets} · unknown packets included", { packets: targetPacketLabel(target.packet_ids) }) : targetPacketLabel(target.packet_ids)));
     const counters = document.createElement("div");
     counters.className = "counter-grid";
     [
-      ["Packets sent", formatCount(target.packets_sent)],
-      ["Bytes sent", formatCount(target.bytes_sent)],
-      ["Queue drops", formatCount(target.queue_drops)],
-      ["Socket errors", formatCount(target.socket_errors)],
+      [i18n.t("Packets sent"), formatCount(target.packets_sent)],
+      [i18n.t("Bytes sent"), formatCount(target.bytes_sent)],
+      [i18n.t("Queue drops"), formatCount(target.queue_drops)],
+      [i18n.t("Socket errors"), formatCount(target.socket_errors)],
     ].forEach(([label, value]) => {
       const item = document.createElement("div");
       item.append(textElement("span", "", label), textElement("strong", "", value));
       counters.append(item);
     });
     card.append(counters);
-    if (target.last_success) card.append(textElement("div", "field-help", `Last successful send: ${new Date(target.last_success).toLocaleString()}`));
-    if (target.last_error) card.append(textElement("div", "error small", `Latest socket error: ${target.last_error}`));
+    if (target.last_success) card.append(textElement("div", "field-help", i18n.t("Last successful send: {time}", { time: new Date(target.last_success).toLocaleString() })));
+    if (target.last_error) card.append(textElement("div", "error small", i18n.t("Latest socket error: {error}", { error: target.last_error })));
     const actions = document.createElement("div");
     actions.className = "forwarder-actions";
     actions.append(
-      button("Edit", `Edit ${target.label}`, () => editForwarder(target)),
-      button(target.enabled ? "Disable" : "Enable", `${target.enabled ? "Disable" : "Enable"} ${target.label}`, () => toggleForwarder(target)),
-      button("Delete", `Delete ${target.label}`, () => deleteForwarder(target), "button ghost danger-button"),
+      button(i18n.t("Edit"), i18n.t("Edit {label}", { label: `${target.label}` }), () => editForwarder(target)),
+      button(target.enabled ? i18n.t("Disable") : i18n.t("Enable"), target.enabled ? i18n.t("Disable {label}", { label: `${target.label}` }) : i18n.t("Enable {label}", { label: `${target.label}` }), () => toggleForwarder(target)),
+      button(i18n.t("Delete"), i18n.t("Delete {label}", { label: `${target.label}` }), () => deleteForwarder(target), "button ghost danger-button"),
     );
     card.append(actions);
     container.append(card);
@@ -405,7 +442,7 @@ function resetForwarderForm() {
   setControlValue("forwarderId", "");
   byId("forwarderEnabled").checked = true;
   byId("forwarderPort").value = "20778";
-  byId("saveForwarder").textContent = "Add target";
+  byId("saveForwarder").textContent = i18n.t("Add target");
   byId("cancelForwarderEdit").hidden = true;
   setNotice("forwarderFormStatus", "");
 }
@@ -419,34 +456,34 @@ function editForwarder(target) {
   byId("forwarderEnabled").checked = Boolean(target.enabled);
   byId("forwardUnknownPackets").checked = Boolean(target.forward_unknown_packets);
   byId("forwarderConfirmPublic").checked = false;
-  byId("saveForwarder").textContent = "Save target";
+  byId("saveForwarder").textContent = i18n.t("Save target");
   byId("cancelForwarderEdit").hidden = false;
-  setNotice("forwarderFormStatus", `Editing ${target.label}. Public destinations must be reconfirmed when changed.`);
+  setNotice("forwarderFormStatus", i18n.t("Editing {label}. Public destinations must be reconfirmed when changed.", { label: `${target.label}` }));
   byId("forwarderLabel").focus();
 }
 
 async function toggleForwarder(target) {
-  setNotice("forwarderFormStatus", `${target.enabled ? "Disabling" : "Enabling"} ${target.label}…`);
+  setNotice("forwarderFormStatus", target.enabled ? i18n.t("Disabling {label}…", { label: `${target.label}` }) : i18n.t("Enabling {label}…", { label: `${target.label}` }));
   try {
     await apiRequest(`/forwarders/${encodeURIComponent(target.id)}`, {
       method: "PATCH",
       body: JSON.stringify({ enabled: !target.enabled }),
     });
     await refreshForwarders();
-    setNotice("forwarderFormStatus", `${target.label} ${target.enabled ? "disabled" : "enabled"}.`, "success");
+    setNotice("forwarderFormStatus", target.enabled ? i18n.t("{label} disabled.", { label: `${target.label}` }) : i18n.t("{label} enabled.", { label: `${target.label}` }), "success");
   } catch (error) {
     setNotice("forwarderFormStatus", error.message, "error");
   }
 }
 
 async function deleteForwarder(target) {
-  if (!window.confirm(`Delete forwarding target “${target.label}” (${target.host}:${target.port})?`)) return;
-  setNotice("forwarderFormStatus", `Deleting ${target.label}…`);
+  if (!window.confirm(i18n.t("Delete forwarding target “{label}” ({host}:{port})?", { label: `${target.label}`, host: `${target.host}`, port: `${target.port}` }))) return;
+  setNotice("forwarderFormStatus", i18n.t("Deleting {label}…", { label: `${target.label}` }));
   try {
     await apiRequest(`/forwarders/${encodeURIComponent(target.id)}`, { method: "DELETE" });
     if (byId("forwarderId").value === target.id) resetForwarderForm();
     await refreshForwarders();
-    setNotice("forwarderFormStatus", `${target.label} deleted.`, "success");
+    setNotice("forwarderFormStatus", i18n.t("{label} deleted.", { label: `${target.label}` }), "success");
   } catch (error) {
     setNotice("forwarderFormStatus", error.message, "error");
   }
@@ -467,7 +504,7 @@ async function refreshStatus({ quiet = false } = {}) {
       setNotice("connectionApiStatus", error.message, "error");
       const badge = byId("connectionStateBadge");
       if (badge) badge.dataset.state = "error";
-      setText("connectionStateText", "Status unavailable");
+      setText("connectionStateText", i18n.t("Status unavailable"));
     }
   }
 }
@@ -483,7 +520,7 @@ async function refreshInterfaces() {
 }
 
 export async function refreshConnectionCenter() {
-  setNotice("connectionApiStatus", "Refreshing network status…");
+  setNotice("connectionApiStatus", i18n.t("Refreshing network status…"));
   // The credential check is deliberately outside the all-rejected test below:
   // it is a different service, and its failure should not claim the whole
   // Connection Center is unavailable.
@@ -491,12 +528,14 @@ export async function refreshConnectionCenter() {
   void refreshAndroidStatus();
   const results = await Promise.allSettled([refreshInterfaces(), refreshStatus(), refreshForwarders()]);
   if (results.every((result) => result.status === "rejected")) {
-    setNotice("connectionApiStatus", "Connection services are unavailable. Live, Review, and Setup remain available.", "error");
+    setNotice("connectionApiStatus", i18n.t("Connection services are unavailable. Live, Review, and Setup remain available."), "error");
   }
 }
 
-async function copyText(value, description) {
-  if (!value || value === "Unavailable") return;
+async function copyText(value, copiedMessage, failedMessage) {
+  // The value is read from the page, where an empty field shows the
+  // "Unavailable" placeholder in the screen language.
+  if (!value || value === "Unavailable" || value === i18n.t("Unavailable")) return;
   try {
     if (navigator.clipboard?.writeText) {
       await navigator.clipboard.writeText(value);
@@ -511,9 +550,9 @@ async function copyText(value, description) {
       document.execCommand("copy");
       input.remove();
     }
-    setNotice("connectionApiStatus", `${description} copied.`, "success");
+    setNotice("connectionApiStatus", copiedMessage, "success");
   } catch {
-    setNotice("connectionApiStatus", `Could not copy ${description.toLowerCase()}; select the value manually.`, "error");
+    setNotice("connectionApiStatus", failedMessage, "error");
   }
 }
 
@@ -522,12 +561,12 @@ async function submitListener(event) {
   const bindHost = byId("listenerBindHost").value.trim();
   const port = Number(byId("listenerPort").value);
   if (!bindHost || !Number.isInteger(port) || port < 1 || port > 65535) {
-    setNotice("connectionApiStatus", "Enter a bind address and a UDP port from 1 to 65535.", "error");
+    setNotice("connectionApiStatus", i18n.t("Enter a bind address and a UDP port from 1 to 65535."), "error");
     return;
   }
   const action = byId("listenerStart");
   action.disabled = true;
-  setNotice("connectionApiStatus", `Starting UDP listener on ${bindHost}:${port}…`);
+  setNotice("connectionApiStatus", i18n.t("Starting UDP listener on {host}:{port}…", { host: bindHost, port }));
   try {
     await apiRequest("/listener/start", { method: "POST", body: JSON.stringify({ bind_host: bindHost, port }) });
     await refreshStatus();
@@ -541,7 +580,7 @@ async function submitListener(event) {
 async function stopListener() {
   const action = byId("listenerStop");
   action.disabled = true;
-  setNotice("connectionApiStatus", "Stopping UDP listener…");
+  setNotice("connectionApiStatus", i18n.t("Stopping UDP listener…"));
   try {
     await apiRequest("/listener/stop", { method: "POST" });
     await refreshStatus();
@@ -559,7 +598,7 @@ async function submitForwarder(event) {
   const host = byId("forwarderHost").value.trim();
   const port = Number(byId("forwarderPort").value);
   if (!label || !host || !Number.isInteger(port) || port < 1 || port > 65535) {
-    setNotice("forwarderFormStatus", "Enter a label, host, and port from 1 to 65535.", "error");
+    setNotice("forwarderFormStatus", i18n.t("Enter a label, host, and port from 1 to 65535."), "error");
     return;
   }
   let packetIds;
@@ -581,13 +620,13 @@ async function submitForwarder(event) {
   };
   const submit = byId("saveForwarder");
   submit.disabled = true;
-  setNotice("forwarderFormStatus", `${id ? "Saving" : "Adding"} forwarding target…`);
+  setNotice("forwarderFormStatus", id ? i18n.t("Saving forwarding target…") : i18n.t("Adding forwarding target…"));
   try {
     await apiRequest(id ? `/forwarders/${encodeURIComponent(id)}` : "/forwarders", {
       method: id ? "PATCH" : "POST",
       body: JSON.stringify(id ? payload : { id: undefined, ...payload }),
     });
-    const message = id ? `${label} updated.` : `${label} added.`;
+    const message = id ? i18n.t("{label} updated.", { label }) : i18n.t("{label} added.", { label });
     resetForwarderForm();
     await refreshForwarders();
     setNotice("forwarderFormStatus", message, "success");
@@ -608,7 +647,7 @@ function normalizeCheckResult(check) {
 async function diagnoseNetwork() {
   const action = byId("diagnoseNetwork");
   action.disabled = true;
-  setNotice("diagnoseStatus", "Running safe local interface and bind checks…");
+  setNotice("diagnoseStatus", i18n.t("Running safe local interface and bind checks…"));
   try {
     const report = await apiRequest("/diagnose", { method: "POST" });
     const checksContainer = byId("diagnoseChecks");
@@ -618,19 +657,19 @@ async function diagnoseNetwork() {
       const card = document.createElement("div");
       card.className = "diagnose-check";
       card.dataset.result = result;
-      const label = String(check.label ?? check.name ?? check.code ?? check.id ?? "Network check").replaceAll("_", " ");
-      const resultLabel = result === "pass" ? "Passed" : result === "fail" ? "Failed" : "Needs attention";
-      card.append(textElement("strong", "", `${resultLabel}: ${label}`));
+      const label = String(check.label ?? check.name ?? check.code ?? check.id ?? i18n.t("Network check")).replaceAll("_", " ");
+      const heading = result === "pass" ? i18n.t("Passed: {check}", { check: label }) : result === "fail" ? i18n.t("Failed: {check}", { check: label }) : i18n.t("Needs attention: {check}", { check: label });
+      card.append(textElement("strong", "", heading));
       const detail = check.message ?? check.detail ?? check.reason;
       if (detail) card.append(textElement("div", "field-help", String(detail)));
       checksContainer.append(card);
     });
-    if (!(report.checks || []).length) checksContainer.append(textElement("div", "empty", "No individual diagnostic checks were returned."));
+    if (!(report.checks || []).length) checksContainer.append(textElement("div", "empty", i18n.t("No individual diagnostic checks were returned.")));
     const actions = byId("diagnoseActions");
     clearChildren(actions);
     (report.actions || []).forEach((item) => actions.append(textElement("li", "", item)));
-    if (!(report.actions || []).length) actions.append(textElement("li", "", "No corrective action is currently recommended."));
-    setNotice("diagnoseStatus", `Diagnostics completed ${new Date(report.generated_at).toLocaleString()}.`, "success");
+    if (!(report.actions || []).length) actions.append(textElement("li", "", i18n.t("No corrective action is currently recommended.")));
+    setNotice("diagnoseStatus", i18n.t("Diagnostics completed {time}.", { time: new Date(report.generated_at).toLocaleString() }), "success");
   } catch (error) {
     setNotice("diagnoseStatus", error.message, "error");
   } finally {
@@ -723,16 +762,20 @@ const CREDENTIAL_BASE = "/api/v1/credentials";
 
 // Labels and paste hints per engine provider. Mirrors the backend registry;
 // unknown ids degrade to their raw name rather than breaking the panel.
-const PROVIDER_META = {
-  openai: { label: "OpenAI", hint: "Starts with sk-. Paste the whole value.", placeholder: "sk-…" },
-  anthropic: { label: "Anthropic (Claude)", hint: "Starts with sk-ant-. Paste the whole value.", placeholder: "sk-ant-…" },
-  deepseek: { label: "DeepSeek", hint: "From platform.deepseek.com. Paste the whole value.", placeholder: "sk-…" },
-  kimi: { label: "Kimi (Moonshot AI)", hint: "From platform.moonshot.ai. Paste the whole value.", placeholder: "sk-…" },
-  custom: { label: "Custom endpoint", hint: "Whatever token your OpenAI-compatible endpoint expects (optional for local servers).", placeholder: "token…" },
-};
+// Built when used, in the screen language, so loading the module needs no
+// translation runtime.
+function providerMeta(provider) {
+  return {
+    openai: { label: "OpenAI", hint: i18n.t("Starts with {prefix}. Paste the whole value.", { prefix: "sk-" }), placeholder: "sk-…" },
+    anthropic: { label: "Anthropic (Claude)", hint: i18n.t("Starts with {prefix}. Paste the whole value.", { prefix: "sk-ant-" }), placeholder: "sk-ant-…" },
+    deepseek: { label: "DeepSeek", hint: i18n.t("From {site}. Paste the whole value.", { site: "platform.deepseek.com" }), placeholder: "sk-…" },
+    kimi: { label: "Kimi (Moonshot AI)", hint: i18n.t("From {site}. Paste the whole value.", { site: "platform.moonshot.ai" }), placeholder: "sk-…" },
+    custom: { label: i18n.t("Custom endpoint"), hint: i18n.t("Whatever token your OpenAI-compatible endpoint expects (optional for local servers)."), placeholder: i18n.t("token…") },
+  }[provider];
+}
 
 function providerLabel(provider) {
-  return PROVIDER_META[provider]?.label || provider;
+  return providerMeta(provider)?.label || provider;
 }
 
 function selectedCredentialProvider() {
@@ -746,7 +789,7 @@ async function credentialRequest(path = "", options = {}) {
   try {
     response = await fetch(`${CREDENTIAL_BASE}${path}`, { ...options, headers, credentials: "same-origin" });
   } catch (error) {
-    throw new Error(`Could not reach Pit Wall: ${error instanceof Error ? error.message : String(error)}`);
+    throw new Error(i18n.t("Could not reach Pit Wall: {error}", { error: error instanceof Error ? error.message : String(error) }));
   }
   let payload = null;
   try {
@@ -755,7 +798,7 @@ async function credentialRequest(path = "", options = {}) {
     payload = null;
   }
   if (!response.ok) {
-    const error = new Error(apiErrorMessage(payload, `Request failed (${response.status}).`));
+    const error = new Error(apiErrorMessage(payload, i18n.t("Request failed ({status}).", { status: response.status })));
     error.status = response.status;
     throw error;
   }
@@ -763,9 +806,9 @@ async function credentialRequest(path = "", options = {}) {
 }
 
 export function credentialBadgeState(status) {
-  if (!status?.configured) return { state: "off", label: "No key set" };
-  if (status.source === "environment") return { state: "listening", label: "Set by environment" };
-  return { state: "receiving", label: `Key ${status.masked}` };
+  if (!status?.configured) return { state: "off", label: i18n.t("No key set") };
+  if (status.source === "environment") return { state: "listening", label: i18n.t("Set by environment") };
+  return { state: "receiving", label: i18n.t("Key {masked}", { masked: `${status.masked}` }) };
 }
 
 function renderProviderOptions(overview) {
@@ -774,7 +817,7 @@ function renderProviderOptions(overview) {
   for (const option of select.options) {
     const meta = providerLabel(option.value);
     const entry = overview?.providers?.[option.value];
-    option.textContent = entry?.configured ? `${meta} ✓ key saved` : meta;
+    option.textContent = entry?.configured ? i18n.t("{provider} ✓ key saved", { provider: meta }) : meta;
   }
   const active = byId("activeProviderSelect");
   if (active && overview?.active_provider && active.value !== overview.active_provider) {
@@ -789,11 +832,11 @@ function renderCredentialStatus(message, tone = "info") {
   const { state, label } = credentialBadgeState(status);
   const badge = byId("credentialBadge");
   if (badge) badge.dataset.state = state;
-  setText("credentialBadgeText", `${providerLabel(provider)}: ${label}`, "Unavailable");
+  setText("credentialBadgeText", `${providerLabel(provider)}: ${label}`, i18n.t("Unavailable"));
 
-  const meta = PROVIDER_META[provider] || {};
-  setText("credentialKeyHint", meta.hint || "Paste the whole value.");
-  setText("credentialVerifyLabel", `Check the key with ${providerLabel(provider)} before saving`);
+  const meta = providerMeta(provider) || {};
+  setText("credentialKeyHint", meta.hint || i18n.t("Paste the whole value."));
+  setText("credentialVerifyLabel", i18n.t("Check the key with {provider} before saving", { provider: providerLabel(provider) }));
   const field = byId("credentialKey");
   if (field && meta.placeholder) field.placeholder = meta.placeholder;
 
@@ -805,10 +848,10 @@ function renderCredentialStatus(message, tone = "info") {
   let detail = message;
   if (!detail) {
     detail = status?.configured
-      ? `A ${providerLabel(provider)} key is saved. Paste a new one to replace it.`
-      : `No ${providerLabel(provider)} key saved yet.`;
+      ? i18n.t("A {provider} key is saved. Paste a new one to replace it.", { provider: providerLabel(provider) })
+      : i18n.t("No {provider} key saved yet.", { provider: providerLabel(provider) });
     if (overview && !overview.voice_ready) {
-      detail += " Voice needs an OpenAI key; other providers answer in text only.";
+      detail += " " + i18n.t("Voice needs an OpenAI key; other providers answer in text only.");
     }
   }
   setNotice("credentialFormStatus", detail, tone);
@@ -841,13 +884,13 @@ async function submitCredential(event) {
   const field = byId("credentialKey");
   const apiKey = String(field?.value ?? "").trim();
   if (!apiKey) {
-    setNotice("credentialFormStatus", "Paste an API key first.", "error");
+    setNotice("credentialFormStatus", i18n.t("Paste an API key first."), "error");
     field?.focus();
     return;
   }
   const verify = Boolean(byId("credentialVerify")?.checked);
   setCredentialBusy(true);
-  setNotice("credentialFormStatus", verify ? `Checking the key with ${providerLabel(provider)}…` : "Saving…");
+  setNotice("credentialFormStatus", verify ? i18n.t("Checking the key with {provider}…", { provider: providerLabel(provider) }) : i18n.t("Saving…"));
   try {
     await credentialRequest(`/${provider}`, {
       method: "PUT",
@@ -858,7 +901,7 @@ async function submitCredential(event) {
     if (field) field.value = "";
     revealCredential(false);
     await refreshCredentialStatus();
-    renderCredentialStatus(`${providerLabel(provider)} key saved. The engineer can use it now.`, "success");
+    renderCredentialStatus(i18n.t("{provider} key saved. The engineer can use it now.", { provider: providerLabel(provider) }), "success");
   } catch (error) {
     renderCredentialStatus(error.message, "error");
   } finally {
@@ -869,7 +912,7 @@ async function submitCredential(event) {
 async function testCredential() {
   const provider = selectedCredentialProvider();
   setCredentialBusy(true);
-  setNotice("credentialFormStatus", `Asking ${providerLabel(provider)} to confirm the saved key…`);
+  setNotice("credentialFormStatus", i18n.t("Asking {provider} to confirm the saved key…", { provider: providerLabel(provider) }));
   try {
     const result = await credentialRequest(`/${provider}/test`, { method: "POST" });
     renderCredentialStatus(result?.detail || "", result?.ok ? "success" : "error");
@@ -883,14 +926,14 @@ async function testCredential() {
 async function removeCredential() {
   const provider = selectedCredentialProvider();
   if (HAS_DOM && typeof window.confirm === "function") {
-    const confirmed = window.confirm(`Remove the saved ${providerLabel(provider)} API key? The engineer cannot use ${providerLabel(provider)} until a new one is set.`);
+    const confirmed = window.confirm(i18n.t("Remove the saved {provider} API key? The engineer cannot use {provider} until a new one is set.", { provider: providerLabel(provider) }));
     if (!confirmed) return;
   }
   setCredentialBusy(true);
   try {
     await credentialRequest(`/${provider}`, { method: "DELETE" });
     await refreshCredentialStatus();
-    renderCredentialStatus(`${providerLabel(provider)} key removed.`, "success");
+    renderCredentialStatus(i18n.t("{provider} key removed.", { provider: providerLabel(provider) }), "success");
   } catch (error) {
     renderCredentialStatus(error.message, "error");
   } finally {
@@ -902,7 +945,7 @@ async function changeActiveProvider() {
   const select = byId("activeProviderSelect");
   if (!select) return;
   const provider = select.value;
-  setNotice("credentialFormStatus", `Switching the engineer to ${provider === "auto" ? "automatic selection" : providerLabel(provider)}…`);
+  setNotice("credentialFormStatus", provider === "auto" ? i18n.t("Switching the engineer to automatic selection…") : i18n.t("Switching the engineer to {provider}…", { provider: providerLabel(provider) }));
   try {
     const response = await fetch("/api/v1/app-settings", {
       method: "POST",
@@ -911,14 +954,14 @@ async function changeActiveProvider() {
       body: JSON.stringify({ llm_provider: provider }),
     });
     const payload = await response.json().catch(() => null);
-    if (!response.ok) throw new Error(apiErrorMessage(payload, `Request failed (${response.status}).`));
+    if (!response.ok) throw new Error(apiErrorMessage(payload, i18n.t("Request failed ({status}).", { status: response.status })));
     await refreshCredentialStatus();
     const overview = uiState.credentials;
     const configured = overview?.providers?.[provider]?.configured;
     if (provider !== "auto" && provider !== "custom" && overview && configured === false) {
-      renderCredentialStatus(`Engineer set to ${providerLabel(provider)} — now save a ${providerLabel(provider)} key below or the radio has nothing to call.`, "warn");
+      renderCredentialStatus(i18n.t("Engineer set to {provider} — now save a {provider} key below or the radio has nothing to call.", { provider: providerLabel(provider) }), "warn");
     } else {
-      renderCredentialStatus(`Engineer now runs on ${provider === "auto" ? "the first configured provider" : providerLabel(provider)}.`, "success");
+      renderCredentialStatus(provider === "auto" ? i18n.t("Engineer now runs on the first configured provider.") : i18n.t("Engineer now runs on {provider}.", { provider: providerLabel(provider) }), "success");
     }
   } catch (error) {
     renderCredentialStatus(error.message, "error");
@@ -931,7 +974,7 @@ function revealCredential(next) {
   if (!field || !toggle) return;
   const shown = next === undefined ? field.type === "password" : Boolean(next);
   field.type = shown ? "text" : "password";
-  toggle.textContent = shown ? "Hide" : "Show";
+  toggle.textContent = shown ? i18n.t("Hide") : i18n.t("Show");
   toggle.setAttribute("aria-pressed", String(shown));
 }
 
@@ -950,8 +993,8 @@ function bindEvents() {
   byId("listenerForm")?.addEventListener("submit", submitListener);
   byId("listenerStop")?.addEventListener("click", stopListener);
   byId("refreshNetwork")?.addEventListener("click", refreshConnectionCenter);
-  byId("copyRecommendedIp")?.addEventListener("click", () => copyText(byId("recommendedIpv4").textContent, "PS5 / second PC UDP IP address"));
-  byId("copyRecommendedPort")?.addEventListener("click", () => copyText(byId("recommendedPort").textContent, "UDP port"));
+  byId("copyRecommendedIp")?.addEventListener("click", () => copyText(byId("recommendedIpv4").textContent, i18n.t("PS5 / second PC UDP IP address copied."), i18n.t("Could not copy ps5 / second pc udp ip address; select the value manually.")));
+  byId("copyRecommendedPort")?.addEventListener("click", () => copyText(byId("recommendedPort").textContent, i18n.t("UDP port copied."), i18n.t("Could not copy udp port; select the value manually.")));
   byId("forwarderForm")?.addEventListener("submit", submitForwarder);
   byId("cancelForwarderEdit")?.addEventListener("click", resetForwarderForm);
   byId("diagnoseNetwork")?.addEventListener("click", diagnoseNetwork);
@@ -964,9 +1007,9 @@ function bindEvents() {
 function initialize() {
   if (!byId("connection")) return;
   const canvasLabels = {
-    paceSpark: "Recent lap pace trend",
-    trace: "Live lap timing trace",
-    lineMap: "Racing line and lap map",
+    paceSpark: i18n.t("Recent lap pace trend"),
+    trace: i18n.t("Live lap timing trace"),
+    lineMap: i18n.t("Racing line and lap map"),
   };
   Object.entries(canvasLabels).forEach(([id, label]) => {
     const canvas = byId(id);

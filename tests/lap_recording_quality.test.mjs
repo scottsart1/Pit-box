@@ -2,12 +2,13 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import vm from 'node:vm';
+await import('../static/js/i18n.js');
 const source=readFileSync(new URL('../static/js/workspaces.js',import.meta.url),'utf8').replace(/^export \{[^\n]+\};?\s*$/m,'');
 function harness(){
   const element=()=>({textContent:'',className:'',dataset:{},children:[],hidden:false,disabled:false,
     append(...nodes){this.children.push(...nodes);},replaceChildren(...nodes){this.children=nodes;}});
   const nodes=new Map();
-  const context=vm.createContext({URLSearchParams,document:{getElementById(id){if(!nodes.has(id))nodes.set(id,element());return nodes.get(id);},createElement:element}});
+  const context=vm.createContext({URLSearchParams,i18n:globalThis.i18n,document:{getElementById(id){if(!nodes.has(id))nodes.set(id,element());return nodes.get(id);},createElement:element}});
   vm.runInContext(source,context);
   for(const name of ['drawComparisonTrace','drawComparisonMap','updateInstruments'])context[name]=()=>{};
   const state=vm.runInContext('state',context);

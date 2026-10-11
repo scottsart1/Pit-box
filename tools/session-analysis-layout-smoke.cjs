@@ -1,7 +1,8 @@
 /* Session Analysis in real Chromium: layout, readability, touch gestures and
    tooltips with populated data. Serves the shipped static files (inline
    scripts stripped, as analysis-layout-smoke does), mocks /api/v1 and loads
-   only the Session Analysis module. No installed app, user data or network.
+   only the screen-language runtime and the Session Analysis module. No
+   installed app, user data or network.
      NODE_PATH=<dir with playwright>/node_modules node tools/session-analysis-layout-smoke.cjs
    Payloads: the committed synthetic race, a practice session derived from it
    (with one lap missing from the recording) and a 22-car, 60-lap race printed
@@ -307,6 +308,7 @@ async function openPage(browser, viewport, sets) {
   // A wide fallback font, to see the layout as machines without Segoe UI do.
   if (process.env.PITBOX_WIDE_FONT) await page.addStyleTag({ content: `body, body * { font-family: ${process.env.PITBOX_WIDE_FONT}, sans-serif !important; }` });
   if (process.env.PITBOX_WIDE_SPACING) await page.addStyleTag({ content: `body, body * { letter-spacing: ${process.env.PITBOX_WIDE_SPACING} !important; }` });
+  await page.addScriptTag({ url: 'http://pitbox.test/static/js/i18n.js' });
   await page.addScriptTag({ type: 'module', url: 'http://pitbox.test/static/js/session-analysis.js' });
   return { context, page, problems };
 }

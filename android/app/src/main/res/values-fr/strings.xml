@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="notification_channel">Session Pit Box</string>
+    <string name="notification_channel_description">Affichée pendant que Your Pit Box reçoit la télémétrie.</string>
+    <string name="notification_title">Your Pit Box est actif</string>
+    <string name="notification_text">Réception de la télémétrie sur le port 20777. Appuie pour ouvrir Your Pit Box.</string>
+    <string name="notification_stop">Arrêter</string>
+    <string name="starting">Ton Pit Box démarre…</string>
+    <string name="start_failed">Your Pit Box n\'a pas pu démarrer. Appuie longuement sur le texte pour le copier. Le même texte est enregistré dans PitWallData/android-start-error.txt, dans le stockage de l\'app.</string>
+    <string name="stage_starting_service">Démarrage du service backend</string>
+    <string name="stage_backend_starting">Le backend démarre</string>
+    <string name="stage_waiting_dashboard">Backend actif, en attente du tableau de bord sur %1$s</string>
+    <string name="start_slow">Cela prend plus de temps que prévu. Journal du backend jusqu\'ici :</string>
+    <string name="backend_log">Journal du backend :</string>
+    <string name="log_missing">(pas encore de pitwall.log : le backend n\'a encore rien journalisé)</string>
+    <string name="log_unreadable">(impossible de lire pitwall.log : %1$s)</string>
+    <string name="no_file_picker">Aucun sélecteur de fichiers n\'est disponible.</string>
+    <string name="report_saved">Rapport de session enregistré.</string>
+    <string name="report_save_failed">Impossible d\'enregistrer le rapport. Relance l\'export.</string>
+</resources>

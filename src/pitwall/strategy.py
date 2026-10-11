@@ -4893,7 +4893,19 @@ class StrategyEngine:
             ),
         }
 
-    async def what_if(self, scenario: str) -> dict[str, Any]:
+    async def what_if(
+        self,
+        scenario: str,
+        *,
+        lap: int | None = None,
+        compound: str | None = None,
+    ) -> dict[str, Any]:
+        """Price one hypothetical stop against the recommended plan.
+
+        ``lap`` and ``compound``, when given, are used as they are. Whichever
+        is missing is read from ``scenario``, which understands English tyre
+        names and the first one- or two-digit number as the stop lap.
+        """
         state = await self.store.snapshot_analysis()
         historical = await self.database.tyre_history_model(
             int(state.get("track_id", -1)), context=state
@@ -4901,18 +4913,24 @@ class StrategyEngine:
         historical = infer_unrun_compounds(historical)
         base, _ = await self._compute_isolated(state, historical)
         text = scenario.lower()
-        compound = next(
-            (
-                name
-                for name in ("SOFT", "MEDIUM", "HARD", "INTER", "WET")
-                if name.lower() in text
-            ),
-            None,
-        )
-        match = re.search(r"(?:lap\s*)?(\d{1,2})", text)
-        requested_lap = (
-            int(match.group(1)) if match else int(state.get("current_lap", 0)) + 1
-        )
+        if compound is not None:
+            compound = str(compound).upper()
+        else:
+            compound = next(
+                (
+                    name
+                    for name in ("SOFT", "MEDIUM", "HARD", "INTER", "WET")
+                    if name.lower() in text
+                ),
+                None,
+            )
+        if lap is not None:
+            requested_lap = int(lap)
+        else:
+            match = re.search(r"(?:lap\s*)?(\d{1,2})", text)
+            requested_lap = (
+                int(match.group(1)) if match else int(state.get("current_lap", 0)) + 1
+            )
         requested_lap = max(int(state.get("current_lap", 0)), requested_lap)
         if compound is None:
             compound = base.get("recommended", {}).get("fit_compound") or "HARD"
@@ -4972,6 +4990,9 @@ class StrategyEngine:
         return {
             "available": True,
             "scenario": f"Box lap {requested_lap} for {compound}",
+            # The same stop as values, so a screen can word it in its own language.
+            "box_lap": requested_lap,
+            "compound": compound,
             "projected_time_s": round(total, 2),
             "projected_time_before_penalties_s": round(total - pending_penalty_s, 2),
             "pending_finish_penalty_s": pending_penalty_s,

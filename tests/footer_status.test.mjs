@@ -3,6 +3,8 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import vm from 'node:vm';
 
+await import('../static/js/i18n.js');
+
 const html = fs.readFileSync(new URL('../static/index.html', import.meta.url), 'utf8');
 const start = html.indexOf('function compactFooterStatus(');
 const end = html.indexOf('/* End compact status strip. */', start);
@@ -11,7 +13,7 @@ const nodes = new Map(['footerTelemetry', 'footerRadio'].map(id => [id, {
   textContent: '', dataset: {}, title: '', attributes: {},
   setAttribute(name, value) { this.attributes[name] = value; },
 }]));
-const context = vm.createContext({ $: id => nodes.get(id) });
+const context = vm.createContext({ $: id => nodes.get(id), i18n: globalThis.i18n });
 vm.runInContext(html.slice(start, end), context);
 const status = (state = {}, transport = true) => context.compactFooterStatus(state, transport);
 
