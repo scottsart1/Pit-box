@@ -16,6 +16,9 @@ PitWallData/
 .codex-remote-attachments/
 # Isolated data root used when capturing documentation screenshots
 .demo-data/
+# Pseudo-locale catalogs written by tools/i18n_extract.py --pseudo for layout checks
+static/i18n/qps.json
+static/driver-dashboard/i18n/qps.json
 
 # Editor/OS noise
 .vscode/
