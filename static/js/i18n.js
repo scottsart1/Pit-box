@@ -25,6 +25,7 @@
   const FORMAT = /\{([A-Za-z0-9_]+)\}/g;
   const ATTRIBUTES = ['placeholder', 'title', 'aria-label', 'alt'];
   const SKIP_TAGS = new Set(['SCRIPT', 'STYLE', 'TEXTAREA', 'CODE', 'PRE', 'NOSCRIPT', 'TEMPLATE']);
+  const VOID_TAGS = new Set(['area', 'base', 'br', 'col', 'embed', 'hr', 'img', 'input', 'link', 'meta', 'source', 'track', 'wbr']);
 
   let lang = 'en';
   let catalog = Object.create(null);
@@ -81,8 +82,9 @@
   }
 
   /* The key of a [data-i18n-html] element: its children with whitespace
-     collapsed, tags lower-case, attributes in source order and double-quoted.
-     tools/i18n_extract.py computes the same form from the HTML source. */
+     collapsed, tags lower-case, attributes in source order and double-quoted,
+     void elements such as <br> without an end tag. tools/i18n_extract.py
+     computes the same form from the HTML source. */
   function canonicalHtml(element) {
     let out = '';
     for (const node of element.childNodes) {
@@ -90,7 +92,7 @@
       else if (node.nodeType === 1) {
         const tag = node.tagName.toLowerCase();
         const attributes = Array.from(node.attributes).map(a => ` ${a.name}="${escapeAttribute(a.value)}"`).join('');
-        out += `<${tag}${attributes}>${canonicalHtml(node)}</${tag}>`;
+        out += VOID_TAGS.has(tag) ? `<${tag}${attributes}>` : `<${tag}${attributes}>${canonicalHtml(node)}</${tag}>`;
       }
     }
     return out;

@@ -109,7 +109,6 @@ class _MarkupKeys(HTMLParser):
             )
             self._html_parts.append(f"<{tag}{rendered}>")
             if tag in VOID_TAGS:
-                self._html_parts.append(f"</{tag}>")
                 return
             self._stack.append((tag, skipped))
             return
