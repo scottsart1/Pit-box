@@ -4,6 +4,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+// The model's text goes through the screen-language runtime, a page global.
+import '../static/js/i18n.js';
 import {
   COMPOUNDS, PACE_EXCLUSION_TEXT, STATUS_TEXT, STOP_KIND_TEXT, compoundInfo, countText, deltaWords, exclusionText, fastestTable,
   formatGap, formatLapTime, frameAt, gapWords, hasRaceOrder, headline, heatmapModel, heatmapTable, lapBands, lapTimesModel, lapTimesTable,

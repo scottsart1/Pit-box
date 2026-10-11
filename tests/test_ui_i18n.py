@@ -8,6 +8,7 @@ no translation can break the page it lands in (placeholders, markup).
 
 from __future__ import annotations
 
+import ast
 import json
 import re
 import sys
@@ -27,6 +28,7 @@ import i18n_extract  # noqa: E402
 LANGUAGES = ("fr", "de", "es")
 PLACEHOLDER = re.compile(r"\{([A-Za-z0-9_]+)\}")
 TAG = re.compile(r"<(/?)([a-z0-9]+)([^>]*)>")
+KEPT = re.compile(r'<([a-z0-9]+)[^>]*\btranslate="no"[^>]*>(.*?)</\1>', re.S)
 
 
 @pytest.fixture(scope="module")
@@ -146,6 +148,8 @@ def test_translations_keep_placeholders_markup_and_plural_forms(extracted, catal
                     problems.append((english, f"bad plural form {form!r}"))
                 elif not set(PLACEHOLDER.findall(text)) <= allowed:
                     problems.append((english, f"unknown placeholder in {form}"))
+                elif '"' in text and '"' not in english:
+                    problems.append((english, f"straight double quote in {form}"))
             if set(PLACEHOLDER.findall(translated["other"])) != expected:
                 problems.append((english, "placeholders differ in 'other'"))
             continue
@@ -159,10 +163,15 @@ def test_translations_keep_placeholders_markup_and_plural_forms(extracted, catal
                 return sorted((m.group(1), m.group(2), m.group(3).strip()) for m in TAG.finditer(text))
             if tags(translated) != tags(english):
                 problems.append((english, "markup differs"))
+            if KEPT.findall(translated) != KEPT.findall(english):
+                problems.append((english, "text marked translate=no changed"))
         elif "<" in translated and "<" not in english:
             problems.append((english, "markup in a plain-text translation"))
         if translated != translated.strip() and english == english.strip():
             problems.append((english, "leading or trailing space"))
+        # Some translations land in HTML attributes written with double quotes.
+        if '"' in translated and '"' not in english:
+            problems.append((english, "straight double quote"))
     assert not problems, problems[:15]
 
 
@@ -178,10 +187,15 @@ def test_catalogs_are_utf8_without_mojibake(catalog, lang):
 
 def test_server_keys_are_strings_the_server_actually_sends():
     keys = json.loads((STATIC / "i18n" / "server-keys.json").read_text(encoding="utf-8"))
-    source = "\n".join(
-        path.read_text(encoding="utf-8") for path in (ROOT / "src" / "pitwall").rglob("*.py")
-    )
-    missing = [key for key in keys if key not in source]
+    # String constants as Python sees them, so adjacent literals joined
+    # across lines count as one string.
+    constants = {
+        node.value
+        for path in (ROOT / "src" / "pitwall").rglob("*.py")
+        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8")))
+        if isinstance(node, ast.Constant) and isinstance(node.value, str)
+    }
+    missing = [key for key in keys if key not in constants]
     assert not missing, missing
 
 

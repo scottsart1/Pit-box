@@ -3,6 +3,8 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import vm from 'node:vm';
 
+await import('../static/js/i18n.js');
+
 const html=fs.readFileSync(new URL('../static/index.html',import.meta.url),'utf8');
 const start=html.indexOf('function renderRival('),end=html.indexOf('function damageText(',start);
 assert.ok(start>0&&end>start);
@@ -17,7 +19,7 @@ function harness(){
   const ids=['objectiveTarget','objectiveHero','objectiveBody','raceFlow','rivalCompare','rivalAhead','rivalBehind'];
   const nodes=new Map(ids.map(id=>[id,{textContent:'',innerHTML:'',className:'',open:true}]));
   const context=vm.createContext({$:id=>nodes.get(id),lastState:{...spa},lastAuxLap:0,
-    lastRivalKey:'',rivalCache:{},objectiveTarget:10,esc:value=>String(value??''),fetch:async()=>reply(hold),sectorStrip:()=>''});
+    lastRivalKey:'',rivalCache:{},objectiveTarget:10,esc:value=>String(value??''),fetch:async()=>reply(hold),sectorStrip:()=>'',i18n:globalThis.i18n});
   vm.runInContext(html.slice(start,end),context);
   context.observeDriveAuxiliarySession(context.lastState);
   const observe=state=>{context.lastState=state;context.observeDriveAuxiliarySession(state);};

@@ -218,7 +218,7 @@ public class MainActivity extends Activity {
         try { startActivityForResult(intent, SAVE_REPORT); }
         catch (android.content.ActivityNotFoundException error) {
             pendingReportUrl = null;
-            android.widget.Toast.makeText(this, "No file picker is available.", android.widget.Toast.LENGTH_LONG).show();
+            android.widget.Toast.makeText(this, R.string.no_file_picker, android.widget.Toast.LENGTH_LONG).show();
         }
     }
 
@@ -261,9 +261,9 @@ public class MainActivity extends Activity {
                     if (output == null) throw new java.io.IOException("Cannot open the selected file");
                     bytes.writeTo(output);
                 }
-                message = "Session report saved.";
+                message = getString(R.string.report_saved);
             } catch (Exception error) {
-                message = "Could not save the report. Please try exporting again.";
+                message = getString(R.string.report_save_failed);
             } finally {
                 if (connection != null) connection.disconnect();
             }
@@ -347,7 +347,7 @@ public class MainActivity extends Activity {
         StringBuilder text = new StringBuilder(getString(R.string.starting));
         text.append("\n\n").append(stage).append(" · ").append(seconds).append(" s");
         if (seconds >= 45) {
-            text.append("\n\nThis is taking longer than it should. The backend's log so far:\n\n")
+            text.append("\n\n").append(getString(R.string.start_slow)).append("\n\n")
                 .append(logTail());
         }
         status.setText(text.toString());
@@ -355,7 +355,7 @@ public class MainActivity extends Activity {
 
     private String logTail() {
         java.io.File log = new java.io.File(getFilesDir(), "PitWallData/pitwall.log");
-        if (!log.isFile()) return "(no pitwall.log yet: the backend has not started logging)";
+        if (!log.isFile()) return getString(R.string.log_missing);
         try (java.io.RandomAccessFile file = new java.io.RandomAccessFile(log, "r")) {
             long length = file.length();
             int want = (int) Math.min(length, 3000);
@@ -364,7 +364,7 @@ public class MainActivity extends Activity {
             file.readFully(bytes);
             return new String(bytes, "UTF-8");
         } catch (java.io.IOException error) {
-            return "(could not read pitwall.log: " + error + ")";
+            return getString(R.string.log_unreadable, error);
         }
     }
 
@@ -374,12 +374,12 @@ public class MainActivity extends Activity {
         String failure = PitBoxService.getFailure();
         if (failure != null) {
             status.setText(getString(R.string.start_failed) + "\n\n" + failure
-                    + "\n\nBackend log:\n\n" + logTail());
+                    + "\n\n" + getString(R.string.backend_log) + "\n\n" + logTail());
             return;
         }
         String url = PitBoxService.getDashboardUrl();
         if (url != null && PitBoxService.isRunning()) {
-            describeWait("Backend running, waiting for the dashboard at " + url);
+            describeWait(getString(R.string.stage_waiting_dashboard, url));
             String healthUrl = join(url, "api/health");
             new Thread(() -> {
                 boolean ready = healthy(healthUrl);
@@ -400,7 +400,7 @@ public class MainActivity extends Activity {
             }, "pitbox-health").start();
             return;
         }
-        describeWait(url == null ? "Starting the backend service" : "Backend starting");
+        describeWait(getString(url == null ? R.string.stage_starting_service : R.string.stage_backend_starting));
         handler.postDelayed(this::pollUntilReady, 400);
     }
 

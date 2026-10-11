@@ -26,20 +26,23 @@ export function comparisonCohorts(result, selections) {
 
 export function comparisonVisuals(result, selections = {}) {
   const wrapper = el('section', '', 'engineering-visuals');
-  wrapper.setAttribute('aria-label', 'A/B comparison charts');
+  wrapper.setAttribute('aria-label', i18n.t('A/B comparison charts'));
   const matched = result.mode === 'setup', pairCount = (result.pairs || []).length;
   const counts = matched ? { a: pairCount, b: pairCount } : result.clean_lap_counts || {};
   const quality = el('p', '', 'engineering-chart-quality');
-  quality.textContent = `${matched ? `${pairCount} matched pairs` : 'Selected clean laps'} · A ${counts.a ?? '—'} / B ${counts.b ?? '—'} used · excluded A ${(result.excluded?.a || []).length} / B ${(result.excluded?.b || []).length}.`;
-  wrapper.append(quality, el('p', `${result.enough_evidence ? 'Observed difference' : 'Preliminary evidence'} · ${matched ? 'Conditions matched within the stated limits.' : 'Conditions are not matched.'} This does not prove a setup or tyre caused the difference.${result.cross_session ? ' Different sessions; game and car equivalence are unverified.' : ''}`, 'small muted'));
+  const used = { pairs: pairCount, a: counts.a ?? '—', b: counts.b ?? '—', excludedA: (result.excluded?.a || []).length, excludedB: (result.excluded?.b || []).length };
+  quality.textContent = matched
+    ? i18n.t('{pairs} matched pairs · A {a} / B {b} used · excluded A {excludedA} / B {excludedB}.', used)
+    : i18n.t('Selected clean laps · A {a} / B {b} used · excluded A {excludedA} / B {excludedB}.', used);
+  wrapper.append(quality, el('p', `${result.enough_evidence ? i18n.t('Observed difference') : i18n.t('Preliminary evidence')} · ${matched ? i18n.t('Conditions matched within the stated limits.') : i18n.t('Conditions are not matched.')} ${i18n.t('This does not prove a setup or tyre caused the difference.')}${result.cross_session ? ` ${i18n.t('Different sessions; game and car equivalence are unverified.')}` : ''}`, 'small muted'));
 
   const sectors = el('figure', '', 'engineering-chart');
-  sectors.append(el('figcaption', 'Where the time changed', 'engineering-chart-title'),
-    el('p', 'Sector delta · B minus A · negative means B was quicker', 'small muted'));
+  sectors.append(el('figcaption', i18n.t('Where the time changed'), 'engineering-chart-title'),
+    el('p', i18n.t('Sector delta · B minus A · negative means B was quicker'), 'small muted'));
   const values = Array.from({ length: 3 }, (_, i) => result.sector_deltas_s?.[i]);
   const limit = Math.max(.001, ...values.filter(finite).map(Math.abs));
   const legend = el('div', '', 'engineering-delta-legend');
-  legend.append(el('span', '← B quicker'), el('span', '0'), el('span', 'B slower →')); sectors.append(legend);
+  legend.append(el('span', i18n.t('← B quicker')), el('span', '0'), el('span', i18n.t('B slower →'))); sectors.append(legend);
   values.forEach((value, i) => {
     const row = el('div', '', 'engineering-sector-row');
     row.dataset.sector = String(i + 1);
@@ -51,22 +54,22 @@ export function comparisonVisuals(result, selections = {}) {
       bar.style.left = `${value < 0 ? 50 - Math.abs(value) / limit * 50 : 50}%`;
       track.append(bar);
     }
-    row.append(el('span', `S${i + 1}`), track, el('span', finite(value) ? signed(value) : 'Unavailable', 'engineering-chart-value'));
+    row.append(el('span', `S${i + 1}`), track, el('span', finite(value) ? signed(value) : i18n.t('Unavailable'), 'engineering-chart-value'));
     sectors.append(row);
   });
-  if (result.sector_lap_counts) sectors.append(el('p', `Complete-sector laps: A ${result.sector_lap_counts.a} / B ${result.sector_lap_counts.b}. This cohort may differ from overall pace.`, 'small muted'));
-  sectors.append(el('p', `Bar scale: ${signed(-limit)} to ${signed(limit)}. Sector medians need not sum to the lap median.`, 'small muted'));
+  if (result.sector_lap_counts) sectors.append(el('p', i18n.t('Complete-sector laps: A {a} / B {b}. This cohort may differ from overall pace.', { a: String(result.sector_lap_counts.a), b: String(result.sector_lap_counts.b) }), 'small muted'));
+  sectors.append(el('p', i18n.t('Bar scale: {low} to {high}. Sector medians need not sum to the lap median.', { low: signed(-limit), high: signed(limit) }), 'small muted'));
   wrapper.append(sectors);
 
   const distribution = el('figure', '', 'engineering-chart');
-  distribution.append(el('figcaption', `${matched ? 'Matched' : 'Clean'}-lap pace and consistency`, 'engineering-chart-title'),
-    el('p', 'Dots show recorded lap times; ×N marks identical times. Both runs share the same scale; a shorter range means less variation.', 'small muted'));
+  distribution.append(el('figcaption', matched ? i18n.t('Matched-lap pace and consistency') : i18n.t('Clean-lap pace and consistency'), 'engineering-chart-title'),
+    el('p', i18n.t('Dots show recorded lap times; ×N marks identical times. Both runs share the same scale; a shorter range means less variation.'), 'small muted'));
   const cohorts = comparisonCohorts(result, selections);
   const laps = ['a', 'b'].flatMap(side => cohorts[side] || []);
   if (cohorts.a === null || cohorts.b === null) {
-    distribution.append(el('p', 'Lap distribution unavailable: the loaded laps do not reproduce the accepted comparison cohort.', 'small muted'));
+    distribution.append(el('p', i18n.t('Lap distribution unavailable: the loaded laps do not reproduce the accepted comparison cohort.'), 'small muted'));
   } else if (!laps.length) {
-    distribution.append(el('p', 'No accepted laps are available to plot.', 'small muted'));
+    distribution.append(el('p', i18n.t('No accepted laps are available to plot.'), 'small muted'));
   } else {
     const seconds = laps.map(lap => lap.lap_time_ms / 1000), low = Math.min(...seconds), high = Math.max(...seconds);
     const pad = Math.max((high - low) * .1, .05), minimum = Math.max(0, low - pad), maximum = high + pad;
@@ -87,15 +90,17 @@ export function comparisonVisuals(result, selections = {}) {
           const dot = el('span', '', 'engineering-pace-dot');
           dot.dataset.count = String(group.length);
           dot.style.left = `${position(lap.lap_time_ms / 1000)}%`; dot.style.top = `${12 + (i % 3) * 8}px`;
-          dot.title = `${side.toUpperCase()} lap${group.length === 1 ? '' : 's'} ${group.map(l => l.lap_num).join(', ')}: ${time(lap.lap_time_ms / 1000)}`;
+          dot.title = i18n.tp(group.length, '{side} lap {laps}: {time}', '{side} laps {laps}: {time}', { side: side.toUpperCase(), laps: group.map(l => l.lap_num).join(', '), time: time(lap.lap_time_ms / 1000) });
           if (group.length > 1) dot.append(el('span', `×${group.length}`, 'engineering-pace-count'));
           dot.setAttribute('role', 'img'); dot.setAttribute('aria-label', dot.title); track.append(dot);
         });
       }
       row.append(track); distribution.append(row);
-      distribution.append(el('p', times.length ? `${side.toUpperCase()} range ${time(times[0])}–${time(times.at(-1))} · spread ${(times.at(-1) - times[0]).toFixed(3)} s` : `${side.toUpperCase()}: no accepted laps.`, 'small muted'));
+      distribution.append(el('p', times.length
+        ? i18n.t('{side} range {from}–{to} · spread {spread} s', { side: side.toUpperCase(), from: time(times[0]), to: time(times.at(-1)), spread: (times.at(-1) - times[0]).toFixed(3) })
+        : i18n.t('{side}: no accepted laps.', { side: side.toUpperCase() }), 'small muted'));
     }
-    const axis = el('div', '', 'engineering-pace-axis'); axis.append(el('span', `${time(minimum)} · quicker`), el('span', `${time(maximum)} · slower`)); distribution.append(axis);
+    const axis = el('div', '', 'engineering-pace-axis'); axis.append(el('span', i18n.t('{time} · quicker', { time: time(minimum) })), el('span', i18n.t('{time} · slower', { time: time(maximum) }))); distribution.append(axis);
   }
   wrapper.append(distribution);
   return wrapper;

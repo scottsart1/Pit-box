@@ -1,6 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+// The strategy text goes through the screen-language runtime, a page global.
+import '../static/js/i18n.js';
 
 const source = fs.readFileSync(new URL('../static/js/strategy.js', import.meta.url), 'utf8');
 class Element {

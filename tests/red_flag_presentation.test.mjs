@@ -6,6 +6,8 @@ import {normalizeState} from '../static/driver-dashboard/model.mjs';
 import {MODULES,renderDashboard} from '../static/driver-dashboard/render.mjs';
 import {cleanPreferences} from '../static/driver-dashboard/display.mjs';
 
+await import('../static/js/i18n.js');
+
 const html=fs.readFileSync(new URL('../static/index.html',import.meta.url),'utf8');
 class Element {
   constructor(tag='div'){this.tagName=tag;this.children=[];this.dataset={};this.style={};this.hidden=false;this._text='';}
@@ -19,12 +21,13 @@ class Element {
 const nodes=new Map();
 const get=id=>{if(!nodes.has(id))nodes.set(id,new Element());return nodes.get(id);};
 const document={getElementById:get,createElement:tag=>new Element(tag),body:new Element()};
-const context=vm.createContext({$:get,document,esc:v=>String(v).replaceAll('<','&lt;')});
+const context=vm.createContext({$:get,document,esc:v=>String(v).replaceAll('<','&lt;'),i18n:globalThis.i18n});
 const slice=(start,end)=>html.slice(html.indexOf(start),html.indexOf(end,html.indexOf(start)));
 vm.runInContext(slice('function confirmedSessionFinish(','function renderTyreDegradation('),context);
 vm.runInContext(slice('function renderStrategy38(','/* ---- Pre-race plan panel'),context);
 vm.runInContext(slice('function renderRaceControl(','/* Compact status strip'),context);
 const source=fs.readFileSync(new URL('../static/js/strategy.js',import.meta.url),'utf8');
+await import('../static/js/i18n.js');
 const strategy=await import('data:text/javascript;base64,'+Buffer.from(source).toString('base64'));
 globalThis.document=document;
 globalThis.confirmedSessionFinish=context.confirmedSessionFinish;

@@ -1,10 +1,26 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">Your Pit Box</string>
+    <string name="app_name" translatable="false">Your Pit Box</string>
     <string name="notification_channel">Pit box session</string>
+    <string name="notification_channel_description">Shown while Your Pit Box is receiving telemetry.</string>
     <string name="notification_title">Your Pit Box is running</string>
     <string name="notification_text">Receiving telemetry on port 20777. Tap to open the pit box.</string>
     <string name="notification_stop">Stop</string>
     <string name="starting">Starting your pit box…</string>
     <string name="start_failed">Your Pit Box could not start. Long-press the text to copy it; the same text is saved as PitWallData/android-start-error.txt in the app\'s storage.</string>
+    <!-- Start screen: what the backend is doing, shown under "starting" with the elapsed seconds. -->
+    <string name="stage_starting_service">Starting the backend service</string>
+    <string name="stage_backend_starting">Backend starting</string>
+    <!-- %1$s is the local dashboard address, such as http://127.0.0.1:8000 -->
+    <string name="stage_waiting_dashboard">Backend running, waiting for the dashboard at %1$s</string>
+    <!-- Followed by the end of pitwall.log, the backend's log file. -->
+    <string name="start_slow">This is taking longer than it should. The backend\'s log so far:</string>
+    <string name="backend_log">Backend log:</string>
+    <string name="log_missing">(no pitwall.log yet: the backend has not started logging)</string>
+    <!-- %1$s is the technical error, left untranslated. -->
+    <string name="log_unreadable">(could not read pitwall.log: %1$s)</string>
+    <!-- Saving an exported session report. -->
+    <string name="no_file_picker">No file picker is available.</string>
+    <string name="report_saved">Session report saved.</string>
+    <string name="report_save_failed">Could not save the report. Please try exporting again.</string>
 </resources>

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {classifyViewport,resolveDisplay,cleanPreferences,cleanWidgets,presetWidgets,reorderWidgets,resizedWidget,DISPLAY_PROFILES,LAYOUTS,WIDGET_CATALOG,WIDGET_PRESETS} from '../static/driver-dashboard/display.mjs';
+import {classifyViewport,resolveDisplay,resolveLanguage,cleanPreferences,cleanWidgets,presetWidgets,reorderWidgets,resizedWidget,DISPLAY_PROFILES,LAYOUTS,WIDGET_CATALOG,WIDGET_PRESETS} from '../static/driver-dashboard/display.mjs';
 import {demoState,normalizeState,raceFlag,lapTime,escapeHTML} from '../static/driver-dashboard/model.mjs';
 import {renderDashboard,MODULES} from '../static/driver-dashboard/render.mjs';
 import {readFileSync} from 'node:fs';
@@ -114,7 +114,7 @@ test('Dashboard header and race-mode status agree with completion and preserve s
     [{connected:false,final_classification:{position:1}},'demo','SAMPLE · SIMULATED'],
   ]){
     const nodes=Object.fromEntries(['sessionStatus','trackStatus','raceModeSource'].map(id=>[id,{textContent:''}]));
-    vm.runInNewContext(labels,{m:normalizeState(state,{transport}),$:id=>nodes[id]});
+    vm.runInNewContext(labels,{m:normalizeState(state,{transport}),$:id=>nodes[id],i18n:globalThis.i18n});
     assert.equal(nodes.sessionStatus.textContent,status);assert.equal(nodes.raceModeSource.textContent,status);
     assert.equal(nodes.trackStatus.textContent,state.final_classification.position?'Session complete':'Start a simulator session');
   }
@@ -241,6 +241,41 @@ test('The downloadable dashboard is self-contained and its bundled script parses
   assert.ok(!html.includes('type="module"'));assert.match(html,/SAMPLE DATA/);assert.match(html,/widgetLibrary/);
   const script=html.match(/<script>([\s\S]*?)<\/script>/)?.[1];assert.ok(script);
   assert.doesNotThrow(()=>new vm.Script(script));
+});
+
+test('The offline download carries its translation catalogs and the runtime before any module',()=>{
+  const html=readFileSync(new URL('../static/driver-dashboard/downloads/driver-dashboard.html',import.meta.url),'utf8');
+  const catalogs=html.match(/<script type="application\/json" id="dashboardCatalogs">([^<]*)<\/script>/)?.[1];
+  assert.ok(catalogs);assert.equal(typeof JSON.parse(catalogs),'object');
+  const script=html.match(/<script>([\s\S]*?)<\/script>/)[1];
+  assert.ok(script.indexOf('const i18n = globalThis.i18n;')<script.indexOf('const DISPLAY_PROFILES'));
+});
+
+test('A ?lang= link wins, then the saved choice, then a French, German or Spanish browser on its own',()=>{
+  assert.equal(resolveLanguage({requested:'de',chosen:'fr',browser:'es-ES'}),'de');
+  assert.equal(resolveLanguage({requested:'../fr',chosen:'es'}),'es');
+  assert.equal(resolveLanguage({chosen:'fr',embedded:true,browser:'de-DE'}),'fr');
+  assert.equal(resolveLanguage({chosen:'auto',browser:'es-MX'}),'es');
+  assert.equal(resolveLanguage({chosen:'auto',browser:'fr'}),'fr');
+  for(const browser of ['frr','it-IT','en-GB',''])assert.equal(resolveLanguage({chosen:'auto',browser}),'en',browser);
+  // Inside the app no ?lang= means its screens are English.
+  assert.equal(resolveLanguage({chosen:'auto',embedded:true,browser:'fr-FR'}),'en');
+  assert.equal(cleanPreferences(null).language,'auto');assert.equal(cleanPreferences({language:'es'}).language,'es');
+  assert.equal(cleanPreferences({language:'it'}).language,'auto');
+});
+
+test('A catalog translates flags, widget names and counts at render time; English needs none',()=>{
+  const english=renderDashboard('modular',normalizeState(demoState('red'),{transport:'demo'}),cleanPreferences({widgets:[{id:'instrument',w:1,h:1}]}));
+  globalThis.i18n.configure('fr',{'RED FLAG':'DRAPEAU ROUGE','Speed & gear':'Vitesse et rapport','{count} widgets':{one:'{count} widget',other:'{count} widgets'}});
+  try{
+    const m=normalizeState(demoState('red'),{transport:'demo'});
+    assert.equal(m.flag.title,'DRAPEAU ROUGE');
+    assert.equal(WIDGET_CATALOG[0].name,'Vitesse et rapport');assert.equal(MODULES.instrument.name,'Vitesse et rapport');
+    const html=renderDashboard('modular',m,cleanPreferences({widgets:[{id:'instrument',w:1,h:1}]}));
+    assert.match(html,/<b>1 widget<\/b>/);assert.match(html,/aria-label="Move Vitesse et rapport\. Drag/);
+  }finally{globalThis.i18n.configure('en',{})}
+  assert.equal(renderDashboard('modular',normalizeState(demoState('red'),{transport:'demo'}),cleanPreferences({widgets:[{id:'instrument',w:1,h:1}]})),english);
+  assert.match(english,/<b>1 widgets<\/b>/);
 });
 
 function preferenceStorage(initial=null){

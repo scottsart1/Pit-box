@@ -3,6 +3,8 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 
+await import('../static/js/i18n.js');
+
 const source = readFileSync(new URL('../static/js/workspaces.js', import.meta.url), 'utf8')
   .replace(/^export \{[^\n]+\};?\s*$/m, '');
 const deferred = () => {
@@ -21,7 +23,7 @@ function harness() {
     'libraryRows', 'libraryCount', 'libraryLoadMore', 'reviewSessionSelect', 'fieldSessionSelect',
     'lapLabSessionSelect'].map(id => [id, node()]));
   const calls = [];
-  const context = vm.createContext({ URLSearchParams, document: {
+  const context = vm.createContext({ URLSearchParams, i18n: globalThis.i18n, document: {
     getElementById: id => nodes.get(id), createElement: node,
   }, fetch: path => { const pending = deferred(); calls.push({ path, ...pending }); return pending.promise; } });
   vm.runInContext(source, context);

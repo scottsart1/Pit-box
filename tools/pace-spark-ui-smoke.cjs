@@ -42,6 +42,8 @@ const strategyModule = fs.readFileSync(path.join(root, 'static/js/strategy.js'),
       });
       await page.goto('http://pitbox.test/');
       await page.evaluate(() => document.getElementById('bootOverlay')?.remove());
+      // The page's scripts were stripped above; the renderers need the screen-language runtime.
+      await page.addScriptTag({ path: path.join(root, 'static/js/i18n.js') });
       await page.addScriptTag({ content: `const $ = id => document.getElementById(id); const esc = v => String(v).replaceAll('&','&amp;').replaceAll('<','&lt;');\n${renderer}\n${damageRenderer}\n${carRenderer}\n${restartRenderer}\n${strategyRenderer}` });
       await page.addScriptTag({ type: 'module', content: `${strategyModule}\nwindow.strategyQA={renderCall,renderPlans,drawTimeline};` });
       await page.waitForFunction(() => window.strategyQA);

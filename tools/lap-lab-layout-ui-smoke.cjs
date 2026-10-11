@@ -60,6 +60,7 @@ const out=path.resolve(process.env.PITBOX_LAP_LAYOUT_EVIDENCE||path.join(root,'.
    assert(hit,`${id} is covered at ${width}`);
   }
   assert.equal(await page.locator('#comparisonCompatibility').innerText(),'comparable with caveats reference · fuel loads differ materially');
+  await page.addScriptTag({content:fs.readFileSync(path.join(root,'static/js/i18n.js'),'utf8')});
   await page.addScriptTag({content:fs.readFileSync(path.join(root,'static/js/workspaces.js'),'utf8')
    .replace(/^const HAS_DOM =[^\n]+/m,'const HAS_DOM = false;').replace(/^export \{[^\n]+\};?\s*$/m,'')+
    '\nwindow.recordingQA={state,renderComparison,analyzeLapAlone}; drawComparisonTrace=()=>{}; drawComparisonMap=()=>{}; updateInstruments=()=>{};'});

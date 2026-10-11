@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import vm from 'node:vm';
 import {normalizeState, finite, positive} from '../static/driver-dashboard/model.mjs';
+await import('../static/js/i18n.js');
 
 const html=fs.readFileSync(new URL('../static/overlay.html',import.meta.url),'utf8');
 const script=html.match(/<script type="module">([\s\S]*?)<\/script>/)[1].replace(/^import .*;$/m,'');
@@ -18,7 +19,7 @@ function suspended(){const s=state();s.race_control_phase='red_flag';s.strategy.
 function harness(){
   const nodes=new Map(), sockets=[], timers=[];let time=101000;
   const get=id=>{if(!nodes.has(id))nodes.set(id,{textContent:'',hidden:false,classList:{add(){},toggle(){}}});return nodes.get(id);};
-  const context=vm.createContext({normalizeState,finite,positive,URLSearchParams,
+  const context=vm.createContext({normalizeState,finite,positive,i18n:globalThis.i18n,URLSearchParams,
     location:{search:'',protocol:'http:',host:'pitbox.test'},Date:{now:()=>time},
     document:{getElementById:get,body:{classList:{add(){}}}},fetch:()=>new Promise(()=>{}),
     setTimeout:()=>{},setInterval:fn=>timers.push(fn),WebSocket:class{constructor(){sockets.push(this);}}});

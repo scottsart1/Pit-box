@@ -885,9 +885,16 @@ class RacePlannerRequest(BaseModel):
 
 
 class WhatIfRequest(BaseModel):
-    """A hypothetical stop for the Strategy workspace, e.g. 'box lap 18 for hards'."""
+    """A hypothetical stop for the Strategy workspace, e.g. 'box lap 18 for hards'.
+
+    ``lap`` and ``compound`` carry the workspace's lap and tyre selectors as
+    values. When present they are used as given; when absent they are read
+    from the scenario text, which only understands English tyre names.
+    """
 
     scenario: str
+    lap: int | None = None
+    compound: str | None = None
 
 
 class RacePlanRequest(BaseModel):
@@ -1612,7 +1619,12 @@ async def strategy_what_if(request: WhatIfRequest) -> dict[str, object]:
     scenario = request.scenario.strip()
     if not scenario:
         raise HTTPException(400, "Describe the stop, e.g. 'box lap 18 for hards'.")
-    return await strategy.what_if(scenario)
+    compound = str(request.compound or "").strip().upper() or None
+    if compound is not None and compound not in {"SOFT", "MEDIUM", "HARD", "INTER", "WET"}:
+        raise HTTPException(400, f"Invalid compound: {compound}")
+    if request.lap is not None and not 0 <= request.lap <= 200:
+        raise HTTPException(400, "lap must be between 0 and 200")
+    return await strategy.what_if(scenario, lap=request.lap, compound=compound)
 
 
 @app.get("/api/strategy/rivals")

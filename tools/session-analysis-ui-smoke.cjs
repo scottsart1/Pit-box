@@ -7,8 +7,9 @@
    IIFE that replaces the view's single `import * as M` line; the view's own
    `export` keywords are dropped and `__test` is exposed on window. Nothing
    else in the source is rewritten, so the shipped code is what runs. The
-   inline router (ANALYSIS_VIEWS, selectPage, selectAnalysisView) is taken
-   from index.html, and runs before the module, as it does in the app.
+   screen-language runtime (static/js/i18n.js) and the inline router
+   (ANALYSIS_VIEWS, selectPage, selectAnalysisView, taken from index.html)
+   run before the module, as they do in the app.
    Timers and animation frames are fakes the tests drive by hand. */
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -145,6 +146,8 @@ async function harness({ hash = '', storage = {}, overrides = {}, reducedMotion 
   };
   const opened = [];
   w.addEventListener('pitwall:open-lap', (event) => opened.push(event.detail));
+  // The screen-language runtime is the page's first script.
+  w.eval(read('static/js/i18n.js'));
   w.eval(ROUTER);
   w.document.querySelectorAll('.tab').forEach((button) => { button.onclick = () => w.selectPage(button.dataset.page); });
   w.document.querySelectorAll('.analysis-subnav .field-tab').forEach((button) => { button.onclick = () => w.selectAnalysisView(button.dataset.page); });

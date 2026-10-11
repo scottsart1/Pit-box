@@ -46,7 +46,7 @@ const settle = async () => { for (let i = 0; i < 8; i++) await new Promise(resol
     w.document.querySelectorAll('.tab').forEach(button => { button.onclick = () => w.selectPage(button.dataset.page); });
     w.document.querySelectorAll('.analysis-subnav .field-tab').forEach(button => { button.onclick = () => w.selectAnalysisView(button.dataset.page); });
     w.selectPage('settings');
-    w.eval(script('usage.js')); w.eval(script('updates.js')); w.eval(script('onboarding.js')); w.eval(script('app-tour.js')); await settle();
+    w.eval(script('i18n.js')); w.eval(script('usage.js')); w.eval(script('updates.js')); w.eval(script('onboarding.js')); w.eval(script('app-tour.js')); await settle();
     assert.equal(id('onboardingDialog').open, false, 'privacy prompt remains independently actionable');
     id('usageNo').click(); await settle();
     assert.equal(usage.enabled, false);

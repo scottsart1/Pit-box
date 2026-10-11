@@ -89,8 +89,8 @@ def test_connection_center_exposes_real_network_operations() -> None:
 def test_network_ui_distinguishes_listening_receiving_and_unavailable() -> None:
     assert "Listening means the socket is open" in INDEX
     assert "Receiving means valid F1 telemetry" in INDEX
-    assert 'listening: "Listening — waiting for telemetry"' in CONNECTION_JS
-    assert 'receiving: "Receiving telemetry"' in CONNECTION_JS
+    assert 'listening: i18n.t("Listening — waiting for telemetry")' in CONNECTION_JS
+    assert 'receiving: i18n.t("Receiving telemetry")' in CONNECTION_JS
     assert "No packet data available" in INDEX
     assert "Unavailable" in INDEX
     assert "Public destinations must be reconfirmed" in CONNECTION_JS

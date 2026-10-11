@@ -32,6 +32,7 @@ const red=()=>frame({race_control_phase:'red_flag',strategy:{...frame().strategy
         if(url.pathname==='/overlay')return route.fulfill({contentType:'text/html',body:html});
         if(url.pathname==='/api/state'){pendingRest=route;return;}
         if(url.pathname==='/static/driver-dashboard/model.mjs')return route.fulfill({contentType:'text/javascript',path:path.join(root,'static/driver-dashboard/model.mjs')});
+        if(url.pathname==='/static/js/i18n.js')return route.fulfill({contentType:'text/javascript',path:path.join(root,'static/js/i18n.js')});
         return route.abort();
       });
       await page.goto('http://pitbox.test/overlay');

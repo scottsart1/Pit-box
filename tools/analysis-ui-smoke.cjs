@@ -74,6 +74,7 @@ async function harness(overrides = {}) {
     ['selectPage', 'selectAnalysisView'].map(name => html.match(new RegExp(`^function ${name}\\([^\\n]+`, 'm'))[0]).join('\n'));
   w.document.querySelectorAll('.tab').forEach(button => { button.onclick = () => w.selectPage(button.dataset.page); });
   w.document.querySelectorAll('.analysis-subnav .field-tab').forEach(button => { button.onclick = () => w.selectAnalysisView(button.dataset.page); });
+  w.eval(fs.readFileSync(path.join(root, 'static/js/i18n.js'), 'utf8'));
   w.eval(moduleText);
   await settle();
   return { w, id, calls, contexts, timers, api: w.pitwallWorkspaces, close: () => dom.window.close() };

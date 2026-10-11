@@ -267,7 +267,7 @@ public class PitBoxService extends Service {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return;
         NotificationChannel channel = new NotificationChannel(
                 CHANNEL_ID, getString(R.string.notification_channel), NotificationManager.IMPORTANCE_LOW);
-        channel.setDescription("Shown while Your Pit Box is receiving telemetry.");
+        channel.setDescription(getString(R.string.notification_channel_description));
         NotificationManager manager = getSystemService(NotificationManager.class);
         if (manager != null) manager.createNotificationChannel(channel);
     }

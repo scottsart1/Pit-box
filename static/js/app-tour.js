@@ -5,28 +5,28 @@
   const panel = get("appTour"), app = document.querySelector(".app");
   if (!panel || !app) return;
   const stops = [
-    {page: "live", target: "traceCard", title: "Drive · your race at a glance",
-      text: "Follow live timing, tyres, fuel and lap targets. Use Dashboard to arrange your cards."},
-    {page: "live", target: "radio", title: "Mark · your race engineer",
-      text: "Type a question, hold your mapped L3 button, or say ‘Mark’. Voice needs an OpenAI key and microphone access."},
-    {page: "driver-dashboard", target: "tab-driver-dashboard", title: "Driver Dashboard · a dedicated driving display",
-      text: "Choose a driving layout for your phone, tablet or laptop, then customize the display."},
-    {page: "strategy", target: "stratCallHeading", title: "Strategy · plan your pit stops",
-      text: "Compare pit plans and what-if scenarios. Discuss a plan with Mark, then choose what to run."},
-    {page: "connection", target: "connectionHeading", title: "Connection · check the real feed",
-      text: "Check your UDP address, port and connection health. Live forwarding is beta; devices do not auto-sync."},
-    {page: "connection", target: "transferPanel", title: "Transfer history · take your sessions with you",
-      text: "Copy saved sessions between paired devices on the same network. Beta: check the copy before deleting originals. Keys stay private."},
-    {page: "analysis", view: "library", target: "libraryTableHeading", title: "Library · revisit previous sessions",
-      text: "Browse saved races, qualifying and practice. Open a session to review its laps and recording quality."},
-    {page: "analysis", view: "lap-lab", target: "traceHeading", title: "Lap Lab · find where time is won or lost",
-      text: "Pick recorded laps to compare speed, throttle and braking. Missing telemetry stays unavailable."},
-    {page: "analysis", view: "field", target: "tab-field", title: "Field · compare the competition",
-      text: "Compare the field's recorded pace, corners and stints. New installs capture all cars by default."},
-    {page: "setup", target: "tab-setup", title: "Setup Lab · tailor the car",
-      text: "Choose a track and profile for setup recommendations. Apply the changes in the game yourself."},
-    {page: "settings", target: "onboardingSettings", title: "Settings · make it yours",
-      text: "Adjust radio and recording preferences, or replay this tour. Privacy and App updates are at the bottom."},
+    {page: "live", target: "traceCard", title: i18n.t("Drive · your race at a glance"),
+      text: i18n.t("Follow live timing, tyres, fuel and lap targets. Use Dashboard to arrange your cards.")},
+    {page: "live", target: "radio", title: i18n.t("Mark · your race engineer"),
+      text: i18n.t("Type a question, hold your mapped L3 button, or say ‘Mark’. Voice needs an OpenAI key and microphone access.")},
+    {page: "driver-dashboard", target: "tab-driver-dashboard", title: i18n.t("Driver Dashboard · a dedicated driving display"),
+      text: i18n.t("Choose a driving layout for your phone, tablet or laptop, then customize the display.")},
+    {page: "strategy", target: "stratCallHeading", title: i18n.t("Strategy · plan your pit stops"),
+      text: i18n.t("Compare pit plans and what-if scenarios. Discuss a plan with Mark, then choose what to run.")},
+    {page: "connection", target: "connectionHeading", title: i18n.t("Connection · check the real feed"),
+      text: i18n.t("Check your UDP address, port and connection health. Live forwarding is beta; devices do not auto-sync.")},
+    {page: "connection", target: "transferPanel", title: i18n.t("Transfer history · take your sessions with you"),
+      text: i18n.t("Copy saved sessions between paired devices on the same network. Beta: check the copy before deleting originals. Keys stay private.")},
+    {page: "analysis", view: "library", target: "libraryTableHeading", title: i18n.t("Library · revisit previous sessions"),
+      text: i18n.t("Browse saved races, qualifying and practice. Open a session to review its laps and recording quality.")},
+    {page: "analysis", view: "lap-lab", target: "traceHeading", title: i18n.t("Lap Lab · find where time is won or lost"),
+      text: i18n.t("Pick recorded laps to compare speed, throttle and braking. Missing telemetry stays unavailable.")},
+    {page: "analysis", view: "field", target: "tab-field", title: i18n.t("Field · compare the competition"),
+      text: i18n.t("Compare the field's recorded pace, corners and stints. New installs capture all cars by default.")},
+    {page: "setup", target: "tab-setup", title: i18n.t("Setup Lab · tailor the car"),
+      text: i18n.t("Choose a track and profile for setup recommendations. Apply the changes in the game yourself.")},
+    {page: "settings", target: "onboardingSettings", title: i18n.t("Settings · make it yours"),
+      text: i18n.t("Adjust radio and recording preferences, or replay this tour. Privacy and App updates are at the bottom.")},
   ];
   let index = -1, highlighted = null, origin = null, oldSpace = "";
   function navigate(page, view) {
@@ -46,9 +46,9 @@
     navigate(stop.page, stop.view);
     get("appTourTitle").textContent = stop.title;
     get("appTourText").textContent = stop.text;
-    get("appTourProgress").textContent = `App tour · ${index + 1} of ${stops.length}`;
+    get("appTourProgress").textContent = i18n.t("App tour · {n} of {total}", {n: index + 1, total: stops.length});
     get("appTourBack").disabled = index === 0;
-    get("appTourNext").textContent = index === stops.length - 1 ? "Finish tour" : "Next";
+    get("appTourNext").textContent = index === stops.length - 1 ? i18n.t("Finish tour") : i18n.t("Next");
     panel.scrollTop = 0; reserveSpace();
     // A user-hidden dashboard card stays hidden. Highlight its workspace tab instead.
     const target = get(stop.target);

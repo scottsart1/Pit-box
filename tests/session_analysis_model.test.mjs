@@ -1,6 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+// The model's text goes through the screen-language runtime, a page global.
+import '../static/js/i18n.js';
 import {
   COMPOUNDS, compoundInfo, continuousRuns, defaultFocus, driverStyles, fastestModel, formatGap, formatLapTime,
   frameAt, gapSeries, headline, heatColour, heatmapModel, lapAxisTicks, lapBands, lapTimesModel, niceTicks,

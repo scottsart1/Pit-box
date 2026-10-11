@@ -36,6 +36,7 @@ const submit = id => byId(id).dispatchEvent(new window.Event('submit', { bubbles
 
 (async () => {
   try {
+    window.eval(fs.readFileSync(path.join(root, 'static/js/i18n.js'), 'utf8'));
     window.eval(fs.readFileSync(path.join(root, 'static/js/transfers.js'), 'utf8').replace(/^export /gm, ''));
     window.document.dispatchEvent(new window.Event('DOMContentLoaded'));
     window.dispatchEvent(new window.CustomEvent('pitwall:pagechange', { detail: { page: 'connection' } }));

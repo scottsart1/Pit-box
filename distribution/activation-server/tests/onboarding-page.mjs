@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
 import vm from 'node:vm';
 import test from 'node:test';
+import '../../../static/js/i18n.js';
 
 const source = await readFile(new URL('../../../static/js/onboarding.js', import.meta.url), 'utf8');
 const html = await readFile(new URL('../../../static/index.html', import.meta.url), 'utf8');
@@ -37,7 +38,7 @@ function harness(options = {}) {
     '/api/v1/network/interfaces': {},
   };
   const context = {
-    document, window, AbortController, setTimeout, clearTimeout,
+    document, window, AbortController, setTimeout, clearTimeout, i18n: globalThis.i18n,
     CustomEvent: class { constructor(type) { this.type = type; } },
     navigator: {clipboard: {writeText: async value => { if (options.clipboardBlocked) throw new Error('denied'); copied.push(value); }}},
     setInterval: fn => { timers.add(fn); return fn; }, clearInterval: fn => timers.delete(fn),

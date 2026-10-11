@@ -89,11 +89,11 @@ function render(state, {ageMs = 0, now = Date.now(), transportLost = false} = {}
   const lap = live && group('2'), status = live && group('7'), damage = live && group('10');
   const pos = finished ?? (lap ? data.position : null);
   document.getElementById("pos").textContent = pos ? "P" + pos : "—";
-  document.getElementById('status').textContent = finished !== null ? `Session complete · P${finished}`
-    : data.provisionalRestart ? 'Last confirmed · provisional'
-    : !data.fresh ? 'Telemetry unavailable'
-    : suspension ? 'Red flag · session suspended'
-    : lap && status && damage ? 'Live telemetry' : 'Some current readings unavailable';
+  document.getElementById('status').textContent = finished !== null ? i18n.t('Session complete · P{position}', {position: finished})
+    : data.provisionalRestart ? i18n.t('Last confirmed · provisional')
+    : !data.fresh ? i18n.t('Telemetry unavailable')
+    : suspension ? i18n.t('Red flag · session suspended')
+    : lap && status && damage ? i18n.t('Live telemetry') : i18n.t('Some current readings unavailable');
 
   const delta = lap ? data.delta : null;
   const el = document.getElementById("delta");
@@ -102,29 +102,29 @@ function render(state, {ageMs = 0, now = Date.now(), transportLost = false} = {}
   el.classList.toggle("pos-bad", typeof delta === "number" && delta > 0);
 
   document.getElementById("tyre").textContent =
-    status ? data.compound + (data.tyreAge !== null ? " · " + data.tyreAge + " laps" : "") : '—';
+    status ? (data.tyreAge !== null ? i18n.t('{compound} · {laps} laps', {compound: data.compound, laps: data.tyreAge}) : data.compound) : '—';
   document.getElementById("wear").textContent =
     damage ? data.wear.map(w => w === null ? '—' : Math.round(w) + "%").join(" ") : "—";
 
   const fuel = status ? data.fuelMargin : null;
   document.getElementById("fuel").textContent =
-    typeof fuel === "number" ? (fuel >= 0 ? "+" : "") + fuel.toFixed(1) + " laps" : "—";
+    typeof fuel === "number" ? i18n.t('{laps} laps', {laps: (fuel >= 0 ? "+" : "") + fuel.toFixed(1)}) : "—";
 
   const usablePlan = live && group('1') && group('2') && status && state.strategy?.available;
-  document.getElementById("strat").textContent = finished !== null ? 'Session complete. Review recorded laps in Analysis.'
-    : data.suspended ? data.plan : usablePlan ? data.plan : 'Current strategy unavailable';
+  document.getElementById("strat").textContent = finished !== null ? i18n.t('Session complete. Review recorded laps in Analysis.')
+    : data.suspended ? data.plan : usablePlan ? data.plan : i18n.t('Current strategy unavailable');
   document.getElementById('alternative').textContent = data.suspended && data.restartAlternative
-    ? 'Alternative: ' + data.restartAlternative : '';
+    ? i18n.t('Alternative: {alternative}', {alternative: data.restartAlternative}) : '';
   document.getElementById('strategyNotice').textContent = data.provisionalRestart
-    ? 'Live telemetry unavailable. Confirm the suspension, tyre sets and track conditions in game before using this plan.'
-    : data.suspended ? 'Follow the game’s suspension instructions. Select restart tyres while stopped.' : '';
+    ? i18n.t('Live telemetry unavailable. Confirm the suspension, tyre sets and track conditions in game before using this plan.')
+    : data.suspended ? i18n.t('Follow the game’s suspension instructions. Select restart tyres while stopped.') : '';
   const showProjection = !!usablePlan && !data.suspended;
   document.getElementById('strategyProjection').hidden = !showProjection;
   const rec = showProjection ? state.strategy.recommended || {} : {};
   const slope = state.analysis && state.analysis.deg_model && state.analysis.deg_model.current_slope_s_per_lap;
   const hold = state.strategy_hold && state.strategy_hold.active;
   document.getElementById("stratMeta").textContent = !showProjection ? '—' : hold
-    ? "DRIVER HOLD"
+    ? i18n.t("DRIVER HOLD")
     : "P" + (rec.projected_finish_position || "—") + " / " +
       (finite(rec.projected_finish_wear_pct) === null ? "—" : Math.round(rec.projected_finish_wear_pct) + "%") + " / " +
       (finite(slope) === null ? "—" : fmtDelta(slope) + "s/L");

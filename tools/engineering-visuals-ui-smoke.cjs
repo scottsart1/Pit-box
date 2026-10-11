@@ -21,6 +21,7 @@ try{for(const [width,height]of [[800,1280],[390,844]]){
   await page.goto('http://pitbox.test/');await page.evaluate(async()=>{
     document.getElementById('bootOverlay')?.remove();for(const main of document.querySelectorAll('main.page')){main.hidden=main.id!=='analysis';main.classList.toggle('active',main.id==='analysis');}
     for(const panel of document.querySelectorAll('.analysis-view'))panel.hidden=panel.id!=='test-engineer';
+    await import('/static/js/i18n.js');// the stripped page's screen-language runtime
     window.renderVisuals=(await import('/static/js/engineering-visuals.mjs')).comparisonVisuals;
   });
   for(const [scenario,result,selected]of [['matched',fixture.comparison,{a:fixture.runs[0],b:fixture.runs[1]}],['cross-session',fixture.cross_comparison,{a:fixture.runs[0],b:fixture.cross_runs[0]}],...(fixture.stint_comparison?[['stint',fixture.stint_comparison,{a:fixture.runs[0],b:fixture.runs[1]}]]:[])]){
