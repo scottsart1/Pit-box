@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Your Pit Box Overlay</title>
+<script src="/static/js/i18n.js?v=5.4.1"></script>
 <style>
 /* Transparent by default for OBS browser sources. Append ?bg=1 for an opaque
    panel when using this as a phone/tablet second screen. */
@@ -62,6 +63,7 @@ body.solid{background:#070b0f}
     <div class="radio" id="radio">—</div>
   </div>
 </div>
+<script>i18n.translateDom(document)</script>
 <script type="module">
 import { normalizeState, finite, positive } from '/static/driver-dashboard/model.mjs';
 if (new URLSearchParams(location.search).get("bg") === "1") document.body.classList.add("solid");

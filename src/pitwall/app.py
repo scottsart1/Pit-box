@@ -93,6 +93,7 @@ from .trace_archive import TraceArchiveService
 from .trace_store import RecoveryReport, TraceStore
 from .track_model_service import TrackModelService
 from .udp import TRACKS, F1DatagramProtocol, classify_session
+from .ui_i18n import render_page
 from .update_service import UpdateService
 from .usage_reporting import UsageReporting
 from .voice import NativeVoiceController
@@ -926,14 +927,19 @@ class WakeRequest(BaseModel):
 
 
 @app.get("/", response_class=HTMLResponse)
-async def index() -> HTMLResponse:
-    return HTMLResponse((_static_root / "index.html").read_text(encoding="utf-8"))
+async def index(lang: str | None = None) -> HTMLResponse:
+    """The dashboard, in the screen language setting unless ?lang= names one."""
+    return HTMLResponse(render_page(_static_root, "index.html", lang, settings.ui_language))
 
 
 @app.get("/overlay", response_class=HTMLResponse)
-async def overlay() -> HTMLResponse:
-    """Transparent OBS/second-screen overlay. Append ?bg=1 for an opaque panel."""
-    return HTMLResponse((_static_root / "overlay.html").read_text(encoding="utf-8"))
+async def overlay(lang: str | None = None) -> HTMLResponse:
+    """Transparent OBS/second-screen overlay. Append ?bg=1 for an opaque panel.
+
+    ?lang= picks the overlay's language independently of the dashboard, so a
+    streamer can show viewers a different language from the one they use.
+    """
+    return HTMLResponse(render_page(_static_root, "overlay.html", lang, settings.ui_language))
 
 
 @app.get("/api/health")
