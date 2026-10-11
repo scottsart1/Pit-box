@@ -5,7 +5,7 @@
     <string name="notification_title">Your Pit Box est actif</string>
     <string name="notification_text">Réception de la télémétrie sur le port 20777. Appuie pour ouvrir Your Pit Box.</string>
     <string name="notification_stop">Arrêter</string>
-    <string name="starting">Ton Pit Box démarre…</string>
+    <string name="starting">Démarrage de ton stand…</string>
     <string name="start_failed">Your Pit Box n\'a pas pu démarrer. Appuie longuement sur le texte pour le copier. Le même texte est enregistré dans PitWallData/android-start-error.txt, dans le stockage de l\'app.</string>
     <string name="stage_starting_service">Démarrage du service backend</string>
     <string name="stage_backend_starting">Le backend démarre</string>

@@ -89,8 +89,8 @@
   // no catalog to translate it with.
   const LANGUAGE_KEY = "pitbox.languageSuggestion.v1";
   const LANGUAGE_OFFERS = {
-    fr: {label: "Langue", offer: "Afficher Your Pit Box en français", dismiss: "Ne plus proposer", failed: "La langue n’a pas pu être changée. Réessayez."},
-    de: {label: "Sprache", offer: "Your Pit Box auf Deutsch anzeigen", dismiss: "Nicht mehr anzeigen", failed: "Die Sprache konnte nicht geändert werden. Bitte erneut versuchen."},
+    fr: {label: "Langue", offer: "Afficher Your Pit Box en français", dismiss: "Ne plus proposer", failed: "Impossible de changer la langue. Réessaie."},
+    de: {label: "Sprache", offer: "Your Pit Box auf Deutsch anzeigen", dismiss: "Nicht mehr anzeigen", failed: "Die Sprache konnte nicht geändert werden. Bitte versuch es erneut."},
     es: {label: "Idioma", offer: "Ver Your Pit Box en español", dismiss: "No volver a mostrar", failed: "No se pudo cambiar el idioma. Inténtalo de nuevo."},
   };
   function offerLanguage() {
