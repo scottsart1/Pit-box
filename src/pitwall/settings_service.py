@@ -171,6 +171,19 @@ SETTINGS_SPEC: dict[str, dict[str, Any]] = {
         "label": "Open browser on launch",
         "description": "Open the dashboard automatically when the app starts.",
     },
+    "ui_language": {
+        "group": "Application", "type": "choice",
+        "choices": ("en", "fr", "de", "es"),
+        # Each language is named in its own language so anyone can find it.
+        "choice_labels": {
+            "en": "English", "fr": "Français", "de": "Deutsch", "es": "Español",
+        },
+        "label": "Screen language",
+        "description": (
+            "Language for menus and screens. The engineer's radio stays in "
+            "English. The page reloads when you change it."
+        ),
+    },
 }
 
 PREFERENCE_KEY = "app_settings"
@@ -311,6 +324,8 @@ def settings_view(settings: Any, saved: dict[str, Any]) -> list[dict[str, Any]]:
         }
         if spec["type"] == "choice":
             entry["choices"] = list(spec["choices"])
+            if spec.get("choice_labels"):
+                entry["choice_labels"] = dict(spec["choice_labels"])
         if spec["type"] in {"int", "float"}:
             entry["min"], entry["max"] = spec["min"], spec["max"]
         view.append(entry)

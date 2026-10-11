@@ -246,6 +246,9 @@ class Settings(BaseSettings):
     # its own storage and points here.
     static_dir: Path | None = None
     open_browser: bool = True
+    # Language of the dashboard's menus and screens: en, fr, de or es. The
+    # engineer's radio is not affected; it stays English.
+    ui_language: str = "en"
     # Housekeeping. 60 Hz lap traces and pre-gating strategy snapshots dominate
     # database size; the reference lap for each track is always preserved.
     db_maintenance_on_start: bool = True
