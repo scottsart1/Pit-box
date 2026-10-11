@@ -45,6 +45,19 @@ NEGATIONS = (
     "stop mentioning", "stop talking", "stop asking", "stop suggesting",
     "stop recommending", "stop saying", "stop bringing up", "stop reminding",
     "stop it", "stop that", "stop with",
+    # French, German and Spanish negations that cannot occur in English
+    # radio. Drivers mix English jargon into their own language, so "Non, je
+    # ne veux pas box lap 18 pour les mediums" carries the English commitment
+    # words "box lap 18" and was locked as a pit stop. Recognising the
+    # negation keeps such a refusal from changing the plan; it is passed to
+    # the model instead. Bare "no" and "non" stay out: they appear in "no
+    # problem" and "non-stop".
+    "pas", "jamais",
+    "nicht", "nichts", "nein", "kein", "keine", "keinen", "keinem", "keiner",
+    "nie", "niemals",
+    "nunca", "jamas", "tampoco", "no quiero", "no queremos", "no voy",
+    "no vamos", "no hagas", "no hagamos", "no entres", "no entramos",
+    "no paro", "no paramos",
 )
 
 
