@@ -1456,3 +1456,18 @@ button:disabled,
 .choice-chip[data-choice="manual"] { color: var(--info); border-color: color-mix(in srgb, var(--info) 50%, var(--border)); }
 .compact-button { min-height: 44px; padding: 4px 12px; }
 @media (max-width: 440px) { .picker-pair { grid-template-columns: minmax(0, 1fr); } }
+
+/* Translated screens (served with data-ui-language). French, German and
+   Spanish labels run longer than English, so the tightest desktop rows give
+   them room: the box-lap field takes its own line above the tyre and stop
+   selects, the what-if tyre select widens, and the lap-delta readout wraps
+   a word like "Nicht verfügbar" instead of cutting it. English pages are
+   unaffected. */
+html[data-ui-language] .comparison-delta output { white-space: normal; }
+@media (min-width: 701px) {
+  html[data-ui-language] .override-row { flex-wrap: wrap; }
+  html[data-ui-language] .override-row > #overrideLap { flex-basis: 100%; }
+}
+@media (min-width: 1181px) {
+  html[data-ui-language] .whatif-controls { grid-template-columns: 110px 130px minmax(0, 1fr) auto; }
+}
