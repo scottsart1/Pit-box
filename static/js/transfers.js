@@ -262,8 +262,8 @@ function renderSessions() {
     const details = textElement("span", "transfer-session-details", "");
     details.append(textElement("strong", "", title));
     const descriptors = [dateLabel(session.started_at ?? session.created_at ?? session.start_time)];
-    if (session.lap_count !== undefined) descriptors.push(i18n.t("{count} laps", { count: `${session.lap_count}` }));
-    if (session.driver_count !== undefined || session.drivers_observed !== undefined) descriptors.push(i18n.t("{count} drivers", { count: `${session.driver_count ?? session.drivers_observed}` }));
+    if (session.lap_count !== undefined) descriptors.push(i18n.tp(session.lap_count, "{count} laps", "{count} laps", { count: `${session.lap_count}` }));
+    if (session.driver_count !== undefined || session.drivers_observed !== undefined) descriptors.push(i18n.tp(session.driver_count ?? session.drivers_observed, "{count} drivers", "{count} drivers", { count: `${session.driver_count ?? session.drivers_observed}` }));
     if (session.trace_laps !== undefined) descriptors.push(i18n.t("{count} laps with traces", { count: `${session.trace_laps}` }));
     if (session.bytes !== undefined || session.size_bytes !== undefined) descriptors.push(formatTransferBytes(session.bytes ?? session.size_bytes));
     details.append(textElement("span", "field-help", descriptors.join(" · ")));
@@ -319,7 +319,7 @@ function renderJobs(jobs, exports = []) {
     directionLabel(card, job, true);
     const header = textElement("div", "section-heading", "");
     const label = { preparing: i18n.t("Preparing history"), ready: i18n.t("Ready to send"), sending: i18n.t("Sending history"), sent: i18n.t("File sent — check receiving device"), interrupted: i18n.t("Sending interrupted"), failed: i18n.t("Export needs attention"), expired: i18n.t("Export expired") }[job.status] || i18n.t("Checking export");
-    header.append(textElement("strong", "", label), textElement("span", "field-help", i18n.t("{count} sessions", { count: `${job.session_ids?.length ?? 0}` }))); card.append(header);
+    header.append(textElement("strong", "", label), textElement("span", "field-help", i18n.tp(job.session_ids?.length ?? 0, "{count} sessions", "{count} sessions", { count: `${job.session_ids?.length ?? 0}` }))); card.append(header);
     if (["preparing", "sending", "sent", "interrupted"].includes(job.status)) renderStage(card, job, true);
     const detail = { ready: i18n.t("Archive prepared. Waiting for the receiving device to download it."), sent: i18n.t("Sending is finished. The receiving device still needs to verify and import the archive; check it for the final result."), interrupted: i18n.t("The connection stopped. Retry on the receiving device to resume copying."), expired: i18n.t("This cached export has expired. Retry on the receiving device to prepare another.") }[job.status];
     if (detail) card.append(textElement("p", "field-help", detail));
@@ -330,7 +330,7 @@ function renderJobs(jobs, exports = []) {
     const card = textElement("article", "transfer-job", ""); card.dataset.status = job.status; card.dataset.direction = "incoming";
     directionLabel(card, job, false);
     const header = textElement("div", "section-heading", "");
-    header.append(textElement("strong", "", transferJobLabel(job.status)), textElement("span", "field-help", job.session_ids ? i18n.t("{count} sessions", { count: `${job.session_ids.length ?? ""}` }) : "")); card.append(header);
+    header.append(textElement("strong", "", transferJobLabel(job.status)), textElement("span", "field-help", job.session_ids ? i18n.tp(job.session_ids.length ?? "", "{count} sessions", "{count} sessions", { count: `${job.session_ids.length ?? ""}` }) : "")); card.append(header);
     if (!TERMINAL.has(job.status)) renderStage(card, job);
     if (job.status === "completed") {
       const result = job.result || {};
