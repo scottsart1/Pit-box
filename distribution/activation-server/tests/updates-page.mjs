@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
 import vm from 'node:vm';
 import test from 'node:test';
+import '../../../static/js/i18n.js';
 const source = await readFile(new URL('../../../static/js/updates.js', import.meta.url), 'utf8');
 const settle = async () => { for (let i = 0; i < 8; i++) await new Promise(resolve => setImmediate(resolve)); };
 function element() { return {listeners: {}, hidden: false, disabled: false, textContent: '', checked: false, before() {}, after() {}, appendChild(child) { this.child = child; }, removeAttribute(key) { delete this[key]; }, addEventListener(name, fn) { this.listeners[name] = fn; }}; }
@@ -9,7 +10,7 @@ function harness(data) {
   const elements = new Map(), header = element(), calls = [], timers = [];
   const get = id => { if (!elements.has(id)) elements.set(id, element()); return elements.get(id); };
   const document = {getElementById: get, createElement: element, querySelector: () => header, visibilityState: 'visible'};
-  vm.runInNewContext(source, {document, setInterval: fn => timers.push(fn), fetch: async (url, options) => { calls.push({url, options}); return {ok: true, json: async () => data}; }});
+  vm.runInNewContext(source, {document, i18n: globalThis.i18n, setInterval: fn => timers.push(fn), fetch: async (url, options) => { calls.push({url, options}); return {ok: true, json: async () => data}; }});
   return {get, header, calls, timers, document};
 }
 const state = () => ({enabled: true, current_version: '4.11.0', available: true, dismissed: false, outcome: 'ok', release: {version: '4.12.0', download_url: 'https://yourpitbox.com/#windows-release', notes: '<script>not executable</script>'}});
