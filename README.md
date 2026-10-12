@@ -1,8 +1,8 @@
-# Your Pit Box 5.4.1 — AI race engineer and driver dashboard
+# Your Pit Box 5.5.0 — AI race engineer and driver dashboard
 
 [Download Windows or Android](https://yourpitbox.com/#download),
 [try the Driver Dashboard](https://your-pit-box-driver-dashboard.sarthakvij123450.chatgpt.site/),
-or read the [release notes](docs/release-notes-5.4.1.md).
+or read the [release notes](docs/release-notes-5.5.0.md).
 
 Your Pit Box receives **F1 26** telemetry (UDP format **2026**) from a PS5, runs deterministic
 strategy/corner/setup analysis locally, keeps persistent SQLite history, answers spoken questions,
@@ -105,6 +105,20 @@ Only enable `PITWALL_WEB_LAN_ACCESS=true` when a phone/tablet needs the
 dashboard. Bind the web host to `0.0.0.0`, set a long
 `PITWALL_WEB_ACCESS_TOKEN`, and keep it on a trusted LAN. Your Pit Box never opens a
 router or firewall to the public internet automatically.
+
+## What changed in 5.5.0
+
+**Screens in French, German and Spanish.** Settings → Application → Screen
+language translates the app's pages, the first-run walkthrough and app tour,
+the stream overlay and the Android start-up screens. The Driver Dashboard has
+its own Language choice, and an overlay can take one from its address
+(`/overlay?lang=de`). The engineer's radio stays in English. Translations are
+English-keyed catalogs in `static/i18n/` and `static/driver-dashboard/i18n/`;
+they were machine-drafted and reviewed by AI, not yet by native speakers.
+
+**Refusals in other languages.** "Non, je ne veux pas box lap 18", "Nein, ich
+will nicht box lap 18" and "No quiero box lap 18" no longer lock a stop; the
+negation check now knows French, German and Spanish words.
 
 ## What changed in 5.4.1
 

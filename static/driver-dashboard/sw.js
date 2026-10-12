@@ -1,4 +1,4 @@
-const CACHE='pitbox-dashboard-5.4.1-languages';
+const CACHE='pitbox-dashboard-5.5.0';
 const FILES=['./','./index.html','./dashboard.css','./dashboard.js','./i18n.mjs','./display.mjs','./model.mjs','./render.mjs','./preferences.mjs','./manifest.webmanifest','./icon.svg','./icon-192.png','./icon-512.png','./downloads/driver-dashboard.html'];
 // A language without a catalog shows English, so a missing one must not stop installation.
 const CATALOGS=['./i18n/fr.json','./i18n/de.json','./i18n/es.json'];
