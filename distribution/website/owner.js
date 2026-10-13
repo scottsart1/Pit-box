@@ -124,6 +124,32 @@
     const eligible = sum(rows, "eligible"), returned = sum(rows, "returned");
     return eligible ? `${number(returned)} / ${number(eligible)} (${(100 * returned / eligible).toFixed(1)}%)` : "Not yet eligible";
   };
+  // Compare numeric version components, then SemVer prerelease identifiers.
+  // Unknown/unversioned reports follow numbered releases.
+  function compareVersionsNewestFirst(left, right) {
+    const parse = value => /^v?(\d+(?:\.\d+)*)(?:-([0-9A-Za-z.-]+))?(?:\+[0-9A-Za-z.-]+)?$/i.exec(value.trim());
+    const a = parse(left), b = parse(right);
+    if (!a || !b) return a ? -1 : b ? 1 : right.localeCompare(left, "en", {numeric: true});
+    const ac = a[1].split(".").map(BigInt), bc = b[1].split(".").map(BigInt);
+    for (let i = 0; i < Math.max(ac.length, bc.length); i++) {
+      const av = ac[i] ?? 0n, bv = bc[i] ?? 0n;
+      if (av !== bv) return av > bv ? -1 : 1;
+    }
+    if (a[2] === b[2]) return 0;
+    if (!a[2] || !b[2]) return a[2] ? 1 : -1; // Stable release precedes its prereleases.
+    const ap = a[2].split("."), bp = b[2].split(".");
+    for (let i = 0; i < Math.max(ap.length, bp.length); i++) {
+      if (ap[i] === bp[i]) continue;
+      if (ap[i] === undefined || bp[i] === undefined) return ap[i] === undefined ? 1 : -1;
+      const an = /^\d+$/.test(ap[i]), bn = /^\d+$/.test(bp[i]);
+      if (an && bn) {
+        const av = BigInt(ap[i]), bv = BigInt(bp[i]);
+        if (av !== bv) return av > bv ? -1 : 1;
+      } else if (an !== bn) return an ? 1 : -1;
+      else return ap[i] > bp[i] ? -1 : 1;
+    }
+    return 0;
+  }
   function renderOverview(data) {
     validateOverview(data);
     for (const id of tableIds.filter(id => id !== "emailRows")) el(id).replaceChildren();
@@ -187,7 +213,8 @@
       addSignal("First reported use", platforms.map(p => sum(u.installations.filter(r => r.platform === p), "new_30d")));
       for (const [event, title] of Object.entries(titles)) addSignal(title, platforms.map(p => sum(u.features.filter(r => r.platform === p && r.event === event), "installations")));
       for (const c of u.retention) row("retentionRows", [`Day ${c.day}`, ...platforms.map(p => returnRate(c.platforms.filter(r => r.platform === p))), returnRate(c.platforms)]);
-      for (const v of u.versions) row("versionRows", [v.platform, v.version, number(v.installations)]);
+      const versions = [...u.versions].sort((a, b) => compareVersionsNewestFirst(a.version, b.version) || platforms.indexOf(a.platform) - platforms.indexOf(b.platform));
+      for (const v of versions) row("versionRows", [v.platform, v.version, number(v.installations)]);
     }
     text("ownerStatus", [d, s, u].every(Boolean) ? "Connected. Collecting automatically; no manual imports needed." : "Connected, but some reports are unavailable. Missing data is not shown as zero.");
   }

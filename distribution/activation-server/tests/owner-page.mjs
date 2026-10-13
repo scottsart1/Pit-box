@@ -143,3 +143,32 @@ test('inconsistent, duplicated, out-of-window or overlapping history is never ad
     assert.equal(h.elements.historyDailyRows.children.length, 0);
   }
 });
+
+test('versions render newest first across platforms and stay sorted after refresh', async () => {
+  const data = structuredClone(overview);
+  const fixtures = [
+    ['windows', '4.9.8', 8], ['android', '5.5.0', 5], ['windows', 'unknown', 1],
+    ['windows', '5.9.0', 9], ['windows', '5.10.0-rc.2', 2], ['windows', '5.5.0', 6],
+    ['android', '5.10.0', 10], ['windows', '4.10.0', 4], ['windows', '5.10.0-rc.10', 3],
+    ['windows', 'v5.10.0+build.7', 7], ['windows', '6.0.0-beta.1', 11],
+  ];
+  data.usage.versions = Object.freeze(fixtures.map(([platform, version, installations]) => Object.freeze({platform, version, installations})));
+  const before = JSON.stringify(data.usage.versions);
+  // Return the frozen report itself so an in-place sort would fail.
+  const h = harness(async url => url.includes('/overview') ? {ok: true, status: 200, json: async () => data} : response(emails));
+  const expected = [
+    ['windows', '6.0.0-beta.1', '11'], ['windows', 'v5.10.0+build.7', '7'],
+    ['android', '5.10.0', '10'], ['windows', '5.10.0-rc.10', '3'],
+    ['windows', '5.10.0-rc.2', '2'], ['windows', '5.9.0', '9'],
+    ['windows', '5.5.0', '6'], ['android', '5.5.0', '5'], ['windows', '4.10.0', '4'],
+    ['windows', '4.9.8', '8'], ['windows', 'unknown', '1'],
+  ];
+  const rows = () => h.elements.versionRows.children.map(tr => tr.children.map(td => td.textContent));
+  await h.login();
+  assert.deepEqual(rows(), expected);
+  assert.equal(JSON.stringify(data.usage.versions), before);
+  await h.elements.ownerRefresh.listeners.click();
+  assert.deepEqual(rows(), expected);
+  h.elements.ownerLock.listeners.click();
+  assert.deepEqual(rows(), []);
+});
