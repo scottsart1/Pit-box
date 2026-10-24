@@ -272,10 +272,99 @@ def run_summary(laps: list[dict]) -> dict:
     }
 
 
+def _timing_only(lap: dict) -> bool:
+    """A lap known only from the game's lap history.
+
+    Its time is authoritative, but nothing about the car was observed: no run
+    serial, no setup, no compound, no tyre age. Pace already excludes it
+    (``missing_telemetry``). What it must not do is pass for a change of tyres
+    or setup and cut the stint it was driven in into separate runs.
+    """
+    return (
+        lap.get("context_observed") is False
+        and not lap.get("run_serial")
+        and setup_key(lap) == "unknown"
+    )
+
+
+def _lap_identity_rank(lap: dict) -> tuple[bool, int, int]:
+    return (
+        lap.get("context_observed") is not False,
+        int(lap.get("timeline_epoch") or 0),
+        int(lap.get("identity_revision") or 0),
+    )
+
+
+def select_player_laps(laps: list[dict]) -> list[dict]:
+    """One row per attempt at each lap, in session order.
+
+    The game's lap history is reconciled under the player's current identity
+    revision. A new revision inserts a timing-only row for every earlier lap
+    beside the row that observed it, so the same lap appeared twice: once
+    with temperatures, fuel and setup, once with none of them, both with a
+    lap time. The copy's unknown compound and setup then cut every stint into
+    one-lap runs. A row that observed the lap therefore beats a timing-only
+    copy, and among timing-only rows the newest timeline, then the newest
+    revision, is kept. Attempts at the same lap on different timelines (a
+    flashback) are different laps and both stay. A chosen row without a time
+    borrows the time and sectors of one that has it.
+    """
+    by_number: dict[int, list[dict]] = {}
+    for lap in laps:
+        by_number.setdefault(int(lap.get("lap_num") or 0), []).append(lap)
+    selected: list[dict] = []
+    for rows in by_number.values():
+        observed = [row for row in rows if row.get("context_observed") is not False]
+        kept: list[dict]
+        if observed:
+            by_epoch: dict[int, dict] = {}
+            for row in observed:
+                epoch = int(row.get("timeline_epoch") or 0)
+                if epoch not in by_epoch or _lap_identity_rank(row) > _lap_identity_rank(by_epoch[epoch]):
+                    by_epoch[epoch] = row
+            kept = list(by_epoch.values())
+        else:
+            kept = [max(rows, key=_lap_identity_rank)]
+        for row in kept:
+            if (number(row.get("lap_time_ms")) or 0) <= 0:
+                epoch = int(row.get("timeline_epoch") or 0)
+                timed = [other for other in rows if (number(other.get("lap_time_ms")) or 0) > 0]
+                if timed:
+                    donor = max(
+                        timed,
+                        key=lambda other: (
+                            int(other.get("timeline_epoch") or 0) == epoch,
+                            _lap_identity_rank(other),
+                        ),
+                    )
+                    row = {
+                        **row,
+                        **{
+                            key: donor[key]
+                            for key in ("lap_time_ms", "valid", "s1_ms", "s2_ms", "s3_ms")
+                            if donor.get(key) is not None
+                        },
+                    }
+            selected.append(row)
+    selected.sort(
+        key=lambda lap: (
+            int(lap.get("timeline_epoch") or 0),
+            int(lap.get("lap_num") or 0),
+            int(lap.get("identity_revision") or 0),
+        )
+    )
+    return selected
+
+
 def build_runs(laps: list[dict]) -> list[dict]:
     runs: list[dict] = []
+    # The last lap whose context was observed. Timing-only laps carry no
+    # setup, compound or tyre age, so they never decide a run boundary.
     previous: dict | None = None
     for lap in laps:
+        if runs and _timing_only(lap):
+            runs[-1]["laps"].append(lap)
+            continue
         signature = (
             lap.get("run_serial"),
             lap.get("timeline_epoch", 0),
@@ -306,24 +395,30 @@ def build_runs(laps: list[dict]) -> list[dict]:
         if signature != previous_signature or new_tyres or legacy_exit:
             old_setup = setup_values(previous or {})
             new_setup = setup_values(lap)
-            runs.append(
-                {
-                    "id": str(lap.get("id", f"run-{len(runs) + 1}")),
-                    "number": len(runs) + 1,
-                    "compound": lap.get("compound", "UNKNOWN"),
-                    "setup_id": setup_key(lap),
-                    "setup": new_setup,
-                    "setup_changes": {
-                        key: {"from": old_setup.get(key), "to": new_setup.get(key)}
-                        for key in sorted(old_setup.keys() | new_setup.keys())
-                        if previous and old_setup.get(key) != new_setup.get(key)
-                    },
-                    "run_serial": lap.get("run_serial"),
-                    "laps": [],
-                }
-            )
+            run = {
+                "id": str(lap.get("id", f"run-{len(runs) + 1}")),
+                "number": len(runs) + 1,
+                "compound": lap.get("compound", "UNKNOWN"),
+                "setup_id": setup_key(lap),
+                "setup": new_setup,
+                "setup_changes": {
+                    key: {"from": old_setup.get(key), "to": new_setup.get(key)}
+                    for key in sorted(old_setup.keys() | new_setup.keys())
+                    if previous and old_setup.get(key) != new_setup.get(key)
+                },
+                "run_serial": lap.get("run_serial"),
+                "laps": [],
+            }
+            if runs and all(_timing_only(item) for item in runs[-1]["laps"]):
+                # Timing-only laps that opened the recording belong to the
+                # first observed stint rather than to a run of their own.
+                run.update(id=runs[-1]["id"], number=runs[-1]["number"], laps=runs[-1]["laps"])
+                runs[-1] = run
+            else:
+                runs.append(run)
         runs[-1]["laps"].append(lap)
-        previous = lap
+        if not _timing_only(lap):
+            previous = lap
     for run in runs:
         run["summary"] = run_summary(run["laps"])
         run["lap_range"] = [run["laps"][0]["lap_num"], run["laps"][-1]["lap_num"]]
@@ -782,8 +877,10 @@ class EngineeringService:
                 raise KeyError(session_id)
             session = dict(row)
             rows = db.execute(
-                """SELECT r.* FROM recorded_laps r JOIN session_cars c ON c.id=r.session_car_id
-                WHERE c.session_id=? AND c.is_player=1 ORDER BY r.timeline_epoch,r.lap_number,r.created_at""",
+                """SELECT r.*, c.identity_revision FROM recorded_laps r
+                JOIN session_cars c ON c.id=r.session_car_id
+                WHERE c.session_id=? AND c.is_player=1
+                ORDER BY r.timeline_epoch,r.lap_number,c.identity_revision,r.created_at""",
                 (session_id,),
             ).fetchall()
         laps = []
@@ -798,6 +895,7 @@ class EngineeringService:
             )
             context.setdefault("mode_profile", session["mode_profile"])
             context.setdefault("session_type", session["session_type"])
+            context.setdefault("identity_revision", row["identity_revision"])
             for key, column in (
                 ("compound", "tyre_compound"),
                 ("tyre_age_start", "tyre_age_laps"),
@@ -808,6 +906,7 @@ class EngineeringService:
             ):
                 context.setdefault(key, row[column])
             laps.append(context)
+        laps = select_player_laps(laps)
         notes = json.loads(session["engineering_notes_json"] or "{}")
         lap_notes = []
         for saved in notes.get("lap_notes", []):
