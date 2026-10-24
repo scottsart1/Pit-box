@@ -116,6 +116,14 @@ observed lap is now the one shown, runs and suggested stints follow the
 observed laps, and a lap known only from the game's history stays inside its
 stint. Recordings from earlier versions display correctly after updating.
 
+**"Mark" in a louder room.** The hands-free microphone gate only learned the
+room's noise from sound quieter than its trigger, so a room whose steady level
+sat above the minimum (game audio through speakers, a fan beside the
+microphone) was never learned: every sound counted as speech, captures ran to
+their 15-second limit, and the wake word was answered late or not at all. A
+capture that runs to the limit, or that the transcriber hears nothing in, now
+raises the noise estimate so the trigger climbs clear of the room.
+
 ## What changed in 5.5.0
 
 **Screens in French, German and Spanish.** Settings → Application → Screen
