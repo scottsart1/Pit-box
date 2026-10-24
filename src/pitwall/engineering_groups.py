@@ -116,6 +116,11 @@ def validate_groups(laps: list[dict], definitions: list[dict]) -> list[dict]:
     return normalized
 
 
+def _known(value: object) -> bool:
+    """A recorded value. Timing-only laps carry 'UNKNOWN', which is not an event."""
+    return value is not None and str(value).strip().lower() not in {"", "unknown", "none"}
+
+
 def _boundary_strength(before: dict, after: dict) -> int:
     """Rank observed events; missing context never becomes an inferred event."""
     score = 0
@@ -123,7 +128,7 @@ def _boundary_strength(before: dict, after: dict) -> int:
         score += 1000
     for field, weight in (("compound", 100), ("run_serial", 70), ("weather", 30)):
         left, right = before.get(field), after.get(field)
-        if left is not None and right is not None and left != right:
+        if _known(left) and _known(right) and left != right:
             score += weight
     left_setup, right_setup = setup_key(before), setup_key(after)
     if (
