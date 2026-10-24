@@ -1,8 +1,8 @@
-# Your Pit Box 5.5.0 — AI race engineer and driver dashboard
+# Your Pit Box 5.5.1 — AI race engineer and driver dashboard
 
 [Download Windows or Android](https://yourpitbox.com/#download),
 [try the Driver Dashboard](https://your-pit-box-driver-dashboard.sarthakvij123450.chatgpt.site/),
-or read the [release notes](docs/release-notes-5.5.0.md).
+or read the [release notes](docs/release-notes-5.5.1.md).
 
 Your Pit Box receives **F1 26** telemetry (UDP format **2026**) from a PS5, runs deterministic
 strategy/corner/setup analysis locally, keeps persistent SQLite history, answers spoken questions,
@@ -105,6 +105,16 @@ Only enable `PITWALL_WEB_LAN_ACCESS=true` when a phone/tablet needs the
 dashboard. Bind the web host to `0.0.0.0`, set a long
 `PITWALL_WEB_ACCESS_TOKEN`, and keep it on a trusted LAN. Your Pit Box never opens a
 router or firewall to the public internet automatically.
+
+## What changed in 5.5.1
+
+**Practice review lists each lap once.** When the game re-sent its lap history
+under a new identity for your car, the Engineering page showed every lap
+twice, once with temperatures and setup and once with `?`, and treated the
+copy as a change of car, so a six-lap stint read as twelve one-lap runs. The
+observed lap is now the one shown, runs and suggested stints follow the
+observed laps, and a lap known only from the game's history stays inside its
+stint. Recordings from earlier versions display correctly after updating.
 
 ## What changed in 5.5.0
 
