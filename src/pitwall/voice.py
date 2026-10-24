@@ -125,7 +125,13 @@ class NativeVoiceController:
         # produced thousands of pending tasks and eventually delayed the radio.
         # One bounded queue and one owned consumer preserve order and apply
         # backpressure without ever blocking the audio callback.
-        self._audio_queue: asyncio.Queue[np.ndarray] = asyncio.Queue(maxsize=64)
+        # Each entry carries the block and the moment the microphone delivered
+        # it. Ten seconds of blocks fit, so a stalled event loop (a lap-end
+        # burst, a slow frame for two dashboards) delays the radio rather than
+        # losing the middle of a sentence.
+        self._audio_queue: asyncio.Queue[tuple[np.ndarray, float]] = asyncio.Queue(
+            maxsize=max(64, int(10.0 / max(0.01, settings.wake_block_ms / 1000.0)))
+        )
         self._audio_consumer_task: asyncio.Task[None] | None = None
         self._session_watch_task: asyncio.Task[None] | None = None
 
@@ -684,7 +690,12 @@ class NativeVoiceController:
                 if status:
                     log.debug("Audio input status: %s", status)
                 block = indata.copy()
-                self.loop.call_soon_threadsafe(self._queue_audio_block, block)
+                # Stamp the block here, on the audio thread: the event loop may
+                # not get to it for a while, and every wake and push-to-talk
+                # decision must be made in the time the sound was heard.
+                self.loop.call_soon_threadsafe(
+                    self._queue_audio_block, block, time.monotonic()
+                )
 
             self.stream = sd.InputStream(
                 samplerate=settings.audio_sample_rate,
@@ -710,31 +721,35 @@ class NativeVoiceController:
             return 0.0
         return float(np.sqrt(np.mean(block.astype(np.float64) ** 2)))
 
-    def _queue_audio_block(self, block: np.ndarray) -> None:
+    def _queue_audio_block(
+        self, block: np.ndarray, captured_at: float | None = None
+    ) -> None:
         """Enqueue a microphone block on the event-loop thread.
 
         If the consumer falls behind, drop the oldest audio rather than growing
-        memory without bound. A 64-block queue still retains nearly two seconds
-        at the default block size, comfortably beyond ordinary scheduling jitter.
+        memory without bound. The queue holds ten seconds at the default block
+        size; a stall that long is a frozen process, not scheduling jitter.
         """
         if self._shutdown:
             return
+        if captured_at is None:
+            captured_at = time.monotonic()
         if self._audio_queue.full():
             with contextlib.suppress(asyncio.QueueEmpty):
                 self._audio_queue.get_nowait()
                 self._audio_queue.task_done()
         with contextlib.suppress(asyncio.QueueFull):
-            self._audio_queue.put_nowait(block)
+            self._audio_queue.put_nowait((block, captured_at))
 
     async def _consume_audio_queue(self) -> None:
         while True:
-            block = await self._audio_queue.get()
+            block, captured_at = await self._audio_queue.get()
             try:
                 if self.realtime_active and self.realtime is not None:
                     self._publish_wake_diagnostics(time.monotonic())
                     await self.realtime.send_audio(block, settings.audio_sample_rate)
                 else:
-                    self._consume_audio_block(block)
+                    self._consume_audio_block(block, captured_at)
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
@@ -836,9 +851,21 @@ class NativeVoiceController:
             or (self._wake_process_task and not self._wake_process_task.done())
         )
 
-    def _consume_audio_block(self, block: np.ndarray) -> None:
-        """Route one microphone block to PTT, wake capture, or a live session."""
-        now = time.monotonic()
+    def _consume_audio_block(
+        self, block: np.ndarray, captured_at: float | None = None
+    ) -> None:
+        """Route one microphone block to PTT, wake capture, or a live session.
+
+        ``captured_at`` is when the microphone delivered the block. The wake
+        gate measures speech and silence in that time, never in the time the
+        event loop happened to process it: while the dashboards, a lap-end
+        burst or a strategy recompute hold the loop for a few hundred
+        milliseconds, blocks arrive here late and bunched. Judged by arrival
+        time they looked like long silences and sudden fifteen-second
+        utterances, so "Mark" was cut short or lost exactly while the car was
+        on track, and worked on the pause screen where the loop is idle.
+        """
+        now = time.monotonic() if captured_at is None else captured_at
         rms = self._rms(block)
         self._last_audio_rms = rms
 

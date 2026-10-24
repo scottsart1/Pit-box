@@ -1,3 +1,5 @@
+import asyncio
+
 import numpy as np
 import pytest
 
@@ -374,4 +376,44 @@ async def test_noise_learning_stops_at_the_configured_ceiling(
         controller._consume_audio_block(np.full((480, 1), 15, dtype=np.int16))
     assert controller._wake_noise_rms < 20.0
     assert controller._wake_effective_threshold == 75.0
+    await controller.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_wake_decisions_follow_capture_time_not_processing_time(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    # The event loop stalls while the car is on track (frames for two
+    # dashboards, a lap-end burst), so microphone blocks reach the detector
+    # late and all at once. Judged by processing time, 0.4 s of "Mark"
+    # followed by 0.7 s of silence never ends: no wall-clock time passes
+    # between the blocks. Judged by capture time the capture ends when the
+    # silence is heard, exactly as it would have on an idle loop.
+    controller = _noise_controller(monkeypatch, tmp_path, _SilentAudio())
+    monkeypatch.setattr(settings, "wake_silence_s", 0.60)
+    monkeypatch.setattr(settings, "wake_min_utterance_s", 0.35)
+    launched: list[tuple[int, str]] = []
+    monkeypatch.setattr(
+        controller, "_launch_wake_candidate", lambda frames, reason: launched.append((len(frames), reason))
+    )
+    block_s = 0.03
+    voice = np.full((480, 1), 200, dtype=np.int16)
+    silence = np.full((480, 1), 10, dtype=np.int16)
+    captured = 100.0
+    for _ in range(14):  # 0.42 s of speech
+        controller._consume_audio_block(voice, captured_at=captured)
+        captured += block_s
+    assert controller._wake_speaking is True
+    for _ in range(24):  # 0.72 s of silence
+        controller._consume_audio_block(silence, captured_at=captured)
+        captured += block_s
+    await asyncio.sleep(0)
+    assert launched and launched[0][1] == "speech_silence"
+    assert controller._wake_speaking is False
+
+    # The queue hands the consumer the capture stamp it was given.
+    controller._queue_audio_block(voice, 123.456)
+    block, stamp = controller._audio_queue.get_nowait()
+    assert stamp == 123.456 and block is voice
     await controller.shutdown()
