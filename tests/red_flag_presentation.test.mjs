@@ -21,7 +21,7 @@ class Element {
 const nodes=new Map();
 const get=id=>{if(!nodes.has(id))nodes.set(id,new Element());return nodes.get(id);};
 const document={getElementById:get,createElement:tag=>new Element(tag),body:new Element()};
-const context=vm.createContext({$:get,document,esc:v=>String(v).replaceAll('<','&lt;'),i18n:globalThis.i18n});
+const context=vm.createContext({setHTML:(el,html)=>{el.innerHTML=html},$:get,document,esc:v=>String(v).replaceAll('<','&lt;'),i18n:globalThis.i18n});
 const slice=(start,end)=>html.slice(html.indexOf(start),html.indexOf(end,html.indexOf(start)));
 vm.runInContext(slice('function confirmedSessionFinish(','function renderTyreDegradation('),context);
 vm.runInContext(slice('function renderStrategy38(','/* ---- Pre-race plan panel'),context);

@@ -137,6 +137,13 @@ UNLOGGED_EVENTS = frozenset({"BUTN"})
 
 def normalize_wheels(values: Iterable[Any]) -> list[Any]:
     """EA packets use RL, RR, FL, FR; Your Pit Box stores FL, FR, RL, RR."""
+    try:
+        if len(values) == 4:  # type: ignore[arg-type]
+            # Parser arrays, lists and tuples all index directly; this runs for
+            # every car's wheels on every telemetry and damage packet.
+            return [values[2], values[3], values[0], values[1]]  # type: ignore[index]
+    except (TypeError, KeyError, IndexError):
+        pass
     raw = list(values)
     if len(raw) != 4:
         return raw

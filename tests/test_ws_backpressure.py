@@ -58,10 +58,11 @@ def test_memory_exhaustion_drops_the_connection_instead_of_crashing(monkeypatch)
     handler must treat it as a droppable frame, not a crash.
     """
 
-    async def exhausted() -> dict:
+    async def exhausted() -> str:
         raise MemoryError
 
-    monkeypatch.setattr(app_module.store, "snapshot_live", exhausted)
+    # The frame is encoded by the store, under its lock, in one step.
+    monkeypatch.setattr(app_module.store, "snapshot_live_json", exhausted)
 
     import pytest
 
@@ -84,7 +85,7 @@ def test_send_racing_a_client_close_ends_quietly(monkeypatch) -> None:
             "Unexpected ASGI message 'websocket.send', after sending 'websocket.close'."
         )
 
-    monkeypatch.setattr(WebSocket, "send_json", send_after_close)
+    monkeypatch.setattr(WebSocket, "send_text", send_after_close)
 
     import pytest
 

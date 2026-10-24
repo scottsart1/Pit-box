@@ -12,7 +12,7 @@ const end = html.indexOf('/* Race control on screen', start);
 assert.ok(start > 0 && end > start);
 const nodes = new Map([...html.matchAll(/\bid="([^"]+)"/g)]
   .map(([, id]) => [id, { textContent: '', className: '', style: {} }]));
-const context = vm.createContext({
+const context = vm.createContext({setHTML:(el,html)=>{el.innerHTML=html},
   $: id => { assert.ok(nodes.has(id), `Missing shipped element ${id}`); return nodes.get(id); },
   dashVisible: () => false, drawPace: () => {}, damageText: () => '',
   loadRivals: () => {}, lastAuxLap: 10,

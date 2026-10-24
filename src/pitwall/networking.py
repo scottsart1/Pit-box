@@ -747,7 +747,18 @@ class _PacketStats:
     last_parse_error_code: str | None = None
 
 
+_SOURCE_PARTS_CACHE: dict[tuple[str, int] | str, tuple[str, int]] = {}
+_SOURCE_PARTS_CACHE_LIMIT = 256
+
+
 def _source_parts(source: tuple[str, int] | str) -> tuple[str, int]:
+    # Every datagram from the game arrives from the same one or two sources,
+    # and parsing the address text through ``ipaddress`` on each of them cost
+    # more than inspecting the packet header did. The result is pure, so it
+    # is remembered per source; the cache stays small because sources do.
+    cached = _SOURCE_PARTS_CACHE.get(source)
+    if cached is not None:
+        return cached
     if isinstance(source, tuple):
         host, port = source
     else:
@@ -755,7 +766,14 @@ def _source_parts(source: tuple[str, int] | str) -> tuple[str, int]:
     parsed = ipaddress.ip_address(str(host))
     if not isinstance(parsed, ipaddress.IPv4Address):
         raise TypeError("packet source must be IPv4")
-    return str(parsed), max(0, min(65535, int(port)))
+    result = (str(parsed), max(0, min(65535, int(port))))
+    if len(_SOURCE_PARTS_CACHE) >= _SOURCE_PARTS_CACHE_LIMIT:
+        _SOURCE_PARTS_CACHE.clear()
+    try:
+        _SOURCE_PARTS_CACHE[source] = result
+    except TypeError:
+        pass  # an unhashable source is parsed every time, as before
+    return result
 
 
 def _forward_delta(previous: int, current: int) -> int | None:

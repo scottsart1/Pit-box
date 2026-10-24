@@ -9,7 +9,7 @@ const html=fs.readFileSync(new URL('../static/index.html',import.meta.url),'utf8
 const start=html.indexOf('function renderLiveCar('),end=html.indexOf('function renderRaceControl(',start);
 assert.ok(start>0&&end>start);
 const nodes=new Map(['compound','age','fl','fr','rl','rr','flTemp','frTemp','rlTemp','rrTemp','fuel','ers','speed','damageRow','weather','carDataStatus','stintClock'].map(id=>[id,{textContent:'',innerHTML:'',className:''}]));
-const context=vm.createContext({$:id=>nodes.get(id),damageText:()=> 'No recorded damage',i18n:globalThis.i18n});
+const context=vm.createContext({setHTML:(el,html)=>{el.innerHTML=html},$:id=>nodes.get(id),damageText:()=> 'No recorded damage',i18n:globalThis.i18n});
 vm.runInContext(html.slice(start,end),context);
 const state=()=>({connected:true,packet_group_freshness:{'1':100,'6':100,'7':100,'10':100},tyre:{compound:'MEDIUM',age_laps:0,wear:[0,10,20,30],inner_temps_c:[90,91,92,93]},fuel_laps_delta:0,ers_pct:0,speed_kph:0,gear:0,weather:'Clear',rain_next_15_pct:0,weather_forecast:[{time_offset_min:15,rain_pct:0}]});
 const draw=s=>context.renderLiveCar(s,101000);

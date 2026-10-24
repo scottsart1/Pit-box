@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import bisect
 import copy
+import json
 import math
 import time
 from collections import deque
@@ -144,23 +145,36 @@ _LIVE_DRIVER_EXCLUDED_FIELDS = frozenset(
 _DRIVER_FIELDS = fields(DriverState)
 
 
-def _serialize_live_driver(driver: DriverState) -> dict[str, Any]:
+def _serialize_live_driver(driver: DriverState, copy_values: bool = True) -> dict[str, Any]:
     """Serialize one car for the live profile without touching its histories.
 
     ``asdict`` deep copies every field before the heavy ones can be dropped,
     which at 4 Hz across 24 cars allocated (and immediately discarded) every
     lap/gap/position history entry of the whole race on every frame — real
     memory pressure on a machine also running the game.
+
+    With ``copy_values`` false the lists and dicts are referenced rather than
+    copied; only a caller that encodes the result before releasing the store
+    lock may ask for that.
     """
     serialized: dict[str, Any] = {}
     for item in _DRIVER_FIELDS:
         if item.name in _LIVE_DRIVER_EXCLUDED_FIELDS:
             continue
         value = getattr(driver, item.name)
-        if isinstance(value, (list, dict)):
+        if copy_values and isinstance(value, (list, dict)):
             value = copy.deepcopy(value)
         serialized[item.name] = value
     return serialized
+
+
+def _reference(value: Any) -> Any:
+    return value
+
+
+# The websocket frame is encoded exactly as Starlette's ``send_json`` does, so
+# a frame built without copies is byte-identical to one built from a snapshot.
+_JSON_SEPARATORS = (",", ":")
 
 
 @dataclass(slots=True)
@@ -719,7 +733,18 @@ class StateStore:
         fraction = (distance - low_d) / span
         return low_t + fraction * (high_t - low_t)
 
-    def _serialize_locked(self, profile: SnapshotProfile) -> dict[str, Any]:
+    def _serialize_locked(
+        self, profile: SnapshotProfile, copy_values: bool = True
+    ) -> dict[str, Any]:
+        """Build one snapshot while the lock is held.
+
+        Every mutable value is deep-copied so the dict can outlive the lock.
+        ``copy_values`` false skips those copies for a caller that consumes the
+        result before the lock is released (the live-frame JSON encoder): the
+        deep copies were the bulk of a frame's cost, and a 250 KB frame for two
+        dashboards at 4 Hz was more CPU than the whole telemetry pipeline.
+        """
+        dup = copy.deepcopy if copy_values else _reference
         data: dict[str, Any] = {}
         for item in fields(self.state):
             name = item.name
@@ -737,7 +762,7 @@ class StateStore:
                     if not is_player and not driver.active:
                         continue
                     if profile in {"live", "radio"}:
-                        serialized = _serialize_live_driver(driver)
+                        serialized = _serialize_live_driver(driver, copy_values)
                     else:
                         serialized = asdict(driver)
                     drivers.append(serialized)
@@ -763,23 +788,23 @@ class StateStore:
                         data[name] = [{key: point[key] for key in ("t", "d", "speed", "throttle", "brake")
                                        if key in point} for point in selected]
                     else:
-                        data[name] = copy.deepcopy(selected)
+                        data[name] = dup(selected)
             elif name == "completed_laps" and profile in {"live", "radio"}:
                 # The live dashboard consumes derived analysis/strategy, not the
                 # full in-memory lap-summary history. Keep this payload bounded.
                 data[name] = []
             elif name == "events_log" and profile in {"live", "radio"}:
-                data[name] = copy.deepcopy(value[-30:])
+                data[name] = dup(value[-30:])
             elif name == "radio_log" and profile in {"live", "radio"}:
-                data[name] = copy.deepcopy(value[-40:])
+                data[name] = dup(value[-40:])
             elif name == "feedback" and profile in {"live", "radio"}:
-                data[name] = copy.deepcopy(value[-10:])
+                data[name] = dup(value[-10:])
             elif name == "analysis" and profile == "radio":
                 compact = {key: val for key, val in value.items() if key not in {"corner_history", "line_history"}}
                 if isinstance(compact.get("racing_line"), dict):
                     compact["racing_line"] = {key: val for key, val in compact["racing_line"].items()
                                               if key not in {"current_line", "reference_line", "deviation_samples"}}
-                data[name] = copy.deepcopy(compact)
+                data[name] = dup(compact)
             elif name == "strategy" and profile in {"live", "radio"}:
                 compact = dict(value)
                 if profile == "radio":
@@ -795,11 +820,11 @@ class StateStore:
                     crossover = compact.get("weather_crossover")
                     if isinstance(crossover, dict) and crossover.get("trajectory"):
                         compact["weather_crossover"] = {**crossover, "trajectory": crossover["trajectory"][:12]}
-                data[name] = copy.deepcopy(compact)
+                data[name] = dup(compact)
             elif is_dataclass(value):
                 data[name] = asdict(value)
             else:
-                data[name] = copy.deepcopy(value)
+                data[name] = dup(value)
 
         data["session_identity"] = session_identity(self.state)
         data["telemetry_stale"] = not data["connected"] and bool(data["last_packet_at"])
@@ -807,7 +832,7 @@ class StateStore:
         if profile == "live":
             # A bounded sparkline feed avoids returning the full completed-lap
             # history while still making the dashboard's pace trend useful.
-            data["recent_laps"] = copy.deepcopy(self.state.completed_laps[-8:])
+            data["recent_laps"] = dup(self.state.completed_laps[-8:])
         return data
 
     async def snapshot(self) -> dict[str, Any]:
@@ -824,6 +849,18 @@ class StateStore:
         """Compact dashboard snapshot without per-driver history payloads."""
         async with self._lock:
             return self._serialize_locked("live")
+
+    async def snapshot_live_json(self) -> str:
+        """The live snapshot already encoded for a websocket frame.
+
+        Identical text to ``json.dumps(await snapshot_live(), ...)`` as the
+        websocket layer encodes it, without first deep-copying every field:
+        the encoder runs under the store lock, so nothing can change the state
+        while it reads it, and no copy outlives the call.
+        """
+        async with self._lock:
+            data = self._serialize_locked("live", copy_values=False)
+            return json.dumps(data, separators=_JSON_SEPARATORS, ensure_ascii=False)
 
     async def snapshot_radio(self) -> dict[str, Any]:
         """Live conditions for frequent radio checks, without traces or histories.

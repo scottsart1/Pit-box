@@ -1241,7 +1241,7 @@ async def websocket_state(websocket: WebSocket) -> None:
     try:
         while True:
             try:
-                await websocket.send_json(await store.snapshot_live())
+                await websocket.send_text(await store.snapshot_live_json())
             except MemoryError:
                 # Serializing a frame is the largest single allocation this
                 # process makes at 4 Hz, so when the machine is out of memory
