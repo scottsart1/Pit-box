@@ -214,7 +214,10 @@ class Settings(BaseSettings):
     wake_speech_rms: float = 180.0
     # The configured RMS is a ceiling, not a hard floor. Your Pit Box continuously
     # estimates room/microphone noise and lowers the speech threshold in quiet
-    # conditions so a soft-spoken "Mark" is still captured.
+    # conditions so a soft-spoken "Mark" is still captured. Steady noise above
+    # the minimum is learned the other way round: a capture that runs to the
+    # hard cap, or one the transcriber hears nothing in, raises the estimate
+    # so the trigger climbs clear of the room instead of staying open.
     wake_min_speech_rms: float = 75.0
     wake_noise_multiplier: float = 1.45
     wake_noise_margin_rms: float = 18.0

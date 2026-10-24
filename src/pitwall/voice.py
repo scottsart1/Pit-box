@@ -754,6 +754,50 @@ class NativeVoiceController:
         else:
             self._wake_noise_rms = (0.97 * self._wake_noise_rms) + (0.03 * rms)
 
+    def _learn_wake_noise_from_clip(
+        self, clip_rms: float, reason: str, weight: float = 1.0
+    ) -> None:
+        """Raise the noise estimate when a captured clip turns out to be noise.
+
+        ``_update_wake_noise`` only learns from blocks below the trigger, so a
+        room whose steady level sits above ``wake_min_speech_rms`` (game audio
+        through speakers, a fan beside the microphone, a hot input gain) is
+        never learned at all: the trigger stays on the floor, every block
+        counts as speech, and the capture runs to the hard cap again and
+        again. A wake phrase said in that state is buried in a fifteen-second
+        clip and heard, if at all, long after the driver gave up on it.
+
+        Two outcomes prove a clip was noise rather than a call: the capture
+        ran to the hard cap (nobody addresses the engineer for fifteen seconds
+        without a pause) and the transcriber returned nothing. The clip's own
+        level is then the best estimate of the room. A hard cap moves the
+        floor straight up to it; an empty transcript only moves halfway, so a
+        soft call the transcriber missed in a quiet room does not deafen the
+        next one. The ceiling keeps one shout from pinning the trigger at the
+        maximum, and block-by-block tracking brings the floor back down as
+        soon as the room quietens.
+        """
+        ceiling = (settings.wake_speech_rms - settings.wake_noise_margin_rms) / max(
+            0.01, settings.wake_noise_multiplier
+        )
+        target = min(float(clip_rms), max(0.0, ceiling))
+        previous = self._wake_noise_rms
+        if previous <= 0:
+            seed = target
+        else:
+            seed = previous + (target - previous) * max(0.0, min(1.0, weight))
+        if seed <= previous:
+            return
+        self._wake_noise_rms = seed
+        self._wake_effective_threshold = self._effective_wake_threshold()
+        log.info(
+            "Wake noise floor raised from %.0f to %.0f RMS after %s; trigger now %.0f RMS",
+            previous,
+            seed,
+            reason,
+            self._wake_effective_threshold,
+        )
+
     def _effective_wake_threshold(self) -> float:
         if self._wake_noise_rms <= 0:
             return float(settings.wake_min_speech_rms)
@@ -934,6 +978,10 @@ class NativeVoiceController:
                     "",
                 )
                 return
+            if reason == "hard_cap":
+                self._learn_wake_noise_from_clip(
+                    clip_rms, "a capture that ran to the hard cap"
+                )
 
             if not getattr(self.audio, "voice_ready", True):
                 await self._reject_wake("voice needs an OpenAI key", "")
@@ -956,6 +1004,9 @@ class NativeVoiceController:
             await self._mark_latency("transcript_ms")
             await self.store.update(radio_last_transcript=text)
             if not text:
+                self._learn_wake_noise_from_clip(
+                    clip_rms, "an empty transcript", weight=0.5
+                )
                 await self._reject_wake("empty transcript", "")
                 return
 

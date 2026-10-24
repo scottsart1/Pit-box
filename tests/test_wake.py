@@ -271,3 +271,107 @@ def test_a_little_filler_before_the_wake_phrase_still_wakes():
     ):
         matched, _, _ = AudioService.extract_wake_command(transcript, phrases)
         assert not matched, transcript
+
+
+class _SilentAudio(_WakeAudio):
+    """Transcriber that hears nothing in the clip, as it does for room noise."""
+
+    async def transcribe(
+        self,
+        path,
+        driver_names=None,
+        wake_phrases=None,
+    ) -> str:
+        del path, driver_names, wake_phrases
+        return ""
+
+
+def _noise_controller(monkeypatch, tmp_path, audio) -> NativeVoiceController:
+    monkeypatch.setattr(settings, "data_dir", tmp_path)
+    monkeypatch.setattr(settings, "wake_enabled", True)
+    monkeypatch.setattr(settings, "native_voice", True)
+    monkeypatch.setattr(settings, "wake_start_blocks", 2)
+    monkeypatch.setattr(settings, "wake_min_speech_rms", 75.0)
+    monkeypatch.setattr(settings, "wake_speech_rms", 180.0)
+    monkeypatch.setattr(settings, "wake_noise_multiplier", 1.45)
+    monkeypatch.setattr(settings, "wake_noise_margin_rms", 18.0)
+    return NativeVoiceController(
+        StateStore(),
+        _WakeBrain(),  # type: ignore[arg-type]
+        audio,  # type: ignore[arg-type]
+    )
+
+
+@pytest.mark.asyncio
+async def test_steady_noise_above_the_floor_is_learned_from_a_hard_capped_clip(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    # Room noise at 90 RMS sits above the 75 RMS minimum trigger. Block-level
+    # tracking never learns a level above the trigger, so without this the
+    # gate stays open and every capture runs to the hard cap.
+    controller = _noise_controller(monkeypatch, tmp_path, _SilentAudio())
+    noise = np.full((480, 1), 90, dtype=np.int16)
+    for _ in range(3):
+        controller._consume_audio_block(noise)
+    assert controller._wake_speaking is True
+    assert controller._wake_noise_rms == 0.0
+
+    controller._clear_wake_capture()
+    await controller._process_wake_candidate([np.full((16000, 1), 90, dtype=np.int16)], "hard_cap")
+
+    assert controller._wake_noise_rms == pytest.approx(90.0)
+    assert controller._wake_effective_threshold > 90.0
+    state = await controller.store.snapshot_live()
+    assert state["wake_last_reason"] == "empty transcript"
+
+    # The same room no longer opens the gate, but a call spoken over it does.
+    for _ in range(3):
+        controller._consume_audio_block(noise)
+    assert controller._wake_speaking is False
+    voice = np.full((480, 1), 200, dtype=np.int16)
+    controller._consume_audio_block(voice)
+    controller._consume_audio_block(voice)
+    assert controller._wake_speaking is True
+    await controller.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_an_empty_transcript_does_not_deafen_a_quiet_room(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    # A soft "Mark" the transcriber missed must not stop the next soft "Mark"
+    # from being captured: the floor only moves halfway towards the clip.
+    controller = _noise_controller(monkeypatch, tmp_path, _SilentAudio())
+    controller._wake_noise_rms = 15.0
+    await controller._process_wake_candidate([np.full((16000, 1), 70, dtype=np.int16)], "speech_silence")
+
+    assert controller._wake_noise_rms == pytest.approx(42.5)
+    assert controller._wake_effective_threshold == pytest.approx(79.6, abs=0.1)
+    quiet_voice = np.full((480, 1), 100, dtype=np.int16)
+    controller._consume_audio_block(quiet_voice)
+    controller._consume_audio_block(quiet_voice)
+    assert controller._wake_speaking is True
+    await controller.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_noise_learning_stops_at_the_configured_ceiling(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    controller = _noise_controller(monkeypatch, tmp_path, _SilentAudio())
+    await controller._process_wake_candidate([np.full((16000, 1), 500, dtype=np.int16)], "hard_cap")
+
+    # (180 - 18) / 1.45: the level at which the trigger already sits on its
+    # ceiling, so a single shout cannot pin the estimate far above the room.
+    assert controller._wake_noise_rms == pytest.approx(111.7, abs=0.1)
+    assert controller._wake_effective_threshold == 180.0
+
+    # Ordinary tracking still brings it back down once the room is quiet.
+    for _ in range(200):
+        controller._consume_audio_block(np.full((480, 1), 15, dtype=np.int16))
+    assert controller._wake_noise_rms < 20.0
+    assert controller._wake_effective_threshold == 75.0
+    await controller.shutdown()
