@@ -114,6 +114,28 @@ async def test_strategy_tool_returns_a_radio_sized_decision_view(stack, scenario
     assert await tools.get_pit_strategy() == raw
 
 
+@pytest.mark.asyncio
+async def test_strategy_view_explains_why_a_faster_plan_ranks_lower(stack):
+    """At the Hungaroring the lap-60 soft stop is quicker but ranks below lap 62.
+
+    The view must state the order the engine actually ranks by, or the
+    engineer reads the negative delta as a reason to box earlier.
+    """
+    _, tools = await _demo_race(stack, HUNGARORING)
+    view = await tools.call("get_pit_strategy", {})
+    recommended = view["recommended"]
+    faster_same_place = [
+        plan for plan in view["plans"]
+        if (plan.get("delta_vs_recommended_s") or 0) < 0
+        and plan["projected_finish_position"] == recommended["projected_finish_position"]
+    ]
+    assert faster_same_place
+    assert all(plan["box_laps"][0] < recommended["box_laps"][0] for plan in faster_same_place)
+    basis = view["plan_comparison_basis"]
+    assert "later first stop ranks higher" in basis
+    assert "elapsed time breaks ties" not in basis
+
+
 def _plan(box_laps, compounds, *, feasible=True, legal=True, risk=1500.0, position=6):
     return {
         "box_laps": box_laps, "compounds": compounds, "feasible": feasible, "legal": legal,
@@ -158,7 +180,7 @@ def test_strategy_view_keeps_the_guard_fields_of_every_ranked_plan():
     assert view["red_flag_restart"] == plan["red_flag_restart"]
     assert view["plans"][0]["is_recommended"] is True
     assert view["plans"][4]["delta_vs_recommended_s"] == 3.33
-    assert view["faster_plan_awaiting_confirmation"]["delta_vs_recommended_s"] == -3.0
+    assert view["newly_ranked_plan_held_back"]["delta_vs_recommended_s"] == -3.0
     assert view["recommended"]["driver_override"]["delta_vs_automatic_s"] == 1.23
     assert view["tyre_inventory"] == {"status": "unknown"}
     encoded = json.dumps(view)
