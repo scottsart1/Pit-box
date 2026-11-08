@@ -148,6 +148,47 @@ async def test_stint_debrief_uses_saved_exclusions_and_keeps_attributed_context(
 
 
 @pytest.mark.asyncio
+async def test_a_race_pit_entry_saves_the_stint_debrief_without_speaking_it(
+    stack, monkeypatch, tmp_path
+):
+    """Pit entry in a race used to read a setup-test debrief over the stop.
+
+    Median lap, spread, trend, temperatures and "change one setup setting"
+    went straight to the speaker in the pit lane, past the radio queue, and
+    held the radio through the rejoin. The debrief is still saved.
+    """
+    application, store, database, _, _, voice = await application_stack(
+        stack, monkeypatch, tmp_path
+    )
+    race_laps = [lap(number, mode_profile="race", session_type="Race") for number in range(1, 5)]
+    for item in race_laps:
+        await database.save_lap(item, [])
+    await store.update(mode_profile="race", session_type="Race", completed_laps=copy.deepcopy(race_laps))
+    await application._persist_stint_debrief(await store.snapshot_analysis())
+
+    debrief = (await store.peek("briefings"))["briefings"]["post_stint"]
+    assert "clean laps" in debrief["text"]
+    voice.speak_text.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_stint_debrief_temperatures_use_the_drivers_unit(stack, monkeypatch, tmp_path):
+    application, store, database, _, _, voice = await application_stack(
+        stack, monkeypatch, tmp_path
+    )
+    for number in range(1, 5):
+        await database.save_lap(lap(number), [])
+    await store.update(temperature_unit="f")
+    await application._persist_stint_debrief(await store.snapshot_analysis())
+
+    text = (await store.peek("briefings"))["briefings"]["post_stint"]["text"]
+    # 93 to 94 C at the end of each lap.
+    assert "Tyre inner temperatures 199 to 201 Fahrenheit." in text
+    assert "Celsius" not in text
+    voice.speak_text.assert_awaited_once_with(text)
+
+
+@pytest.mark.asyncio
 async def test_stint_debrief_cannot_reuse_an_earlier_timeline_with_the_same_run_serial(
     stack, monkeypatch, tmp_path
 ):

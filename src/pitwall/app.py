@@ -385,7 +385,15 @@ async def _persist_stint_debrief(snapshot: dict[str, object]) -> None:
             if trend is not None:
                 text += f"Observed pace trend {trend:+.2f} seconds per lap. "
             if temperature:
-                text += f"Tyre inner temperatures {temperature[0]:.0f} to {temperature[1]:.0f} Celsius. "
+                from .brain import _temperature_values
+
+                # In the unit the driver chose, as every other spoken temperature is.
+                shown, unit = _temperature_values(
+                    [float(temperature[0]), float(temperature[1])],
+                    str(current.get("temperature_unit", "c")),
+                )
+                unit_name = "Fahrenheit" if unit == "F" else "Celsius"
+                text += f"Tyre inner temperatures {shown[0]:.0f} to {shown[1]:.0f} {unit_name}. "
             reported = context_notes(run["laps"])
             exclusions = sum(bool(note.get("exclude_from_pace")) for note in reported)
             if exclusions:
@@ -395,7 +403,19 @@ async def _persist_stint_debrief(snapshot: dict[str, object]) -> None:
             payload["context_notes"] = reported
             await database.save_briefing(snapshot, "post_stint", payload, text)
             await store.mutate_for_session(snapshot, lambda live: live.briefings.update({"post_stint": {"payload": payload, "text": text}}))
-            if voice is not None and current.get("proactive", {}).get("enabled") and await store.matches_session(snapshot):
+            # Spoken in practice only. The same pit-entry trigger fires in a
+            # race, where this setup-test debrief (median lap, spread, trend,
+            # temperatures, "change one setup setting") went straight to the
+            # speaker mid-stop, past the radio queue's priorities, safe windows
+            # and silencing, and held the radio through the rejoin. In a race it
+            # is still saved for DRIVE and STRATEGY.
+            spoken_mode = str(snapshot.get("mode_profile") or current.get("mode_profile") or "")
+            if (
+                voice is not None
+                and spoken_mode == "practice"
+                and current.get("proactive", {}).get("enabled")
+                and await store.matches_session(snapshot)
+            ):
                 # Do not queue a garage debrief behind a driver's active question.
                 if not voice.is_busy:
                     await voice.speak_text(text)
