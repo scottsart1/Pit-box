@@ -333,7 +333,9 @@ def compose_persona(
 
 # High reasoning is reserved for actual planning. Routine pace/corner/target questions
 # stay on the low-latency path instead of being escalated merely because they contain
-# words such as "why", "corner", or "best lap".
+# words such as "why", "corner", or "best lap". Terms are matched as whole words;
+# the pit-now decision is matched by _PIT_DECISION_NOW, which knows that "stay
+# out of trouble" is not a pit call.
 _DEEP_TERMS = (
     "strategy",
     "undercut",
@@ -343,12 +345,11 @@ _DEEP_TERMS = (
     "compare strategy",
     "make it to the end",
     "make these tyres last",
-    "pit now",
-    "stay out",
     "safety car pit",
     "vsc pit",
     "red flag strategy",
     "setup",
+    "setups",
     "race plan",
     "tyre plan",
     "tire plan",
@@ -358,6 +359,152 @@ _DEEP_TERMS = (
     "how many pit stops",
     "how many stops",
 )
+_PIT_DECISION_NOW = re.compile(r"\b(?:(?:pit|box) now|stay out)\b(?! of\b)")
+
+# A question about what *would* happen rather than what is happening. It is a
+# simulation request: the fast path must not answer it with the standing value,
+# and when it is about the stop it needs the planning tier and its tools.
+_HYPOTHETICAL_MARKERS = (
+    "how slow", "how quick", "how fast", "how much would", "how long would",
+    "would be", "would it", "what would", "is there any way",
+    "could we", "can we", "how do we", "what about",
+    "what if", "what happens if", "if we", "if i", "is it worth", "worth it",
+    "suppose", "supposing", "hypothetically",
+    "last to the end", "last until the end", "make it to the end",
+)
+# What makes such a question a strategy question.
+_STRATEGY_SUBJECTS = (
+    "stop", "stops", "one stop", "two stop", "three stop", "stopper", "pit",
+    "pit stop", "pitting", "box", "boxing", "stint", "compound", "undercut",
+    "overcut", "strategy", "go long", "stay out", "extend", "this set",
+    "these tyres", "these tires", "fresh tyres", "fresh tires", "new tyres",
+    "new tires", "softs", "mediums", "hards", "inters", "intermediates", "wets",
+    "soft tyre", "soft tyres", "medium tyre", "medium tyres", "hard tyre",
+    "hard tyres", "soft tire", "soft tires", "medium tire", "medium tires",
+    "hard tire", "hard tires", "the end", "the finish", "the flag",
+)
+
+# One reading of "is the driver asking for the pit call", shared by every gate
+# that depends on it: the deterministic ranked-plan answer, the plan in the
+# model's context with its confidence qualifier, the computed-plan fallback
+# when the provider fails, and the race-complete guard. Separate phrase lists
+# used to disagree, so "should I pit" got all of these while "should I box",
+# "when do we box" and "is it time to pit" got none of them.
+#
+# The bare form: the pit call is the whole request. Only then can the standing
+# ranked plan answer it.
+_BARE_PIT_CALL = re.compile(
+    r"(?:"
+    r"(?:should|shall|do|must) (?:i|we) (?:pit|box|stop|come in|stay out)"
+    r"|(?:when|what lap) (?:should|shall|do|will|must) (?:i|we) (?:pit|box|stop|come in)"
+    r"|(?:when )?(?:are|am) (?:we|i) (?:pitting|boxing|stopping|coming in|staying out)"
+    r"|(?:is it |it s |its )?time to (?:pit|box|stop|come in)"
+    r"|(?:pit|box) now"
+    r"|stay out"
+    r"|what(?: is| s|s) (?:the|our) (?:current |pit |race )?plan"
+    r"|(?:(?:tell me|let me know|i wonder|i m wondering|i was wondering) )?"
+    r"(?:if|whether) (?:i|we) should (?:pit|box|stop|come in|stay out)"
+    r")"
+    r"(?: (?:now|then|this lap|next lap|"
+    r"under (?:the )?(?:safety car|sc|virtual safety car|vsc|yellows?|yellow flags?)))*"
+    r"(?: or (?:not|box|pit|stay out|stop|keep going|go long)(?: now| this lap| next lap)?)?"
+    r"(?: please| mate)?"
+)
+# "Box this lap?" asks for the call; said flat it may be the driver's decision,
+# which the model acknowledges with the plan in its context.
+_PIT_THIS_LAP = re.compile(r"(?:pit|box) (?:this|next) lap(?: please| mate)?")
+# The pit call as one part of a longer request.
+_PIT_CALL_MENTION = re.compile(
+    r"\b(?:"
+    r"(?:should|shall|do|must|can|could) (?:i|we) (?:pit|box)"
+    r"|(?:when|what lap) (?:should|shall|do|will|can|must|are|am) (?:i|we) (?:pit|box|pitting|boxing)"
+    r"|(?:are|am) (?:we|i) (?:pitting|boxing)"
+    r"|(?:pit|box) now"
+    r"|stay out(?! of\b)"
+    r")\b"
+)
+# Said flat, these are usually the driver's own decision ("we're staying out",
+# "let's go long", "box this lap"); only asked do they ask for the call.
+_PIT_CALL_IF_ASKED = re.compile(
+    r"\b(?:time to (?:pit|box)|(?:pit|box) (?:this|next) lap|staying out(?! of\b)|go(?:ing)? long)\b"
+)
+# A "no" in front contradicts what was said before: "No, box now" is a
+# correction, not a request for the standing plan.
+_REPLY_WORDS = frozenset({"no", "nope"})
+
+
+def _plain_words(text: str) -> str:
+    return " ".join(re.findall(r"[a-z0-9]+", normalize_text(text)))
+
+
+def _request_forms(utterance: str) -> tuple[str, ...]:
+    """The request as plain words, with and without the filler said in front.
+
+    "Okay, should we stay out?", "Copy, fuel status" and "Mark, what's the gap
+    ahead" ask exactly what the bare request asks.
+    """
+    words = _plain_words(utterance)
+    core = strip_leading_fillers(words)
+    removed = words[: len(words) - len(core)].split()
+    if core and core != words and not _REPLY_WORDS.intersection(removed):
+        return words, core
+    return (words,)
+
+
+def _is_bare_pit_call(utterance: str) -> bool:
+    """The driver asks for the pit call and nothing else.
+
+    A second subject ("what's my fuel and should I pit"), a condition ("should
+    I pit if the safety car comes out") or a comparison ("would it be quicker
+    to stay out than box") asks something the standing call does not answer.
+    """
+    forms = _request_forms(utterance)
+    if any(_BARE_PIT_CALL.fullmatch(form) for form in forms):
+        return True
+    return is_question(utterance) and any(_PIT_THIS_LAP.fullmatch(form) for form in forms)
+
+
+def _asks_for_pit_call(utterance: str) -> bool:
+    """Whether the pit call is part of what the driver asks, alone or not."""
+    words = _plain_words(utterance)
+    if _is_bare_pit_call(utterance) or _PIT_CALL_MENTION.search(words):
+        return True
+    if not is_question(utterance):
+        return False
+    if _PIT_CALL_IF_ASKED.search(words):
+        return True
+    # "Can I make it to the end on these tyres" asks whether to stop again.
+    # The same words about fuel do not.
+    return (
+        has_any_phrase(words, (
+            "make it to the end", "make it to the finish", "last to the end",
+            "last until the end", "last to the finish",
+        ))
+        and has_any_phrase(words, (
+            "tyre", "tyres", "tire", "tires", "these", "this set", "softs",
+            "mediums", "hards", "inters", "wets",
+        ))
+        and not has_phrase(words, "fuel")
+    )
+
+
+# When the provider fails, an answer that does not need the model (the
+# computed plan for a strategy question, the stored value for a quick one) is
+# spoken instead, opened by what failed, so a plain readout is never taken for
+# the engineer's reasoning. Only transient failures qualify: a missing key,
+# denied access or an exhausted account must reach the driver as the
+# actionable message, or it would never be fixed.
+_PROVIDER_FALLBACK_PREFIXES = {
+    "deadline": "Engineer analysis timed out; ",
+    "timeout": "Engineer service timed out; ",
+    "connection": "Engineer service unreachable; ",
+    "service": "Engineer service unavailable; ",
+    "rate_limit": "Engineer service busy; ",
+    "cooldown": "Engineer service paused after repeated failures; ",
+    "truncation": "Engineer answer was cut off; ",
+    "response": "Engineer gave no usable answer; ",
+    "unknown": "Engineer service failed; ",
+}
 
 _FEEDBACK_PATTERNS = {
     "tyres_gone": (
@@ -618,11 +765,26 @@ class EngineerBrain:
         """
         return await self._header(include_strategy=include_strategy)
 
-    async def _strategy_deadline_answer(self) -> str:
+    async def _strategy_fallback_answer(self, prefix: str) -> str:
         """A failed narration must not hide an independently computed plan."""
         state = await self.store.snapshot_analysis()
         plan = await self.tools.get_pit_strategy()
-        return self._complete_strategy_answer(plan, state, "Engineer analysis timed out; ")
+        return self._complete_strategy_answer(plan, state, prefix)
+
+    @staticmethod
+    def _provider_fallback_kind(exc: Exception) -> str | None:
+        """The provider failure a model-free answer may stand in for, if any.
+
+        A deadline anywhere in the attempt counts as the deadline: a primary
+        that ran out of time must not lose the plan because the fallback then
+        failed differently.
+        """
+        if isinstance(exc, ProviderDeadlineError):
+            return "deadline"
+        if isinstance(exc, ProviderRequestError) and exc.any_deadline:
+            return "deadline"
+        kind = str(getattr(exc, "kind", "unknown"))
+        return kind if kind in _PROVIDER_FALLBACK_PREFIXES else None
 
     def _complete_strategy_answer(self, plan: dict[str, Any], state: dict[str, Any], prefix: str) -> str:
         """Describe one frozen, authoritative complete plan without reranking."""
@@ -713,11 +875,30 @@ class EngineerBrain:
             "restart strategy", "race strategy", "pit strategy", "pit plan", "rundown",
         ))
 
-    @staticmethod
-    def classify_request(utterance: str) -> str:
-        """Return fast, normal, or deep for acknowledgement/routing."""
-        text = " ".join(utterance.lower().split())
-        if any(term in text for term in _DEEP_TERMS) or len(text.split()) >= 32:
+    @classmethod
+    def classify_request(cls, utterance: str) -> str:
+        """Return fast, normal, or deep for acknowledgement/routing.
+
+        Decided with the same reading of the request as the rest of routing,
+        not raw substrings. A hypothetical about the stop ("how slow would a
+        one-stop to hards be", "can we go long on this set") needs the planning
+        tier even without the words "what if" or "strategy". A quick question
+        stays quick when the driver talked for a while first or mentioned the
+        setup in passing.
+        """
+        text = normalize_text(utterance)
+        words = _plain_words(utterance)
+        if cls._is_simple_lookup(utterance):
+            return "fast"
+        trailing = cls._trailing_lookup(words)
+        if trailing is not None and cls._is_narrative(trailing[0]):
+            return "fast"
+        if (
+            has_any_phrase(text, _DEEP_TERMS)
+            or _PIT_DECISION_NOW.search(words)
+            or cls._asks_strategy_hypothetical(text)
+            or (len(text.split()) >= 32 and trailing is None)
+        ):
             return "deep"
 
         fast_subjects = (
@@ -744,15 +925,77 @@ class EngineerBrain:
             "weather",
             "rain",
             "damage",
+            "warning",
             "warnings",
             "penalty",
+            "penalties",
         )
-        planning_words = ("should", "why", "how do", "approach", "attack", "defend")
-        if any(subject in text for subject in fast_subjects) and not any(
-            word in text for word in planning_words
-        ):
+        planning_words = (
+            "should", "why", "how do", "approach", "attack", "attacking",
+            "defend", "defending",
+        )
+        if has_any_phrase(text, fast_subjects) and not has_any_phrase(text, planning_words):
             return "fast"
         return "normal"
+
+    @classmethod
+    def _asks_strategy_hypothetical(cls, text: str) -> bool:
+        """A what-would-happen question about the stop, the stint or the tyre."""
+        return has_any_phrase(text, _HYPOTHETICAL_MARKERS) and has_any_phrase(text, _STRATEGY_SUBJECTS)
+
+    @classmethod
+    def _trailing_lookup(cls, words: str) -> tuple[str, str] | None:
+        """Split off a simple lookup that ends the utterance: (before, lookup)."""
+        tokens = words.split()
+        for start in range(1, len(tokens)):
+            tail = " ".join(tokens[start:])
+            if cls._is_simple_lookup(tail):
+                return " ".join(tokens[:start]), tail
+        return None
+
+    # Words that hand over to the question that follows them.
+    _HANDOVER = re.compile(
+        r"(?:\s+(?:(?:i\s+)?(?:just\s+)?(?:want|wanted|need|needed|d like|would like)\s+to\s+know|"
+        r"tell me|let me know|and|but|so|anyway|mate|then|now))+$"
+    )
+    _NARRATIVE_OPENER = re.compile(
+        r"(?:i|i m|im|i ve|i d|i was|we|we re|we ve|it|it s|its|the car|my car|"
+        r"the rear|the rears|the front|the fronts|this|that)\b"
+    )
+    _REQUEST_CUES = (
+        "want", "wanted", "need", "needs", "like to", "would", "could", "can",
+        "should", "shall", "will you", "please", "give", "tell", "make", "change",
+        "generate", "build", "create", "set up", "fix", "sort", "help", "compare",
+        "plan", "explain", "check", "run", "what", "how", "why", "when", "where",
+        "which", "who", "if", "whether",
+    )
+
+    @classmethod
+    def _quick_question_after_chat(cls, utterance: str) -> str | None:
+        """The lookup that ends an utterance whose other words only chat."""
+        trailing = cls._trailing_lookup(_plain_words(utterance))
+        if trailing is None or not cls._is_narrative(trailing[0]):
+            return None
+        return trailing[1]
+
+    @classmethod
+    def _is_narrative(cls, words: str) -> bool:
+        """Whether words before a question only report or chat.
+
+        "I've been happy with the setup so far, what's the gap behind" asks for
+        the gap; the setup is said in passing. Anything that asks or requests
+        on its own, wonders about the stop or names a hypothetical is not
+        narrative, and keeps the whole utterance on its own merits.
+        """
+        core = cls._HANDOVER.sub("", " " + strip_leading_fillers(words)).strip()
+        if not core or not cls._NARRATIVE_OPENER.match(core):
+            return False
+        if utterance_mood(core) != "statement":
+            return False
+        return not (
+            has_any_phrase(core, cls._REQUEST_CUES + _HYPOTHETICAL_MARKERS)
+            or _asks_for_pit_call(core)
+        )
 
     @staticmethod
     def _format_ms(ms: int) -> str | None:
@@ -785,9 +1028,8 @@ class EngineerBrain:
             text,
             (
                 "strategy", "pit plan", "tyre plan", "tire plan", "box lap",
-                "when should i box", "should i pit", "pit now", "stay out",
-                "undercut", "overcut", "one stop", "one-stop", "two stop",
-                "two-stop", "race strategy", "strategy update",
+                "pit window", "undercut", "overcut", "one stop", "one-stop",
+                "two stop", "two-stop", "race strategy", "strategy update",
                 "why low confidence", "why is confidence low", "practice data",
                 "tyre data", "tire data", "tyre forecast", "tire forecast",
             ),
@@ -797,42 +1039,57 @@ class EngineerBrain:
         ) and has_any_phrase(
             text, ("box", "boxing", "pit", "pitting", "soft", "medium", "hard", "stay out")
         )
-        return direct or challenged_call
+        return direct or challenged_call or _asks_for_pit_call(utterance)
+
+    _CARS_AHEAD_REQUEST = re.compile(
+        r"(?:please )?(?:"
+        r"(?:what is the |what s the |whats the |the )?gap (?:to )?(?:the )?cars? (?:ahead|in front)|"
+        r"(?:update|updates|what about)(?: on| for)? (?:the )?cars? (?:ahead|in front)|"
+        r"(?:am i|are we) (?:closing|catching|gaining)(?: in| into)?(?: on| to)?(?: the)?(?: cars? (?:ahead|in front))?|"
+        r"cars? (?:ahead|in front))(?:(?: of me)? please)?"
+    )
 
     @classmethod
     def _is_cars_ahead_request(cls, utterance: str) -> bool:
-        text = " ".join(re.findall(r"[a-z0-9]+", cls._normalize_text(utterance)))
-        return bool(re.fullmatch(
-            r"(?:please )?(?:"
-            r"(?:what is the |what s the |the )?gap (?:to )?(?:the )?cars? (?:ahead|in front)|"
-            r"(?:update|updates|what about)(?: on| for)? (?:the )?cars? (?:ahead|in front)|"
-            r"(?:am i|are we) (?:closing|catching|gaining)(?: in| into)?(?: on| to)?(?: the)?(?: cars? (?:ahead|in front))?|"
-            r"cars? (?:ahead|in front))(?:(?: of me)? please)?", text
-        ))
+        return any(cls._CARS_AHEAD_REQUEST.fullmatch(form) for form in _request_forms(utterance))
+
+    # Each form is a complete request for one value that a fast-path branch
+    # answers. The everyday wordings are listed, not only the clipped radio
+    # ones: "what's the gap ahead" and "are we OK on fuel" went to the model,
+    # which made a stored number wait on a provider and fail with it.
+    _SIMPLE_LOOKUP = re.compile(
+        r"(?:please )?(?:"
+        r"radio check|can you hear me|time check|"
+        r"restart update|restart grid|update the restart grid|"
+        r"(?:i am|i m|im|we are|we re) (?:currently )?(?:in |running )?(?:p?[1-9]|p?1[0-9]|p?2[0-4]|first|second|third)|"
+        r"(?:what|which) (?:position|place)(?: (?:am i|are we)(?: in| running)?)?|(?:what is |what s )?my position|current position|where am i running|"
+        r"(?:what is|what s|how is|how s|check|report)(?: my| the)? (?:fuel|damage|weather|rain|battery|ers|tyre condition|tire condition)(?: like| looking)?|"
+        r"how much fuel(?: is)?(?: left| remaining)?|fuel (?:status|delta|margin|level)|"
+        r"(?:are we|am i) (?:ok|okay|fine) (?:on|for|with) fuel|fuel (?:ok|okay|fine)|"
+        r"(?:battery|ers|manual override|overtake mode|overtake available|active aero|target lap|best lap|pole)|"
+        r"(?:what is |what s |whats )?(?:my |the )?gap (?:ahead|behind)|"
+        r"(?:is |what is |what s )?(?:my |the )?(?:overtake mode|active aero)(?: available| active| status)?|"
+        r"(?:what are |what s |what is )?(?:my |the )?(?:last (?:(?:two|three|[1-9]) )?laps?(?: time)?|tyre temperatures|tire temperatures)|"
+        r"(?:what tyres|what tires)(?: am i on| are we on)?|"
+        r"how many (?:warnings|penalties) do i have|(?:any|check|report) (?:damage|warnings|penalties)|damage report|"
+        r"(?:lap last time|last lap(?: time)?|lap time) of the car (?:ahead|in front)|"
+        r"(?:weather|rain) (?:forecast|risk|update)|"
+        r"(?:what is |what s |whats )?(?:the )?gap to the car behind"
+        r"|(?:give me )?(?:tyre|tire) temperatures in (?:fahrenheit|celsius)"
+        r")(?: please)?"
+    )
 
     @classmethod
     def _is_simple_lookup(cls, utterance: str) -> bool:
-        """Only complete, single-purpose requests may bypass reasoning."""
-        text = " ".join(re.findall(r"[a-z0-9]+", cls._normalize_text(utterance)))
-        return cls._is_cars_ahead_request(text) or bool(re.fullmatch(
-            r"(?:please )?(?:"
-            r"radio check|can you hear me|time check|"
-            r"restart update|restart grid|update the restart grid|"
-            r"(?:i am|i m|im|we are|we re) (?:currently )?(?:in |running )?(?:p?[1-9]|p?1[0-9]|p?2[0-4]|first|second|third)|"
-            r"(?:what|which) (?:position|place)(?: am i(?: in)?)?|(?:what is |what s )?my position|current position|where am i running|"
-            r"(?:what is|what s|how is|how s|check|report)(?: my| the)? (?:fuel|damage|weather|rain|battery|ers|tyre condition|tire condition)|"
-            r"how much fuel(?: is)?(?: left| remaining)?|fuel (?:status|delta|margin|level)|"
-            r"(?:battery|ers|manual override|overtake mode|overtake available|active aero|gap ahead|gap behind|target lap|best lap|pole)|"
-            r"(?:is |what is |what s )?(?:my |the )?(?:overtake mode|active aero)(?: available| active| status)?|"
-            r"(?:what are |what s |what is )?(?:my |the )?(?:last (?:(?:two|three|[1-9]) )?laps?(?: time)?|tyre temperatures|tire temperatures)|"
-            r"(?:what tyres|what tires)(?: am i on)?|"
-            r"how many (?:warnings|penalties) do i have|(?:any|check|report) (?:damage|warnings|penalties)|damage report|"
-            r"(?:lap last time|last lap(?: time)?|lap time) of the car (?:ahead|in front)|"
-            r"(?:weather|rain) (?:forecast|risk|update)|"
-            r"(?:what is the |what s the )?gap to the car behind"
-            r"|(?:give me )?(?:tyre|tire) temperatures in (?:fahrenheit|celsius)"
-            r")(?: please)?", text
-        ))
+        """Only complete, single-purpose requests may bypass reasoning.
+
+        Filler said in front ("okay", "copy", the wake name) does not make a
+        lookup any less complete.
+        """
+        return any(
+            cls._CARS_AHEAD_REQUEST.fullmatch(form) or cls._SIMPLE_LOOKUP.fullmatch(form)
+            for form in _request_forms(utterance)
+        )
 
     # Phrasings that mean "stop bringing this up", each paired with the subject
     # the driver wants dropped.
@@ -1660,15 +1917,12 @@ class EngineerBrain:
         temperature target exists, and the differential/brake-bias change for a
         loose rear. Handing them to a model would replace a specific answer with
         a general one.
+
+        The pit call qualifies only when it is the whole request. Matched
+        anywhere in the sentence, "what's my fuel and should I pit" lost the
+        fuel and "what happens if I stay out" got the standing call back.
         """
-        asks_for_the_pit_call = has_any_phrase(
-            text,
-            (
-                "should i pit", "should i box", "should we pit", "should we box",
-                "when should i box", "when should i pit", "when do i box",
-                "pit now", "box now", "stay out",
-            ),
-        )
+        asks_for_the_pit_call = _is_bare_pit_call(text)
         asks_aid_temperature = (
             has_any_phrase(text, ("drs", "manual override", "overtake"))
             and has_any_phrase(text, ("temperature", "temp", "tyre", "tire"))
@@ -1834,14 +2088,7 @@ class EngineerBrain:
         # him") is a simulation request, not a request for the standing call.
         # Answering it with the current recommendation is what produced the
         # recorded "No change — Box lap 8 for hards" replies.
-        if has_any_phrase(
-            text,
-            (
-                "how slow", "how quick", "how fast", "how much would", "how long would",
-                "would be", "would it", "what would", "is there any way",
-                "could we", "can we", "how do we", "what about",
-            ),
-        ):
+        if has_any_phrase(text, _HYPOTHETICAL_MARKERS):
             return True
 
         # A request for the WHOLE picture goes to the model. In a real race
@@ -1954,10 +2201,7 @@ class EngineerBrain:
             "compare", "versus", "rival", "car ahead", "car behind", "leader", "teammate",
         )):
             return False
-        return cls._requests_current_strategy_plan(state, utterance) or has_any_phrase(text, (
-            "should i box", "should i pit", "should we box", "should we pit",
-            "when should i box", "when should i pit", "when do i box", "box now", "pit now", "stay out",
-        ))
+        return cls._requests_current_strategy_plan(state, utterance) or _asks_for_pit_call(utterance)
 
     @staticmethod
     def _finished_strategy_answer(state: dict[str, Any]) -> str | None:
@@ -2928,19 +3172,38 @@ class EngineerBrain:
                 refresh_current_strategy=self._requests_current_strategy_plan(state, utterance),
             )
         except (ProviderDeadlineError, ProviderRequestError) as exc:
-            deadline = isinstance(exc, ProviderDeadlineError) or exc.kind == "deadline"
-            if not deadline or not include_strategy:
+            # Neither the plan nor a stored value depends on the model, so any
+            # transient provider failure gets them, not only a deadline: a
+            # refused connection or a busy service must not cost the driver
+            # the pit call. A stored value is given only for a lookup that
+            # ends an utterance which otherwise just chats, and only through
+            # _fast_answer, whose freshness guard keeps a stale or paused
+            # value from being spoken as current.
+            failure = self._provider_fallback_kind(exc)
+            lookup = None if include_strategy else self._quick_question_after_chat(utterance)
+            if failure is None or not (include_strategy or lookup):
                 raise
             if not await self.store.matches_session(origin):
                 raise SessionChangedError("Session changed; the previous radio request was discarded.") from exc
-            text = await self._strategy_deadline_answer()
+            prefix = _PROVIDER_FALLBACK_PREFIXES[failure]
+            if include_strategy:
+                text = await self._strategy_fallback_answer(prefix)
+                fallback_model = (
+                    "strategy-deadline-fallback" if failure == "deadline" else "strategy-provider-fallback"
+                )
+            else:
+                readout = await self._fast_answer(str(lookup))
+                if not readout:
+                    raise
+                text = prefix.rstrip("; ") + ". " + readout
+                fallback_model = "deterministic-radio-fallback"
             elapsed_ms = (time.monotonic() - narration_started) * 1000
             self.last_provider_result = ProviderResult(
-                text=text, provider="local", model="strategy-deadline-fallback", latency_ms=elapsed_ms,
+                text=text, provider="local", model=fallback_model, latency_ms=elapsed_ms,
             )
             # _run and the router retain the failed provider diagnostic. The
             # response is explicitly identified as local, degraded guidance.
-            await self.store.update(llm_provider="local", llm_model="strategy-deadline-fallback",
+            await self.store.update(llm_provider="local", llm_model=fallback_model,
                                     llm_last_latency_ms=round(elapsed_ms, 1), llm_last_tool_rounds=0)
         if not await self.store.append_radio("engineer", text, expected=origin):
             raise SessionChangedError("Session changed; the previous radio request was discarded.")
