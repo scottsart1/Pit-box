@@ -3623,11 +3623,25 @@ class EngineerBrain:
         )
         return needs_reasoning or not cls._is_simple_lookup(utterance)
 
+    # The driver asking for their own place in the order.
+    _POSITION_QUESTIONS = (
+        "what position", "which position", "my position", "current position",
+        "what place", "where am i running", "where do i sit", "position now",
+        "am i in", "what p am i",
+    )
+
     async def _fast_answer(self, utterance: str) -> str | None:
         answer = await self._fast_answer_unchecked(utterance)
         if answer is None or not self._is_simple_lookup(utterance):
             return answer
-        if self._requests_current_final_result(await self.store.snapshot_analysis(), utterance):
+        state = await self.store.snapshot_analysis()
+        if self._requests_current_final_result(state, utterance):
+            return answer
+        # The confirmed classification answers a position question, and it
+        # stays valid however stale the live timing feed has gone.
+        if has_any_phrase(normalize_text(utterance), self._POSITION_QUESTIONS) and self.tools.final_result(
+            state
+        )["result_confirmed"]:
             return answer
         text = normalize_text(utterance)
         groups: tuple[int, ...] = ()
@@ -4058,14 +4072,13 @@ class EngineerBrain:
         # keyword match anywhere in the sentence turned every question that
         # happened to contain "position", "fuel" or "damage" into a readout of
         # that one value, whatever was actually asked.
-        if has_any_phrase(
-            text,
-            (
-                "what position", "which position", "my position", "current position",
-                "what place", "where am i running", "where do i sit", "position now",
-                "am i in", "what p am i",
-            ),
-        ):
+        if has_any_phrase(text, self._POSITION_QUESTIONS):
+            # Once the game has classified the race, the result is the
+            # position: live timing can still show the order before a time
+            # penalty was applied.
+            result = self.tools.final_result(state)
+            if result["result_confirmed"]:
+                return f"Confirmed final classification: P{int(result['final_classification']['position'])}."
             return f"Timing currently reports P{int(state.get('player_position', 0))}."
 
         if has_any_phrase(text, ("what tyres", "what tires", "tyre condition", "tire condition")) or re.search(
