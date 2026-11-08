@@ -1088,6 +1088,24 @@ def _plan_call_index(sentences: list[str], recommended: dict[str, Any], current_
     return None
 
 
+_TO_THE_FINISH = re.compile(
+    r"\b(?:to the (?:finish|end|flag)|rest of the race|no (?:more|further) stops?|"
+    r"(?:make|run) (?:it|them|these) to the)\b",
+    re.IGNORECASE,
+)
+
+
+def _finish_option_index(sentences: list[str]) -> int | None:
+    """Which sentence gives a no-stop option: the one that names the finish."""
+    return next(
+        (
+            index for index, sentence in enumerate(sentences)
+            if not sentence.endswith("?") and _TO_THE_FINISH.search(sentence)
+        ),
+        None,
+    )
+
+
 def _states_change_condition(text: str, condition: str) -> bool:
     """Whether the reply already gives its own condition, in one clause, naming
     one of the triggers in the plan's condition."""
@@ -1469,6 +1487,27 @@ class EngineerBrain:
         )
 
     @staticmethod
+    def _agreed_tactic_stands(state: dict[str, Any]) -> bool:
+        """Whether a tactic agreed with the driver still governs the next stop.
+
+        Going long, the overcut and the undercut are all about the next stop,
+        and nothing clears the agreement once it is made. A set fitted after
+        the lap it was agreed (tyre age shorter than the laps since) means
+        that stop has been made: twenty laps on, "AGREED: go long" is history,
+        and treating it as binding sent every later pit question to the model
+        with an order to honour it.
+        """
+        intent = state.get("strategy_intent", {}) or {}
+        if not intent.get("active"):
+            return False
+        try:
+            laps_since = int(state.get("current_lap", 0) or 0) - int(intent.get("set_at_lap"))
+        except (TypeError, ValueError):
+            return True
+        age = (state.get("tyre") or {}).get("age_laps")
+        return not (isinstance(age, (int, float)) and age < laps_since)
+
+    @staticmethod
     def _compound_change_owed(strategy: dict[str, Any]) -> bool:
         """Whether the race still owes a second dry compound before the flag."""
         rule = strategy.get("compound_rule", {}) or {}
@@ -1772,7 +1811,7 @@ class EngineerBrain:
         # that set it. Outside include_strategy too: the driver expects the
         # overcut they agreed to be honoured whatever they ask about next.
         intent = state.get("strategy_intent", {}) or {}
-        if intent.get("active"):
+        if self._agreed_tactic_stands(state):
             strategy_clause += (
                 f" | AGREED WITH THE DRIVER on lap {intent.get('set_at_lap')}: "
                 f"{str(intent.get('intent', '')).replace('_', ' ')}"
@@ -3291,7 +3330,7 @@ class EngineerBrain:
         # for hards". The model has the hold, the agreement, the computed next
         # option and the radio behind them.
         if cls._is_strategy_request(utterance) and (
-            cls._hold_running(state) or (state.get("strategy_intent", {}) or {}).get("active")
+            cls._hold_running(state) or cls._agreed_tactic_stands(state)
         ):
             return True
 
@@ -3977,6 +4016,18 @@ class EngineerBrain:
     _UNIT_REFUSED = re.compile(
         r"\b(?:not|no|never|don\W?t|do not|stop|without|instead of|rather than|enough)\b"
     )
+    # "Can I have them in Fahrenheit?", "Could we go back to Celsius?": a
+    # request for the unit, worded as a question.
+    _UNIT_REQUEST_QUESTION = re.compile(
+        r"^(?:can|could|may|would|will)\s+(?:i|we|you)\s+(?:(?:please|just|maybe)\s+)*"
+        r"(?:have|get|go|switch|change|swap|use|put|set|keep|give|make|do|run|stick|move)\b"
+    )
+    # A clause that asks about the unit inside such a request ("..., or is
+    # that Fahrenheit already?") still changes nothing.
+    _UNIT_QUESTION = re.compile(
+        r"^(?:(?:or|and)\s+)?(?:is|are|was|were|what|whats|what\W?s|which|how|do|does|did|"
+        r"isn\W?t|aren\W?t)\b"
+    )
 
     @classmethod
     def _requested_temperature_unit(cls, utterance: str) -> str | None:
@@ -3987,13 +4038,23 @@ class EngineerBrain:
         a unit the clause refuses ("not Fahrenheit, Celsius please", "stop
         giving me Fahrenheit") is not the one asked for. Matched anywhere in
         the turn, each of those switched the radio to the unit the driver had
-        rejected, for the rest of the run.
+        rejected, for the rest of the run. A request worded as a question
+        ("can I have them in Fahrenheit?", "could we go back to Celsius?")
+        and a request after another instruction ("stop the tyre updates and
+        give me Fahrenheit") are still requests.
         """
         chosen = None
-        for sentence in sentences(utterance):
-            for clause in re.split(r"[,;:—–]|\s-\s", sentence):
+        # Split by hand rather than with sentences(): its ASCII folding drops
+        # the degree sign of "100°F".
+        for sentence in re.split(r"(?<=[.?!;])\s+", utterance.lower()):
+            asks_to_change = bool(cls._UNIT_REQUEST_QUESTION.match(strip_leading_fillers(sentence)))
+            for clause in re.split(r"[,;:—–]|\s-\s|\s(?:and|but|then)\s", sentence):
                 clause = clause.strip()
-                if not clause or is_question(clause):
+                if not clause:
+                    continue
+                if is_question(clause) and not (
+                    asks_to_change and not cls._UNIT_QUESTION.match(clause)
+                ):
                     continue
                 for unit, pattern in cls._TEMPERATURE_UNITS:
                     match = pattern.search(clause)
@@ -4682,10 +4743,15 @@ class EngineerBrain:
             current_lap = int(state.get("current_lap", 0) or 0)
             if computed["kind"] == "option":
                 laps = list(computed["alternative"].get("box_laps") or [])
-                target = (
-                    {"box_lap": laps[0], "instruction": ""} if laps else {"instruction": "Stay out"}
-                )
-                call_index = lambda sentences: _plan_call_index(sentences, target, current_lap)  # noqa: E731
+                if laps:
+                    target = {"box_lap": laps[0], "instruction": ""}
+                    call_index = lambda sentences: _plan_call_index(sentences, target, current_lap)  # noqa: E731
+                else:
+                    # A no-stop option is found by the finish it names. Matched
+                    # as "stay out", it was the acknowledgement "Copy, staying
+                    # out" that got the plan's qualifier, reading the driver's
+                    # own decision back as provisional.
+                    call_index = _finish_option_index
             else:
                 call_index = lambda sentences: None  # noqa: E731
         return _RadioRequest(
