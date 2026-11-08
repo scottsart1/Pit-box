@@ -485,6 +485,40 @@ def test_free_text_arguments_say_what_they_accept(stack):
     assert "ahead" in schemas["get_gap"]["target"]["description"]
 
 
+
+@pytest.mark.asyncio
+async def test_cut_tools_resolve_every_rival_reference_the_schema_offers(stack, monkeypatch):
+    """The engine's cut resolver knows only ahead/behind/leader, P<n> and a surname."""
+    store, _, strategy, _, _, tools = stack
+
+    def apply(state):
+        state.player_car_index = 0
+        state.player_position = 6
+        state.drivers[0].name = "PLAYER"
+        state.drivers[0].position = 6
+        mate = state.drivers[3]
+        mate.name = "TEAMMATE"
+        mate.active = True
+        mate.position = 9
+        mate.is_teammate = True
+    await store.mutate(apply)
+    seen = []
+
+    async def cut(driver):
+        seen.append(driver)
+        return {"available": True}
+
+    monkeypatch.setattr(strategy, "evaluate_undercut", cut)
+    monkeypatch.setattr(strategy, "evaluate_overcut", cut)
+
+    await tools.call("evaluate_undercut", {"driver": "teammate"})
+    await tools.call("evaluate_overcut", {"driver": "team mate"})
+    await tools.call("evaluate_undercut", {"driver": "ahead"})
+    # Unresolved references pass through for the engine to refuse.
+    await tools.call("evaluate_undercut", {"driver": "zzz"})
+    await tools.call("evaluate_overcut", {"driver": "me"})
+    assert seen == ["P9", "P9", "ahead", "zzz", "me"]
+
 # ------------------------------------------------------------------ gap trend
 
 

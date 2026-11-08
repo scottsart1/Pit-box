@@ -2703,11 +2703,26 @@ class TelemetryTools:
         )
         return cls._round_floats(view)
 
+    async def _cut_target(self, driver: str) -> str:
+        """The rival reference the strategy engine's cut comparison can resolve.
+
+        The engine's own resolver knows ahead, behind, leader, P<n> and a
+        surname fragment. The schema offers the same references as every other
+        rival tool, so the teammate, a car number, a first name or a nickname
+        is resolved here and handed over as the car's position.
+        """
+        state = await self.store.snapshot_analysis()
+        match = self._resolve_driver(state, driver)
+        position = int((match or {}).get("position", 0) or 0)
+        if match is None or position <= 0 or match.get("car_idx") == state.get("player_car_index"):
+            return driver
+        return f"P{position}"
+
     async def evaluate_undercut(self, driver: str = "ahead") -> dict[str, Any]:
-        return await self.strategy.evaluate_undercut(driver)
+        return await self.strategy.evaluate_undercut(await self._cut_target(driver))
 
     async def evaluate_overcut(self, driver: str = "ahead") -> dict[str, Any]:
-        return await self.strategy.evaluate_overcut(driver)
+        return await self.strategy.evaluate_overcut(await self._cut_target(driver))
 
     async def get_tyre_sets_available(self) -> dict[str, Any]:
         state = await self.store.snapshot_analysis()
