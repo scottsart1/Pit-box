@@ -554,7 +554,11 @@ def test_realtime_bound_keeps_small_fields_of_a_wide_payload():
     """Many large keys defeat list and string trimming; the call must survive."""
     wide = {f"section_{index}": {f"field_{k}": "v" * 700 for k in range(6)} for index in range(8)}
     wide["instruction"] = "Box lap 20 for hards."
+    wide["plans"] = [{"box_laps": [20 + k]} for k in range(4)]
     decoded = json.loads(RealtimeRadio._tool_output(wide))
     assert decoded["instruction"] == "Box lap 20 for hards."
     assert decoded["truncated"] is True and decoded["omitted_fields"]
     assert len(json.dumps(decoded)) <= 16_000
+    # A kept list is still cut to one entry; the note must not imply it is whole.
+    assert decoded["plans"] == [{"box_laps": [20]}]
+    assert "first item" in decoded["truncation_note"]
