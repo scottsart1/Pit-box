@@ -4037,7 +4037,7 @@ class EngineerBrain:
             first = f"Lower on-throttle differential from {int(on_throttle)} to {target}." if target is not None else "Lower on-throttle differential a few clicks."
             return first + " Move brake bias one point forward only if the rear moves under braking."
 
-        if has_phrase(text, "radio check"):
+        if has_any_phrase(text, ("radio check", "can you hear me")):
             lap = int(state.get("current_lap", 0))
             position = int(state.get("player_position", 0))
             return f"Radio check, loud and clear; lap {lap}, P{position}."
@@ -4055,6 +4055,24 @@ class EngineerBrain:
             target = summary.get("target") or "still building"
             player = summary.get("player_best") or "no valid lap yet"
             return f"Your best {player}; target {target}; best times: {leaders or 'not available yet'}."
+
+        # Outside qualifying, "pole" is where the grid started and "best lap"
+        # is the driver's own best of this session against the fastest.
+        if has_phrase(text, "pole"):
+            sitter = next(
+                (driver for driver in state.get("drivers", []) or [] if int(driver.get("grid_position", 0) or 0) == 1),
+                None,
+            )
+            if sitter is None:
+                return "The starting grid is not available for this session."
+            return f"{sitter.get('name', 'Unknown')} started from pole."
+        if has_phrase(text, "best lap"):
+            summary = self.tools.qualifying_summary(state, 3)
+            fastest = ", ".join(
+                f"{item.get('name')} {item.get('best_lap')}" for item in summary.get("field", []) if item.get("best_lap")
+            )
+            player = summary.get("player_best") or "no valid lap yet"
+            return f"Your best lap {player}; fastest this session: {fastest or 'not available yet'}."
 
         if has_any_phrase(text, ("gap ahead", "car ahead")):
             result = await self.tools.get_gap("ahead")
@@ -4139,7 +4157,7 @@ class EngineerBrain:
         if has_any_phrase(text, ("weather", "rain")) and has_any_phrase(
             text,
             ("what is", "what s", "how is", "how s", "forecast", "any", "chance",
-             "risk", "coming", "expected", "update", "look"),
+             "risk", "coming", "expected", "update", "look", "check", "report"),
         ):
             # Answer with the read the tyre call is actually being made on, not
             # just the label and a percentage. A driver asking about the weather
