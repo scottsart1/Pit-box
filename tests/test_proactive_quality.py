@@ -830,6 +830,87 @@ async def test_a_penalty_the_driver_talked_over_is_said_again_after_their_exchan
 
 
 @pytest.mark.asyncio
+async def test_a_cut_call_waits_for_the_answer_to_the_drivers_question(stack, monkeypatch, tmp_path):
+    """Between letting go of the button and the clip reaching the engineer,
+    the radio read as free: the cut penalty was said again before the answer,
+    with the acknowledgement playing over it."""
+    import asyncio
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    import numpy as np
+
+    from pitwall.voice import NativeVoiceController
+
+    monkeypatch.setattr(settings, "data_dir", tmp_path)
+    monkeypatch.setattr(settings, "voice_realtime_enabled", False)
+    monkeypatch.setattr(settings, "native_voice", True)
+    monkeypatch.setattr(settings, "voice_stream_tts", True)
+    monkeypatch.setattr(settings, "ptt_release_tail_s", 0.02)
+    monkeypatch.setattr(settings, "ptt_min_hold_ms", 0)
+    monkeypatch.setattr(settings, "audio_min_rms", 1.0)
+    monkeypatch.setattr(settings, "proactive_safe_hold_s", 0.0)
+    monkeypatch.setattr(proactive_module, "DELIVER_INTERVAL_S", 0.01)
+    store, database, *_ = stack
+    heard: list[str] = []
+
+    async def stream_speech(text, target=None, on_first_audio=None):
+        heard.append(text)
+        await asyncio.sleep(0.2)
+        return True
+
+    async def play_tone(*_args):
+        await asyncio.sleep(0.07)
+
+    async def transcribe(_path, _names):
+        await asyncio.sleep(0.1)
+        return "what's the gap behind"
+
+    async def play_ack(_kind):
+        heard.append("<ack>")
+
+    class _Answering(_Brain):
+        @staticmethod
+        def classify_request(_command):
+            return "fast"
+
+        async def ask(self, _command):
+            await asyncio.sleep(0.05)
+            return "Gap behind is 1.2 seconds."
+
+    audio = SimpleNamespace(
+        stop_playback=lambda: None, voice_ready=True, play_ack=play_ack, play_tone=play_tone,
+        stream_speech=stream_speech, play_listening_cue=AsyncMock(), transcribe=transcribe,
+    )
+    controller = NativeVoiceController(store, _Answering(database), audio)
+
+    async def microphone(self):
+        self.stream = object()
+
+    controller._ensure_input_stream = types.MethodType(microphone, controller)
+    store, engineer, _voice = await _race(stack)
+    engineer.voice = controller
+    deliver = asyncio.create_task(engineer._run_deliver())
+    try:
+        await store.update(penalties_s=5)
+        await engineer._detect(await store.snapshot_radio())
+        await _wait_for(lambda: bool(heard))
+        penalty = heard[0]
+        assert "penalty" in penalty
+        controller._signal_pressed = True
+        await controller._transition(True, real_time.monotonic(), "mask_press")
+        controller.frames = [np.full((1600, 1), 3000, dtype=np.int16)]
+        await asyncio.sleep(0.05)
+        await controller._transition(False, real_time.monotonic(), "explicit_release")
+        await _wait_for(lambda: heard.count(penalty) > 1)
+        assert heard == [penalty, "<ack>", "Gap behind is 1.2 seconds.", penalty]
+    finally:
+        deliver.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await deliver
+
+
+@pytest.mark.asyncio
 async def test_a_cut_call_no_longer_true_does_not_come_back(stack, monkeypatch, tmp_path):
     """A flashback took the penalty back while the driver was talking."""
     import asyncio
