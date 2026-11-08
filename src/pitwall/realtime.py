@@ -263,6 +263,8 @@ class RealtimeRadio:
         self._lap_note_origin: dict[str, Any] | None = None
         self._lap_note_turn = 0
         self._response_origins: dict[str, tuple[int, dict[str, Any] | None]] = {}
+        # Whether the open response called a tool.
+        self._response_used_tool = False
         self._note_call_results: dict[str, dict[str, Any]] = {}
         self._next_clip_origin: dict[str, Any] | None = None
         # A reply the session was asked for that has not been created yet.
@@ -713,6 +715,8 @@ class RealtimeRadio:
             # turn still owes the driver a spoken word.
             if self._rerun_pending:
                 await self._rerun_turn("")
+                return
+            await self._transcript_lost()
             return
 
         if kind == "response.function_call_arguments.done":
@@ -759,6 +763,9 @@ class RealtimeRadio:
 
         tag = self._call_responses.pop(response_id, None)
         call = self._calls.get(tag) if tag else None
+        # Whether any of this response reached the speaker. A reply the driver
+        # heard most of is not answered a second time on the other radio.
+        spoke = self._audio_received > 0
         if call is not None and status == "cancelled" and not heard:
             # Cut off before a word of it played: the driver heard nothing,
             # so it goes out again once their own turn has been answered.
@@ -768,12 +775,25 @@ class RealtimeRadio:
             # The caller logs a delivered line itself, exactly once.
             if status == "cancelled":
                 await self._record("engineer", heard)
-            self._settle_call(call, {"completed": True, "cancelled": False}.get(status))
+            if status == "completed":
+                # A response that only called a tool said nothing: the line is
+                # spoken on the other audio path, not marked delivered.
+                outcome = None if (self._response_used_tool and not spoke and not text) else True
+            else:
+                # Cut short or failed after some of it played: heard in part,
+                # so it is not repeated in full. Nothing played: not heard.
+                outcome = False if (spoke or heard) else None
+            self._settle_call(call, outcome)
         else:
             await self._record("engineer", heard)
 
         if status in {"failed", "incomplete"}:
-            await self._response_failed(response, status, answered_turn=tag is None)
+            await self._response_failed(
+                response,
+                status,
+                answered_turn=tag is None and not heard and not spoke,
+                call_failed=tag is not None,
+            )
             return
         if status == "cancelled":
             self._tool_results_pending = False
@@ -811,20 +831,34 @@ class RealtimeRadio:
                 return True
         return False
 
-    async def _response_failed(self, response: Any, status: str, *, answered_turn: bool) -> None:
+    async def _response_failed(
+        self, response: Any, status: str, *, answered_turn: bool, call_failed: bool = False
+    ) -> None:
+        """Report a failed or incomplete response, and answer the driver's turn
+        on the standard radio when ``answered_turn`` says they heard nothing.
+
+        A reply the driver heard (some or all of its audio played) is not
+        answered again: the radio then carried two answers to one question,
+        in two voices, and the session was closed under them.
+        """
         details = getattr(response, "status_details", None)
         error = getattr(details, "error", None)
         reason = (
             getattr(error, "code", None) or getattr(error, "type", None)
             or getattr(details, "reason", None) or "no reason given"
         )
-        self._tool_results_pending = False
         log.warning("Realtime response %s: %s", status, reason)
         await self.store.update(
             last_error=f"Realtime radio reply {status}: {reason}",
             engineer_status="error",
             radio_indicator="error",
         )
+        if call_failed:
+            # A pit-wall line's own response failed. The tool reply it was
+            # held in front of still owes the driver an answer.
+            await self._request_next_response()
+            return
+        self._tool_results_pending = False
         if not answered_turn or self.on_failed_turn is None:
             return
         if self._turn_transcript is None:
@@ -897,6 +931,7 @@ class RealtimeRadio:
         self._audio_started_at = 0.0
         self._heard_bytes: int | None = None
         self._interrupted_response = ""
+        self._response_used_tool = False
 
     def _played_bytes(self) -> int:
         """Audio of the current response that has actually played."""
@@ -991,6 +1026,40 @@ class RealtimeRadio:
         if self._rerun_pending:
             await self._rerun_turn(transcript)
 
+    async def _transcript_lost(self) -> None:
+        """Tell the model, and the dashboard, that a driver turn stored nothing.
+
+        Commands are stored from the transcript, but the model answers from
+        the audio and may already have confirmed a refusal or a lock that was
+        never stored. Without a note it has no reason to correct itself, and
+        the unsolicited calls go on as though the driver had said nothing.
+        """
+        await self.store.update(last_error="Speech transcript failed; driver command not stored")
+        connection = self._connection
+        if connection is None or self._closing or self._session_signal.is_set():
+            return
+        note = (
+            "Pit wall note: the driver's last turn could not be transcribed, so nothing in it was "
+            "stored: no strategy lock, refused stop, standing instruction or setting. If they gave "
+            "a command, tell them in one short sentence that it did not register and ask them to "
+            "repeat it."
+        )
+        with contextlib.suppress(Exception):
+            await connection.send({
+                "type": "conversation.item.create",
+                "item": {
+                    "type": "message",
+                    "role": "system",
+                    "content": [{"type": "input_text", "text": note}],
+                },
+            })
+            # The reply to that turn may already be over; the correction is
+            # only worth anything if it is said. An open or requested
+            # response sees the note in its context instead.
+            if not (self._response_active or self._reply_requested or self._driver_speaking):
+                await connection.send({"type": "response.create"})
+                self._reply_requested = True
+
     async def _apply_driver_turn(self, transcript: str) -> None:
         """Store what the driver told the pit wall, and tell the model what was stored.
 
@@ -1037,6 +1106,7 @@ class RealtimeRadio:
         name = str(getattr(event, "name", "") or "")
         if self._session_signal.is_set():
             return
+        self._response_used_tool = True
         call_id = str(getattr(event, "call_id", "") or "")
         raw_arguments = getattr(event, "arguments", "") or "{}"
         connection = self._connection
@@ -1330,6 +1400,10 @@ class RealtimeRadio:
                     "event_id": call.event_id,
                     "response": {
                         "metadata": {_CALL_TAG: call.tag},
+                        # The line is already computed. A response that went
+                        # off to check it with a tool said nothing and was
+                        # still taken as delivered.
+                        "tool_choice": "none",
                         "instructions": (
                             "Read this pit-wall call to the driver verbatim, in your "
                             f"normal radio delivery. Do not add to it: {call.text}"

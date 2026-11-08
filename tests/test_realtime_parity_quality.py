@@ -823,3 +823,119 @@ async def test_speech_session_driver_lines_carry_the_same_reaction_labels(stack,
         ("driver", "What's the gap behind?", ""),
         ("engineer", "Say again: box lap 14 for hards.", ""),
     ]
+
+
+# ------------------------------------------- what the driver already heard
+
+
+@pytest.mark.asyncio
+async def test_a_reply_the_driver_heard_is_not_answered_again_on_the_standard_radio(stack, realtime_on, monkeypatch):
+    store, brain = await _brain(stack)
+    controller, radio, _connection = await _controller(store, brain)
+    answered: list[str] = []
+
+    async def run_command(command, source, *, recorded=None):
+        answered.append(command)
+
+    controller._run_command = run_command
+    stream = FakeStream()
+    radio._output_stream = stream
+    radio._ensure_output_stream = lambda: stream
+    clock = {"now": 100.0}
+    monkeypatch.setattr(realtime_module, "time", SimpleNamespace(monotonic=lambda: clock["now"]))
+    one_second = base64.b64encode(bytes(48_000)).decode("ascii")
+    try:
+        await _driver_says(radio, "what's the gap behind and is he catching?")
+        await radio._handle_event(Event(type="response.created", response=Event(id="r1")))
+        reply = "Norris is 1.4 behind and closing two tenths a lap, so expect him in DRS range in about"
+        await radio._handle_event(Event(type="response.output_audio_transcript.delta", delta=reply))
+        for _ in range(6):
+            await radio._handle_event(Event(type="response.output_audio.delta", delta=one_second,
+                                            response_id="r1", item_id="item_1"))
+        clock["now"] += 6.0
+        await radio._handle_event(Event(type="response.done", response=Event(
+            id="r1", status="incomplete", status_details=Event(type="incomplete", reason="max_output_tokens"),
+        )))
+        await _settle()
+        assert answered == []
+        assert controller._realtime_recovery_task is None
+        assert radio.is_open
+        assert "max_output_tokens" in (await store.snapshot_live())["last_error"]
+        log = [entry["role"] for entry in (await store.snapshot_analysis())["radio_log"]]
+        assert log == ["driver", "engineer"]
+    finally:
+        await radio.client.close()
+
+
+@pytest.mark.asyncio
+async def test_a_failed_call_still_lets_the_drivers_tool_answer_out(stack, realtime_on):
+    store, brain = await _brain(stack)
+    controller, radio, connection = await _controller(store, brain)
+    radio._ensure_output_stream = lambda: None
+    try:
+        await _driver_says(radio, "what's the gap to Norris?")
+        await radio._handle_event(Event(type="input_audio_buffer.speech_stopped"))
+        await radio._handle_event(Event(type="response.created", response=Event(id="r_tool")))
+        await radio._handle_event(Event(type="response.function_call_arguments.done",
+                                        name="get_gap", call_id="c1", arguments="{}", response_id="r_tool"))
+        speaking = asyncio.create_task(controller.speak_text("Safety car, safety car."))
+        await _settle()
+        await radio._handle_event(Event(type="response.done", response=Event(id="r_tool", status="completed")))
+        await _settle()
+        await radio._handle_event(_created(connection, "r_call"))
+        await radio._handle_event(Event(type="response.done", response=Event(
+            id="r_call", status="failed",
+            status_details=Event(type="failed", error=Event(type="server_error", code="server_error")))))
+        await speaking
+        await _settle()
+        creates = connection.of_type("response.create")
+        assert len(creates) == 2, "the reply to the driver's tool result is still requested"
+        assert "response" not in creates[-1]
+    finally:
+        await radio.client.close()
+
+
+@pytest.mark.asyncio
+async def test_a_call_whose_response_only_called_a_tool_is_spoken_on_the_other_path(stack, realtime_on):
+    store, brain = await _brain(stack)
+    controller, radio, connection = await _controller(store, brain)
+    radio._ensure_output_stream = lambda: None
+    try:
+        speaking = asyncio.create_task(controller.speak_text("Norris has pitted, gap to him now 21.4."))
+        await _settle()
+        call = _call_event(connection)
+        assert call["response"]["tool_choice"] == "none"
+        await radio._handle_event(_created(connection, "r_call"))
+        await radio._handle_event(Event(type="response.function_call_arguments.done", name="get_gap",
+                                        call_id="c9", arguments="{}", response_id="r_call"))
+        await radio._handle_event(Event(type="response.done", response=Event(id="r_call", status="completed")))
+        assert await speaking is True
+        controller.audio.stream_speech.assert_awaited_once()
+        assert controller.audio.stream_speech.await_args.args[0] == "Norris has pitted, gap to him now 21.4."
+    finally:
+        await radio.client.close()
+
+
+@pytest.mark.asyncio
+async def test_a_turn_that_could_not_be_transcribed_is_flagged_to_the_model_and_the_dashboard(stack, realtime_on):
+    store, brain = await _brain(stack)
+    _controller_, radio, connection = await _controller(store, brain)
+    radio._ensure_output_stream = lambda: None
+    try:
+        await radio._handle_event(Event(type="input_audio_buffer.speech_started"))
+        await radio._handle_event(Event(type="input_audio_buffer.speech_stopped"))
+        await radio._handle_event(Event(type="response.created", response=Event(id="r1")))
+        await radio._handle_event(Event(type="response.output_audio_transcript.delta",
+                                        delta="Copy, staying out. We won't call that stop again."))
+        await radio._handle_event(Event(type="response.done", response=Event(id="r1", status="completed")))
+        await radio._handle_event(Event(type="conversation.item.input_audio_transcription.failed"))
+        notes = [
+            event["item"]["content"][0]["text"] for event in connection.of_type("conversation.item.create")
+            if event["item"].get("role") == "system"
+        ]
+        assert any("could not be transcribed, so nothing in it was stored" in note for note in notes)
+        assert connection.of_type("response.create"), "the correction is asked for, so it is said"
+        assert (await store.snapshot_live())["last_error"] == "Speech transcript failed; driver command not stored"
+        assert not (await store.snapshot_analysis())["strategy_hold"].get("active")
+    finally:
+        await radio.client.close()
