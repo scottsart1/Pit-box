@@ -8,6 +8,7 @@ local yellows, 500s on odd data, unlabelled derived results and so on.
 from __future__ import annotations
 
 import asyncio
+import gc
 import json
 import random
 import sqlite3
@@ -766,6 +767,12 @@ async def test_analysis_reads_no_traces_writes_nothing_and_leaves_the_loop_free(
             pauses.append(now - last)
             last = now
 
+    # A full garbage collection of the heap the rest of the suite leaves
+    # behind takes about as long as this budget. Landing inside the window it
+    # measured the interpreter, not Session Analysis, so the existing heap is
+    # collected and frozen first and only the analysis's own objects count.
+    gc.collect()
+    gc.freeze()
     beat = asyncio.create_task(heartbeat())
     try:
         result = await service.analysis(key)
@@ -773,6 +780,7 @@ async def test_analysis_reads_no_traces_writes_nothing_and_leaves_the_loop_free(
     finally:
         finished.set()
         await beat
+        gc.unfreeze()
     assert max(pauses) < 0.2
     assert len(result["drivers"]) == 22
     assert all(row["laps_completed"] == 70 for row in result["drivers"])
