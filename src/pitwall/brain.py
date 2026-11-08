@@ -655,8 +655,6 @@ _PROVIDER_FALLBACK_PREFIXES = {
 }
 
 _FEEDBACK_PATTERNS = {
-    # First, so the generic "tyres are gone" below does not claim the fronts.
-    "no_front_grip": ("no front grip", "fronts are gone", "front tyres are gone", "front tires are gone"),
     "tyres_gone": (
         "they're gone", "they are gone", "tyres gone", "tires gone",
         "tyres are gone", "tires are gone", "rears are gone", "tyres are dead",
@@ -672,11 +670,31 @@ _FEEDBACK_PATTERNS = {
         "the rears are holding",
     ),
     "understeer": ("understeer", "won't turn", "does not turn", "front won't bite"),
+    "no_front_grip": ("no front grip", "fronts are gone", "front tyres are gone", "front tires are gone"),
     "oversteer": ("oversteer", "rear is loose", "rear steps out"),
     "rear_instability": ("rear unstable", "rear instability", "snappy rear"),
     "traction": ("no traction", "wheelspin", "spinning the rears"),
     "no_grip": ("no grip", "tires are toast", "tyres are toast"),
 }
+
+# The tyre-life reports feed the strategy's degradation model, so they are
+# read from what the driver says the tyres are doing now. A front-grip report
+# ("the front tyres are gone") is a balance problem, not tyre life, and a
+# tyre phrase that follows "until", "before", "if" or "when" is a question or
+# a condition: "how long until the tyres are gone?" reports nothing.
+_TYRE_LIFE_FEEDBACK = frozenset({"tyres_gone", "tyres_going", "tyres_fine"})
+_HYPOTHETICAL_TYRE_CLAUSE = re.compile(
+    r"\b(?:until|till|before|if|once|whether|unless|by the time|when)\s+"
+    r"(?:the\s+|my\s+|our\s+|these\s+|those\s+)?(?:rear\s+|front\s+)?"
+    r"(?:tyres|tires|rears|fronts|they)\b[^,.;!?]*"
+)
+
+
+def _tyre_life_report(lowered: str) -> str:
+    """The part of a driver turn that reports on tyre life as it is now."""
+    for phrase in _FEEDBACK_PATTERNS["no_front_grip"]:
+        lowered = lowered.replace(phrase, " ")
+    return _HYPOTHETICAL_TYRE_CLAUSE.sub(" ", lowered)
 
 # What the driver says about the *track*, which is a different question from
 # what they say about their tyres. The pit wall can see rain percentages and lap
@@ -1505,7 +1523,7 @@ class EngineerBrain:
         if not instruction:
             return None
         if not (recommended.get("legal") and recommended.get("feasible")):
-            return "No current, legal and feasible pit plan is confirmed; give no new pit instruction."
+            return "No current, legal and feasible pit plan is confirmed; I cannot give a new pit instruction."
         return cls._with_strategy_change_condition(cls.qualify_strategy_text(instruction, plan), plan)
 
     async def realtime_instructions(self, persona: str) -> str:
@@ -3849,10 +3867,12 @@ class EngineerBrain:
         elif closed_answer in {"going away", "they're going away", "they re going away", "the rears are going away"}:
             lowered = "starting to go"
         await self._capture_conditions_feedback(utterance, lowered, state)
+        tyre_life = _tyre_life_report(lowered)
         for category, patterns in _FEEDBACK_PATTERNS.items():
-            if any(pattern in lowered for pattern in patterns):
+            heard = tyre_life if category in _TYRE_LIFE_FEEDBACK else lowered
+            if any(pattern in heard for pattern in patterns):
                 await self.store.add_feedback(category, utterance)
-                if category in {"tyres_gone", "tyres_going", "tyres_fine"}:
+                if category in _TYRE_LIFE_FEEDBACK:
                     await self.store.update(
                         driver_tyre_feedback={
                             "lap": int(state.get("current_lap", 0) or 0),

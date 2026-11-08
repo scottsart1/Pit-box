@@ -287,6 +287,29 @@ async def test_plain_tyre_reports_reach_the_strategy(stack, utterance, category)
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "utterance",
+    [
+        "how long until the tyres are gone?",
+        "how many laps before the tyres are dead",
+        "tell me when the rears are gone",
+        "if the tyres are gone we box",
+    ],
+)
+async def test_a_question_about_tyre_life_is_not_a_tyre_report(stack, utterance):
+    store, brain = await _brain(stack)
+    await brain._capture_feedback(utterance)
+    assert not (await store.snapshot_analysis()).get("driver_tyre_feedback")
+
+
+@pytest.mark.asyncio
+async def test_a_tyre_report_with_a_front_grip_complaint_still_reaches_the_strategy(stack):
+    store, brain = await _brain(stack)
+    await brain._capture_feedback("they're gone, no front grip either")
+    assert (await store.snapshot_analysis())["driver_tyre_feedback"]["category"] == "tyres_gone"
+
+
+@pytest.mark.asyncio
 async def test_front_tyres_gone_is_still_a_front_grip_report(stack):
     store, brain = await _brain(stack)
     await brain._capture_feedback("the front tyres are gone")
@@ -380,6 +403,11 @@ def test_the_speech_persona_has_the_rules_that_change_pit_and_damage_calls():
     assert "radio_call" in flat and "provisional qualifier" in flat
     assert "not to having a strategy" in flat and "next option from get_pit_strategy" in flat
     assert "pit wall note" in flat
+    # A note usually lands after the reply it concerns, so the rule is to
+    # correct a wrong confirmation, not to answer the note in place of the
+    # driver's next question.
+    assert "correct that in one short clause at the start of your next reply" in flat
+    assert "nothing else" not in flat
 
 
 # ------------------------------------------------- calls into an open session
@@ -468,17 +496,115 @@ async def test_a_call_the_server_refuses_is_not_reported_delivered(stack, realti
 
 
 @pytest.mark.asyncio
-async def test_a_call_the_driver_talks_over_is_not_delivered_and_not_repeated_on_tts(stack, realtime_on):
+async def test_a_call_the_driver_talks_over_is_not_delivered_and_not_repeated_on_tts(stack, realtime_on, monkeypatch):
     store, brain = await _brain(stack)
     controller, radio, connection = await _controller(store, brain)
+    radio._output_stream = FakeStream()
+    radio._ensure_output_stream = lambda: radio._output_stream
+    clock = {"now": 100.0}
+    monkeypatch.setattr(realtime_module, "time", SimpleNamespace(monotonic=lambda: clock["now"]))
     try:
         speaking = asyncio.create_task(controller.speak_text("Penalty, five seconds."))
         await _settle()
         await radio._handle_event(_created(connection, "resp_3"))
+        await radio._handle_event(Event(type="response.output_audio_transcript.delta", delta="Penalty, five seconds."))
+        await radio._handle_event(Event(
+            type="response.output_audio.delta", delta=base64.b64encode(bytes(96_000)).decode("ascii"),
+            response_id="resp_3", item_id="item_3",
+        ))
+        # Halfway through the line.
+        clock["now"] += 1.0
         await radio._handle_event(Event(type="input_audio_buffer.speech_started"))
         await radio._handle_event(Event(type="response.done", response=Event(id="resp_3", status="cancelled")))
+        # Part of it was heard: not repeated, and not counted as delivered.
         assert await speaking is False
         controller.audio.stream_speech.assert_not_awaited()
+        log = [entry["text"] for entry in (await store.snapshot_analysis())["radio_log"]]
+        assert log == ["Penalty —"]
+    finally:
+        await radio.client.close()
+
+
+@pytest.mark.asyncio
+async def test_a_call_cut_off_before_it_played_goes_out_after_the_drivers_turn(stack, realtime_on):
+    """The driver keyed up as the call began; they heard none of it."""
+    store, brain = await _brain(stack)
+    controller, radio, connection = await _controller(store, brain)
+    radio._ensure_output_stream = lambda: None
+    try:
+        speaking = asyncio.create_task(controller.speak_text("Red flag, red flag."))
+        await _settle()
+        await radio._handle_event(_created(connection, "first_try"))
+        await radio._handle_event(Event(type="input_audio_buffer.speech_started"))
+        await radio._handle_event(Event(type="response.done", response=Event(id="first_try", status="cancelled")))
+        await _settle()
+        assert not speaking.done(), "nothing was heard, so nothing is settled yet"
+        assert len(connection.of_type("response.create")) == 1, "never talk over the driver"
+
+        await radio._handle_event(Event(type="input_audio_buffer.speech_stopped"))
+        await radio._handle_event(Event(type="response.created", response=Event(id="reply")))
+        await radio._handle_event(Event(type="response.done", response=Event(id="reply", status="completed")))
+        await _settle()
+        assert len(connection.of_type("response.create")) == 2
+        await radio._handle_event(_created(connection, "second_try"))
+        await radio._handle_event(Event(type="response.done", response=Event(id="second_try", status="completed")))
+        assert await speaking is True
+        controller.audio.stream_speech.assert_not_awaited()
+        assert (await store.snapshot_analysis())["radio_log"] == []
+    finally:
+        await radio.client.close()
+
+
+@pytest.mark.asyncio
+async def test_a_call_still_queued_behind_the_reply_counts_as_unheard_on_a_barge_in(stack, realtime_on, monkeypatch):
+    """A held call's audio plays after the tail of the reply it waited for."""
+    store, brain = await _brain(stack)
+    controller, radio, connection = await _controller(store, brain)
+    radio._output_stream = FakeStream()
+    radio._ensure_output_stream = lambda: radio._output_stream
+    clock = {"now": 100.0}
+    monkeypatch.setattr(realtime_module, "time", SimpleNamespace(monotonic=lambda: clock["now"]))
+    one_second = base64.b64encode(bytes(48_000)).decode("ascii")
+    try:
+        await radio._handle_event(Event(type="response.created", response=Event(id="reply")))
+        speaking = asyncio.create_task(controller.speak_text("Safety car, safety car."))
+        await _settle()
+        for _ in range(3):
+            await radio._handle_event(Event(
+                type="response.output_audio.delta", delta=one_second, response_id="reply", item_id="reply_item",
+            ))
+        await radio._handle_event(Event(type="response.done", response=Event(id="reply", status="completed")))
+        await _settle()
+        await radio._handle_event(_created(connection, "call"))
+        await radio._handle_event(Event(type="response.output_audio_transcript.delta", delta="Safety car, safety car."))
+        await radio._handle_event(Event(
+            type="response.output_audio.delta", delta=one_second, response_id="call", item_id="call_item",
+        ))
+        # Two seconds in, the reply is still playing and the call has not started.
+        clock["now"] += 2.0
+        await radio._handle_event(Event(type="input_audio_buffer.speech_started"))
+        truncate = connection.of_type("conversation.item.truncate")[-1]
+        assert (truncate["item_id"], truncate["audio_end_ms"]) == ("call_item", 0)
+        await radio._handle_event(Event(type="response.done", response=Event(id="call", status="cancelled")))
+        await _settle()
+        assert not speaking.done(), "the call was never heard, so it goes out again"
+        assert (await store.snapshot_analysis())["radio_log"] == []
+    finally:
+        speaking.cancel()
+        await asyncio.gather(speaking, return_exceptions=True)
+        await radio.client.close()
+
+
+@pytest.mark.asyncio
+async def test_a_call_the_session_never_started_goes_to_the_other_audio_path(stack, realtime_on, monkeypatch):
+    monkeypatch.setattr(realtime_module, "CALL_DELIVERY_S", 0.05, raising=False)
+    monkeypatch.setattr(realtime_module, "_CALL_START_S", 0.01, raising=False)
+    store, brain = await _brain(stack)
+    controller, radio, connection = await _controller(store, brain)
+    try:
+        assert await controller.speak_text("Safety car, safety car.") is True
+        assert len(connection.of_type("response.create")) == 1
+        controller.audio.stream_speech.assert_awaited_once()
     finally:
         await radio.client.close()
 
@@ -513,6 +639,20 @@ async def test_a_call_waits_for_the_driver_to_finish_and_for_their_answer(stack,
         await radio._handle_event(_created(connection, "call"))
         await radio._handle_event(Event(type="response.done", response=Event(id="call", status="completed")))
         assert await speaking is True
+    finally:
+        await radio.client.close()
+
+
+@pytest.mark.asyncio
+async def test_a_call_sent_just_before_the_deadline_is_left_to_the_session(stack, realtime_on, monkeypatch):
+    """Handing it to the other audio path too would say it twice."""
+    monkeypatch.setattr(realtime_module, "CALL_DELIVERY_S", 0.05, raising=False)
+    store, brain = await _brain(stack)
+    controller, radio, connection = await _controller(store, brain)
+    try:
+        assert await controller.speak_text("Safety car, safety car.") is False
+        assert len(connection.of_type("response.create")) == 1
+        controller.audio.stream_speech.assert_not_awaited()
     finally:
         await radio.client.close()
 
@@ -611,7 +751,7 @@ async def test_a_barge_in_logs_only_what_was_heard_and_truncates_the_rest(stack,
     radio._output_stream = FakeStream()
     radio._ensure_output_stream = lambda: radio._output_stream or FakeStream()
     clock = {"now": 100.0}
-    monkeypatch.setattr(realtime_module.time, "monotonic", lambda: clock["now"])
+    monkeypatch.setattr(realtime_module, "time", SimpleNamespace(monotonic=lambda: clock["now"]))
     try:
         await radio._handle_event(
             Event(type="conversation.item.input_audio_transcription.completed", transcript="what's the plan")
