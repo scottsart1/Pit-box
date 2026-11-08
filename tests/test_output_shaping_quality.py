@@ -16,6 +16,7 @@ from pitwall.brain import (
     PERSONA,
     EngineerBrain,
     _limit_radio_sentences,
+    _pit_call_index,
     compose_persona,
 )
 from pitwall.briefing import BriefingEngine
@@ -99,6 +100,24 @@ def test_an_abbreviation_is_not_a_sentence_end():
 
 def test_a_lone_acknowledgement_is_still_spoken_when_it_is_the_whole_reply():
     assert _limit_radio_sentences("Copy.", "normal", "terse") == "Copy."
+
+
+@pytest.mark.parametrize("reply", [
+    "No. Stay out two more laps, the undercut does not work.",
+    "Safety car! Box this lap for mediums, it's a free stop.",
+    "Box, box. Box this lap for mediums.",
+])
+def test_a_short_opener_does_not_cost_terse_its_instruction(reply):
+    # The opener is spoken, and so is the instruction it introduces.
+    assert _limit_radio_sentences(reply, "normal", "terse") == reply
+
+
+@pytest.mark.parametrize("verbosity", ["terse", "standard"])
+def test_the_cut_keeps_both_the_pit_call_and_the_closing_question(verbosity):
+    reply = "Rears are fading. Wear is 60 percent. Box lap 14 for hards. Want to extend instead?"
+    assert _limit_radio_sentences(reply, "normal", verbosity, protect=_pit_call_index) == (
+        "Box lap 14 for hards. Want to extend instead?"
+    )
 
 
 @pytest.mark.asyncio
@@ -235,6 +254,13 @@ async def test_race_update_names_the_event_instead_of_its_packet_code(stack, mon
     assert "latest event 5-second time penalty for you, corner cutting, gained time" in answer
 
 
+def test_a_car_that_took_the_flag_is_not_called_retired():
+    record = {"kind": "retirement", "driver": "NORRIS", "reason": "finished"}
+    assert EngineerBrain._spoken_event(record) == "NORRIS finished"
+    record = {"kind": "retirement", "driver": "NORRIS", "reason": "terminal damage"}
+    assert EngineerBrain._spoken_event(record) == "NORRIS retired, terminal damage"
+
+
 async def _tow_against_the_trend(store):
     """The gap grew 1.0 -> 2.2 s over two laps; a tow took 0.25 s back in 8 s."""
     history = []
@@ -305,6 +331,36 @@ async def test_a_reply_that_already_hedges_and_conditions_is_not_repeated(stack,
     _, brain = await _scripted(stack, monkeypatch, reply, strategy=_low_confidence_plan())
     answer = await brain.ask("What is the current pit strategy?")
     assert answer == reply
+
+
+def test_the_qualifier_goes_on_the_drivers_call_not_on_a_rivals_lap():
+    answer = EngineerBrain.qualify_strategy_text(
+        "Norris pitted on lap 12. Box this lap to cover.", _low_confidence_plan(),
+    )
+    assert answer == (
+        "Norris pitted on lap 12. Box this lap to cover; provisional, confidence low, "
+        "tyre estimates include track defaults."
+    )
+
+
+@pytest.mark.parametrize("reply", [
+    "No change: box lap 17 for mediums, rear wear is on the model.",
+    "Box lap 14 for hards; rear wear changes little over the stint.",
+])
+def test_a_reply_that_states_no_condition_still_gets_the_plans_condition(reply):
+    answer = EngineerBrain._with_strategy_change_condition(reply, _low_confidence_plan())
+    assert answer.endswith(
+        "; the call changes for a safety car, red flag, wet crossover, new damage, "
+        "or a hard tyre-wear limit breach."
+    )
+
+
+@pytest.mark.parametrize("reply", [
+    "Box lap 14 for hards; a safety car before lap 12 would bring it forward.",
+    "Box lap 14 for hards. If it rains we switch to inters.",
+])
+def test_a_reply_with_its_own_condition_is_not_given_a_second(reply):
+    assert EngineerBrain._with_strategy_change_condition(reply, _low_confidence_plan()) == reply
 
 
 @pytest.mark.asyncio
