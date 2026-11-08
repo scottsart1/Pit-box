@@ -186,14 +186,6 @@ not be described as verified for the same car, formula or conditions when those 
 PRACTICE_NOTES_PERSONA = """
 For practice runs, stint debriefs and what to test next, call get_practice_run_review.
 Use its measured evidence and next test; observed pace trend is not isolated tyre degradation.
-When the driver describes why a lap or stint was unusual, record it with record_lap_observation
-when that tool is offered; without it, say the note was not saved.
-Preserve the driver's meaning and use source=driver; an engineer inference uses source=engineer.
-Resolve the affected lap explicitly: "this lap" is current, "last lap" is previous, numbered laps
-belong to the current timeline, and a named group must be resolved with get_practice_run_review.
-If "that lap" or "that run" is ambiguous, ask which one instead of attaching it to two laps.
-Record a current-lap note even before the lap finishes; the tool preserves the pending reference.
-Exclude a lap from pace only when the driver reports it was compromised or asks to exclude it.
 Traffic, temperature, balance and setup observations alone do not prove an unrepresentative lap.
 Before analysing a lap or segment, retrieve get_lap_observations or get_practice_run_review and
 consider relevant driver and engineer notes alongside measured temperatures and traffic evidence.
@@ -208,21 +200,44 @@ With no_close_following_flag, do not claim telemetry confirmed the driver's traf
 A qualitative note is the driver's evidence, not corroboration from the gap-coverage fields.
 """.strip()
 
+# Saving the driver's lap notes, attached with the practice-notes brief when
+# record_lap_observation is offered; the other line when it is not, so the
+# brief never orders a tool the reply cannot call.
+NOTE_RECORDING_PERSONA = """
+When the driver describes why a lap or stint was unusual, record it with record_lap_observation.
+Preserve the driver's meaning and use source=driver; an engineer inference uses source=engineer.
+Resolve the affected lap explicitly: "this lap" is current, "last lap" is previous, numbered laps
+belong to the current timeline, and a named group must be resolved with get_practice_run_review.
+If "that lap" or "that run" is ambiguous, ask which one instead of attaching it to two laps.
+Record a current-lap note even before the lap finishes; the tool preserves the pending reference.
+Exclude a lap from pace only when the driver reports it was compromised or asks to exclude it.
+""".strip()
+NOTE_NOT_SAVED_PERSONA = (
+    "A lap note cannot be saved on this reply: when the driver describes why a lap or stint "
+    "was unusual, use it as context and say the note was not saved."
+)
+
 # Car setup and handling changes.
 SETUP_PERSONA = """
 For setup advice, state that only the front wing is normally adjustable during a pit stop.
 Full Race, Quali, and Hybrid setup recommendations are for the garage or a future session.
-Only when the generate_setup tool is offered: Use generate_setup with basis reference for a fresh
-circuit baseline, and personalized only when the driver wants applicable live feedback and
-preferences applied. Without that tool, do not describe a reference setup you have not retrieved:
-give one or two changes the live data supports and leave a full setup for the garage. Reference styles
-stable and rotation are separate published starting points, not a ranking of fastest setups.
-State their game, conditions, source and any adaptations. An unavailable reference must not
-be filled with invented wet settings or values from another game. These tools do not change
-the car in the game. Do not promise a lap-time gain or tyre-life multiplier from setup values
-alone, or lower tyre pressure automatically because wear or temperature is high. Suggest one
-or two deliberate changes and use matched Test Engineer runs to evaluate the result.
+Do not promise a lap-time gain or tyre-life multiplier from setup values alone, or lower tyre
+pressure automatically because wear or temperature is high. Suggest one or two deliberate
+changes and use matched Test Engineer runs to evaluate the result.
 """.strip()
+# The setup brief's reference-setup rules, attached only with generate_setup;
+# the other line when it is not offered.
+SETUP_TOOL_PERSONA = """
+Use generate_setup with basis reference for a fresh circuit baseline, and personalized only when
+the driver wants applicable live feedback and preferences applied. Reference styles stable and
+rotation are separate published starting points, not a ranking of fastest setups. State their
+game, conditions, source and any adaptations. An unavailable reference must not be filled with
+invented wet settings or values from another game. The setup tools do not change the car in the game.
+""".strip()
+SETUP_WITHOUT_TOOL_PERSONA = (
+    "Do not describe a reference setup you have not retrieved: give one or two changes the "
+    "live data supports and leave a full setup for the garage."
+)
 
 # Answers built from stored measurements: saved sessions, reference laps and
 # full-field rankings. Attached when the tools that return them are offered.
@@ -471,8 +486,10 @@ def persona_addenda(
     the strategy brief for anything about the stop, the tyres or the plan, the
     driver's own report on the tyres, a declined call (``strategy``) or a red
     flag; the practice-notes brief where the note tools are offered and the
-    session or the request is about runs and notes; the setup brief where
-    setup tools are offered or the request is about the car's setup; and the
+    session or the request is about runs and notes, with its note-saving rules
+    only where record_lap_observation is offered; the setup brief where setup
+    tools are offered or the request is about the car's setup, with its
+    reference-setup rules only where generate_setup is offered; and the
     saved-session provenance contract wherever the tools that return stored
     measurements are offered.
     """
@@ -493,12 +510,20 @@ def persona_addenda(
         )
     ):
         addenda.append(STRATEGY_PERSONA)
+    # A brief that names a tool appears only with that tool, so the same path
+    # always gets the same text and never an order it cannot carry out.
     if _NOTE_TOOLS & set(tool_names) and (
         state.get("mode_profile") == "practice" or has_any_phrase(text, _NOTE_TERMS)
     ):
         addenda.append(PRACTICE_NOTES_PERSONA)
+        addenda.append(
+            NOTE_RECORDING_PERSONA if "record_lap_observation" in tool_names else NOTE_NOT_SAVED_PERSONA
+        )
     if _SETUP_TOOLS & set(tool_names) or has_any_phrase(text, _SETUP_TERMS):
         addenda.append(SETUP_PERSONA)
+        addenda.append(
+            SETUP_TOOL_PERSONA if "generate_setup" in tool_names else SETUP_WITHOUT_TOOL_PERSONA
+        )
     if _SAVED_SESSION_TOOLS & set(tool_names):
         addenda.append(SAVED_SESSION_PERSONA)
     return tuple(addenda)
@@ -4694,12 +4719,15 @@ class EngineerBrain:
         history: list[dict[str, Any]],
         *,
         declined: bool,
+        withheld: frozenset[str] = frozenset(),
     ) -> _RadioRequest:
         """The model request for one driver turn.
 
         ``history`` is the radio before this turn. ask() sends exactly this
         request and compare() replays it, so a provider comparison measures
         the prompt, brief, history and tool set the driver's question gets.
+        ``withheld`` tools are left out of the offered set before the brief is
+        composed, so the brief does not order a tool the request lacks.
         """
         route = self.classify_request(utterance)
         include_strategy = self._is_strategy_request(utterance) or declined
@@ -4732,7 +4760,10 @@ class EngineerBrain:
             f"RECENT RADIO:\n{lines}\n"
             f"DRIVER: {utterance}"
         )
-        tools = self.tools.schemas_for_route(route)
+        tools = [
+            schema for schema in self.tools.schemas_for_route(route)
+            if schema["name"] not in withheld
+        ]
         offered = {schema["name"] for schema in tools}
         call_index = None
         if declined:
@@ -4809,7 +4840,8 @@ class EngineerBrain:
         """
         state = await self.store.snapshot_analysis()
         request = await self._radio_request(
-            utterance, state, list(state.get("radio_log", []))[-8:], declined=False
+            utterance, state, list(state.get("radio_log", []))[-8:], declined=False,
+            withheld=frozenset({"record_lap_observation"}),
         )
         used_strategy = deepcopy(request.strategy_context)
         calls: list[tuple[str, str, str]] = []
@@ -4827,7 +4859,7 @@ class EngineerBrain:
             instructions=request.instructions,
             route=request.route,
             effort=request.effort,
-            tools=[schema for schema in request.tools if schema["name"] != "record_lap_observation"],
+            tools=request.tools,
             execute_tool=execute_tool,
             max_rounds=request.max_rounds,
         )

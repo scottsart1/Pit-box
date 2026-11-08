@@ -9,6 +9,7 @@ and instructions, not a model's wording.
 from __future__ import annotations
 
 import json
+import re
 import time
 from copy import deepcopy
 
@@ -19,6 +20,7 @@ from pitwall.brain import (
     QUESTION_PERSONA,
     SAVED_SESSION_PERSONA,
     SETUP_PERSONA,
+    SETUP_TOOL_PERSONA,
     STRATEGY_PERSONA,
     EngineerBrain,
     compose_persona,
@@ -324,7 +326,7 @@ def test_each_reply_brief_is_attached_where_it_applies():
     assert SAVED_SESSION_PERSONA in persona_addenda(race, "anything", {"compare_laps"})
     # Fixed order: the same path always opens with the same text.
     deep = persona_addenda(race, "talk me through the strategy", {"compare_laps", "generate_setup"})
-    assert deep == (QUESTION_PERSONA, STRATEGY_PERSONA, SETUP_PERSONA, SAVED_SESSION_PERSONA)
+    assert deep == (QUESTION_PERSONA, STRATEGY_PERSONA, SETUP_PERSONA, SETUP_TOOL_PERSONA, SAVED_SESSION_PERSONA)
     composed = compose_persona(PERSONA, "standard", route="deep", addenda=deep)
     assert composed.startswith(PERSONA + "\n\n" + QUESTION_PERSONA)
 
@@ -339,6 +341,50 @@ def test_the_drivers_tyre_report_carries_the_rule_on_feedback_against_the_model(
     addenda = persona_addenda({"mode_profile": "race"}, utterance, {"get_pit_strategy"})
     assert STRATEGY_PERSONA in addenda
     assert "Driver tyre feedback is evidence, not telemetry" in STRATEGY_PERSONA
+
+
+def _ordered_tools(instructions: str, stack) -> set[str]:
+    """Every tool of the telemetry set that the brief names."""
+    names = {schema["name"] for schema in stack[5].schemas()}
+    return {name for name in names if re.search(rf"\b{name}\b", instructions)}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("utterance", [
+    "What front wing should I run for the second stint?",
+    "Should I lower the tyre pressures, the rears are overheating?",
+    "Log that last lap, I got held up by traffic in turn 7.",
+])
+async def test_a_brief_names_only_tools_its_request_offers(stack, monkeypatch, utterance):
+    """The setup brief told a normal-route reply to "Use generate_setup", which
+    only the deep route offers; the practice-notes brief did the same with
+    record_lap_observation on the comparison, which withholds it."""
+    store, brain, captured = await _scripted(stack, monkeypatch, mode_profile="practice", session_type="Practice 2")
+    await brain.ask(utterance)
+    offered = {tool["name"] for tool in captured[-1]["tools"]}
+    assert _ordered_tools(captured[-1]["instructions"], stack) <= offered
+    received: dict = {}
+
+    async def compare(**kwargs):
+        received.update(kwargs)
+        return {"results": {}}
+
+    brain.router.compare = compare
+    await brain.compare(utterance)
+    offered = {tool["name"] for tool in received["tools"]}
+    assert "record_lap_observation" not in offered
+    assert _ordered_tools(received["instructions"], stack) <= offered
+
+
+def test_the_notes_brief_saves_a_note_only_where_it_can():
+    practice = {"mode_profile": "practice"}
+    notes = {"get_practice_run_review", "get_lap_observations", "compare_practice_groups"}
+    without = " ".join(persona_addenda(practice, "log that lap, traffic", notes))
+    assert "record_lap_observation" not in without
+    assert "say the note was not saved" in without
+    offered = " ".join(persona_addenda(practice, "log that lap, traffic", notes | {"record_lap_observation"}))
+    assert "record it with record_lap_observation" in offered
+    assert "say the note was not saved" not in offered
 
 
 @pytest.mark.asyncio
