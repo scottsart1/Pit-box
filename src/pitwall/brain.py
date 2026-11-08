@@ -2302,9 +2302,18 @@ class EngineerBrain:
         trailing = cls._trailing_lookup(words)
         if trailing is not None and cls._is_narrative(trailing[0]):
             return "fast"
+        # A driver refusing the stop has decided, not asked for a plan: "stay
+        # out" in "I'm not boxing, stay out" is the decision, and it took the
+        # planning tier's model, effort and deadline while "I'm not boxing"
+        # took the normal one. The answer to either is the same computed
+        # acknowledgement and next option. A proposal ("I think we should
+        # stay out") still asks for the plan to be weighed.
+        decided = cls._strategy_refusal(utterance) and not has_any_phrase(
+            text, ("should", "i think", "maybe", "perhaps", "what do you think")
+        )
         if (
             has_any_phrase(text, _DEEP_TERMS)
-            or _PIT_DECISION_NOW.search(words)
+            or (_PIT_DECISION_NOW.search(words) and not decided)
             or cls._asks_strategy_hypothetical(text)
             or len(text.split()) >= 32
         ):
