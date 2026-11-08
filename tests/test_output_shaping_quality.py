@@ -13,6 +13,7 @@ import pytest
 
 from pitwall import app as application
 from pitwall.brain import (
+    _PROVIDER_FALLBACK_PREFIXES,
     PERSONA,
     EngineerBrain,
     _limit_radio_sentences,
@@ -385,7 +386,7 @@ async def test_deadline_plan_says_confidence_once_with_spoken_compounds(stack, m
         return _low_confidence_plan()
 
     monkeypatch.setattr(tools, "get_pit_strategy", plan_tool)
-    answer = await brain._strategy_deadline_answer()
+    answer = await brain._strategy_fallback_answer(_PROVIDER_FALLBACK_PREFIXES["deadline"])
     assert "box lap 14 for hards; alternative: box lap 16 for hards" in answer
     assert answer.count("confidence") == 1
     assert "HARD" not in answer

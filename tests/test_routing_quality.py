@@ -151,7 +151,7 @@ async def test_a_pit_question_still_gets_the_computed_plan_when_the_model_times_
     store, brain = await _race(stack)
     _provider_fails(brain, monkeypatch, ProviderFailure("openai", "deadline", "test deadline"))
     answer = await brain.ask(utterance)
-    assert "Engineer analysis timed out; current computed plan: box lap 12 for HARD" in answer
+    assert "Engineer analysis timed out; current computed plan: box lap 12 for hards" in answer
     assert (await store.snapshot_analysis())["llm_model"] == "strategy-deadline-fallback"
 
 
@@ -389,8 +389,8 @@ async def test_every_transient_failure_kind_falls_back_to_the_computed_plan(stac
     store, brain = await _race(stack)
     _provider_fails(brain, monkeypatch, ProviderFailure("openai", kind, "test failure"))
     answer = await brain.ask(REQUEST)
-    assert prefix + "current computed plan: box lap 12 for HARD" in answer, answer
-    assert "alternative: box lap 10 for SOFT, then box lap 16 for SOFT" in answer
+    assert prefix + "current computed plan: box lap 12 for hards" in answer, answer
+    assert "alternative: box lap 10 for softs, then box lap 16 for softs" in answer
     state = await store.snapshot_analysis()
     assert state["llm_provider"] == "local"
     assert state["llm_model"] == "strategy-provider-fallback"
@@ -417,7 +417,7 @@ async def test_a_primary_deadline_is_not_hidden_by_the_fallbacks_later_failure(s
         ProviderFailure("deepseek", "response", "still requesting tools after the final round"),
     )
     answer = await brain.ask(REQUEST)
-    assert "Engineer analysis timed out; current computed plan: box lap 12 for HARD" in answer
+    assert "Engineer analysis timed out; current computed plan: box lap 12 for hards" in answer
     assert (await store.snapshot_analysis())["llm_model"] == "strategy-deadline-fallback"
 
 
