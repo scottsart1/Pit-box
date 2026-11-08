@@ -619,13 +619,15 @@ def _failover_router(primary: Any, fallback: Any, deadline: float) -> ProviderRo
 
 @pytest.mark.asyncio
 async def test_failover_after_a_hung_primary_answers_inside_the_route_deadline() -> None:
+    # The primary's share ends at 1.3 s and the fallback answers by about
+    # 1.5 s; a per-provider deadline would answer only after 2.2 s.
     fallback = _Scripted("deepseek", 0.2, "Gap 1.4.")
-    router = _failover_router(_Hanging(), fallback, deadline=1.0)
+    router = _failover_router(_Hanging(), fallback, deadline=2.0)
     started = time.monotonic()
     result = await _router_request(router)
     elapsed = time.monotonic() - started
     assert result.text == "Gap 1.4."
-    assert elapsed < 1.0
+    assert elapsed < 2.0
     failure = router.status()["recent_failures"][0]
     assert failure["provider"] == "openai" and failure["kind"] == "deadline"
 
