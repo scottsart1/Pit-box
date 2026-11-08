@@ -578,6 +578,10 @@ class Settings(BaseSettings):
     @field_validator(
         "openai_deep_max_output_tokens",
         "openai_deep_retry_max_output_tokens",
+        "openai_normal_max_output_tokens",
+        "openai_normal_retry_max_output_tokens",
+        "custom_llm_normal_max_tokens",
+        "custom_llm_normal_retry_max_tokens",
         "deepseek_deep_max_tokens",
         "deepseek_deep_retry_max_tokens",
         "anthropic_deep_max_tokens",
