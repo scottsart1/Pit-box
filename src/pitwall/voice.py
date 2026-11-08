@@ -15,7 +15,7 @@ from typing import Any
 import numpy as np
 
 from .audio import AudioService
-from .brain import EngineerBrain
+from .brain import DriverCommands, EngineerBrain
 from .config import settings
 from .engineering_context import (
     lap_note_context,
@@ -23,7 +23,7 @@ from .engineering_context import (
     lap_note_task_context,
 )
 from .providers import ProviderRequestError
-from .realtime import RealtimeRadio
+from .realtime import REALTIME_PERSONA, RealtimeRadio
 from .session_guard import SessionChangedError, session_scoped
 from .state import StateStore
 
@@ -166,14 +166,24 @@ class NativeVoiceController:
         # transcribe/reason/synthesise chain stays available as the fallback.
         self.realtime: RealtimeRadio | None = None
         self._realtime_mode_lock = asyncio.Lock()
+        # The last driver turn the speech session stored, so a reply that
+        # fails can be answered on the standard radio without storing it twice.
+        self._realtime_turn: tuple[str, DriverCommands] | None = None
+        self._realtime_recovery_task: asyncio.Task[None] | None = None
         if settings.voice_realtime_enabled:
-            self.realtime = RealtimeRadio(
-                store,
-                brain.tools,
-                on_transcript=self._persist_realtime_transcript,
-                situation_header=self._realtime_header,
-            )
+            self.realtime = self._new_realtime_radio()
         self._load_config()
+
+    def _new_realtime_radio(self) -> RealtimeRadio:
+        return RealtimeRadio(
+            self.store,
+            self.brain.tools,
+            on_transcript=self._persist_realtime_transcript,
+            instructions=self._realtime_instructions,
+            on_driver_turn=self._apply_realtime_commands,
+            on_failed_turn=self._recover_realtime_turn,
+            pit_call=EngineerBrain.spoken_pit_call,
+        )
 
     async def configure_realtime(self, enabled: bool) -> None:
         """Switch voice mode live without opening a billable interaction.
@@ -184,11 +194,7 @@ class NativeVoiceController:
         async with self._realtime_mode_lock:
             if enabled:
                 if self.realtime is None:
-                    self.realtime = RealtimeRadio(
-                        self.store, self.brain.tools,
-                        on_transcript=self._persist_realtime_transcript,
-                        situation_header=self._realtime_header,
-                    )
+                    self.realtime = self._new_realtime_radio()
             else:
                 radio, self.realtime = self.realtime, None
                 if radio is not None:
@@ -196,15 +202,59 @@ class NativeVoiceController:
                 self._wake_armed_until = 0.0
                 await self.store.update(wake_armed=False)
 
-    async def _realtime_header(self) -> str:
-        """Live situation summary handed to the speech session."""
-        return await self.brain.situation_header()
+    async def _realtime_instructions(self) -> str:
+        """The speech session's brief, composed as the text path's is."""
+        return await self.brain.realtime_instructions(REALTIME_PERSONA)
 
     async def _persist_realtime_transcript(self, role: str, text: str) -> None:
         state = await self.store.snapshot_analysis()
         await self.brain.database.save_radio_message(
             state, role, text, "user" if role == "driver" else "response:realtime"
         )
+
+    async def _apply_realtime_commands(self, text: str) -> str | None:
+        """Store what a speech-session driver turn tells the pit wall.
+
+        The same method the text path runs, so a refusal, a strategy lock, a
+        standing instruction or a tyre report means the same thing whichever
+        radio heard it. Returns a note of what was stored for the model.
+        """
+        commands = await self.brain.apply_driver_commands(text)
+        self._realtime_turn = (text, commands)
+        return " ".join(commands.notes) or None
+
+    async def _recover_realtime_turn(self, transcript: str) -> None:
+        """Answer a driver turn whose speech-session reply failed.
+
+        Runs apart from the session's receive loop, which the recovery closes.
+        """
+        if self._realtime_recovery_task and not self._realtime_recovery_task.done():
+            return
+        self._realtime_recovery_task = self.loop.create_task(
+            self._answer_failed_realtime_turn(transcript),
+            name="pitwall-realtime-recovery",
+        )
+
+    async def _answer_failed_realtime_turn(self, transcript: str) -> None:
+        """Give the driver an answer, or a spoken failure, instead of silence.
+
+        The session is closed first, so the standard radio speaks the answer
+        rather than routing it back into the session that just failed. The
+        dashboard keeps the speech session's error unless the standard radio
+        reports one of its own.
+        """
+        failure = str((await self.store.snapshot_live()).get("last_error") or "")
+        radio = self.realtime
+        if radio is not None:
+            await radio.close("reply failed")
+        turn, self._realtime_turn = self._realtime_turn, None
+        if not transcript.strip():
+            await self.speak_text(BRAIN_FALLBACK_LINE)
+        else:
+            recorded = turn[1] if turn is not None and turn[0] == transcript else None
+            await self._run_command(transcript, "realtime fallback", recorded=recorded)
+        if failure and not (await self.store.snapshot_live()).get("last_error"):
+            await self.store.update(last_error=f"{failure}; answered on the standard radio")
 
     @property
     def realtime_active(self) -> bool:
@@ -1231,7 +1281,9 @@ class NativeVoiceController:
             await self.store.update(radio_queue_depth=0, wake_armed=False, radio_indicator="idle")
 
     @session_scoped(raise_on_change=False)
-    async def _run_command(self, command: str, source: str) -> None:
+    async def _run_command(
+        self, command: str, source: str, *, recorded: DriverCommands | None = None
+    ) -> None:
         if getattr(self.store, "usage_event", None):
             self.store.usage_event("voice")
         route = self.brain.classify_request(command)
@@ -1253,7 +1305,7 @@ class NativeVoiceController:
         # Start the actual work before the acknowledgement. The short cached
         # radio response fills the perceived vacuum without adding model time.
         brain_task = self.loop.create_task(
-            self.brain.ask(command),
+            self.brain.ask(command, recorded=recorded) if recorded is not None else self.brain.ask(command),
             name=f"pitwall-brain-{route}",
         )
         ack_task = self.loop.create_task(
@@ -1499,13 +1551,13 @@ class NativeVoiceController:
             return False
 
         # With a conversation already open, route the call through that session
-        # so the engineer never speaks on two audio paths at once.
-        if (
-            self.realtime_active
-            and self.realtime is not None
-            and await self.realtime.say(text)
-        ):
-            return True
+        # so the engineer never speaks on two audio paths at once. Its answer
+        # is final once the session took the line: spoken, or talked over by
+        # the driver. Only a line the session never spoke falls through.
+        if self.realtime_active and self.realtime is not None:
+            spoken = await self.realtime.say(text)
+            if spoken is not None:
+                return spoken
 
         async def first_audio() -> None:
             await self.store.update(
