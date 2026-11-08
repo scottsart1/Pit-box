@@ -351,6 +351,12 @@ async def test_session_events_name_the_driver_and_decode_the_penalty(stack):
     assert next(event for event in everything if event["kind"] == "safety_car")["detail"] == "virtual safety car deployed"
     assert next(event for event in everything if event["kind"] == "retirement")["reason"] == "mechanical failure"
 
+    # SCAR with type "none" comes around a red flag; it is not a safety car.
+    await store.append_event("SCAR", {"safety_car_type": 0, "safety_car": "none",
+                                      "event_type": 3, "event": "resume"})
+    latest = (await tools.call("get_session_events", {"last_n": 1, "types": "safety_car"}))["events"][0]
+    assert latest["detail"] == "resume, no safety car type reported"
+
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(("types", "kinds"), [
