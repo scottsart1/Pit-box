@@ -272,6 +272,9 @@ class RealtimeRadio:
         self._next_clip_origin: dict[str, Any] | None = None
         # A reply the session was asked for that has not been created yet.
         self._reply_requested = False
+        # A lost-transcript note arrived while a reply was open; that reply
+        # was built before the note, so one more is owed once it closes.
+        self._lost_turn_reply_owed = False
         # Between the server hearing the driver start and stop; a reply is
         # created for their turn when they stop.
         self._driver_speaking = False
@@ -491,6 +494,7 @@ class RealtimeRadio:
             self._note_call_results.clear()
             self._next_clip_origin = None
             self._reply_requested = False
+            self._lost_turn_reply_owed = False
             self._driver_speaking = False
             self._call_responses.clear()
             self._turn_transcript = None
@@ -574,6 +578,7 @@ class RealtimeRadio:
             self._closing = False
             self._response_active = False
             self._reply_requested = False
+            self._lost_turn_reply_owed = False
             self._driver_speaking = False
             # A line this session never finished speaking is handed back, so
             # the other audio path can still deliver it.
@@ -655,6 +660,8 @@ class RealtimeRadio:
             self._driver_speaking = True
             self._turn_transcript = None
             self._rerun_pending = False
+            # The reply to this new turn is built with the note in context.
+            self._lost_turn_reply_owed = False
             # The driver has started talking. Drop any engineer audio already
             # queued locally so the interruption is immediate rather than
             # arriving after the buffered sentence finishes, and tell the
@@ -826,8 +833,9 @@ class RealtimeRadio:
             if await self._send_call(held):
                 return True
             self._settle_call(held, None)
-        if self._tool_results_pending:
+        if self._tool_results_pending or self._lost_turn_reply_owed:
             self._tool_results_pending = False
+            self._lost_turn_reply_owed = False
             with contextlib.suppress(Exception):
                 await connection.send({"type": "response.create"})
                 self._reply_requested = True
@@ -1056,10 +1064,14 @@ class RealtimeRadio:
                     "content": [{"type": "input_text", "text": note}],
                 },
             })
-            # The reply to that turn may already be over; the correction is
-            # only worth anything if it is said. An open or requested
-            # response sees the note in its context instead.
-            if not (self._response_active or self._reply_requested or self._driver_speaking):
+            # The correction is only worth anything if it is said. With the
+            # reply to that turn already over, it is asked for now. A reply
+            # still open was built before the note and confirms whatever the
+            # model heard, so one more is asked for when it closes. A driver
+            # already talking again gets a reply built with the note in it.
+            if self._response_active or self._reply_requested:
+                self._lost_turn_reply_owed = True
+            elif not self._driver_speaking:
                 await connection.send({"type": "response.create"})
                 self._reply_requested = True
 
