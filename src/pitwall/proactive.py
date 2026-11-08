@@ -1995,8 +1995,12 @@ class ProactiveEngineer:
         if kind == "strategy_change":
             changed = payload.get("hold_released_reason")
             prefix = f"Your strategy hold is released because {changed}. " if changed else ""
-            return prefix + str(
-                payload.get("instruction", "Strategy has changed; check the dashboard.")
+            # The narrated call carries a low-confidence plan's qualifier, so
+            # the template does too: a provisional plan must not sound firm
+            # because narration was off or timed out.
+            return prefix + EngineerBrain.qualify_strategy_text(
+                str(payload.get("instruction", "Strategy has changed; check the dashboard.")),
+                state.get("strategy", {}),
             )
         if kind == "driver_check":
             laps = int(payload.get("laps_to_window", 2) or 2)
