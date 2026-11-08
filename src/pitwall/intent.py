@@ -202,9 +202,9 @@ _LEADING_FILLERS = (
     "uh", "um", "erm", "er", "hmm", "oh", "ah", "hey", "ok", "okay", "alright",
     "all right", "so", "right", "well", "and", "but", "now", "yeah", "yes", "yep",
     "no", "nope", "please", "look", "listen", "copy", "copy that", "roger",
-    "understood", "got it", "will do", "thanks", "thank you", "cheers", "mate",
-    "quick question", "question", "hypothetically", "just", "then", "also",
-    "actually", "radio",
+    "understood", "got it", "will do", "can do", "thanks", "thank you", "cheers",
+    "mate", "quick question", "question", "just", "then", "also", "actually",
+    "radio",
 )
 
 # Wrappers that turn what follows into a question about it.
@@ -225,9 +225,16 @@ _QUESTION_OPENER = re.compile(
     # they are statements, not inverted questions.
     r"(?:will|would)(?!\s+(?:do|stay|box|pit|push|try|keep|go|stop|come|take|"
     r"manage|save|look|rather|prefer|like)\b)|"
-    r"do(?!\s+not\b)|"
+    # "Do it", "do that" and "do me a favour" are imperatives - "do it" is
+    # how a driver agrees to a plan - while "do we box" asks.
+    r"do(?!\s+(?:not|it|that|this|me|us|so)\b)|"
     r"am\s+i|(?:was|were)\s+" + _SUBJECT + r"|"
-    r"(?:have|has|had)\s+(?:" + _SUBJECT_WORDS + r"|anyone|anybody|someone|somebody)|"
+    # "Have" asks only with a pronoun after it: "have the hards ready" is an
+    # instruction, "have we got enough fuel" a question.
+    r"have\s+(?:we|i|you|they|there|anyone|anybody|someone|somebody)|"
+    r"(?:has|had)\s+(?:" + _SUBJECT_WORDS + r"|anyone|anybody|someone|somebody)|"
+    # A hypothetical asks what would happen; it decides nothing.
+    r"(?:suppose|supposing|imagine|say)\s+(?:we|i)|"
     r"any\s+(?:chance|idea|reason|point|news|word|sign)|"
     r"(?:isn|aren|doesn|didn|shouldn|won|can|wouldn|couldn|haven|hasn)\s*t\s+"
     + _SUBJECT + r")\b"
@@ -239,6 +246,7 @@ _INDIRECT_QUESTION = re.compile(r"^(?:if|whether)\b")
 # Markers that make a sentence a question wherever they fall.
 _QUESTION_MARKER = re.compile(
     r"\b(?:what\s+if|what\s+happens\s+if|what\s+about|whether|"
+    r"hypothetically|theoretically|in\s+theory|"
     r"if\s+(?:i|we)\s+(?:should|shall)|"
     r"(?:should|shall|could|would|can)\s+(?:i|we)|"
     r"do\s+you\s+(?:think|reckon|feel|want)|"
@@ -250,6 +258,13 @@ _QUESTION_MARKER = re.compile(
 _EMPHATIC_TAG = re.compile(
     r"[\s,.;:!-]+(?:ok|okay|alright|all\s+right|got\s+it|understood|copy|"
     r"copy\s+that|clear)\s*\?+\s*$"
+)
+
+# A tag question at the end asks for confirmation even when the transcriber
+# left the "?" off: "we're staying out, aren't we".
+_TAG_QUESTION = re.compile(
+    r"\b(?:isn|aren|don|doesn|didn|won|wouldn|shouldn|can|couldn|haven|hasn)\s*t\s+"
+    r"(?:we|i|it|you|they|he|she|there)$"
 )
 
 # Two pit options offered as a choice: "pit now or stay out", "hards or
@@ -360,7 +375,7 @@ def utterance_mood(text: str) -> str:
     body = normalized.rstrip()
     if body.endswith("?") and not _EMPHATIC_TAG.search(body):
         return "question"
-    if _QUESTION_MARKER.search(core):
+    if _QUESTION_MARKER.search(core) or _TAG_QUESTION.search(core):
         return "question"
     for match in _ALTERNATIVE.finditer(core):
         left = _OPTION_WORDS.get(" ".join(match.group("left").split()))
@@ -373,3 +388,4 @@ def utterance_mood(text: str) -> str:
 def is_question(text: str) -> bool:
     """Whether a driver turn asks rather than tells. See ``utterance_mood``."""
     return utterance_mood(text) == "question"
+

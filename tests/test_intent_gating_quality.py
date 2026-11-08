@@ -484,3 +484,61 @@ def test_the_transcriber_hears_every_name_on_a_full_grid():
     prompt = AudioService.transcription_prompt(names, ["mark"])
     assert "DRIVER19" in prompt and "DRIVER20" in prompt
     assert AudioService._looks_like_prompt_echo("I am not boxing this lap, stay out", prompt) is False
+
+
+# ---------------------------------------------------------------------------
+# Orders that look like questions, and questions that look like orders
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "utterance,mood",
+    [
+        ("do it", "statement"),
+        ("do me a favour and stop telling me about the fuel", "statement"),
+        ("have the hards ready, box lap 22 for hards", "statement"),
+        ("do we box this lap", "question"),
+        ("have we got enough fuel", "question"),
+        ("hypothetically I want to try switching to softs", "question"),
+        ("suppose we box lap 22 for hards", "question"),
+        ("we're staying out, aren't we", "question"),
+    ],
+)
+def test_imperatives_and_hypotheticals_are_told_apart(utterance, mood):
+    assert utterance_mood(utterance) == mood, utterance
+
+
+@pytest.mark.asyncio
+async def test_an_order_to_have_the_tyres_ready_still_locks_the_stop(stack):
+    store, _database, brain = await _brain_mid_race(stack)
+
+    answer = await brain._fast_answer("Have the hards ready, box lap 22 for hards")
+
+    assert answer == "Driver strategy locked: box lap 22 for hards."
+    assert (await store.snapshot_live())["strategy_override"]["next_box_lap"] == 22
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "question",
+    [
+        "hypothetically I want to try switching to softs",
+        "suppose we box lap 22 for hards",
+    ],
+)
+async def test_a_hypothetical_stop_is_not_locked(stack, question):
+    store, _database, brain = await _brain_mid_race(stack)
+
+    answer = await brain._fast_answer(question)
+
+    assert "locked" not in str(answer or "").lower(), (question, answer)
+    assert (await _binding_state(store))["locked"] is False, question
+
+
+@pytest.mark.parametrize(
+    "remark",
+    ["we're staying out, aren't we", "I won't forget the pit stop", "we can't skip the stop"],
+)
+def test_a_tag_question_or_a_promise_is_not_a_refusal(remark):
+    assert EngineerBrain._strategy_refusal(remark) is False, remark
+

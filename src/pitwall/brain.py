@@ -1155,7 +1155,8 @@ class EngineerBrain:
         # a garbled number). Locking the compound alone would let the engine
         # pick its own lap while the driver believes theirs is set, so ask.
         if lap is None and re.search(
-            r"\b(?:box|boxing|pit|pitting|stop|stopping|in|on)\s+(?:on\s+)?lap\b"
+            # "In lap" alone is the lap into the pits ("push on the in lap").
+            r"\b(?:box|boxing|pit|pitting|stop|stopping|on)\s+(?:on\s+)?lap\b"
             r"(?!\s+(?:\d|times?|record|delta|charts?|count|counter)\b)",
             " ".join(re.findall(r"[a-z0-9]+", spoken_numbers_to_digits(text))),
         ):
@@ -1342,8 +1343,8 @@ class EngineerBrain:
         + r"|(?:take|make|do)\s+(?:a\s+|another\s+|any\s+|the\s+)?(?:more\s+)?"
         r"(?:pit\s+)?stops?\b)"
         # Cancelling the stop outright: "skip the stop", "forget the box call"
-        # - but not "don't forget the pit stop".
-        r"|(?<!don t )(?<!dont )(?<!do not )(?<!never )(?<!not )"
+        # - but not "don't forget the pit stop" or "I won't forget the stop".
+        r"|(?<! t )(?<!dont )(?<!wont )(?<!do not )(?<!never )(?<!not )"
         r"\b(?:skip|cancel|forget|scrap|abort|ignore|disregard|avoid)\s+(?:about\s+)?"
         r"(?:the\s+|this\s+|that\s+|our\s+|my\s+|another\s+|any\s+)?(?:pit\s+)?"
         r"(?:stop|stops|box|pit|boxing|pitting|box\s+call|pit\s+call)\b"
