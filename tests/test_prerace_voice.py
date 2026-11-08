@@ -202,6 +202,31 @@ async def test_agreeing_over_the_radio_commits_the_plan(stack) -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "said",
+    ["do it", "yes, do it", "Do it.", "yeah thats fine", "lock it in, jenny"],
+)
+async def test_short_radio_agreements_still_commit_the_plan(stack, monkeypatch, said) -> None:
+    """"Do it" is an order, not the start of a question like "do we box".
+
+    Read as a question, "yes, do it" was handed to the engineer and the plan
+    the driver had just agreed to was never locked. The engineer's name can
+    end the sentence whatever it is set to.
+    """
+    from pitwall.config import settings
+
+    monkeypatch.setattr(settings, "wake_phrase", "jenny")
+    monkeypatch.setattr(settings, "wake_aliases", "")
+    store, _, planner = await _open_discussion(stack)
+
+    briefing = await planner.try_respond(said)
+
+    assert briefing is not None and briefing.get("committed"), said
+    override = (await store.snapshot_analysis())["strategy_override"]
+    assert override["plan_agreed"] is True, said
+
+
+@pytest.mark.asyncio
 async def test_a_radio_check_reaches_the_engineer_and_locks_nothing(stack) -> None:
     from pitwall.brain import EngineerBrain
 

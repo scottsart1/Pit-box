@@ -26,6 +26,7 @@ from __future__ import annotations
 import time
 from typing import Any
 
+from .config import settings
 from .intent import (
     extract_compounds,
     extract_lap,
@@ -71,7 +72,7 @@ QUESTION_PHRASES = (
 # to be made of agreement and plan words only.
 _PLAN_COMPANIONS = frozenset({
     "i", "m", "im", "am", "we", "re", "are", "s", "is", "it", "its", "that",
-    "this", "the", "a", "plan", "strategy", "with", "me", "for", "us", "go",
+    "this", "thats", "the", "a", "plan", "strategy", "with", "me", "for", "us", "go",
     "lets", "let", "in", "please", "thanks", "thank", "mate", "ok", "okay",
     "alright", "right", "then", "and", "so", "good", "great", "fine", "nice",
     "cool", "really", "very", "all", "sounds", "looks", "works", "just", "do",
@@ -80,7 +81,7 @@ _PLAN_COMPANIONS = frozenset({
     "deal", "not", "like", "don", "t", "dont", "something", "else", "another",
     "option", "alternative", "different", "other", "yes", "yeah", "yep", "no",
     "nope", "negative", "copy", "agreed", "agree", "perfect", "confirm",
-    "confirmed", "mark", "marc",
+    "confirmed", "mark", "marc", "but", "make",
 })
 _PLAN_COMPANION_PHRASES = ("thank you", "for me", "with me", "to me")
 _PLAN_WORDS = ("plan", "strategy", "stop", "stops", "tyre", "tire")
@@ -89,7 +90,9 @@ _PLAN_WORDS = ("plan", "strategy", "stop", "stops", "tyre", "tire")
 def _only_plan_talk(text: str) -> bool:
     """Whether every word is agreement, refusal or plan vocabulary."""
     words = f" {strip_leading_fillers(text)} "
-    for phrase in sorted(ACCEPT_PHRASES + REJECT_PHRASES + _PLAN_COMPANION_PHRASES, key=len, reverse=True):
+    # The engineer's name can close the sentence too: "lock it in, Mark".
+    phrases = ACCEPT_PHRASES + REJECT_PHRASES + _PLAN_COMPANION_PHRASES + tuple(settings.wake_phrases)
+    for phrase in sorted(phrases, key=len, reverse=True):
         words = words.replace(f" {phrase} ", " ")
     return all(word in _PLAN_COMPANIONS for word in words.split())
 
