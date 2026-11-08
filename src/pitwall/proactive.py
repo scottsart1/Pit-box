@@ -13,6 +13,7 @@ from . import rain
 from .analysis import fmt_ms
 from .brain import EngineerBrain
 from .config import settings
+from .grounding import lap_counts, place_counts, unsupported
 from .session_guard import session_key, session_scoped
 from .setup_advisor import SetupAdvisor
 from .state import StateStore
@@ -20,6 +21,9 @@ from .strategy import StrategyEngine
 from .voice import NativeVoiceController
 
 log = logging.getLogger(__name__)
+
+# Starts the note a call carries when its template replaced the narration.
+TEMPLATE_SPOKEN = "template spoken: "
 
 # How often the race is looked at, and how often the queue is drained.
 #
@@ -2459,11 +2463,23 @@ class ProactiveEngineer:
         """Turn a deterministic event payload into spoken radio.
 
         The deterministic template is both the safety net and the ground truth:
-        every number the engineer speaks is already in the payload, so narration
-        changes the wording, never the facts. Falling back to the template on any
-        model failure means an unsolicited call is never lost to a timeout.
+        narration may change the wording, never the facts. That is checked, not
+        assumed: a narration that says a number found nowhere in what the model
+        was shown (the situation header and the call's facts) or in the
+        template is replaced by the template. Falling back to the template on
+        any model failure means an unsolicited call is never lost to a timeout.
+        Whenever the template replaces a narration, the call records why, so
+        the saved call says which words the driver heard.
         """
         fallback = self._fallback_text(event, state)
+        # A call worded again after a requeue starts with a clean record.
+        event.pop("narration_rejected", None)
+        event.pop("narration_evidence", None)
+        if event.get("blocked_reasons"):
+            event["blocked_reasons"] = [
+                reason for reason in event["blocked_reasons"]
+                if not str(reason).startswith(TEMPLATE_SPOKEN)
+            ]
         if not settings.proactive_narration_enabled:
             return fallback
         if event.get("flash"):
@@ -2479,14 +2495,64 @@ class ProactiveEngineer:
             )
         except Exception as exc:
             log.debug("Proactive narration fell back to the template: %s", exc)
+            event.pop("narration_evidence", None)
+            self._template_replaced_narration(event, f"narration failed ({type(exc).__name__})")
             return fallback
+        evidence = event.pop("narration_evidence", None)
         spoken = " ".join((spoken or "").split())
         if event.get("type") == "driver_check" and not spoken.endswith("?"):
             # The call exists to hear the driver's tyre read, and only a call
             # that ends on its question opens the reply window. A narration
             # that lost or moved the question is replaced by the template.
+            self._template_replaced_narration(event, "narration lost its question")
             return fallback
-        return spoken or fallback
+        if not spoken:
+            self._template_replaced_narration(event, "narration was empty")
+            return fallback
+        if isinstance(evidence, str):
+            # The template's own numbers count as evidence: it is computed
+            # from the same state, so "two laps" or a count it works out are
+            # numbers the call is entitled to say.
+            payload = event.get("payload") or {}
+            invented = unsupported(
+                spoken,
+                evidence,
+                fallback,
+                laps=lap_counts(
+                    state.get("current_lap"),
+                    state.get("total_laps"),
+                    (state.get("strategy") or {}).get("recommended") or {},
+                    state.get("strategy_hold") or {},
+                    payload,
+                ),
+                places=place_counts(
+                    state.get("player_position"),
+                    {"active_cars": state.get("active_cars")},
+                    payload,
+                ),
+            )
+            if invented:
+                said = ", ".join(dict.fromkeys(number.text for number in invented))
+                reason = f"narration said {said}, which its facts do not contain"
+                log.info("Proactive %s narration replaced by its template: %s", event.get("type"), reason)
+                self._template_replaced_narration(event, reason)
+                return fallback
+        return spoken
+
+    @staticmethod
+    def _template_replaced_narration(event: dict[str, Any], reason: str) -> None:
+        """Record on the call why its template was spoken instead of the narration.
+
+        The note joins the call's blocked reasons, which the saved call keeps.
+        For a call that was sent to the model, a saved record without the note
+        means the driver heard the model's words; flag calls and calls made
+        with narration off are never sent.
+        """
+        event["narration_rejected"] = reason
+        note = f"{TEMPLATE_SPOKEN}{reason}"
+        reasons = event.setdefault("blocked_reasons", [])
+        if note not in reasons:
+            reasons.append(note)
 
     def _select(self, state: dict[str, Any]) -> dict[str, Any] | None:
         """Drop irrelevant calls, then pick the most important speakable one.
