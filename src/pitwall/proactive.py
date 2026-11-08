@@ -1297,7 +1297,14 @@ class ProactiveEngineer:
         return None
 
     def _is_urgent(self, event: dict[str, Any]) -> bool:
-        """A FLASH or critical call: a flag, a penalty, damage, a safety car."""
+        """A FLASH or critical call: a flag, a penalty, damage, a safety car.
+
+        A call the driver talked over is not urgent on its way back: they keyed
+        the radio to say something, so it waits for the whole exchange rather
+        than cutting in between their question and the answer.
+        """
+        if event.get("cut_short"):
+            return False
         return bool(event.get("flash")) or self._priority_of(event) <= CRITICAL
 
     @staticmethod
@@ -2991,14 +2998,38 @@ class ProactiveEngineer:
 
     async def _speak(self, event: dict[str, Any], text: str, state: dict[str, Any]) -> None:
         delivered = False
+        come_back = False
         # A flag call spoken into the reply window after the engineer's own
         # question gives the driver the whole window back afterwards.
         window_was_open = bool(getattr(self.voice, "reply_window_armed", False))
+        cuts_before = getattr(self.voice, "speech_cut_count", None)
         try:
             delivered = await self.voice.speak_text(text)
         finally:
-            event["delivery_outcome"] = "delivered" if delivered else "voice delivery failed"
+            cut = (
+                not delivered
+                and isinstance(cuts_before, int)
+                and int(getattr(self.voice, "speech_cut_count", 0) or 0) > cuts_before
+            )
+            if delivered:
+                event["delivery_outcome"] = "delivered"
+            elif cut:
+                # The driver keyed the radio over it. A flag, penalty or damage
+                # call goes back once, to be said after their exchange if it is
+                # still true then; routine news cut short is not repeated.
+                come_back = self._is_urgent(event) and not event.get("cut_short")
+                event["delivery_outcome"] = (
+                    "cut short by the driver; requeued" if come_back
+                    else "cut short by the driver"
+                )
+            else:
+                event["delivery_outcome"] = "voice delivery failed"
             await self.database.save_proactive_call(state, event, text, delivered)
+        if come_back:
+            event["cut_short"] = True
+            event.pop("delivery_outcome", None)
+            self._requeue(event, "cut short by the driver", counted=False)
+            return
         if delivered:
             self._last_spoken_at = time.monotonic()
             self._last_spoken_text = text
