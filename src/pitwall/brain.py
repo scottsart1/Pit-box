@@ -4289,10 +4289,18 @@ class EngineerBrain:
         # gets the plan's confidence in the header and the qualifier on the
         # sentence that restates the plan, as the strategy calls themselves do.
         strategy_call = kind in strategy_events or carries_plan
-        prompt = (
+        # Everything the call may take a number from. The radio history below
+        # is context, not evidence: its numbers are earlier calls, not the
+        # current state. Left on the event so delivery can check the
+        # narration's numbers against exactly what the model was shown.
+        evidence = (
             f"{await self._header(include_strategy=strategy_call)}\n"
             f"{hold_line}"
-            f"PROACTIVE EVENT: {json.dumps(facts, ensure_ascii=False)}\n"
+            f"PROACTIVE EVENT: {json.dumps(facts, ensure_ascii=False)}"
+        )
+        event["narration_evidence"] = evidence
+        prompt = (
+            f"{evidence}\n"
             f"{_RADIO_LABELS_NOTE}\n"
             f"RECENT ENGINEER CALLS: {json.dumps(recent_engineer, ensure_ascii=False)}\n"
             f"RECENT DRIVER RADIO: {json.dumps(recent_driver, ensure_ascii=False)}"
