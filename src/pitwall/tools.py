@@ -833,8 +833,11 @@ class TelemetryTools:
             vehicle = {
                 "full": "safety car", "virtual": "virtual safety car",
                 "formation": "formation lap safety car",
-            }.get(str(payload.get("safety_car")), "safety car")
-            record["detail"] = f"{vehicle} {payload.get('event') or 'event unknown'}"
+            }.get(str(payload.get("safety_car")))
+            phase = payload.get("event") or "event unknown"
+            # The game also sends type "none" (around a red flag); that is not
+            # a safety car and must not be spoken as one.
+            record["detail"] = f"{vehicle} {phase}" if vehicle else f"{phase}, no safety car type reported"
         elif code == "RTMT":
             record["driver"] = car(payload.get("vehicle_idx"))
             record["reason"] = label(RETIREMENT_REASONS, payload.get("reason"))
