@@ -494,6 +494,11 @@ class SessionState:
         default_factory=lambda: [DriverState(i) for i in range(24)]
     )
     radio_log: list[dict[str, str]] = field(default_factory=list)
+    # Moves forward on every change to radio_log, including when a flashback
+    # or a new session clears it, and never goes back. Live frames carry only
+    # the newest 40 entries, so once the log is longer their length stops
+    # changing; the dashboards redraw the radio panels when this moves instead.
+    radio_seq: int = 0
     events_log: list[dict[str, Any]] = field(default_factory=list)
     traces: list[dict[str, Any]] = field(default_factory=list)
     # Completed laps are summaries only. Full traces are passed once through
@@ -611,6 +616,7 @@ class StateStore:
             strategy_risk_appetite=str(previous.strategy_risk_appetite),
             standing_instructions=copy.deepcopy(previous.standing_instructions),
             state_revision=previous.state_revision + 1,
+            radio_seq=previous.radio_seq + 1,
         )
         self._packet_times.clear()
         self._delta_ref = []
@@ -666,6 +672,7 @@ class StateStore:
                 self.state.current_lap_started.clear()
                 self.state.completed_laps.clear()
                 self.state.radio_log.clear()
+                self.state.radio_seq += 1
                 self.state.briefings.clear()
                 self.state.analysis.clear()
                 # New questions after a rewind must not quote the abandoned
@@ -1404,6 +1411,7 @@ class StateStore:
                     return False
             self.state.radio_log.append({"role": role, "text": text})
             self.state.radio_log = self.state.radio_log[-100:]
+            self.state.radio_seq += 1
         if role == "engineer" and text and self.usage_event:
             self.usage_event("engineer")
         return True

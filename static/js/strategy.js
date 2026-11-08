@@ -26,7 +26,8 @@ const view = {
   rivals: null,
   rivalsFetchedAt: 0,
   logSignature: "",
-  radioLength: -1,
+  radioSeq: -1,
+  radioShown: [],
 };
 
 function esc(value) {
@@ -673,15 +674,34 @@ function handleTimelineClick(event) {
 
 /* ---- Strategy radio ------------------------------------------------------- */
 
-function renderRadio(s) {
-  const log = s.radio_log || [];
-  if (log.length === view.radioLength) return;
-  view.radioLength = log.length;
+function paintRadio(entries) {
   const node = byId("stratRadio");
-  node.textContent = log.length
-    ? log.map((x) => `${x.role === "driver" ? i18n.t("DRIVER") : i18n.t("ENGINEER")}: ${x.text}`).join("\n\n")
+  node.textContent = entries.length
+    ? entries.map((x) => `${x.role === "driver" ? i18n.t("DRIVER") : i18n.t("ENGINEER")}: ${x.text}`).join("\n\n")
     : i18n.t("Engineer standing by.");
   node.scrollTop = node.scrollHeight;
+}
+
+/* Live frames carry only the newest 40 radio entries, so once the log is
+   longer their length stops changing. radio_seq moves on every entry, so the
+   panel keeps following the conversation for the whole session. */
+function renderRadio(s) {
+  const log = s.radio_log || [];
+  const seq = s.radio_seq ?? log.length;
+  if (seq === view.radioSeq) return;
+  view.radioSeq = seq;
+  view.radioShown = log;
+  paintRadio(log);
+}
+
+/* The answer to a typed question is also in the radio log, and the next frame
+   redraws the panel from it. Show it now unless that frame got here first:
+   the redraw replaces this line, so the answer appears once either way. */
+function showAskReply(reply) {
+  const text = String(reply ?? "");
+  if (!text || view.radioShown.some((x) => x.role === "engineer" && x.text === text)) return;
+  view.radioShown = [...view.radioShown, { role: "engineer", text }];
+  paintRadio(view.radioShown);
 }
 
 async function sendAsk() {
@@ -690,7 +710,8 @@ async function sendAsk() {
   if (!text) return;
   input.value = "";
   try {
-    await post("/api/ask", { text });
+    const answer = await post("/api/ask", { text });
+    showAskReply(answer.reply);
   } catch (error) {
     byId("stratPlanStatus").textContent = String(error.message || error);
     byId("stratPlanStatus").dataset.tone = "error";
@@ -965,4 +986,4 @@ if (HAS_DOM) {
   });
 }
 
-export { planKey, describeEvidence, renderCall, renderPlans, loadDecisionLog, COMPOUND_COLORS };
+export { planKey, describeEvidence, renderCall, renderPlans, loadDecisionLog, renderRadio, sendAsk, COMPOUND_COLORS };
