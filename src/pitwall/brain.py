@@ -1287,6 +1287,10 @@ class EngineerBrain:
     def _is_cars_ahead_request(cls, utterance: str) -> bool:
         return any(cls._CARS_AHEAD_REQUEST.fullmatch(form) for form in _request_forms(utterance))
 
+    # "How are the tyres" is how a driver asks for tyre condition, and the
+    # tyre-condition readout answers it.
+    _TYRE_CONDITION_QUESTION = r"how (?:are|re|s)(?: my| the)? (?:tyres|tires)"
+
     # Each form is a complete request for one value that a fast-path branch
     # answers. The everyday wordings are listed, not only the clipped radio
     # ones: "what's the gap ahead" and "are we OK on fuel" went to the model,
@@ -1305,6 +1309,7 @@ class EngineerBrain:
         r"(?:is |what is |what s )?(?:my |the )?(?:overtake mode|active aero)(?: available| active| status)?|"
         r"(?:what are |what s |what is )?(?:my |the )?(?:last (?:(?:two|three|[1-9]) )?laps?(?: time)?|tyre temperatures|tire temperatures)|"
         r"(?:what tyres|what tires)(?: am i on| are we on)?|"
+        + _TYRE_CONDITION_QUESTION + r"(?: looking| doing| holding up)?|"
         r"how many (?:warnings|penalties) do i have|(?:any|check|report) (?:damage|warnings|penalties)|damage report|"
         r"(?:lap last time|last lap(?: time)?|lap time) of the car (?:ahead|in front)|"
         r"(?:weather|rain) (?:forecast|risk|update)|"
@@ -2439,7 +2444,7 @@ class EngineerBrain:
             (("fuel", "battery", "ers", "manual override", "overtake"), (7,), "Fuel or battery telemetry"),
             (("active aero",), (16,), "Active Aero telemetry"),
             (("tyre temperatures", "tire temperatures"), (6,), "Tyre temperatures"),
-            (("what tyres", "what tires", "tyre condition", "tire condition"), (7, 10, 6), "Tyre condition telemetry"),
+            (("tyres", "tires", "tyre condition", "tire condition"), (7, 10, 6), "Tyre condition telemetry"),
             (("weather", "rain"), (1,), "Weather telemetry"),
             (("damage",), (10,), "Damage telemetry"),
             (("position", "place", "where am i running", "gap", "cars ahead", "car ahead", "car behind", "warnings", "penalties", "time check"), (2,), "Timing telemetry"),
@@ -3071,7 +3076,9 @@ class EngineerBrain:
         ):
             return f"Timing currently reports P{int(state.get('player_position', 0))}."
 
-        if has_any_phrase(text, ("what tyres", "what tires", "tyre condition", "tire condition")):
+        if has_any_phrase(text, ("what tyres", "what tires", "tyre condition", "tire condition")) or re.search(
+            rf"\b{self._TYRE_CONDITION_QUESTION}\b", _plain_words(utterance)
+        ):
             tyre = state.get("tyre", {})
             wear = [float(value) for value in tyre.get("wear", [0, 0, 0, 0])]
             temps_c = [float(value) for value in tyre.get("inner_temps_c", [0, 0, 0, 0])]
