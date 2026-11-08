@@ -943,6 +943,37 @@ def _pit_call_index(sentences: list[str]) -> int | None:
     return None
 
 
+def _plan_call_index(sentences: list[str], recommended: dict[str, Any], current_lap: int) -> int | None:
+    """Which sentence restates the plan's own call, when the call is about
+    something else.
+
+    A rival's stop, a penalty to serve or a progress update carries the plan
+    alongside its own news, and its first "stop" or "box" is usually that
+    news: "Stop-go penalty outstanding", "Hamilton has made his stop". The
+    plan's call names its lap ("box lap 14", "box this lap"), or, for a plan
+    that makes no stop, says stay out. A question is never the call.
+    """
+    staying = str(recommended.get("instruction") or "").lower().startswith("stay out")
+    try:
+        box_lap = int(recommended["box_lap"]) if recommended.get("box_lap") is not None else None
+    except (TypeError, ValueError):
+        box_lap = None
+    for index, sentence in enumerate(sentences):
+        if sentence.endswith("?"):
+            continue
+        if staying and re.search(r"\bstay(?:ing)? out\b", sentence, re.IGNORECASE):
+            return index
+        if box_lap is None:
+            continue
+        if _PIT_CALL.search(sentence) and re.search(rf"\blap {box_lap}\b(?![\d:])", sentence, re.IGNORECASE):
+            return index
+        if box_lap <= current_lap + 1 and re.search(
+            r"\b(?:box|pit)\b.*\b(?:this|next) lap\b", sentence, re.IGNORECASE
+        ):
+            return index
+    return None
+
+
 def _states_change_condition(text: str, condition: str) -> bool:
     """Whether the reply already gives its own condition, in one clause, naming
     one of the triggers in the plan's condition."""
@@ -995,6 +1026,29 @@ class EngineerBrain:
             return text
         sentences = _radio_sentences(text)
         target = _pit_call_index(sentences)
+        if target is None:
+            return text
+        sentences[target] = sentences[target].rstrip(".!") + f"; {qualifier}."
+        return " ".join(sentences)
+
+    @staticmethod
+    def _qualify_plan_call(
+        text: str, plan: dict[str, Any] | None, call: dict[str, Any], current_lap: int
+    ) -> str:
+        """The low-confidence qualifier on the sentence that restates the plan.
+
+        For a call whose news is something else and which carries the plan's
+        call (``call``, as the radio words it) alongside. qualify_strategy_text
+        picks the first sentence with a call word, which there is often the
+        news itself, and "Stop-go penalty outstanding; provisional, confidence
+        low" makes a penalty sound provisional. Without a sentence that
+        restates the plan's call, there is nothing to qualify.
+        """
+        qualifier = EngineerBrain._strategy_qualifier(plan)
+        if qualifier is None or _STATED_UNCERTAINTY.search(text):
+            return text
+        sentences = _radio_sentences(text)
+        target = _plan_call_index(sentences, call, current_lap)
         if target is None:
             return text
         sentences[target] = sentences[target].rstrip(".!") + f"; {qualifier}."
@@ -4021,8 +4075,8 @@ class EngineerBrain:
             else ""
         )
         # A call that carries the plan (a rival stopping, a penalty to serve)
-        # gets the plan's confidence in the header and the qualifier on its
-        # pit call, as the strategy calls themselves do.
+        # gets the plan's confidence in the header and the qualifier on the
+        # sentence that restates the plan, as the strategy calls themselves do.
         strategy_call = kind in strategy_events or carries_plan
         prompt = (
             f"{await self._header(include_strategy=strategy_call)}\n"
@@ -4034,7 +4088,11 @@ class EngineerBrain:
         )
         # While the driver's hold runs the call must not restate the plan, so
         # there is no pit call to qualify.
-        is_strategy_call = strategy_call and not hold.get("active")
+        is_strategy_call = kind in strategy_events and not hold.get("active")
+        # Where the plan only rides along, the first "stop" or "box" in the
+        # call is usually its own news (the penalty, the rival's stop), so
+        # only a sentence that restates the plan's call is qualified.
+        plan_rides_along = strategy_call and not is_strategy_call and not hold.get("active")
         text = await self._run(
             prompt,
             settings.reasoning_effort,
@@ -4054,6 +4112,10 @@ class EngineerBrain:
             # when the engineer raises it himself.
             strategy_context=state.get("strategy", {}) if is_strategy_call else None,
         )
+        if plan_rides_along:
+            text = self._qualify_plan_call(
+                text, state.get("strategy", {}) or {}, carried, int(state.get("current_lap", 0) or 0)
+            )
         # Deliberately not recorded here. An unsolicited call is only part of the
         # conversation once it has actually been spoken, and delivery can still
         # fail or be cancelled after this returns. Recording it eagerly put lines

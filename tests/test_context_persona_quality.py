@@ -240,6 +240,44 @@ async def test_a_volunteered_rival_stop_call_carries_the_plan_confidence_and_qua
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("kind,payload,reply,spoken", [
+    # The penalty is a fact, not a provisional projection.
+    ("penalty_service", {"drive_through": 0, "stop_go": 1, "serve_at_stop": False},
+     "Stop-go penalty outstanding. Serve it within the game deadline.",
+     "Stop-go penalty outstanding. Serve it within the game deadline."),
+    ("penalty_service", {"drive_through": 1, "stop_go": 0, "serve_at_stop": False},
+     "Drive-through penalty outstanding. Do not combine it with the tyre stop.",
+     "Drive-through penalty outstanding. Do not combine it with the tyre stop."),
+    # The rival's stop is his; the plan's own call is the one qualified.
+    ("rival_pitted", {"driver": "HAMILTON", "position": 6, "tyre": "HARD", "gap_to_player_s": 1.8},
+     "Hamilton has made his stop for hards. We box lap 14 for hards.",
+     "Hamilton has made his stop for hards. We box lap 14 for hards; provisional, confidence low, "
+     "tyre estimates include track defaults."),
+    # Coaching that says "stop" is not a pit call.
+    ("progress_update", {"lap": 12, "mode_profile": "race", "progress": {}, "target": {"target": "1:31.000"},
+                         "racing_line": {}, "qualifying": {}, "gaps": {}},
+     "Lap 12, on target. Stop braking so early into turn 3.",
+     "Lap 12, on target. Stop braking so early into turn 3."),
+    # A plan the stop guard turned into "stay out" is restated as staying out.
+    ("rival_pitted", {"driver": "HAMILTON", "position": 6, "tyre": "HARD", "gap_to_player_s": 1.8,
+                      "instruction_override": "Stay out — boxing costs you 6 places and gains nothing."},
+     "Hamilton has made his stop. We stay out, a stop costs six places.",
+     "Hamilton has made his stop. We stay out, a stop costs six places; provisional, confidence low, "
+     "tyre estimates include track defaults."),
+])
+async def test_a_plan_that_rides_along_qualifies_only_the_plans_own_call(stack, monkeypatch, kind, payload, reply, spoken):
+    store, brain, captured = await _scripted(stack, monkeypatch, reply, strategy=_plan(), lap=12)
+    plan = dict((await store.snapshot_analysis())["strategy"]["recommended"])
+    payload = dict(payload)
+    if "instruction_override" in payload:
+        # As _spoken_advice queues it: the plan with the radio's wording.
+        plan["instruction"] = payload.pop("instruction_override")
+    assert await brain.proactive({"type": kind, "payload": {**payload, "strategy": plan}}) == spoken
+    # The confidence is still in front of the narrator.
+    assert "plan confidence low" in captured[0]["prompt"]
+
+
+@pytest.mark.asyncio
 async def test_the_narration_brief_orders_no_tools_and_says_so(stack, monkeypatch):
     _, brain, captured = await _scripted(stack, monkeypatch, "Rears at seventy.", strategy=_plan())
     await brain.proactive({"type": "tyre_wear", "payload": {"wear_fl_fr_rl_rr": [55, 56, 70, 66]}})
