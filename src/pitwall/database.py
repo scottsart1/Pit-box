@@ -2393,13 +2393,18 @@ class PitWallDatabase:
         track_id: int | None = None,
         session_uid: int | None = None,
         limit: int = 50,
+        *,
+        include_traces: bool = False,
     ) -> dict[str, Any]:
+        """Stored history. ``include_traces`` adds each answer's trace, for the
+        session export; the dashboard listing and the history tool leave it out."""
         async with self._lock:
             return await asyncio.to_thread(
                 self._history_query_sync,
                 track_id,
                 session_uid,
                 max(1, min(250, int(limit))),
+                include_traces,
             )
 
     def _history_query_sync(
@@ -2407,6 +2412,7 @@ class PitWallDatabase:
         track_id: int | None,
         session_uid: int | None,
         limit: int,
+        include_traces: bool = False,
     ) -> dict[str, Any]:
         clauses: list[str] = []
         params: list[Any] = []
@@ -2454,14 +2460,23 @@ class PitWallDatabase:
                 _restore_session_uid(dict(row))
                 for row in db.execute(
                     "SELECT id, session_uid, track_id, lap_num, role, text, source, "
-                    "label, created_at, trace_json IS NOT NULL AS has_trace "
-                    f"FROM radio_messages{where} "
+                    "label, created_at, trace_json IS NOT NULL AS has_trace"
+                    + (", trace_json " if include_traces else " ")
+                    + f"FROM radio_messages{where} "
                     "ORDER BY created_at DESC LIMIT ?",
                     (*params, limit),
                 ).fetchall()
             ]
             for item in radio:
                 item["has_trace"] = bool(item["has_trace"])
+                if include_traces:
+                    # The export is the one file-based copy of a session; a row
+                    # flagged has_trace there must carry the trace itself.
+                    raw = item.pop("trace_json", None)
+                    try:
+                        item["trace"] = json.loads(raw) if raw else None
+                    except (TypeError, ValueError):
+                        item["trace"] = None
             proactive = [
                 _restore_session_uid(dict(row))
                 for row in db.execute(
