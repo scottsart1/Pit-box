@@ -134,6 +134,14 @@ async def test_a_plan_question_with_an_acknowledgement_is_answered_not_committed
 
 
 @pytest.mark.asyncio
+async def test_a_spoken_lap_number_moves_the_stop(stack) -> None:
+    _, _, planner = await _open_discussion(stack)
+    briefing = await planner.try_respond("box on lap twenty two")
+    assert briefing is not None
+    assert briefing["proposal"]["box_laps"][0] == 22
+
+
+@pytest.mark.asyncio
 async def test_nothing_is_taken_when_no_discussion_is_open(stack) -> None:
     store, _, strategy, _, _, _ = stack
     await store.mutate(_on_the_grid)

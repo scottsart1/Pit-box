@@ -14,9 +14,15 @@ from __future__ import annotations
 
 import pytest
 
+from pitwall.audio import RACING_VOCAB, AudioService
 from pitwall.brain import EngineerBrain
 from pitwall.config import settings
-from pitwall.intent import is_question, utterance_mood
+from pitwall.intent import (
+    extract_lap,
+    is_question,
+    spoken_numbers_to_digits,
+    utterance_mood,
+)
 from pitwall.proactive import ProactiveEngineer
 
 
@@ -421,3 +427,60 @@ def test_a_question_about_the_session_does_not_lock_it():
     for question in ("so this is the race?", "this is qualifying, right?"):
         assert EngineerBrain._manual_session_override_mode(question) is None, question
     assert EngineerBrain._manual_session_override_mode("this is qualifying") == "qualifying"
+
+
+# ---------------------------------------------------------------------------
+# Spoken lap and position numbers
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "command,lap",
+    [
+        ("box lap twenty two for hards", 22),
+        ("box lap twenty for hards", 20),
+        ("box lap twenty-five for mediums", 25),
+    ],
+)
+async def test_a_spoken_lap_number_is_locked_as_the_lap(stack, command, lap):
+    store, _database, brain = await _brain_mid_race(stack)
+
+    answer = await brain._fast_answer(command)
+
+    assert f"box lap {lap}" in str(answer).lower(), answer
+    override = (await store.snapshot_live())["strategy_override"]
+    assert override["next_box_lap"] == lap
+    assert override["locked"] is True
+
+
+@pytest.mark.asyncio
+async def test_a_lap_that_could_not_be_read_is_asked_for_not_guessed(stack):
+    store, _database, brain = await _brain_mid_race(stack)
+
+    answer = await brain._fast_answer("box lap for hards")
+
+    assert answer.startswith("Which lap for the hards?"), answer
+    assert (await _binding_state(store))["locked"] is False
+
+
+def test_number_words_are_read_only_where_they_name_a_lap_or_position():
+    assert extract_lap("box on lap number twenty one", 18) == 21
+    assert extract_lap("last lap two tenths quicker", 18) is None
+    assert spoken_numbers_to_digits("let's do the one stop") == "let's do the one stop"
+    assert spoken_numbers_to_digits("box in two laps") == "box in 2 laps"
+    assert spoken_numbers_to_digits("in one stop") == "in one stop"
+    assert EngineerBrain._driver_position_claim("I am in P five") == 5
+    assert EngineerBrain._driver_position_claim("we are in position eleven") == 11
+
+
+def test_the_transcriber_is_steered_towards_the_words_commands_use():
+    assert {"softs", "stay out", "lift and coast", "front wing"} <= set(RACING_VOCAB)
+
+
+def test_the_transcriber_hears_every_name_on_a_full_grid():
+    # Empty car slots at the front of the list pushed the last cars out.
+    names = ["PLAYER", "", "", "Unknown"] + [f"DRIVER{index}" for index in range(21)]
+    prompt = AudioService.transcription_prompt(names, ["mark"])
+    assert "DRIVER19" in prompt and "DRIVER20" in prompt
+    assert AudioService._looks_like_prompt_echo("I am not boxing this lap, stay out", prompt) is False

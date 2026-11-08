@@ -13,9 +13,13 @@ from openai import AsyncOpenAI
 from .config import settings
 
 
+# Words the transcriber should spell the way the intent layer reads them.
+# "Softs" and "stay out" drive deterministic strategy commands, so a
+# mishearing there changes what the engineer does, not just what he says.
 RACING_VOCAB = (
     "box",
     "pit",
+    "stay out",
     "undercut",
     "overcut",
     "overtake mode",
@@ -27,11 +31,18 @@ RACING_VOCAB = (
     "degradation",
     "safety car",
     "virtual safety car",
+    "lift and coast",
+    "front wing",
+    "softs",
     "mediums",
     "hards",
     "inters",
     "wets",
 )
+
+# A full grid. Names are filtered before the cap, so empty car slots no longer
+# push the last cars on the grid out of the prompt.
+_PROMPT_DRIVER_LIMIT = 22
 
 # What a transcriber returns when it was handed silence or room noise rather
 # than speech. These are subtitle-corpus artefacts, not driver radio, so a clip
@@ -236,9 +247,13 @@ class AudioService:
         while removing the invitation to insert one.
         """
         names = ", ".join(
-            name
-            for name in (driver_names or [])[:20]
-            if name and name != "Unknown"
+            list(
+                dict.fromkeys(
+                    name
+                    for name in (driver_names or [])
+                    if name and name != "Unknown"
+                )
+            )[:_PROMPT_DRIVER_LIMIT]
         )
         parts: list[str] = []
         if wake_phrases:
