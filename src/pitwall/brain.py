@@ -1223,6 +1223,33 @@ class EngineerBrain:
         compound = recommended.get("fit_compound")
         if box_lap is None or not compound:
             return str(recommended.get("instruction") or "Stay out to the finish.")
+        override = EngineerBrain._strategy_guard_override(recommended, current_lap, tyre)
+        if override is not None:
+            return override
+        box_lap = int(box_lap)
+        if box_lap <= current_lap:
+            return f"Box this lap for {str(compound).lower()}s."
+        return f"Box lap {box_lap} for {str(compound).lower()}s."
+
+    @staticmethod
+    def _strategy_guard_override(
+        recommended: dict[str, Any],
+        current_lap: int,
+        tyre: dict[str, Any] | None = None,
+    ) -> str | None:
+        """The stay-out sentence when the plan's own numbers rule out its stop.
+
+        Returns None when neither guard applies, so a caller that has better
+        wording of its own (the mandatory-compound or disqualification text)
+        keeps it. Shared with the unsolicited radio so a driver never hears
+        "Stay out" when asking and "Box this lap" from the next flag call.
+        """
+        if recommended.get("action") == "red_flag_tyre_change":
+            return None
+        box_lap = recommended.get("box_lap")
+        compound = recommended.get("fit_compound")
+        if box_lap is None or not compound:
+            return None
         # Never voice a stop the model itself says is not worth making.
         #
         # From a real race, lap 33 of 37, the driver running P7 on mediums at
@@ -1262,7 +1289,10 @@ class EngineerBrain:
         except (TypeError, ValueError):
             pass
 
-        box_lap = int(box_lap)
+        try:
+            box_lap = int(box_lap)
+        except (TypeError, ValueError):
+            return None
         if box_lap <= current_lap:
             # Never tell a driver to pit for the tyre they are already on and
             # have only just fitted. In a real race this was said on lap 33 of
@@ -1278,8 +1308,7 @@ class EngineerBrain:
                 and age <= EngineerBrain._JUST_FITTED_LAPS
             ):
                 return "Stay out — you're on fresh " + str(compound).lower() + "s."
-            return f"Box this lap for {str(compound).lower()}s."
-        return f"Box lap {box_lap} for {str(compound).lower()}s."
+        return None
 
     @classmethod
     def _drivers_named_in_request(
@@ -2622,19 +2651,37 @@ class EngineerBrain:
 
     async def proactive(self, event: dict[str, Any]) -> str:
         state = await self.store.snapshot_analysis()
+        recent_log = state.get("radio_log", [])[-8:]
         recent_engineer = [
             entry["text"]
-            for entry in state.get("radio_log", [])[-8:]
+            for entry in recent_log
             if entry.get("role") == "engineer"
         ]
+        # The driver's own last words. Without them the narrator could not see
+        # that the driver had just declined the stop it was about to call.
+        recent_driver = [
+            entry["text"]
+            for entry in recent_log
+            if entry.get("role") == "driver"
+        ][-2:]
         strategy_events = {
             "strategy_change", "race_control", "tyre_wear",
             "compound_requirement", "undercut_threat",
         }
+        hold = state.get("strategy_hold", {}) or {}
+        hold_line = (
+            "DRIVER DECLINED THE PIT CALL: the strategy hold runs until lap "
+            f"{hold.get('until_lap')}. Do not tell the driver to box and do not "
+            "restate the pit plan in this call.\n"
+            if hold.get("active")
+            else ""
+        )
         prompt = (
             f"{await self._header(include_strategy=event.get('type') in strategy_events)}\n"
+            f"{hold_line}"
             f"PROACTIVE EVENT: {json.dumps(event, ensure_ascii=False)}\n"
-            f"RECENT ENGINEER CALLS: {json.dumps(recent_engineer, ensure_ascii=False)}"
+            f"RECENT ENGINEER CALLS: {json.dumps(recent_engineer, ensure_ascii=False)}\n"
+            f"RECENT DRIVER RADIO: {json.dumps(recent_driver, ensure_ascii=False)}"
         )
         text = await self._run(
             prompt,

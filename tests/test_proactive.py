@@ -306,7 +306,8 @@ def test_progress_fallback_never_speaks_a_raw_finding_dict():
     event["payload"]["racing_line"]["top_opportunity"] = {"start_m": 1.0}
     text = ProactiveEngineer._fallback_text(event, {})
     assert "{" not in text
-    assert "keep the lap clean" in text
+    # Its own sentence, so capitalised: "... 1:33.425. Keep the lap clean."
+    assert "Keep the lap clean." in text
 
 
 def test_near_identical_consecutive_calls_are_swallowed(stack):
