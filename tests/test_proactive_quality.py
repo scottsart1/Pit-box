@@ -558,6 +558,16 @@ async def test_a_declined_stop_is_not_called_by_any_other_proactive_call(stack, 
 
 
 @pytest.mark.asyncio
+async def test_a_tyre_past_the_hard_limit_still_carries_the_plan(stack, clock):
+    """"Unless it is safety-critical" is part of the rule the driver set."""
+    store, engineer, voice = await _declined(stack, "stop telling me about the pit stop")
+    await store.mutate(_set_tyre(wear=[55.0, 56.0, 85.0, 66.0]))
+    await _tick(store, engineer)
+    tyre = [text for text in voice.spoken if text.startswith("Tyre warning")]
+    assert tyre and "box" in tyre[-1].lower(), voice.spoken
+
+
+@pytest.mark.asyncio
 async def test_the_tyre_check_is_not_asked_about_a_declined_window(stack, clock):
     store, engineer, _ = await _declined(stack, "No, I'm not boxing, staying out on these.")
     await store.mutate(lambda s: s.strategy["recommended"].update({"box_lap": 19}))

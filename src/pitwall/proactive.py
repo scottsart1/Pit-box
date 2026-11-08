@@ -1226,9 +1226,18 @@ class ProactiveEngineer:
         hold = state.get("strategy_hold", {}) or {}
         if hold.get("active"):
             return False
-        return not ProactiveEngineer.is_suppressed(
+        if not ProactiveEngineer.is_suppressed(
             "strategy_change", state.get("standing_instructions", []) or []
+        ):
+            return True
+        # The standing rule reads "do not raise the pit stop unless the driver
+        # asks or it is safety-critical". A limiting tyre past the hard limit,
+        # the same line that releases a hold, is safety-critical: from there
+        # the warnings carry the plan again.
+        wear = max(
+            [float(value) for value in (state.get("tyre", {}) or {}).get("wear", [0]) or [0]]
         )
+        return wear >= 82.0
 
     @staticmethod
     def _spoken_advice(
