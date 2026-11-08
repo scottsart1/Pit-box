@@ -4,7 +4,7 @@ import asyncio
 from itertools import pairwise
 from typing import Any
 
-from .analysis import AnalysisEngine
+from .analysis import AnalysisEngine, fmt_ms
 from .database import PitWallDatabase
 from .setup_advisor import SetupAdvisor
 from .state import StateStore
@@ -466,11 +466,16 @@ class BriefingEngine:
 
     @staticmethod
     def fallback_text(kind: str, payload: dict[str, Any]) -> str:
-        """Deterministic narration used when the configured model is unavailable."""
+        """Deterministic narration used when the configured model is unavailable.
+
+        The two debriefs are spoken, so lap times read as the m:ss.mmm used
+        everywhere else, a lap that is the best so far is called that rather
+        than "+0.000", and the race debrief ends on an instruction.
+        """
         if kind == "pre_session":
             target = payload.get("realistic_target_lap", {}) or {}
             target_text = (
-                f"Target {int(target['lap_time_ms']) / 1000:.3f} seconds, confidence {target.get('confidence', 'low')}."
+                f"Target {fmt_ms(int(target['lap_time_ms']))}, confidence {target.get('confidence', 'low')}."
                 if target.get("lap_time_ms") else "No defensible personal target lap yet; confidence low."
             )
             goals = " ".join(
@@ -485,15 +490,38 @@ class BriefingEngine:
             if not payload.get("available"):
                 return str(payload.get("reason", "No qualifying lap is available."))
             verdict = payload.get("verdict", {}) or {}
-            return (
-                f"Lap {payload.get('lap_num')}, {int(payload.get('lap_ms', 0)) / 1000:.3f} seconds, "
-                f"{float(payload.get('delta_to_personal_best_s', 0)):+.3f} to your best. "
-                f"{verdict.get('instruction')}"
+            lap_time = fmt_ms(int(payload.get("lap_ms", 0) or 0)) or "no time"
+            # The personal best includes this lap, so a delta of zero means
+            # this lap is the best so far.
+            delta = float(payload.get("delta_to_personal_best_s", 0) or 0)
+            standing = (
+                "your best lap so far"
+                if delta <= 0.0005
+                else f"{delta:.1f} off your best" if delta >= 0.1 else f"{delta:.2f} off your best"
             )
+            instruction = str(verdict.get("instruction") or "").strip()
+            return f"Lap {payload.get('lap_num')}, {lap_time}, {standing}." + (f" {instruction}" if instruction else "")
         if kind == "post_race":
-            return (
-                f"Race complete: P{payload.get('finish_position')}, "
-                f"{int(payload.get('net_places') or 0):+d} places, {int(payload.get('points', 0))} points. "
-                f"Next session, {((payload.get('top_time_losses') or [{}])[0].get('name') or 'prioritise repeatable clean laps')}."
-            )
+            finish = payload.get("finish_position")
+            if not finish:
+                return "Race complete; the final classification is not available yet."
+            facts = [f"P{int(finish)}"]
+            net = payload.get("net_places")
+            if net is not None:
+                net = int(net)
+                facts.append(
+                    "same as the grid" if net == 0
+                    else f"{'gained' if net > 0 else 'lost'} {abs(net)} place{'' if abs(net) == 1 else 's'}"
+                )
+            facts.append(f"{int(payload.get('points', 0) or 0)} points")
+            loss = (payload.get("top_time_losses") or [{}])[0] or {}
+            if loss.get("name"):
+                cost = loss.get("avg_loss_s")
+                instruction = f"Next session, work on {loss['name']}" + (
+                    f": it cost about {float(cost):.{1 if cost >= 0.1 else 2}f} seconds a lap."
+                    if isinstance(cost, (int, float)) and cost > 0 else "."
+                )
+            else:
+                instruction = "Next session, prioritise repeatable clean laps."
+            return f"Race complete: {', '.join(facts)}. {instruction}"
         return "Briefing data is available on the dashboard."
