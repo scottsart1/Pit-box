@@ -965,13 +965,21 @@ class EngineerBrain:
         if not standing:
             return None
         text = cls._normalize_text(utterance)
-        # "Don't keep telling me about the fuel" and "you can stop telling me
-        # about the fuel" both contain the cue; neither lifts anything.
-        if is_question(text) or has_negation(text):
+        # "You can stop updating me about the tyres" contains a resume cue
+        # ("you can ... updating") but asks for the opposite; any suppression
+        # cue rules a lift out.
+        if is_question(text) or cls._SUPPRESSION_CUE.search(text):
             return None
         words = " ".join(re.findall(r"[a-z0-9]+", text))
         if cls._CLEAR_STANDING.search(words):
+            # "Forget" and "cancel" are negations in their own right, so only
+            # a negation of the clearing itself keeps the rules.
+            if re.search(r"\b(?:not|never|don\s*t|dont|won\s*t|wont)\b", words):
+                return None
             return [], None
+        # "Don't keep telling me about the fuel" contains the resume cue too.
+        if has_negation(text):
+            return None
         cue = cls._RESUME_CUE.search(words)
         if not cue:
             return None

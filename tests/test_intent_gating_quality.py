@@ -542,3 +542,45 @@ async def test_a_hypothetical_stop_is_not_locked(stack, question):
 def test_a_tag_question_or_a_promise_is_not_a_refusal(remark):
     assert EngineerBrain._strategy_refusal(remark) is False, remark
 
+
+# ---------------------------------------------------------------------------
+# Standing rules: the way back must not run backwards
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "utterance",
+    [
+        "you can stop updating me about the tyres",
+        "you can quit telling me about the tyres",
+        "you can stop warning me about the tyres",
+    ],
+)
+async def test_asking_again_to_drop_a_subject_never_lifts_its_rule(stack, utterance):
+    store, _database, brain = await _brain_mid_race(stack)
+    await brain._fast_answer("stop telling me about the tyres")
+
+    answer = await brain._fast_answer(utterance)
+
+    assert "report" not in str(answer or "").lower(), (utterance, answer)
+    standing = (await _binding_state(store))["standing"]
+    assert ProactiveEngineer.is_suppressed("tyre_wear", standing) is True, utterance
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "utterance", ["forget my standing instructions", "cancel my standing instructions"]
+)
+async def test_every_clearing_word_clears_the_standing_rules(stack, utterance):
+    store, database, brain = await _brain_mid_race(stack)
+    await brain._fast_answer("stop telling me about the tyres")
+
+    assert await brain._fast_answer("don't clear my standing instructions") != (
+        "Copy, standing instructions cleared."
+    )
+    assert len((await _binding_state(store))["standing"]) == 1
+
+    assert await brain._fast_answer(utterance) == "Copy, standing instructions cleared."
+    assert (await _binding_state(store))["standing"] == []
+    assert await database.load_preference("standing_instructions", None) == []
