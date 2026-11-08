@@ -331,6 +331,53 @@ def test_each_reply_brief_is_attached_where_it_applies():
     assert composed.startswith(PERSONA + "\n\n" + QUESTION_PERSONA)
 
 
+_FIELD = {
+    "mode_profile": "race", "player_car_index": 0,
+    "drivers": [
+        {"car_idx": 0, "name": "PLAYER", "active": True},
+        {"car_idx": 1, "name": "NORRIS", "active": True},
+        {"car_idx": 2, "name": "VERSTAPPEN", "active": True},
+    ],
+}
+
+
+@pytest.mark.parametrize("utterance", [
+    "Is Norris on hards?", "Has Norris made his stop yet?", "Is he on mediums?",
+    "What tyres is the car ahead on?",
+])
+def test_a_question_about_a_rivals_stop_keeps_the_rival_rules(utterance):
+    """'Is Norris on hards?' was given the brief for the driver's own plan."""
+    assert STRATEGY_PERSONA not in persona_addenda(_FIELD, utterance, set())
+
+
+@pytest.mark.parametrize("utterance", [
+    "Norris is on hards, should we go to hards too?", "can I make it to the end on these tyres",
+    "Has Norris stopped? When do we box?",
+])
+def test_a_question_about_the_drivers_own_stop_carries_the_strategy_brief(utterance):
+    assert STRATEGY_PERSONA in persona_addenda(_FIELD, utterance, set())
+
+
+@pytest.mark.asyncio
+async def test_the_plan_qualifier_lands_on_the_drivers_call_not_a_rivals_stop(stack, monkeypatch):
+    """'Norris made his stop two laps ago; provisional, confidence low' made a
+    rival's stop sound provisional and left the actual call unqualified."""
+    store, brain, captured = await _scripted(
+        stack, monkeypatch, "Norris made his stop two laps ago. Box lap 14 for hards.", strategy=_plan(),
+    )
+
+    def field(state):
+        state.player_car_index = 0
+        for index, name in enumerate(("PLAYER", "NORRIS")):
+            state.drivers[index].name = name
+            state.drivers[index].active = True
+
+    await store.mutate(field)
+    heard = await brain.ask("Norris has stopped, talk me through our strategy and the alternatives")
+    assert captured, "the model answers"
+    assert heard.startswith("Norris made his stop two laps ago. Box lap 14 for hards; provisional")
+
+
 @pytest.mark.parametrize("utterance", [
     "they're gone", "the rears are going away", "no grip left", "holding", "plenty left in these",
     "I'm losing the rears",

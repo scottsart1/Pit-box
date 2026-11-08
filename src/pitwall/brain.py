@@ -500,7 +500,12 @@ def persona_addenda(
         strategy
         or state.get("red_flag_active")
         or state.get("race_control_phase") == "red_flag"
-        or has_any_phrase(text, _STRATEGY_SUBJECTS + _TYRE_AND_PLAN_TERMS)
+        # A stop or a compound is the driver's own plan unless the question
+        # is about someone else's: "Is Norris on hards?" keeps the rival rules.
+        or (
+            has_any_phrase(text, _STRATEGY_SUBJECTS + _TYRE_AND_PLAN_TERMS)
+            and not _asks_about_another_car(state, utterance)
+        )
         or _closed_tyre_answer(utterance) is not None
         # The same reading _capture_feedback uses to record the report.
         or any(
@@ -1111,6 +1116,81 @@ def _plan_call_index(sentences: list[str], recommended: dict[str, Any], current_
         ):
             return index
     return None
+
+
+# Someone else's car, named or not. Shared by the fast path, which must not
+# answer a rival question with the driver's own car, and the reply briefs.
+_OTHER_CAR_PHRASES = (
+    "his car", "her car", "their car", "his tyres", "his tires",
+    "their tyres", "their tires", "his damage", "his battery",
+    "his fuel", "his pace", "the other car", "everyone else",
+    "the field", "who has stopped", "who has pitted", "who retired",
+    "rest of the field", "other drivers", "anyone else",
+    "the leader", "leader s", "the guy ahead", "the guy behind",
+    "the car ahead", "the car in front", "the car behind",
+    "cars ahead", "cars in front", "cars behind", "other cars", "entire field",
+    "driver ahead", "driver behind", "car ahead has", "car behind has",
+)
+# The driver's own side of a sentence: a reply that says "we" or "you", or
+# that opens a clause with the call itself, is about the driver's plan.
+_OWN_SIDE = re.compile(
+    r"\b(?:we|we[’']?(?:re|ll|ve|d)|you|you[’']?(?:re|ll|ve|d)|your|us|our|let[’']?s|i|i[’']?m|me|my)\b",
+    re.IGNORECASE,
+)
+_IMPERATIVE_CALL = re.compile(
+    r"(?:^|[,;:—–]\s*)(?:(?:copy|okay|ok|right|so|then|and|yes|no)\W+)*"
+    r"(?:box|pit|stay out|stop|come in|extend|fit)\b",
+    re.IGNORECASE,
+)
+_RIVAL_SUBJECT = re.compile(
+    r"^(?:he|she|the (?:leader|car (?:ahead|in front|behind)|guy (?:ahead|behind)|cars? (?:ahead|behind)))\b",
+    re.IGNORECASE,
+)
+
+
+def _rival_drivers(state: dict[str, Any]) -> list[dict[str, Any]]:
+    """Every car but the driver's own."""
+    player = state.get("player_car_index")
+    return [
+        driver for driver in state.get("drivers", []) or []
+        if isinstance(driver, dict) and driver.get("car_idx") != player
+    ]
+
+
+def _about_another_car(sentence: str, rivals: list[dict[str, Any]]) -> bool:
+    """A sentence whose news is another car: "Norris made his stop two laps ago."
+
+    Its "stop" is a rival's stop, not the driver's call, so the plan's
+    confidence qualifier does not belong on it.
+    """
+    if _OWN_SIDE.search(sentence) or _IMPERATIVE_CALL.search(sentence.strip()):
+        return False
+    return bool(
+        _RIVAL_SUBJECT.match(sentence.strip())
+        or re.search(r"\b(?:his|him|her)\b", sentence, re.IGNORECASE)
+        or match_drivers(rivals, sentence)
+    )
+
+
+def _own_pit_call_index(sentences: list[str], rivals: list[dict[str, Any]]) -> int | None:
+    """The sentence that makes the driver's own pit call, past any sentence
+    that reports another car's stop or tyres."""
+    return _pit_call_index(["" if _about_another_car(sentence, rivals) else sentence for sentence in sentences])
+
+
+def _asks_about_another_car(state: dict[str, Any], utterance: str) -> bool:
+    """A question about a rival's stop or tyres, not the driver's own plan.
+
+    "Is Norris on hards?" and "has he stopped yet?" ask about someone else;
+    "Norris has pitted, should we cover?" asks about the driver's plan.
+    """
+    text = normalize_text(utterance)
+    if has_any_phrase(text, ("i", "we", "me", "us", "my", "our")):
+        return False
+    return bool(
+        match_drivers(_rival_drivers(state), utterance)
+        or has_any_phrase(text, _OTHER_CAR_PHRASES + ("he", "his", "him", "she", "her"))
+    )
 
 
 _TO_THE_FINISH = re.compile(
@@ -3389,20 +3469,7 @@ class EngineerBrain:
         # "the leader's battery" and "how's the fuel for the guy ahead" carry no
         # driver name, and every fast-path branch below reads the player's car,
         # so they were answered with the driver's own fuel and energy.
-        refers_to_another_car = has_any_phrase(
-            text,
-            (
-                "his car", "her car", "their car", "his tyres", "his tires",
-                "their tyres", "their tires", "his damage", "his battery",
-                "his fuel", "his pace", "the other car", "everyone else",
-                "the field", "who has stopped", "who has pitted", "who retired",
-                "rest of the field", "other drivers", "anyone else",
-                "the leader", "leader s", "the guy ahead", "the guy behind",
-                "the car ahead", "the car in front", "the car behind",
-                "cars ahead", "cars in front", "cars behind", "other cars", "entire field",
-                "driver ahead", "driver behind", "car ahead has", "car behind has",
-            ),
-        )
+        refers_to_another_car = has_any_phrase(text, _OTHER_CAR_PHRASES)
         # ... but only when the question is about that car's condition or plan.
         # A plain "gap to the car ahead" is still a correct fast-path answer.
         asks_about_their_state = has_any_phrase(
@@ -4816,7 +4883,10 @@ class EngineerBrain:
             if schema["name"] not in withheld
         ]
         offered = {schema["name"] for schema in tools}
-        call_index = None
+        # The qualifier and the radio cut follow the driver's own call, not
+        # a sentence reporting a rival's stop ahead of it.
+        rivals = _rival_drivers(state)
+        call_index = lambda sentences: _own_pit_call_index(sentences, rivals)  # noqa: E731
         if declined:
             # The reply's pit call is the next option, not the acknowledgement
             # of the stop the driver refused: the qualifier and the radio cut
