@@ -286,7 +286,7 @@ class NativeVoiceController:
         Empty string when the engineer is free.
         """
         if self.busy:
-            return "speaking"
+            return "answering the driver"
         if self._signal_pressed:
             return "push-to-talk held"
         if self._wake_speaking:
@@ -301,6 +301,29 @@ class NativeVoiceController:
         if self._wake_process_task and not self._wake_process_task.done():
             return "wake task still running"
         return ""
+
+    @property
+    def audio_busy(self) -> bool:
+        """Whether the radio channel itself is in use right now.
+
+        The driver holding push-to-talk or speaking after the wake word, or
+        the engineer's own audio playing. ``is_busy`` also covers the silent
+        stretches of a conversation: the reply window after the engineer
+        asked something, and transcribing and answering a driver question.
+        A flag or safety call waits only for the channel, not for those, or a
+        yellow arrived 400 metres late and a safety car up to 25 seconds late.
+        """
+        return bool(
+            self._signal_pressed
+            or self._wake_speaking
+            or self._tts_playing
+            or (self._speech_task and not self._speech_task.done())
+        )
+
+    @property
+    def reply_window_armed(self) -> bool:
+        """Whether the driver may answer now without the wake phrase."""
+        return self._wake_armed_until > time.monotonic()
 
     @property
     def is_busy(self) -> bool:
@@ -1601,7 +1624,14 @@ class NativeVoiceController:
             return delivered
         except asyncio.CancelledError:
             self.audio.stop_playback()
-            raise
+            current = asyncio.current_task()
+            if current is not None and current.cancelling():
+                raise
+            # The speech itself was cut (the driver keyed the radio), not the
+            # caller. Re-raising here ended the unsolicited-call loop that
+            # asked for this line, and no call was spoken again for the rest
+            # of the run.
+            return False
         finally:
             self._speech_task = None
             self._tts_playing = False
