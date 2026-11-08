@@ -191,6 +191,11 @@ def _events() -> list[dict]:
                                              "candidate_plans": [{"box_laps": [14], "compounds": ["MEDIUM", "HARD"]}]}},
         {"type": "rival_pace", "payload": {"driver": "NORRIS", "gap_to_player_s": 1.62, "closing": True}},
         {"type": "energy_low", "payload": {"ers_pct": 12.4, "regulations_2026": True}},
+        {"type": "fuel_warning", "payload": {"burn_kg_per_lap": 1.612, "fuel_laps_delta": -0.42,
+                                             "lift_and_coast_m_per_lap": 20, "recommendation": "save fuel"}},
+        {"type": "warning", "payload": {"corner_cutting_warnings": 3}},
+        {"type": "engine_failure", "payload": {"blown": False, "seized": True}},
+        {"type": "lap_deleted", "payload": {"lap": 5, "sector": 2}},
         {"type": "quali_clear_air", "payload": {"lap": 3, "clear_air_estimate": True, "closest_gap_s": None,
                                                 "target": {"target": "1:28.200", "session_best": "1:28.000"},
                                                 "ers_pct": 100.0, "tyre_temps": [90, 91, 88, 89]}},
@@ -496,6 +501,15 @@ async def test_a_declined_call_travels_in_the_header(stack, monkeypatch):
     await store.update(strategy_hold={"active": True, "until_lap": 18, "set_at_lap": 13, "reason": "not boxing"})
     header = await brain.situation_header(include_strategy=False)
     assert "STRATEGY HOLD until lap 18: the driver declined the pit call on lap 13" in header
+
+
+@pytest.mark.asyncio
+async def test_a_hold_past_its_last_lap_is_not_stated_as_running(stack, monkeypatch):
+    """The hold is released by the unsolicited-call loop; with those calls
+    switched off its flag stays set, and the replies must not keep honouring it."""
+    store, brain, _ = await _scripted(stack, monkeypatch, strategy=_plan(), lap=31)
+    await store.update(strategy_hold={"active": True, "until_lap": 18, "set_at_lap": 13, "reason": "not boxing"})
+    assert "STRATEGY HOLD" not in await brain.situation_header(include_strategy=True)
 
 
 @pytest.mark.asyncio
