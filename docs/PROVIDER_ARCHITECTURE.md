@@ -34,7 +34,7 @@ The route deadline bounds the whole radio request, failover included. Provider S
 
 When every provider fails, `ProviderRequestError.kind` reports the last provider attempted, which is what the driver is told. `kinds` lists every attempted provider's failure kind in order, and `any_deadline` is true when any provider hit, or was skipped for lack of, the route deadline, so a primary deadline is not hidden behind a fallback's later, different failure.
 
-When OpenAI is selected, the configured GPT model receives the matching reasoning effort. Deep calls receive a larger output-token allowance because reasoning tokens share the model budget.
+When OpenAI is selected, the configured GPT model receives the matching reasoning effort. Reasoning tokens share the output-token budget with the answer, so GPT-5/GPT-6 models get a reasoning-sized cap on the normal route as well as the deep route. Spoken length is bounded by the persona, low verbosity and the radio sentence limit, not by these caps.
 
 ## Final answer round
 
@@ -130,9 +130,14 @@ Two consecutive health failures open the configured short cooldown. One failure 
 A response ending because its output budget was exhausted is not treated as an outage. Pit Wall retries the same provider once with a larger budget:
 
 ```text
-DeepSeek deep: 2,200 -> 6,000 max tokens
-OpenAI deep:   2,200 -> 6,000 max output tokens
+DeepSeek deep:                 2,200 -> 6,000 max tokens
+OpenAI deep:                   2,200 -> 6,000 max output tokens
+OpenAI normal, GPT-5/GPT-6:    1,600 -> 4,000 max output tokens
+Custom endpoint normal:        1,600 -> 4,000 max tokens (room for inline <think>)
+Kimi and DeepSeek normal:        650 -> 1,400 max tokens (non-thinking models)
 ```
+
+The OpenAI normal-route and custom normal-route caps are settings (`PITWALL_OPENAI_NORMAL_MAX_OUTPUT_TOKENS`, `PITWALL_CUSTOM_LLM_NORMAL_MAX_TOKENS` and their `_RETRY_` counterparts). Reported usage includes `reasoning_tokens` where the API returns it, which shows whether a cap fits the reasoning a route actually uses.
 
 If the enlarged retry also truncates, the fallback may answer, but the primary provider's circuit failure count remains unchanged.
 

@@ -291,6 +291,18 @@ def _usage_dict(usage: Any) -> dict[str, int]:
     cached = getattr(details, "cached_tokens", None) if details is not None else None
     if cached is not None:
         result["cached_input_tokens"] = int(cached)
+    # Reasoning tokens share the output cap with the spoken answer; recording
+    # them shows whether a route's cap fits the reasoning it actually uses.
+    output_details = getattr(usage, "output_tokens_details", None) or getattr(
+        usage, "completion_tokens_details", None
+    )
+    reasoning = (
+        getattr(output_details, "reasoning_tokens", None)
+        if output_details is not None
+        else None
+    )
+    if reasoning is not None:
+        result["reasoning_tokens"] = int(reasoning)
     return result
 
 
@@ -564,10 +576,29 @@ class OpenAIResponsesProvider:
             )
 
         model = self.model_for(route)
+        reasoning_model = model.startswith(("gpt-5", "gpt-6"))
         started = time.perf_counter()
         input_items: list[dict[str, Any]] = [{"role": "user", "content": prompt}]
         schema_by_name = {tool["name"]: tool for tool in tools}
         total_usage: dict[str, int] = {}
+
+        if effort in {"high", "xhigh", "max"}:
+            base_budget = self.config.openai_deep_max_output_tokens
+            retry_budget = self.config.openai_deep_retry_max_output_tokens
+        elif reasoning_model:
+            # Reasoning tokens share max_output_tokens with the answer. An
+            # answer-sized cap let low-effort reasoning end the response
+            # incomplete, and the retry re-sent the whole prompt. Spoken length
+            # is bounded by the persona, low verbosity and the radio sentence
+            # limit; this cap only stops a runaway response.
+            base_budget = self.config.openai_normal_max_output_tokens
+            retry_budget = self.config.openai_normal_retry_max_output_tokens
+        elif effort == "medium":
+            base_budget = 1100
+            retry_budget = 2600
+        else:
+            base_budget = 520
+            retry_budget = 1200
 
         for round_index in range(max_rounds):
             # Reserve the last existing request for an answer. Previously a
@@ -575,15 +606,6 @@ class OpenAIResponsesProvider:
             # when the loop ended: even successful tools became a radio error.
             # This adds neither a request nor time to the router's deadline.
             final_synthesis = bool(tools) and round_index == max_rounds - 1
-            if effort in {"high", "xhigh", "max"}:
-                base_budget = self.config.openai_deep_max_output_tokens
-                retry_budget = self.config.openai_deep_retry_max_output_tokens
-            elif effort == "medium":
-                base_budget = 1100
-                retry_budget = 2600
-            else:
-                base_budget = 520
-                retry_budget = 1200
 
             response: Any | None = None
             for attempt, token_budget in enumerate((base_budget, retry_budget)):
@@ -603,7 +625,7 @@ class OpenAIResponsesProvider:
                     # paying it once.
                     "prompt_cache_key": f"pitwall-{route}-{self.config.engineer_name}",
                 }
-                if model.startswith(("gpt-5", "gpt-6")):
+                if reasoning_model:
                     request["reasoning"] = {"effort": effort}
                 if final_synthesis:
                     request["tool_choice"] = "none"
@@ -1216,6 +1238,10 @@ class OpenAICompatibleChatProvider:
     def _configured(self) -> bool:
         return bool(self._key()) or not self._key_required()
 
+    def _normal_budgets(self) -> tuple[int, int]:
+        """Answer-sized normal-route budget for a non-thinking model."""
+        return 650, 1400
+
     def model_for(self, route: str) -> str:
         raise NotImplementedError
 
@@ -1313,8 +1339,7 @@ class OpenAICompatibleChatProvider:
                 base_budget = 2200
                 retry_budget = 6000
             else:
-                base_budget = 650
-                retry_budget = 1400
+                base_budget, retry_budget = self._normal_budgets()
             round_messages = (
                 _with_system_directive(messages) if final_synthesis else messages
             )
@@ -1442,6 +1467,14 @@ class CustomChatProvider(OpenAICompatibleChatProvider):
 
     def _configured(self) -> bool:
         return self.config.custom_llm_ready
+
+    def _normal_budgets(self) -> tuple[int, int]:
+        # Any model can sit behind this endpoint, including a local reasoning
+        # model whose inline <think> block shares the budget with the answer.
+        return (
+            self.config.custom_llm_normal_max_tokens,
+            self.config.custom_llm_normal_retry_max_tokens,
+        )
 
     def model_for(self, route: str) -> str:
         return (
