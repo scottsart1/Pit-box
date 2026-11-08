@@ -1949,10 +1949,17 @@ class TelemetryTools:
         result["interpretation"] = "Only fields marked live are current; paused values describe the paused state. Stale fields are historical and unavailable fields must not be quoted."
         return result
 
-    async def get_tyre_condition(self, detail: bool = False) -> dict[str, Any]:
+    async def get_tyre_condition(self, detail: bool = True) -> dict[str, Any]:
+        """Tyre wear, temperatures and degradation for the player's car.
+
+        Per-wheel wear and temperatures are always returned: nulling them on
+        a summary request sat beside an interpretation saying missing values
+        are unknown, and contradicted the per-wheel wear in the situation
+        header. ``detail`` is accepted for older callers and has no effect.
+        """
         state = await self.store.snapshot_analysis()
         tyre = state["tyre"]
-        wear = tyre.get("wear", [0, 0, 0, 0])
+        wear = [round(float(value), 1) for value in tyre.get("wear", [0, 0, 0, 0])]
         temps = [float(value) for value in tyre.get("inner_temps_c", [0, 0, 0, 0])]
         average_wear = sum(wear) / len(wear) if wear else 0
         front_temp = sum(temps[:2]) / 2 if len(temps) >= 4 else 0
@@ -1987,11 +1994,11 @@ class TelemetryTools:
             "average_wear_pct": round(average_wear, 1),
             "max_wear_pct": round(max(wear or [0]), 1),
             "wheel_order": ["FL", "FR", "RL", "RR"],
-            "wear": wear if detail else None,
+            "wear": wear,
             "temperature_unit": spoken_label,
-            "inner_temps": spoken_temps if detail else None,
+            "inner_temps": spoken_temps,
             "front_to_rear_temp_delta": spoken_delta,
-            "inner_temps_c": temps if detail else None,
+            "inner_temps_c": temps,
             "front_to_rear_temp_delta_c": round(front_temp - rear_temp, 1),
             "blisters": tyre.get("blisters", []),
             "deg_s_per_lap": deg.get("current_slope_s_per_lap") if live_fit_matches else None,
@@ -3597,6 +3604,20 @@ class TelemetryTools:
         ]
 
     def schemas(self) -> list[dict[str, Any]]:
+        driver = {
+            "type": "string",
+            "description": (
+                "ahead, behind, leader, teammate, me, a position such as P5, a "
+                "car number, or a driver's name."
+            ),
+        }
+        lap = {
+            "type": "string",
+            "description": (
+                "last (the latest completed lap), best (the fastest valid lap "
+                "this session) or a lap number such as 29."
+            ),
+        }
         definitions = [
             ("get_strategic_rivals", "Identify who the driver is actually racing using projected finish gaps, tyre age and estimated remaining stops; includes uncertainty.", {}),
             ("get_practice_run_review", "Review this session's automatic runs and saved lap groups with exact IDs, measured air/track temperatures and traffic evidence, reported lap notes, clean pace and what to test next. Read before comparing or explaining a stint.", {}),
@@ -3782,7 +3803,10 @@ class TelemetryTools:
                 "Get live standings, gaps, laps and tyres.",
                 {
                     "top_n": {"type": "integer", "minimum": 1, "maximum": 24},
-                    "around_player": {"type": "boolean"},
+                    "around_player": {
+                        "type": "boolean",
+                        "description": "true for the cars around the player's position; false for the front of the order.",
+                    },
                 },
             ),
             (
@@ -3821,7 +3845,7 @@ class TelemetryTools:
             (
                 "get_gap",
                 "Get the live gap to a named driver, ahead, behind, leader, or position.",
-                {"target": {"type": "string"}},
+                {"target": dict(driver)},
             ),
             (
                 "get_cars_ahead_progress",
@@ -3837,7 +3861,7 @@ class TelemetryTools:
                     "that explains it. Use this for any 'how am I doing against X' "
                     "or 'am I catching X' question instead of reading out lap times."
                 ),
-                {"driver": {"type": "string"}},
+                {"driver": dict(driver)},
             ),
             (
                 "get_position_target",
@@ -3870,7 +3894,7 @@ class TelemetryTools:
                     "penalties, stints and live pit-lane status. Use this for any "
                     "question about a specific rival rather than the player."
                 ),
-                {"driver": {"type": "string"}},
+                {"driver": dict(driver)},
             ),
             (
                 "get_field_state",
@@ -3880,7 +3904,10 @@ class TelemetryTools:
                 ),
                 {
                     "top_n": {"type": "integer", "minimum": 1, "maximum": 24},
-                    "around_player": {"type": "boolean"},
+                    "around_player": {
+                        "type": "boolean",
+                        "description": "true for the cars around the player's position; false for the front of the order.",
+                    },
                 },
             ),
             (
@@ -3905,30 +3932,30 @@ class TelemetryTools:
                 "get_driver_lap_history",
                 "Get exact recent lap/sector history plus best valid lap from all available current-session history. Includes explicit session coverage; recent-window best is not session best.",
                 {
-                    "driver": {"type": "string"},
+                    "driver": dict(driver),
                     "n_laps": {"type": "integer", "minimum": 1, "maximum": 20},
                 },
             ),
             (
                 "get_rival_sector_comparison",
                 "Compare the player's latest matched sector times with a named driver; positive delta means player time lost.",
-                {"driver": {"type": "string"}},
+                {"driver": dict(driver)},
             ),
             (
                 "get_rival_pace_analysis",
                 "Analyze a driver's recent valid lap pace and current stint.",
-                {"driver": {"type": "string"}},
+                {"driver": dict(driver)},
             ),
             (
                 "get_driver_stint_info",
                 "Get a driver's tyre stint history and stop count.",
-                {"driver": {"type": "string"}},
+                {"driver": dict(driver)},
             ),
             (
                 "get_position_chart",
                 "Get position by lap for a driver.",
                 {
-                    "driver": {"type": "string"},
+                    "driver": dict(driver),
                     "laps": {"type": "integer", "minimum": 1, "maximum": 50},
                 },
             ),
@@ -3939,8 +3966,8 @@ class TelemetryTools:
             ),
             (
                 "get_tyre_condition",
-                "Get tyre wear, wheel temperatures, degradation and projected cliff.",
-                {"detail": {"type": "boolean"}},
+                "Get per-wheel tyre wear and temperatures, degradation, compound evidence and projected cliff.",
+                {},
             ),
             (
                 "get_fuel_state",
@@ -3956,21 +3983,34 @@ class TelemetryTools:
             ("get_car_setup", "Get the current setup and queued front-wing value.", {}),
             (
                 "get_lap_analysis",
-                "Analyze a lap against the personal best or session reference.",
-                {"lap": {"type": "string"}, "compare_to": {"type": "string"}},
+                (
+                    "Analyze one completed lap against your personal best, your session best "
+                    "or the lap before it. The result names the lap analysed and the "
+                    "comparison basis to quote."
+                ),
+                {
+                    "lap": dict(lap),
+                    "compare_to": {
+                        "type": "string",
+                        "enum": ["personal_best", "session_best", "previous_lap"],
+                    },
+                },
             ),
             (
                 "get_corner_analysis",
                 "Analyze a learned lap-map corner over recent laps.",
                 {
-                    "corner": {"type": "string"},
+                    "corner": {
+                        "type": "string",
+                        "description": "The learned corner's number, such as 3, or its displayed name.",
+                    },
                     "last_n_laps": {"type": "integer", "minimum": 1, "maximum": 10},
                 },
             ),
             (
                 "get_racing_line_analysis",
-                "Compare the player's world-coordinate racing line with the personal-best line and identify persistent deviation zones.",
-                {"lap": {"type": "string"}},
+                "Compare one completed lap's world-coordinate racing line with the personal-best line and identify persistent deviation zones.",
+                {"lap": dict(lap)},
             ),
             (
                 "get_stored_history",
@@ -4019,12 +4059,12 @@ class TelemetryTools:
             (
                 "evaluate_undercut",
                 "Evaluate an undercut against a driver.",
-                {"driver": {"type": "string"}},
+                {"driver": dict(driver)},
             ),
             (
                 "evaluate_overcut",
                 "Evaluate an overcut against a driver.",
-                {"driver": {"type": "string"}},
+                {"driver": dict(driver)},
             ),
             (
                 "get_tyre_sets_available",
@@ -4051,7 +4091,7 @@ class TelemetryTools:
             (
                 "get_personal_history",
                 "Get personal best, recent laps and recurring weak corners at a track.",
-                {"track": {"type": "string"}},
+                {"track": {"type": "string", "description": "current, or a circuit name or track ID."}},
             ),
             (
                 "generate_setup",
@@ -4108,7 +4148,7 @@ class TelemetryTools:
                     "Review legacy setup aggregates at this track; their ranking does not isolate "
                     "a setup effect. Use Test Engineer matched comparisons for evidence. profile: race/quali/hybrid/all."
                 ),
-                {"profile": {"type": "string"}},
+                {"profile": {"type": "string", "enum": ["race", "quali", "hybrid", "all"]}},
             ),
             (
                 "get_energy_plan",
