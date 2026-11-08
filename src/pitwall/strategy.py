@@ -4172,9 +4172,12 @@ class StrategyEngine:
             )
             rationale = "The displayed finish is conditional on a tyre plan outside its known limits; it is not a supported finish prediction."
         best["finish_projection_valid"] = bool(best.get("feasible") and best.get("legal"))
+        # Spoken over the radio after the call, so it avoids words that are
+        # also compound names: "a hard tyre-wear limit breach" can be heard as
+        # a limit on the hard tyre.
         change_condition = (
             "The call changes for a safety car, red flag, wet crossover, new damage, "
-            "or a hard tyre-wear limit breach."
+            "or the tyres reaching their wear limit."
         )
         selected_stint = (
             best.get("stint_models", [])[-1] if best.get("stint_models") else {}
@@ -4312,7 +4315,7 @@ class StrategyEngine:
             "model_summary": model_summary,
             "personal_wear_model": style_evidence,
             "assumptions": [
-                "Plans are ranked by projected finishing position first; elapsed time only breaks classification ties.",
+                "Plans are ranked by projected finishing position first; among equal finishes the later first stop is preferred (a free red-flag tyre change excepted), and risk-adjusted time only breaks the ties that remain.",
                 f"Risk appetite is {risk_appetite}; it selects the distribution used between plans with the same central finish.",
                 f"Overtaking difficulty is {overtaking_difficulty:.2f}; unknown circuits use 0.60 with lower confidence.",
                 "Clean live wear and fuel-corrected stint pace blend with personal history as samples accumulate; untested tyres keep low confidence.",
