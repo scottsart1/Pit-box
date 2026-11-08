@@ -6,6 +6,7 @@ everyday "how are the tyres", and the trend reported for the car behind.
 """
 
 import re
+import time
 from copy import deepcopy
 
 import pytest
@@ -162,3 +163,72 @@ async def test_template_and_narrated_strategy_calls_say_the_same_thing(stack, mo
     narrated = await brain.proactive(deepcopy(event))
     template = ProactiveEngineer._fallback_text(event, state)
     assert template == narrated == f"Box lap 14 for hards; {QUALIFIER}."
+
+
+# ------------------------------------------------------ how are the tyres
+
+
+async def _tyre_radio(stack, monkeypatch):
+    store, database, _, _, _, tools = stack
+    brain = EngineerBrain(store, tools, database)
+
+    async def no_provider(*args, **kwargs):
+        pytest.fail("A tyre-condition question must be answered locally, without a provider call")
+
+    monkeypatch.setattr(brain, "_run", no_provider)
+    for group in (1, 2, 6, 7, 10):
+        await store.mark_packet(2026, 26, 54321, packet_id=group)
+    await store.update(
+        session_type="Race", mode_profile="race", current_lap=8, total_laps=20,
+        player_position=3, player_car_index=0,
+        tyre={"compound": "MEDIUM", "age_laps": 5, "wear": [21, 22, 24, 28],
+              "inner_temps_c": [92, 94, 96, 98]},
+    )
+    return store, brain
+
+
+HOW_ARE_THE_TYRES = [
+    "how are the tyres", "How are the tyres looking?", "how're my tyres",
+    "How're the tires?", "how are my tyres doing", "how are the tyres holding up",
+    "Mark, how are the tyres?",
+]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("utterance", HOW_ARE_THE_TYRES)
+async def test_how_are_the_tyres_is_the_tyre_condition_readout(stack, monkeypatch, utterance):
+    store, brain = await _tyre_radio(stack, monkeypatch)
+    assert EngineerBrain.classify_request(utterance) == "fast"
+    answer = await brain.ask(utterance)
+    assert answer == "Mediums, 5 laps old, rear-right limiting at 28 percent; front cores 92/94 C."
+    assert answer == await brain.ask("what's the tyre condition")
+    assert (await store.snapshot_analysis())["llm_provider"] == "local"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("utterance", ["how are the tyres", "how're my tyres"])
+async def test_how_are_the_tyres_is_not_read_out_from_stale_telemetry(stack, monkeypatch, utterance):
+    store, brain = await _tyre_radio(stack, monkeypatch)
+    await store.mutate(lambda state: state.packet_group_freshness.update({"10": time.time() - 100}))
+    # An unrelated packet arrives, so the receiver itself is still connected.
+    await store.mark_packet(2026, 26, 54321, packet_id=0)
+    answer = await brain.ask(utterance)
+    assert answer == "Tyre condition telemetry is stale; I cannot confirm the current value."
+
+
+@pytest.mark.asyncio
+async def test_how_are_the_tyres_while_paused_is_labelled_as_last_confirmed(stack, monkeypatch):
+    store, brain = await _tyre_radio(stack, monkeypatch)
+    await store.update(game_paused=True, connected=False)
+    answer = await brain.ask("how are the tyres looking")
+    assert answer == "Paused, last confirmed: Mediums, 5 laps old, rear-right limiting at 28 percent; front cores 92/94 C."
+
+
+@pytest.mark.parametrize("utterance", [
+    "how are his tyres", "how are the tyres on the car ahead",
+    "how are the tyres compared to Norris", "how are the tyres, should I box",
+    "how are the tyre temps",
+])
+def test_tyre_questions_about_something_else_still_go_to_the_model(utterance):
+    state = {"drivers": [{"name": "NORRIS", "driver_id": 3, "car_idx": 1, "position": 5}]}
+    assert EngineerBrain._defers_to_model(state, utterance)
