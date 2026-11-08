@@ -1172,10 +1172,48 @@ def _about_another_car(sentence: str, rivals: list[dict[str, Any]]) -> bool:
     )
 
 
-def _own_pit_call_index(sentences: list[str], rivals: list[dict[str, Any]]) -> int | None:
+def _names_plan_lap(sentence: str, recommended: dict[str, Any]) -> bool:
+    """Whether a sentence names the lap of the plan's own stop.
+
+    Only the lap number counts: "stay out" or "pit this lap" in a sentence
+    about a rival are as likely to be the rival's as the driver's, and a call
+    of the driver's own in those words already reads as one ("we stay out",
+    "box this lap").
+    """
+    if sentence.endswith("?"):
+        return False
+    try:
+        box_lap = int(recommended["box_lap"]) if recommended.get("box_lap") is not None else None
+    except (TypeError, ValueError):
+        return False
+    return box_lap is not None and re.search(rf"\blap {box_lap}\b(?![\d:])", sentence, re.IGNORECASE) is not None
+
+
+def _own_pit_call_index(
+    sentences: list[str],
+    rivals: list[dict[str, Any]],
+    recommended: dict[str, Any] | None = None,
+) -> int | None:
     """The sentence that makes the driver's own pit call, past any sentence
-    that reports another car's stop or tyres."""
-    return _pit_call_index(["" if _about_another_car(sentence, rivals) else sentence for sentence in sentences])
+    that reports another car's stop or tyres.
+
+    A rival named as the reason for the call is still the call: "Undercut
+    Norris with a stop on lap 18" and "Lap 18 for hards to cover Norris" carry
+    the plan's lap. When no other sentence makes a call, the first of those
+    is the call, so the low-confidence qualifier and the radio cut still find
+    it, and a rival's stop with no lap of the plan in it is still passed over.
+    """
+    about_rival = [_about_another_car(sentence, rivals) for sentence in sentences]
+    index = _pit_call_index(["" if rival else sentence for sentence, rival in zip(sentences, about_rival)])
+    if index is not None or not recommended:
+        return index
+    return next(
+        (
+            position for position, sentence in enumerate(sentences)
+            if about_rival[position] and _names_plan_lap(sentence, recommended)
+        ),
+        None,
+    )
 
 
 def _asks_about_another_car(state: dict[str, Any], utterance: str) -> bool:
@@ -2128,9 +2166,9 @@ class EngineerBrain:
             call = self._finished_strategy_answer(state) or self.spoken_pit_call(state.get("strategy"), state)
             if call:
                 situation.append(f"PIT CALL AS SPOKEN: {call}")
-            # Gated like the header's STRATEGY HOLD clause: with unsolicited
-            # calls off nothing releases the hold, and past its last lap it
-            # is over whatever its flag says.
+            # Gated like the header's STRATEGY HOLD clause: past its last lap,
+            # or once the race has moved on from it, the hold is over whatever
+            # its flag says.
             if self._hold_running(state):
                 hold = state.get("strategy_hold", {}) or {}
                 situation.append(
@@ -4926,7 +4964,8 @@ class EngineerBrain:
         # The qualifier and the radio cut follow the driver's own call, not
         # a sentence reporting a rival's stop ahead of it.
         rivals = _rival_drivers(state)
-        call_index = lambda sentences: _own_pit_call_index(sentences, rivals)  # noqa: E731
+        own_call = (state.get("strategy", {}) or {}).get("recommended") or {}
+        call_index = lambda sentences: _own_pit_call_index(sentences, rivals, own_call)  # noqa: E731
         if declined:
             # The reply's pit call is the next option, not the acknowledgement
             # of the stop the driver refused: the qualifier and the radio cut
@@ -5037,6 +5076,7 @@ class EngineerBrain:
                 guard_origin=state if request.refresh_current_strategy else None,
                 refresh_current_strategy=request.refresh_current_strategy,
                 steps=steps,
+                call_index=request.call_index,
             )
             entry["as_spoken"] = spoken
             entry["postprocess"] = [step["step"] for step in steps]
