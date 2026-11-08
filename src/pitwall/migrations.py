@@ -475,6 +475,23 @@ V5_2_ENGINEERING = Migration(
 )
 
 
+V5_5_RADIO_TRACE = Migration(
+    version=5510,
+    app_version="5.5.1",
+    statements=(
+        # How the driver reacted to the engineer's previous message (a repeat
+        # request, a correction, a dispute), stored on the driver's own row.
+        "ALTER TABLE radio_messages ADD COLUMN label TEXT NOT NULL DEFAULT ''",
+        # The bounded evidence behind an engineer answer: route, provider and
+        # model, tool calls and their results, the provider's own text and
+        # each post-processing step. On the answer's own row, so deleting or
+        # transferring a session carries it with the message. Rows written
+        # before this column existed read as NULL.
+        "ALTER TABLE radio_messages ADD COLUMN trace_json TEXT",
+    ),
+)
+
+
 MIGRATIONS: tuple[Migration, ...] = (
     V4_2_CATALOG,
     V4_2_COMPARISON_RESULTS,
@@ -484,5 +501,6 @@ MIGRATIONS: tuple[Migration, ...] = (
     V4_13_LIBRARY_INDEXES,
     V4_13_1_PLAYER_FLAG_CONTEXT,
     V5_2_ENGINEERING,
+    V5_5_RADIO_TRACE,
 )
 LATEST_SCHEMA_VERSION = MIGRATIONS[-1].version

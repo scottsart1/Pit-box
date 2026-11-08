@@ -2094,9 +2094,24 @@ class PitWallDatabase:
         role: str,
         text: str,
         source: str = "radio",
-    ) -> None:
+        *,
+        label: str = "",
+        trace: dict[str, Any] | None = None,
+    ) -> int | None:
+        """Store one radio line; returns its row id, or None for an empty line.
+
+        ``label`` marks how a driver turn reacted to the engineer's previous
+        message. ``trace`` is the bounded evidence behind an engineer answer;
+        the caller bounds it, and it is stored on the same row so the answer
+        and its evidence are deleted and transferred together.
+        """
+        trace_json = (
+            json.dumps(trace, ensure_ascii=False, separators=(",", ":"), default=str)
+            if trace
+            else None
+        )
         async with self._lock:
-            await asyncio.to_thread(
+            return await asyncio.to_thread(
                 self._save_radio_message_sync,
                 int(state.get("session_uid", 0)),
                 int(state.get("track_id", -1)),
@@ -2104,6 +2119,8 @@ class PitWallDatabase:
                 role,
                 text,
                 source,
+                label,
+                trace_json,
             )
 
     def _save_radio_message_sync(
@@ -2114,15 +2131,18 @@ class PitWallDatabase:
         role: str,
         text: str,
         source: str,
-    ) -> None:
+        label: str = "",
+        trace_json: str | None = None,
+    ) -> int | None:
         if not text.strip():
-            return
+            return None
         with self._connect() as db:
-            db.execute(
+            cursor = db.execute(
                 """
                 INSERT INTO radio_messages(
-                    session_uid, track_id, lap_num, role, text, source, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                    session_uid, track_id, lap_num, role, text, source, label,
+                    trace_json, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     _session_uid_to_sqlite(session_uid),
@@ -2131,9 +2151,32 @@ class PitWallDatabase:
                     role,
                     text,
                     source,
+                    str(label or ""),
+                    trace_json,
                     time.time(),
                 ),
             )
+            return int(cursor.lastrowid) if cursor.lastrowid is not None else None
+
+    async def radio_trace(self, message_id: int) -> dict[str, Any] | None:
+        """One radio line with the evidence stored for it, or None if absent."""
+        async with self._lock:
+            return await asyncio.to_thread(self._radio_trace_sync, int(message_id))
+
+    def _radio_trace_sync(self, message_id: int) -> dict[str, Any] | None:
+        with self._connect() as db:
+            row = db.execute(
+                "SELECT * FROM radio_messages WHERE id=?", (message_id,)
+            ).fetchone()
+        if row is None:
+            return None
+        record = _restore_session_uid(dict(row))
+        raw = record.pop("trace_json", None)
+        try:
+            record["trace"] = json.loads(raw) if raw else None
+        except (TypeError, ValueError):
+            record["trace"] = None
+        return record
 
     async def save_strategy_snapshot(
         self,
@@ -2404,14 +2447,21 @@ class PitWallDatabase:
                     (*params, limit),
                 ).fetchall()
             ]
+            # The answer's trace is read on its own (radio_trace): history is
+            # listed to the dashboard and offered to the model as a tool, and
+            # neither should carry every answer's evidence.
             radio = [
                 _restore_session_uid(dict(row))
                 for row in db.execute(
-                    f"SELECT * FROM radio_messages{where} "
+                    "SELECT id, session_uid, track_id, lap_num, role, text, source, "
+                    "label, created_at, trace_json IS NOT NULL AS has_trace "
+                    f"FROM radio_messages{where} "
                     "ORDER BY created_at DESC LIMIT ?",
                     (*params, limit),
                 ).fetchall()
             ]
+            for item in radio:
+                item["has_trace"] = bool(item["has_trace"])
             proactive = [
                 _restore_session_uid(dict(row))
                 for row in db.execute(
