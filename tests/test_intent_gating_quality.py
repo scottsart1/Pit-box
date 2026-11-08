@@ -661,3 +661,27 @@ async def test_every_clearing_word_clears_the_standing_rules(stack, utterance):
     assert await brain._fast_answer(utterance) == "Copy, standing instructions cleared."
     assert (await _binding_state(store))["standing"] == []
     assert await database.load_preference("standing_instructions", None) == []
+
+
+# ------------------------------------------------------------------ cost
+
+
+@pytest.mark.asyncio
+async def test_phrase_patterns_are_compiled_once(stack, monkeypatch):
+    """Rebuilt per call, the phrase patterns overflowed the re module's cache
+    and several hundred were recompiled on every driver turn."""
+    from pitwall.intent import _phrase_pattern
+    from pitwall.providers import ProviderResult
+
+    store, _database, brain = await _brain_mid_race(stack)
+
+    async def generate(**_kwargs):
+        return ProviderResult("Gap is 1.2.", "test", "test", 1)
+
+    monkeypatch.setattr(brain.router, "generate", generate)
+    for _ in range(2):
+        await brain.ask("How is my pace against the car ahead?")
+    misses = _phrase_pattern.cache_info().misses
+    for _ in range(3):
+        await brain.ask("How is my pace against the car ahead?")
+    assert _phrase_pattern.cache_info().misses == misses
