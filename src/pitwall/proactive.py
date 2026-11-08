@@ -2312,6 +2312,11 @@ class ProactiveEngineer:
             log.debug("Proactive narration fell back to the template: %s", exc)
             return fallback
         spoken = " ".join((spoken or "").split())
+        if event.get("type") == "driver_check" and not spoken.endswith("?"):
+            # The call exists to hear the driver's tyre read, and only a call
+            # that ends on its question opens the reply window. A narration
+            # that lost or moved the question is replaced by the template.
+            return fallback
         return spoken or fallback
 
     def _select(self, state: dict[str, Any]) -> dict[str, Any] | None:

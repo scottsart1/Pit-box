@@ -408,7 +408,9 @@ async def test_a_spoken_question_opens_the_reply_window(stack):
 
     assert voice.reply_windows == ["engineer asked a question"]
 
-    # A statement does not open the window.
+    # A statement does not open the window. (A driver check never ends on a
+    # statement: narration that drops its question is replaced by the
+    # template, so the statement is made on an ordinary progress call.)
     class _StatementBrain(_Brain):
         async def proactive(self, event):
             return "Box this lap for mediums."
@@ -418,6 +420,6 @@ async def test_a_spoken_question_opens_the_reply_window(stack):
     await store.mutate(move_window)
     voice = _ListeningVoice()
     engineer = ProactiveEngineer(store, _StatementBrain(database), voice, _Setup(), _Strategy())
-    engineer._enqueue("driver_check", {"laps_to_window": 2, "box_lap": 5}, critical=True)
+    engineer._enqueue("progress_update", {"lap": 3}, critical=True)
     await engineer._deliver(await store.snapshot_analysis())
     assert voice.reply_windows == []

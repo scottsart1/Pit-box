@@ -38,9 +38,11 @@ async def test_deadline_keeps_full_verified_plan_and_alternative_with_failure_di
     store, _, brain = await configured(stack, monkeypatch)
     answer = await brain.ask(REQUEST)
     assert "analysis timed out" in answer
-    assert "box lap 12 for HARD" in answer
-    assert "alternative: box lap 10 for SOFT, then box lap 16 for SOFT" in answer
-    assert "confidence low" in answer and "confirm spare sets" in answer
+    # Compounds are spoken as the rest of the radio speaks them ("hards"),
+    # and the low confidence is said once.
+    assert "box lap 12 for hards" in answer
+    assert "alternative: box lap 10 for softs, then box lap 16 for softs" in answer
+    assert answer.count("confidence low") == 1 and "confirm spare sets" in answer
     state = await store.snapshot_analysis()
     assert "ProviderRequestError" in state["llm_last_error"]
     assert state["llm_model"] == "strategy-deadline-fallback"
