@@ -138,8 +138,9 @@ async def test_manual_race_override_can_answer_start_tyre_before_udp(stack) -> N
         "please help me with the first tyre for the race. This is the race, tell me that"
     )
     assert answer is not None
-    assert "Session locked to Race" in answer
-    assert "Start on mediums" in answer
+    # The start tyre that was asked for leads, in the same sentence as the lock.
+    assert answer.startswith("Start on mediums")
+    assert "session locked to Race" in answer
     snapshot = await store.snapshot_analysis()
     assert snapshot["session_mode_override"] == "race"
     assert snapshot["mode_profile"] == "race"
@@ -207,7 +208,9 @@ async def test_strategy_challenge_explains_evidence_instead_of_blind_yes(stack) 
     answer = await brain._fast_answer("are you sure about boxing this lap for softs? it does not make sense")
     assert answer is not None
     assert "two personal wear samples" in answer
-    assert "Confidence low" in answer
+    # The call leads; its low confidence is said once, attached to it.
+    assert answer.startswith("Box lap 9 for softs; provisional, confidence low")
+    assert answer.lower().count("confidence low") == 1
 
 class _VoiceBrain:
     async def ask(self, text: str) -> str:

@@ -28,8 +28,11 @@ async def test_strategy_uncertainty_survives_provider_sentence_cap(stack, monkey
 
     monkeypatch.setattr(brain.router, "generate", generate)
     answer = await brain._run("Full strategy", "low", "instructions", route="deep", strategy_context=plan())
-    assert "confidence low" in answer and "tyre estimates include track defaults" in answer
-    assert "Box lap 12 for hards; alternative lap 13." in answer
+    # The qualifier follows the call it qualifies, inside the same sentence.
+    assert answer.startswith(
+        "Box lap 12 for hards; alternative lap 13; provisional, confidence low, "
+        "tyre estimates include track defaults."
+    )
     assert "This is only provisional" not in answer  # Provider's late caveat was capped.
 
 
@@ -116,5 +119,8 @@ def test_red_flag_proactive_keeps_urgent_prefix_plan_and_uncertainty():
     event = {"type": "race_control", "payload": {"to": "red_flag", "red_flag_restart": {"instruction": advice}}}
     answer = ProactiveEngineer._fallback_text(event, {"strategy": plan()})
     assert answer.startswith("Red flag, red flag.")
-    assert advice in answer
-    assert "confidence low" in answer and "track defaults" in answer
+    # The qualifier is attached to the best strategy, before the alternative.
+    assert (
+        "Best strategy: spare softs, then mediums on lap 13; provisional, confidence low, "
+        "tyre estimates include track defaults. Alternative: fresh mediums, then softs on lap 21."
+    ) in answer

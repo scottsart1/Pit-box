@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import re
 import time
+from collections.abc import Callable
 from copy import deepcopy
 from typing import Any
 
@@ -37,9 +38,10 @@ Be calm, precise, proactive and brief. Lead with the answer, not the data.
 
 You are analysing, not reading out. The driver is at speed and cannot do arithmetic on
 lap times, gaps or sector splits. A number on its own is not an answer.
-- A comparison ("how am I doing against X", "am I catching him", "is he quicker") is answered
-  with a verdict first — closing, holding, losing — then the evidence that supports it, then what
-  to do about it. Call get_pace_verdict; never reply with two lap times and let the driver subtract.
+- A comparison ("how am I doing against X", "am I catching him", "is he quicker") opens with the
+  verdict — closing, holding, losing — and what to do about it, in the same sentence, then gives
+  the evidence that supports it. Call get_pace_verdict; never reply with two lap times and let the
+  driver subtract.
 - An open question ("how is the race going", "where do I stand", "any updates") is answered from
   get_race_picture: the real threat or opportunity, whether their own pace is holding, and the one
   thing that follows. Not a status dump.
@@ -49,7 +51,8 @@ lap times, gaps or sector splits. A number on its own is not an answer.
   end, whether the stop still works. Numbers are the evidence for that, never the substitute.
 - If the data cannot support a verdict, say which part is missing in a few words and give the
   best call available. Do not pad with numbers to fill the gap.
-Return only the words that should be spoken over team radio. Think privately: never output analysis,
+Return only the words that should be spoken over team radio; your first word is the first thing
+the driver hears. Think privately: never output analysis,
 deliberation, tool-selection notes, self-talk, or phrases such as "let me check", "I need to",
 "wait", or "hold on". Do not use headings, bullet lists, markdown, or restate the prompt.
 Use telemetry tools for facts not already in the situation header. Never invent a number.
@@ -200,8 +203,9 @@ When the driver asks why, retrieve the finding's evidence chain and give the ear
 well-supported cause, not the last visible symptom. Use "likely contributed" or
 "associated with" unless the evidence supports causation outright.
 
-Normally answer in one or two short radio sentences. A deeper requested explanation may use
-three concise sentences. Every sentence must contain driver-useful information. Do not mention being an AI.
+Answer in short radio sentences, the answer or instruction first. When a sentence limit is stated
+below, the radio cuts the reply there. Every sentence must contain driver-useful information.
+Do not mention being an AI.
 """.strip()
 
 PROACTIVE_PERSONA = """
@@ -239,13 +243,13 @@ findings were measured against.
 
 _VERBOSITY_GUIDANCE = {
     "terse": (
-        "Verbosity: terse. Reply in the fewest words possible — numbers and the "
-        "action only, ideally one short clause. Omit pleasantries."
+        "Verbosity: terse. One short sentence: the verdict and the action, with a "
+        "number only as the evidence for them. Omit pleasantries."
     ),
     "standard": "",
     "chatty": (
         "Verbosity: conversational. You may add a short sentence of context or "
-        "encouragement, while still leading with the action and the numbers."
+        "encouragement after the verdict and the action, which still come first."
     ),
 }
 
@@ -283,13 +287,21 @@ def compose_persona(
     base: str,
     verbosity: str | None = None,
     standing_instructions: list[dict[str, Any]] | None = None,
+    *,
+    route: str | None = None,
 ) -> str:
     """Fold the user's engineer name, custom persona and verbosity into a base
     persona. Any user-supplied text is placed between the base brief and a final
     safety anchor, so custom tone can never appear as the last word and override
     the safety-critical instructions.
+
+    With ``route``, the brief also states the sentence limit the radio applies
+    to that reply, taken from the same function that enforces it, so the
+    prompt and the cut cannot disagree.
     """
     parts = [base]
+    if route is not None:
+        parts.append(_radio_length_rule(route, str(verbosity or settings.radio_verbosity)))
     # Tolerate anything that survived from an older or hand-edited preference
     # file. A bare list of strings previously raised AttributeError here, which
     # took down every model call the engineer made.
@@ -606,40 +618,179 @@ def _contains_deliberation_for_history(text: str) -> bool:
     ))
 
 
-def _limit_radio_sentences(text: str, route: str, verbosity: str) -> str:
-    """Keep TTS output radio-length even when a provider ignores the style brief."""
+_SENTENCE_BREAK = re.compile(r"(?<=[.!?])\s+(?=[A-Z0-9])")
+# "vs." and "St." end an abbreviation, not a sentence.
+_ABBREVIATION_END = re.compile(r"(?:\b(?:vs|approx|St|Ste|Mr)|\be\.g|\bi\.e)\.$", re.IGNORECASE)
+# A sentence made only of one of these acknowledges; it never answers.
+_ACKNOWLEDGEMENTS = frozenset({
+    "copy", "copy that", "copy copy", "copy understood", "understood", "roger",
+    "roger that", "ok", "okay", "ok copy", "okay copy", "got it", "noted",
+    "affirm", "affirmative", "received", "will do",
+})
+_ACKNOWLEDGEMENT_OPENERS = frozenset({"copy", "understood", "roger", "ok", "okay", "noted", "got"})
+# Briefings have their own length, independent of the radio verbosity: the
+# pre-session brief is read on screen, the debriefs are spoken off the throttle.
+_BRIEFING_SENTENCE_LIMITS = {"pre_session": 8, "post_race": 2, "post_qualifying_lap": 3}
+
+
+def _radio_sentences(text: str) -> list[str]:
     flattened = " ".join(text.replace("\n", " ").split())
     if not flattened:
-        return ""
+        return []
+    pieces: list[str] = []
+    for piece in _SENTENCE_BREAK.split(flattened):
+        if pieces and _ABBREVIATION_END.search(pieces[-1]):
+            pieces[-1] += " " + piece
+        else:
+            pieces.append(piece)
+    return pieces
+
+
+def _radio_sentence_limit(route: str, verbosity: str) -> int:
     if verbosity == "terse":
-        limit = 1
-    elif route == "deep" or verbosity == "chatty":
-        limit = 3
-    else:
-        limit = 2
-    sentences = re.split(r"(?<=[.!?])\s+(?=[A-Z0-9])", flattened)
-    return " ".join(sentences[:limit]).strip()
+        return 1
+    if route == "deep" or verbosity == "chatty":
+        return 3
+    return 2
+
+
+def _radio_length_rule(route: str, verbosity: str) -> str:
+    limit = _radio_sentence_limit(route, verbosity)
+    return (
+        f"Length: the radio cuts this reply after {limit} sentence{'' if limit == 1 else 's'}. "
+        "Put the answer or the instruction in the first sentence. Do not spend a sentence on a "
+        'bare acknowledgement such as "copy" or "understood": it is never the whole answer.'
+    )
+
+
+def _is_acknowledgement(sentence: str) -> bool:
+    return " ".join(re.findall(r"[a-z]+", sentence.lower())) in _ACKNOWLEDGEMENTS
+
+
+def _is_acknowledging_lead_in(sentence: str) -> bool:
+    """A few words that open on an acknowledgement: "Copy, staying out." """
+    words = re.findall(r"[a-z]+", sentence.lower())
+    return 1 < len(words) <= 4 and words[0] in _ACKNOWLEDGEMENT_OPENERS
+
+
+def _limit_radio_sentences(
+    text: str,
+    route: str,
+    verbosity: str,
+    *,
+    limit: int | None = None,
+    keep_last: bool = False,
+    protect: Callable[[str], bool] | None = None,
+) -> str:
+    """Keep TTS output radio-length even when a provider ignores the style brief.
+
+    Counting from the front alone kept whatever came first. In terse mode
+    "Copy. Box this lap for hards." became "Copy.", and a driver check lost
+    the question that opens the reply window. When the text is over the
+    limit, therefore: a leading bare acknowledgement is dropped, a short
+    acknowledging lead-in ("Copy, staying out.") does not use up the budget,
+    the first sentence matching ``protect`` (a pit call) is kept, and a
+    closing question (or, with ``keep_last``, a debrief's final instruction)
+    is kept, even when that takes a terse reply to two sentences.
+    """
+    sentences = _radio_sentences(text)
+    budget = limit if limit is not None else _radio_sentence_limit(route, verbosity)
+    if len(sentences) <= budget:
+        return " ".join(sentences)
+    while len(sentences) > 1 and _is_acknowledgement(sentences[0]):
+        sentences = sentences[1:]
+    lead: list[str] = []
+    if len(sentences) > budget and _is_acknowledging_lead_in(sentences[0]):
+        lead, sentences = sentences[:1], sentences[1:]
+    chosen = list(range(min(budget, len(sentences))))
+    if protect is not None and not any(protect(sentence) for sentence in lead):
+        target = next((index for index, sentence in enumerate(sentences) if protect(sentence)), None)
+        if target is not None and target not in chosen:
+            chosen[-1] = target
+    last = len(sentences) - 1
+    if last not in chosen and (keep_last or sentences[last].endswith("?")):
+        chosen = chosen[: max(1, budget - 1)] + [last]
+    return " ".join(lead + [sentences[index] for index in sorted(set(chosen))])
+
+
+# What a strategy reply says when it makes a call: the sentence the plan's
+# uncertainty is attached to, and the one the radio cut must keep. A "pit"
+# that only qualifies a noun (pit lane, pit loss) is not a call, and nor is a
+# lap time ("last lap 1:31.2").
+_PIT_CALL = re.compile(
+    r"\b(?:box|pit(?![- ]?(?:lane|loss|wall|window|exit|entry|limiter|crew)\b)|stay out|stop|"
+    r"lap \d+(?![\d:])|fit|keep the current|to the (?:finish|flag|end)|change (?:tyres|tires|to))\b",
+    re.IGNORECASE,
+)
+_STATED_UNCERTAINTY = re.compile(
+    r"\bprovisional\b|\blow confidence\b|\bconfidence (?:is )?(?:low|unreported)\b|\btrack[- ]defaults?\b",
+    re.IGNORECASE,
+)
+_CHANGE_CUE = re.compile(r"\b(?:if|unless|changes?|would change)\b", re.IGNORECASE)
+_CHANGE_TRIGGERS = ("safety car", "vsc", "red flag", "rain", "wet", "damage", "wear")
+
+
+def _states_pit_call(sentence: str) -> bool:
+    return _PIT_CALL.search(sentence) is not None
+
+
+def _states_change_condition(text: str, condition: str) -> bool:
+    """Whether the reply already gives a condition naming one of the plan's triggers."""
+    if _CHANGE_CUE.search(text) is None:
+        return False
+    return any(
+        re.search(rf"\b{re.escape(trigger)}\b", text, re.IGNORECASE)
+        and re.search(rf"\b{re.escape(trigger)}\b", condition, re.IGNORECASE)
+        for trigger in _CHANGE_TRIGGERS
+    )
+
+
+def _spoken_compound(compound: Any) -> str:
+    return f"{str(compound).lower()}s"
 
 
 class EngineerBrain:
     @staticmethod
-    def qualify_strategy_text(text: str, plan: dict[str, Any] | None) -> str:
-        """Keep authoritative model uncertainty outside the narration cap."""
-        if not plan or not (plan.get("recommended") or plan.get("red_flag_restart", {}).get("active")):
-            return text
+    def _strategy_qualifier(plan: dict[str, Any] | None) -> str | None:
+        """The plan's own uncertainty, as a clause, when it is low or unreported."""
+        if not plan or not (plan.get("recommended") or (plan.get("red_flag_restart") or {}).get("active")):
+            return None
         confidence = str(plan.get("confidence") or "unknown").lower()
         if confidence not in {"low", "unknown"}:
-            return text
+            return None
         evidence = plan.get("model_summary", {}) or {}
         sources = [evidence.get("selected_stint_wear_source", ""), evidence.get("selected_stint_deg_source", "")]
-        used = set(plan.get("recommended", {}).get("compounds", []) or [])
+        used = set((plan.get("recommended") or {}).get("compounds", []) or [])
         for compound in used:
             model = (evidence.get("compounds", {}) or {}).get(compound, {})
             sources.extend((model.get("wear_source", ""), model.get("pace_source", "")))
-        basis = "; tyre estimates include track defaults" if any("track_default" in str(value) for value in sources) else ""
+        basis = ", tyre estimates include track defaults" if any("track_default" in str(value) for value in sources) else ""
         confidence_text = "confidence low" if confidence == "low" else "confidence unreported"
-        qualifier = f"Provisional strategy ({confidence_text}{basis}); "
-        return text if text.startswith(qualifier) else qualifier + text
+        return f"provisional, {confidence_text}{basis}"
+
+    @staticmethod
+    def qualify_strategy_text(text: str, plan: dict[str, Any] | None) -> str:
+        """Attach a low-confidence plan's uncertainty to the pit call it qualifies.
+
+        The qualifier is a clause on the call's own sentence, after the call,
+        so it adds no sentence to the radio budget and never pushes the call
+        back. A reply that already says it is provisional is left alone, and
+        a reply that makes no call (an acknowledgement, an explanation of the
+        confidence) has nothing to qualify.
+        """
+        qualifier = EngineerBrain._strategy_qualifier(plan)
+        if qualifier is None or _STATED_UNCERTAINTY.search(text):
+            return text
+        sentences = _radio_sentences(text)
+        target = next(
+            (index for index, sentence in enumerate(sentences)
+             if _states_pit_call(sentence) and not sentence.endswith("?")),
+            None,
+        )
+        if target is None:
+            return text
+        sentences[target] = sentences[target].rstrip(".!") + f"; {qualifier}."
+        return " ".join(sentences)
 
     def __init__(
         self,
@@ -824,7 +975,7 @@ class EngineerBrain:
             stops = list(zip(candidate.get("box_laps", []), candidate.get("compounds", [])[1:]))
             if not stops:
                 return "stay on the fitted tyres to the finish"
-            return ", then ".join(f"box lap {lap} for {compound}" for lap, compound in stops)
+            return ", then ".join(f"box lap {lap} for {_spoken_compound(compound)}" for lap, compound in stops)
 
         signature = (recommended.get("box_laps"), recommended.get("compounds"))
         alternative = next((candidate for candidate in plan.get("plans", []) if supported(candidate)
@@ -833,22 +984,33 @@ class EngineerBrain:
         label = "current computed plan" if fresh["current"] else "last confirmed computed plan"
         response = prefix + f"{label}: {describe(recommended)}"
         response += f"; alternative: {describe(alternative)}" if alternative else "; no distinct feasible alternative is confirmed"
-        response += f"; confidence {plan.get('confidence', 'unknown')}"
+        # Confidence is said once: as the provisional qualifier when it is low
+        # or unreported, otherwise as the plain level.
+        response += f"; {self._strategy_qualifier(plan) or 'confidence ' + str(plan.get('confidence', 'unknown'))}"
         if plan.get("tyre_inventory", {}).get("status") == "unknown":
             response += "; confirm spare sets in the tyre menu"
         if not fresh["current"]:
             response += "; live telemetry must confirm this before a new pit call"
-        return self._with_strategy_change_condition(self.qualify_strategy_text(response + ".", plan), plan)
+        return self._with_strategy_change_condition(response + ".", plan)
 
     @staticmethod
     def _with_strategy_change_condition(text: str, plan: dict[str, Any] | None) -> str:
+        """Close a current-plan answer with the condition that would change the call.
+
+        Added once, as a clause on the last sentence, so it adds nothing to the
+        sentence count. A reply that already gives its own condition naming
+        one of the same triggers keeps that one rather than hearing two.
+        """
         recommended = (plan or {}).get("recommended", {}) or {}
         if not recommended.get("legal") or not recommended.get("feasible"):
             return text
         condition = str(recommended.get("call_changes_if") or recommended.get("change_condition") or "").strip().rstrip(".")
-        if not condition or condition.casefold() in text.casefold():
+        if not condition or condition.casefold() in text.casefold() or _states_change_condition(text, condition):
             return text
-        return text.rstrip(". ") + "; " + condition[0].lower() + condition[1:] + "."
+        stripped = text.rstrip()
+        if stripped.endswith("?"):
+            return f"{stripped} {condition}."
+        return stripped.rstrip(".!; ") + "; " + condition[0].lower() + condition[1:] + "."
 
     @staticmethod
     def _material_plan_identity(plan: dict[str, Any] | None) -> tuple[Any, ...] | None:
@@ -1885,18 +2047,30 @@ class EngineerBrain:
             trend = car.get("trend")
             change = car.get("gap_change_s")
             window = car.get("window_s")
+            # A short-term move against the lap trend (a tow, one corner) is
+            # what the driver may be seeing; say it, so the verdict does not
+            # sound wrong to him.
+            short = car.get("short_term_change_s")
+            short_window = car.get("short_term_window_s")
+            conflict = (
+                f", though it {'grew' if float(short) > 0 else 'shrank'} {abs(float(short)):.1f} "
+                f"over the last {float(short_window):.0f} seconds"
+                if car.get("trend_conflict") and isinstance(short, (int, float))
+                and isinstance(short_window, (int, float))
+                else ""
+            )
             if trend == "closing":
-                return f"You are closing on {driver}: {gap:.1f} seconds, gained {abs(float(change)):.1f} over {float(window):.0f} seconds."
+                return f"You are closing on {driver}: {gap:.1f} seconds, gained {abs(float(change)):.1f} over {float(window):.0f} seconds{conflict}."
             if trend == "falling_back":
-                return f"You are not closing on {driver}: {gap:.1f} seconds, lost {abs(float(change)):.1f} over {float(window):.0f} seconds."
+                return f"You are not closing on {driver}: {gap:.1f} seconds, lost {abs(float(change)):.1f} over {float(window):.0f} seconds{conflict}."
             if trend == "steady":
                 return f"The gap to {driver} is steady at {gap:.1f} seconds."
             pace = car.get("pace_delta_s")
             if isinstance(pace, (int, float)):
                 if pace > 0.05:
-                    return f"No measured gap trend yet. {driver} is {gap:.1f} seconds ahead; your latest lap was {pace:.1f} slower."
+                    return f"{driver} is {gap:.1f} seconds ahead with no measured gap trend yet; your latest lap was {pace:.1f} slower."
                 if pace < -0.05:
-                    return f"No measured gap trend yet. {driver} is {gap:.1f} seconds ahead; your latest lap was {abs(pace):.1f} faster."
+                    return f"{driver} is {gap:.1f} seconds ahead with no measured gap trend yet; your latest lap was {abs(pace):.1f} faster."
             return f"{driver} is {gap:.1f} seconds ahead; not enough gap history to call the trend."
         entries: list[str] = []
         for car in cars[:4]:
@@ -1912,6 +2086,33 @@ class EngineerBrain:
                 f"{car.get('driver', 'Unknown')} {float(car.get('gap_s', 0.0)):.1f}s{suffix}"
             )
         return "Ahead: " + "; ".join(entries) + "."
+
+    @staticmethod
+    def _spoken_event(record: dict[str, Any]) -> str:
+        """One decoded session event in words, never its packet code."""
+        if record.get("detail"):
+            return str(record["detail"])
+        kind = str(record.get("kind") or "event")
+        driver = record.get("driver")
+
+        def known(value: Any) -> bool:
+            return bool(value) and not str(value).startswith("unknown")
+
+        if kind == "penalty":
+            penalty = str(record.get("penalty")) if known(record.get("penalty")) else "penalty"
+            seconds = record.get("time_s")
+            if isinstance(seconds, (int, float)) and seconds > 0:
+                penalty = f"{seconds:g}-second {penalty}"
+            spoken = f"{penalty} for {driver or 'a car'}"
+            infringement = record.get("infringement")
+            return spoken + (f", {infringement}" if known(infringement) else "")
+        if kind == "retirement":
+            reason = record.get("reason")
+            return f"{driver or 'a car'} retired" + (
+                f", {reason}" if known(reason) and reason not in {"retired", "invalid"} else ""
+            )
+        words = kind.replace("_", " ").replace("drs", "DRS")
+        return f"{words}, {driver}" if driver else words
 
     @classmethod
     def _handles_named_rival(cls, text: str) -> bool:
@@ -2315,18 +2516,20 @@ class EngineerBrain:
                         start_wetness, ("MEDIUM", "INTER", "WET")
                     )
                     tyre_call = (
-                        "Start on full wets."
+                        "Start on full wets"
                         if start_compound == "WET"
-                        else "Start on intermediates."
+                        else "Start on intermediates"
                     )
                 elif priority in {"tyre_life", "safety", "one_stop"}:
-                    tyre_call = "Start on hards for tyre-life priority."
+                    tyre_call = "Start on hards for tyre-life priority"
                 elif 0 < total_laps <= 15:
-                    tyre_call = "Start on softs for the short race."
+                    tyre_call = "Start on softs for the short race"
                 else:
-                    tyre_call = "Start on mediums as the balanced dry default."
-                qualifier = " I’ll validate the stop lap when race distance, grid and live conditions arrive." if not state.get("connected") or total_laps <= 0 else ""
-                return f"Session locked to {label}. {tyre_call}{qualifier}"
+                    tyre_call = "Start on mediums as the balanced dry default"
+                # One sentence, start tyre first: it is what was asked, and the
+                # radio cut must not leave only the lock confirmation.
+                qualifier = "; I’ll validate the stop lap when race distance, grid and live conditions arrive" if not state.get("connected") or total_laps <= 0 else ""
+                return f"{tyre_call}; session locked to {label}{qualifier}."
             return f"Session locked to {label}. I’ll use {profile.replace('_', ' ')} logic until you clear it."
 
         # A pre-race plan discussion, if one is open, owns strategy talk until
@@ -2558,8 +2761,8 @@ class EngineerBrain:
         telemetry_stale = bool(not state.get("connected") and not state.get("game_paused"))
         if telemetry_stale and has_any_phrase(text, ("radio check", "can you hear me")):
             lap = int(state.get("current_lap", 0) or 0)
-            suffix = f" Last confirmed lap {lap}." if lap > 0 else ""
-            return "Radio check, loud and clear. Live telemetry is not connected yet." + suffix
+            suffix = f", last confirmed lap {lap}" if lap > 0 else ""
+            return f"Radio check, loud and clear; live telemetry is not connected yet{suffix}."
 
         asks_temperature_unit = has_any_phrase(
             text, ("fahrenheit", "celsius", "tire temperatures", "tyre temperatures")
@@ -2701,7 +2904,10 @@ class EngineerBrain:
             report = await self.tools.get_cars_ahead_progress(1)
             nearest = report.get("cars", [])
             gap_text = f"; {nearest[0]['driver']} {float(nearest[0]['gap_s']):.1f} ahead" if nearest else ""
-            event_text = f"; latest event {material[-1].get('description', material[-1].get('type'))}" if material else "; no new incident or penalty"
+            event_text = (
+                "; latest event " + self._spoken_event(self.tools._event_record(material[-1], state, time.time()))
+                if material else "; no new incident or penalty"
+            )
             prefix = f"Last confirmed lap {int(state.get('current_lap', 0))}: " if telemetry_stale else ""
             rain15 = self.tools.forecast_probability(state, 15) if self.tools.packet_freshness(state, 1)["available"] else None
             rain_text = f"rain risk {rain15:g} percent in 15 minutes" if rain15 is not None else "15-minute rain forecast unavailable"
@@ -2751,13 +2957,15 @@ class EngineerBrain:
             )
             if challenged:
                 reason = str(recommended.get("tyre_reason") or recommended.get("stop_required_reason") or "")
-                confidence = str(strategy.get("confidence") or "low")
                 override_meta = recommended.get("driver_override") or {}
                 warning = str(override_meta.get("warning") or "")
                 detail = warning or reason
-                if detail:
-                    return self.qualify_strategy_text(f"{prefix}{instruction} {detail} Confidence {confidence}.", strategy)
-                return self.qualify_strategy_text(f"{prefix}{instruction} Confidence {confidence}; the call is provisional.", strategy)
+                answer = f"{prefix}{instruction}" + (f" {detail}" if detail else "")
+                # Low or unreported confidence is said once, by the qualifier
+                # on the call; a supported level is stated plainly.
+                if self._strategy_qualifier(strategy) is None:
+                    return f"{answer.rstrip('.')}. Confidence {strategy.get('confidence')}."
+                return self.qualify_strategy_text(answer, strategy)
             return self.qualify_strategy_text(prefix + (f"No change — {instruction}" if previous == signature else instruction), strategy)
 
         asks_balance = has_any_phrase(text, ("differential", "diff setting", "brake bias"))
@@ -2772,13 +2980,13 @@ class EngineerBrain:
         if has_phrase(text, "radio check"):
             lap = int(state.get("current_lap", 0))
             position = int(state.get("player_position", 0))
-            return f"Radio check, loud and clear. Lap {lap}, P{position}."
+            return f"Radio check, loud and clear; lap {lap}, P{position}."
 
         if has_phrase(text, "time check"):
             lap = int(state.get("current_lap", 0))
             position = int(state.get("player_position", 0))
             last = self._format_ms(int(state.get("last_lap_ms", 0)))
-            return f"Lap {lap}, P{position}." + (f" Last lap {last}." if last else "")
+            return f"Lap {lap}, P{position}" + (f", last lap {last}." if last else ".")
 
         if state.get("mode_profile") == "qualifying" and has_any_phrase(text, ("best lap", "target lap", "pole")):
             summary = self.tools.qualifying_summary(state, 3)
@@ -2786,7 +2994,7 @@ class EngineerBrain:
             leaders = ", ".join(f"{item.get('name')} {item.get('best_lap')}" for item in field if item.get("best_lap"))
             target = summary.get("target") or "still building"
             player = summary.get("player_best") or "no valid lap yet"
-            return f"Best times: {leaders or 'not available yet'}. Your best {player}; target {target}."
+            return f"Your best {player}; target {target}; best times: {leaders or 'not available yet'}."
 
         if has_any_phrase(text, ("gap ahead", "car ahead")):
             result = await self.tools.get_gap("ahead")
@@ -2821,8 +3029,13 @@ class EngineerBrain:
             temps, temperature_label = _temperature_values(temps_c, str(state.get("temperature_unit", "c")))
             limiting = max(range(len(wear)), key=wear.__getitem__) if wear else 0
             labels = ["front-left", "front-right", "rear-left", "rear-right"]
-            temp_text = f" Front cores {temps[0]:.0f}/{temps[1]:.0f} {temperature_label}." if len(temps) >= 2 else ""
-            return f"{tyre.get('compound', 'Unknown').title()}s, {int(tyre.get('age_laps', 0))} laps old. Limiting tyre is {labels[limiting]} at {wear[limiting]:.0f} percent.{temp_text}"
+            temp_text = f"; front cores {temps[0]:.0f}/{temps[1]:.0f} {temperature_label}" if len(temps) >= 2 else ""
+            # One sentence, so the radio cut keeps the limiting tyre's wear,
+            # which is the condition being asked about.
+            return (
+                f"{tyre.get('compound', 'Unknown').title()}s, {int(tyre.get('age_laps', 0))} laps old, "
+                f"{labels[limiting]} limiting at {wear[limiting]:.0f} percent{temp_text}."
+            )
 
         if has_phrase(text, "fuel") and has_any_phrase(
             text,
@@ -2878,7 +3091,11 @@ class EngineerBrain:
             if risk is None:
                 return f"{label}; no 15-minute rain probability is available."
             if crossover.get("reason"):
-                return f"{label}, rain risk {risk} percent in 15 minutes. {crossover['reason']}"
+                # One sentence, so the radio cut keeps the crossover reason.
+                reason = str(crossover["reason"]).strip().rstrip(".").replace(". ", "; ")
+                if reason[1:2].islower():
+                    reason = reason[:1].lower() + reason[1:]
+                return f"{label}, rain risk {risk} percent in 15 minutes; {reason}."
             return f"{label}; rain risk {risk} percent in 15 minutes."
 
         if has_phrase(text, "damage") and has_any_phrase(
@@ -3028,8 +3245,14 @@ class EngineerBrain:
             raise
         if enforce_radio_limit:
             live_state = await self.store.snapshot_analysis()
+            # On a strategy reply the cut keeps the pit call, so the qualifier
+            # and change condition below are attached to the call, not to
+            # whatever happened to come first.
             result.text = _limit_radio_sentences(
-                result.text, route, str(live_state.get("radio_verbosity", settings.radio_verbosity))
+                result.text,
+                route,
+                str(live_state.get("radio_verbosity", settings.radio_verbosity)),
+                protect=_states_pit_call if strategy_context is not None else None,
             )
         if guard_origin is not None:
             latest_state = await self.store.snapshot_analysis()
@@ -3062,21 +3285,34 @@ class EngineerBrain:
         return result.text
 
     async def narrate_briefing(self, kind: str, payload: dict[str, Any]) -> str:
-        """Narrate frozen deterministic facts without giving the model tools."""
+        """Narrate frozen deterministic facts without giving the model tools.
+
+        Each kind has its own sentence limit, stated in the brief and enforced
+        on the reply: the debriefs are spoken verbatim, so an overrun reaches
+        the driver whole. The radio verbosity does not apply: its one-clause
+        terse rule cannot coexist with a brief that must state three goals.
+        """
         state = await self.store.snapshot_analysis()
         is_pre = kind == "pre_session"
         specialist = PRE_SESSION_PERSONA if is_pre else DEBRIEF_PERSONA
+        limit = _BRIEFING_SENTENCE_LIMITS.get(kind, 3)
+        briefing_rule = (
+            "This briefing has no situation header and no tools: narrate only the payload in the "
+            "request, and ignore any instruction above about calling a tool or reading the header. "
+            f"Length: at most {limit} sentences; anything past that is cut"
+            + ("." if is_pre else ", except the final actionable instruction, which is always kept.")
+        )
         prompt = (
             f"BRIEFING KIND: {kind}\n"
             "NARRATE ONLY THIS DETERMINISTIC PAYLOAD; DO NOT COMPUTE OR INFER NEW FACTS:\n"
             f"{json.dumps(payload, ensure_ascii=False)}"
         )
-        return await self._run(
+        text = await self._run(
             prompt,
             settings.deep_reasoning_effort,
             compose_persona(
-                f"{PERSONA}\n\n{specialist}",
-                str(state.get("radio_verbosity", "standard")),
+                f"{PERSONA}\n\n{specialist}\n\n{briefing_rule}",
+                "standard",
                 state.get("standing_instructions", []),
             ),
             max_rounds=1,
@@ -3084,6 +3320,7 @@ class EngineerBrain:
             tools=[],
             enforce_radio_limit=False,
         )
+        return _limit_radio_sentences(text, "deep", "standard", limit=limit, keep_last=not is_pre)
 
     @session_scoped()
     async def compare(self, utterance: str) -> dict[str, Any]:
@@ -3110,7 +3347,7 @@ class EngineerBrain:
         )
         return await self.router.compare(
             prompt=prompt,
-            instructions=compose_persona(PERSONA),
+            instructions=compose_persona(PERSONA, route=route),
             route=route,
             effort=effort,
             tools=[schema for schema in self.tools.schemas() if schema["name"] != "record_lap_observation"],
@@ -3143,7 +3380,11 @@ class EngineerBrain:
         direct = await self._fast_answer(utterance)
         if direct:
             direct = _limit_radio_sentences(
-                direct, route, str((await self.store.snapshot_analysis()).get("radio_verbosity", "standard"))
+                direct,
+                route,
+                str((await self.store.snapshot_analysis()).get("radio_verbosity", "standard")),
+                # A computed plan's warning must not cost the driver its box call.
+                protect=_states_pit_call if self._is_strategy_request(utterance) else None,
             )
             await self.store.update(
                 llm_provider="local",
@@ -3194,6 +3435,7 @@ class EngineerBrain:
                     PERSONA,
                     str(state.get("radio_verbosity", "standard")),
                     state.get("standing_instructions", []),
+                    route=route,
                 ),
                 max_rounds=4 if route == "deep" else 3,
                 route=route,
@@ -3282,6 +3524,9 @@ class EngineerBrain:
             f"RECENT ENGINEER CALLS: {json.dumps(recent_engineer, ensure_ascii=False)}\n"
             f"RECENT DRIVER RADIO: {json.dumps(recent_driver, ensure_ascii=False)}"
         )
+        # While the driver's hold runs the call must not restate the plan, so
+        # there is no pit call to qualify.
+        is_strategy_call = event.get("type") in strategy_events and not hold.get("active")
         text = await self._run(
             prompt,
             settings.reasoning_effort,
@@ -3289,12 +3534,17 @@ class EngineerBrain:
                 f"{PERSONA}\n\n{PROACTIVE_PERSONA}",
                 str(state.get("radio_verbosity", "standard")),
                 state.get("standing_instructions", []),
+                route="normal",
             ),
             max_rounds=1,
             route="normal",
             # No tools: the event payload already carries every number that may
             # be spoken, and narration must not go looking for new ones.
             tools=[],
+            # A volunteered pit call carries the same provisional qualifier as
+            # an answered one, so a low-confidence plan never sounds firmer
+            # when the engineer raises it himself.
+            strategy_context=state.get("strategy", {}) if is_strategy_call else None,
         )
         # Deliberately not recorded here. An unsolicited call is only part of the
         # conversation once it has actually been spoken, and delivery can still

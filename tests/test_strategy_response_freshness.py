@@ -49,7 +49,7 @@ async def test_material_plan_change_replaces_stale_narration_with_complete_curre
     before_override = (await store.snapshot_analysis())["strategy_override"]
     answer = await brain.ask("Give me the full pit strategy and its best alternative.")
     assert "Telemetry updated while checking" in answer
-    assert "box lap 21 for SOFT" in answer and "alternative: box lap 22 for SOFT" in answer
+    assert "box lap 21 for softs" in answer and "alternative: box lap 22 for softs" in answer
     assert "lap 23" not in answer and "confidence low" in answer
     state = await store.snapshot_analysis()
     assert state["llm_provider"] == "local" and state["llm_model"] == "strategy-refresh-guard"
@@ -62,7 +62,7 @@ async def test_material_plan_change_replaces_stale_narration_with_complete_curre
 async def test_same_plan_or_minor_wear_change_preserves_narration(stack, monkeypatch, wear):
     store, brain = await radio(stack, monkeypatch, plan(wear=wear))
     answer = await brain.ask("Give me the full pit strategy and its best alternative.")
-    assert "Box lap 23 for softs. Alternative lap 24" in answer
+    assert "Box lap 23 for softs" in answer and "Alternative lap 24 for softs" in answer
     assert "Telemetry updated" not in answer
     assert (await store.snapshot_analysis())["llm_provider"] == "test"
 
@@ -74,8 +74,8 @@ async def test_explicit_ordinary_action_does_not_falsely_replace_unchanged_plan(
     latest["plans"][1]["action"] = "pit_stop"
     store, brain = await radio(stack, monkeypatch, latest)
     answer = await brain.ask("Give me the full pit strategy and its best alternative.")
-    assert answer.startswith("Provisional strategy (confidence low)")
-    assert "Box lap 23 for softs. Alternative lap 24" in answer
+    assert answer.startswith("Box lap 23 for softs; provisional, confidence low.")
+    assert "Alternative lap 24 for softs" in answer
     assert "Telemetry updated" not in answer
     assert (await store.snapshot_analysis())["llm_provider"] == "test"
 
@@ -111,7 +111,7 @@ async def test_refreshed_complete_plan_includes_latest_change_condition(stack, m
     latest["recommended"]["change_condition"] = "The call changes if a safety car is deployed."
     _, brain = await radio(stack, monkeypatch, latest)
     answer = await brain.ask("Give me the full pit strategy and its best alternative.")
-    assert "box lap 21 for SOFT" in answer
+    assert "box lap 21 for softs" in answer
     assert "the call changes if a safety car is deployed" in answer
     assert answer.count("the call changes") == 1
 
@@ -131,7 +131,7 @@ async def test_changed_best_alternative_refreshes_full_answer_even_when_primary_
     store, brain = await radio(stack, monkeypatch, latest)
     answer = await brain.ask("Give me the full pit strategy and its best alternative.")
     assert "Telemetry updated while checking" in answer
-    assert "box lap 23 for SOFT" in answer and "alternative: box lap 25 for SOFT" in answer
+    assert "box lap 23 for softs" in answer and "alternative: box lap 25 for softs" in answer
     assert "lap 24" not in answer
     assert (await store.snapshot_analysis())["llm_model"] == "strategy-refresh-guard"
 
