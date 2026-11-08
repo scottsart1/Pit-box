@@ -1487,6 +1487,7 @@ def hold_baseline(state: dict[str, Any]) -> dict[str, Any]:
             [float(value) for value in (state.get("tyre", {}) or {}).get("wear", [0]) or [0]] or [0.0]
         ),
         "compound": (state.get("tyre", {}) or {}).get("compound"),
+        "tyre_age_laps": (state.get("tyre", {}) or {}).get("age_laps"),
     }
 
 
@@ -1519,6 +1520,18 @@ def hold_material_change(state: dict[str, Any], hold: dict[str, Any]) -> str | N
         (state.get("tyre", {}) or {}).get("compound")
     ) != str(baseline.get("compound")):
         return "the fitted tyre changed"
+    # A stop for the same compound changes no compound name, only the age: a
+    # set that was several laps old and now reads new has been changed. The
+    # margin keeps a flashback, which rewinds the age by a lap or so, from
+    # reading as a stop.
+    age_then = baseline.get("tyre_age_laps")
+    age_now = (state.get("tyre", {}) or {}).get("age_laps")
+    if (
+        isinstance(age_then, (int, float)) and not isinstance(age_then, bool)
+        and isinstance(age_now, (int, float)) and not isinstance(age_now, bool)
+        and age_then >= 3 and age_now <= 1
+    ):
+        return "a fresh set was fitted"
     current_damage = state.get("damage", {}) or {}
     for key, old_value in (baseline.get("damage", {}) or {}).items():
         new_value = current_damage.get(key, 0)
@@ -3145,6 +3158,12 @@ class EngineerBrain:
         r"no\s+point|no\s+way)\s+(?:[a-z0-9]+\s+){0,3}?stay(?:ing)?\s+out\b"
     )
 
+    # "Stay out" decides the stop; "stay out of trouble" or "stay out of his
+    # dirty air" is driving talk. "Stay out of the pits" is still the stop.
+    _STAY_OUT_DECISION = re.compile(
+        r"\bstay(?:ing)?\s+out\b(?!\s+of\b(?!\s+(?:the\s+)?(?:pits?|pit\s+lane|box)\b))"
+    )
+
     @classmethod
     def _strategy_refusal(cls, utterance: str) -> bool:
         text = cls._normalize_text(utterance)
@@ -3171,7 +3190,7 @@ class EngineerBrain:
                 "not in the mood for a box",
             ),
         ) or (
-            has_any_phrase(text, ("staying out", "stay out"))
+            cls._STAY_OUT_DECISION.search(words) is not None
             and not cls._NEGATED_STAY_OUT.search(words)
         )
         if explicit:
