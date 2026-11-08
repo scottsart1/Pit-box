@@ -168,6 +168,27 @@ def _serialize_live_driver(driver: DriverState, copy_values: bool = True) -> dic
     return serialized
 
 
+def agreed_tactic_stands(state: dict[str, Any]) -> bool:
+    """Whether a tactic agreed with the driver still governs the next stop.
+
+    Going long, the overcut and the undercut are all about the next stop,
+    and nothing clears the agreement once it is made. A set fitted after
+    the lap it was agreed (tyre age shorter than the laps since) means
+    that stop has been made: twenty laps on, "AGREED: go long" is history.
+    Serialised with every snapshot as ``strategy_intent_stands`` so the
+    radio and every dashboard view read the same answer.
+    """
+    intent = state.get("strategy_intent", {}) or {}
+    if not intent.get("active"):
+        return False
+    try:
+        laps_since = int(state.get("current_lap", 0) or 0) - int(intent.get("set_at_lap"))
+    except (TypeError, ValueError):
+        return True
+    age = (state.get("tyre") or {}).get("age_laps")
+    return not (isinstance(age, (int, float)) and age < laps_since)
+
+
 def _reference(value: Any) -> Any:
     return value
 
@@ -836,6 +857,7 @@ class StateStore:
 
         data["session_identity"] = session_identity(self.state)
         data["telemetry_stale"] = not data["connected"] and bool(data["last_packet_at"])
+        data["strategy_intent_stands"] = agreed_tactic_stands(data)
         data["wheel_labels"] = list(WHEEL_LABELS)
         if profile == "live":
             # A bounded sparkline feed avoids returning the full completed-lap
