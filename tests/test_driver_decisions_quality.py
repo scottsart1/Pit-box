@@ -617,3 +617,58 @@ async def test_the_speech_session_does_not_restate_a_declined_stop(stack, monkey
     assert spoken == "Holding as agreed; next option is box lap 17 for hards, about 2.1 seconds slower."
     brief = await brain.realtime_instructions(REALTIME_PERSONA)
     assert "PIT CALL AS SPOKEN: Holding as agreed; next option is box lap 17" in brief
+
+
+@pytest.mark.parametrize("utterance", [
+    "stay out of trouble", "Stay out of his dirty air on the exit", "staying out of trouble, nice",
+])
+def test_driving_talk_about_staying_out_of_something_is_not_a_declined_stop(utterance):
+    assert EngineerBrain._strategy_refusal(utterance) is False
+
+
+@pytest.mark.parametrize("utterance", [
+    "I'm staying out", "stay out", "I'm staying out of the pits", "stay out of the pit lane this lap",
+])
+def test_staying_out_of_the_pits_is_still_a_declined_stop(utterance):
+    assert EngineerBrain._strategy_refusal(utterance) is True
+
+
+@pytest.mark.asyncio
+async def test_a_hold_ends_at_a_stop_for_the_same_compound(stack, monkeypatch):
+    """A stop for the same compound changes no compound name, only the age."""
+    store, brain, _captured = await _race(stack, monkeypatch, ["Copy, staying out."])
+    await store.mutate(lambda state: state.proactive.update({"enabled": False}))
+
+    def on_worn_mediums(state):
+        state.tyre.compound = "MEDIUM"
+        state.tyre.age_laps = 12
+
+    await store.mutate(on_worn_mediums)
+    await brain.ask("I'm not boxing")
+    assert "STRATEGY HOLD" in await brain.situation_header()
+
+    def fresh_mediums(state):
+        state.current_lap = 14
+        state.tyre.age_laps = 0
+
+    await store.mutate(fresh_mediums)
+    assert "STRATEGY HOLD" not in await brain.situation_header()
+
+
+@pytest.mark.asyncio
+async def test_a_flashback_that_rewinds_the_tyre_age_keeps_the_hold(stack, monkeypatch):
+    store, brain, _captured = await _race(stack, monkeypatch, ["Copy, staying out."])
+    await store.mutate(lambda state: state.proactive.update({"enabled": False}))
+
+    def on_worn_mediums(state):
+        state.tyre.compound = "MEDIUM"
+        state.tyre.age_laps = 12
+
+    await store.mutate(on_worn_mediums)
+    await brain.ask("I'm not boxing")
+
+    def rewound(state):
+        state.tyre.age_laps = 11
+
+    await store.mutate(rewound)
+    assert "STRATEGY HOLD" in await brain.situation_header()
