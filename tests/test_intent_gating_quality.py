@@ -544,8 +544,85 @@ def test_a_tag_question_or_a_promise_is_not_a_refusal(remark):
 
 
 # ---------------------------------------------------------------------------
-# Standing rules: the way back must not run backwards
+# A question beside an instruction does not cancel the instruction
 # ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_a_question_beside_a_suppression_still_drops_the_subject(stack):
+    store, database, brain = await _brain_mid_race(stack)
+
+    answer = await brain._fast_answer(
+        "What's the gap behind? And stop telling me about the tyres."
+    )
+
+    # The rule is kept, and the question goes to the model to be answered.
+    assert answer is None
+    standing = (await _binding_state(store))["standing"]
+    assert ProactiveEngineer.is_suppressed("tyre_wear", standing) is True
+    saved = await database.load_preference("standing_instructions", None)
+    assert EngineerBrain.suppressed_subjects(saved) == ["tyres"]
+
+
+@pytest.mark.asyncio
+async def test_a_question_beside_a_preference_still_saves_it(stack):
+    store, _database, brain = await _brain_mid_race(stack)
+
+    answer = await brain._fast_answer("What's the gap behind? I want more traction.")
+
+    assert answer is None
+    assert (await _binding_state(store))["preferences"]["setup_bias"] == "traction"
+
+
+@pytest.mark.asyncio
+async def test_a_question_beside_a_request_for_short_answers_still_sets_them(stack, monkeypatch):
+    store, _database, brain = await _brain_mid_race(stack)
+    _stub_model(monkeypatch, brain)
+
+    answer = await brain.ask("What's the gap behind? And keep your answers short.")
+
+    assert answer == "Model answer."
+    assert (await _binding_state(store))["verbosity"] == "terse"
+
+
+@pytest.mark.parametrize(
+    "remark",
+    [
+        "I'm going to lose straight line speed if we add wing",
+        "I need to know how much straight line speed I'm losing",
+    ],
+)
+def test_a_report_about_a_setup_trait_is_not_a_preference(remark):
+    assert EngineerBrain._preference_updates(remark) == {}, remark
+
+
+@pytest.mark.parametrize(
+    "utterance,expected",
+    [
+        ("I'd like more rotation", {"rotation": 2, "setup_bias": "rotation"}),
+        ("let's protect the tyres", {"tyre_life": 2, "strategy_priority": "safety"}),
+    ],
+)
+def test_a_contracted_preference_is_saved(utterance, expected):
+    assert EngineerBrain._preference_updates(utterance) == expected
+
+
+# ---------------------------------------------------------------------------
+# Answer length and standing rules: the way back must not run backwards
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_not_wanting_short_answers_is_not_a_request_for_them(stack, monkeypatch):
+    store, _database, brain = await _brain_mid_race(stack)
+    _stub_model(monkeypatch, brain)
+    await store.update(radio_verbosity="terse")
+
+    assert await brain.ask("I don't want short answers") == "Copy, normal-length answers again."
+    assert (await _binding_state(store))["verbosity"] == "standard"
+
+    assert EngineerBrain._requests_standard_answers("I don't want normal answers") is False
+    assert EngineerBrain._requests_short_answers("I don't want normal answers") is False
 
 
 @pytest.mark.asyncio
