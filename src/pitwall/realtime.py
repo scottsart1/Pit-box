@@ -756,6 +756,23 @@ class RealtimeRadio:
             encoded = json.dumps(bounded, default=str)
             if len(encoded) <= 16_000:
                 return encoded
+        # Shortening lists and strings cannot shrink a payload made of many
+        # keys. Rather than return nothing, drop the largest top-level fields
+        # and name them, so the small decision fields still reach the radio.
+        fields = {key: value for key, value in bounded.items() if key not in {"truncated", "truncation_note"}}
+        largest_first = sorted(fields, key=lambda name: len(json.dumps(fields[name], default=str)), reverse=True)
+        omitted: list[str] = []
+        for key in largest_first[:-1]:
+            del fields[key]
+            omitted.append(key)
+            encoded = json.dumps({
+                **fields,
+                "truncated": True,
+                "omitted_fields": omitted,
+                "truncation_note": "omitted_fields were too large for radio; do not infer their contents.",
+            }, default=str)
+            if len(encoded) <= 16_000:
+                return encoded
         return json.dumps({"available": False, "truncated": True, "reason": "This result is too large for radio; request a specific lap or group."})
 
     async def shakedown(self) -> dict[str, Any]:

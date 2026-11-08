@@ -2083,22 +2083,335 @@ class TelemetryTools:
                     "reason": "The race is complete; no further racing pit stop or live strategy alternative is needed."}
         return await self.strategy.get_plan()
 
-    @staticmethod
-    def _compact_strategy_for_radio(plan: dict[str, Any]) -> dict[str, Any]:
-        def compact(value: Any) -> Any:
-            if isinstance(value, dict):
-                return {key: compact(item) for key, item in value.items()
-                        if key not in {"lap_times_s", "wheel_projection"}}
-            if isinstance(value, list):
-                return [compact(item) for item in value]
-            return value
+    # The strategy engine's plan is built for the dashboard and the guards: it
+    # carries per-lap simulations, a setup-effect baseline in every stint,
+    # Monte Carlo detail, weather scenario trajectories and a projection for
+    # every rival, with the same basis strings repeated dozens of times. Sent
+    # whole it is ~75k characters, which buries the one-line decision, is
+    # resent on every later tool round and cannot fit the realtime radio at
+    # all. The model gets an allow-listed decision view instead. It keeps the
+    # fields the persona asks the engineer to weigh (alternatives, uncertainty,
+    # per-wheel wear, traffic and rejoin, compound legality, evidence source,
+    # neutralisation) and every field the brain's strategy guards read from a
+    # tool result (confidence, model_summary evidence sources, the recommended
+    # and every ranked plan's laps, compounds, action, feasible and legal, and
+    # call_changes_if), with unchanged values.
+    _STRATEGY_TOP_LEVEL_FIELDS = (
+        "available", "reason", "race_completed", "planning_available",
+        "result_confirmed", "final_classification", "result_source",
+        "result_interpretation", "laps_remaining", "confidence",
+        "strategy_risk_appetite", "pit_loss_s", "red_flag_restart",
+        "tyre_inventory", "game_window", "stability", "personal_wear_model",
+    )
+    _RECOMMENDED_PLAN_FIELDS = (
+        "instruction", "action", "box_lap", "fit_compound", "box_laps",
+        "compounds", "stops_remaining", "inventory_feasible", "feasible",
+        "legal", "finish_projection_valid", "finish_projection_confidence",
+        "projected_finish_position", "projected_points",
+        "position_probabilities", "projected_rejoin_position",
+        "positions_lost_by_stopping", "traffic_cost_s",
+        "positions_gained_vs_stay_out", "net_gain_vs_stay_out_s",
+        "delta_to_next_s", "projected_time_s", "risk_adjusted_time_s",
+        "total_pit_cost_s", "projected_max_wear_pct",
+        "projected_finish_wear_pct", "projected_finish_wear_fl_fr_rl_rr",
+        "tyre_reason", "stop_required_reason", "rationale", "call_changes_if",
+        "committed_at_lap",
+    )
+    # Present only when they say something: neutral driver feedback, a zero
+    # penalty and a satisfied feedback guard are the normal case.
+    _RECOMMENDED_PLAN_SIGNALS = (
+        "pending_finish_penalty_s", "feasible_without_driver_feedback",
+        "feedback_guard_applied", "driver_feedback_lap",
+        "driver_feedback_category", "feedback_conflict",
+    )
+    _ALTERNATIVE_PLAN_FIELDS = (
+        "action", "box_lap", "fit_compound", "box_laps", "compounds",
+        "feasible", "legal", "projected_finish_position",
+        "projected_rejoin_position", "traffic_cost_s", "projected_max_wear_pct",
+    )
+    # A ranked entry that is the recommended plan repeats only what the
+    # guards compare; its evidence is under "recommended".
+    _PLAN_IDENTITY_FIELDS = (
+        "action", "box_lap", "fit_compound", "box_laps", "compounds",
+        "feasible", "legal",
+    )
+    # Each compound's evidence source is reported once, in model_summary.
+    _STINT_EVIDENCE_FIELDS = (
+        "laps", "starting_wear_pct", "projected_max_wear_pct",
+        "projected_finish_wear_fl_fr_rl_rr", "feasible", "usable_life_laps",
+        "operational_wear_limit_pct", "wear_per_lap_pct", "wear_sample_size",
+        "deg_s_per_lap", "deg_sample_size", "tyre_set_index",
+    )
+    _COMPOUND_EVIDENCE_FIELDS = (
+        "historical_laps_recorded", "historical_laps_observed",
+        "live_laps_observed", "wear_sample_size", "pace_sample_size",
+        "wear_source", "pace_source", "inferred_from", "wear_per_lap_pct",
+        "deg_s_per_lap", "pace_excluded_laps", "wear_excluded_laps",
+    )
+    _MODEL_SUMMARY_FIELDS = (
+        "confidence", "confidence_basis", "evidence_samples",
+        "history_compatibility_basis", "selected_stint_wear_source",
+        "selected_stint_deg_source", "limiting_wear_per_lap_pct",
+        "learning_excluded_laps", "pace_learning_excluded_laps",
+    )
+    _NEUTRALISATION_FIELDS = (
+        "phase", "effective_pit_loss_s", "base_pit_loss_s", "saving_vs_green_s",
+        "pit_entry_status", "pit_this_lap_available", "opportunity",
+        "field_compression_expected", "gaps_partly_preserved",
+        "late_neutralisation", "finish_under_neutralisation_risk",
+        "track_position_warning", "estimate_confidence", "red_flag_tyre_change",
+    )
+    _WEATHER_DECISION_FIELDS = (
+        "trend", "wetness", "projected_end_wetness", "rain_pct", "compound",
+        "compound_split", "box_lap", "worth_stopping", "reason", "ask_driver",
+        "driver_question", "margin_s", "uncertainty_s", "payback_s",
+    )
+    _DEFENCE_DECISION_FIELDS = (
+        "pursuer", "gap_s", "gap_trend", "gap_change_s_per_lap",
+        "defence_laps_sustainable", "estimated_pass_probability",
+        "overtaking_difficulty", "confidence",
+    )
+    _COMPOUND_RULE_FIELDS = (
+        "applies", "compliant", "dry_compounds_used", "change_outstanding",
+        "conditional_on_future_use", "eligible_next_compounds",
+    )
+    _SHAPE_FIELDS = (
+        "stops", "compounds", "box_laps", "stint_laps",
+        "projected_finish_position", "projected_max_wear_pct", "cost_vs_best_s",
+        "feasible", "verdict",
+    )
+    _RIVAL_PROJECTION_FIELDS = (
+        "driver", "position", "current_gap_s", "compound", "tyre_age",
+        "likely_remaining_stops", "likely_stop_offsets_laps", "confidence",
+    )
+    _NEAREST_RIVAL_PROJECTIONS = 3
 
-        # Radio needs the complete plan, evidence and final per-wheel limits;
-        # repeating all per-lap simulated arrays across alternatives consumes
-        # the response deadline without adding facts to the spoken decision.
-        result = compact(plan)
-        result["detail_scope"] = "Complete ranked plan summaries; per-lap simulation arrays omitted from this radio tool."
-        return result
+    @staticmethod
+    def _round_floats(value: Any) -> Any:
+        """Round floats for a model prompt: 2 dp, or 3 dp below one."""
+        if isinstance(value, float):
+            return round(value, 2 if abs(value) >= 1 else 3)
+        if isinstance(value, dict):
+            return {key: TelemetryTools._round_floats(item) for key, item in value.items()}
+        if isinstance(value, list):
+            return [TelemetryTools._round_floats(item) for item in value]
+        return value
+
+    @staticmethod
+    def _pick(
+        source: Any, fields: tuple[str, ...], *, drop_empty: bool = False,
+    ) -> dict[str, Any]:
+        if not isinstance(source, dict):
+            return {}
+        return {
+            key: source[key]
+            for key in fields
+            if key in source and not (drop_empty and source[key] in (None, {}, [], ""))
+        }
+
+    @classmethod
+    def _stint_evidence(cls, plan: dict[str, Any]) -> list[dict[str, Any]]:
+        compounds = list(plan.get("compounds") or [])
+        stints = []
+        for index, stint in enumerate(plan.get("stint_models") or []):
+            if not isinstance(stint, dict):
+                continue
+            entry: dict[str, Any] = {"compound": compounds[index] if index < len(compounds) else None}
+            entry.update(cls._pick(stint, cls._STINT_EVIDENCE_FIELDS, drop_empty=True))
+            stints.append(entry)
+        return stints
+
+    @staticmethod
+    def _same_plan(plan: dict[str, Any], other: dict[str, Any]) -> bool:
+        return bool(plan.get("compounds")) and (
+            list(plan.get("box_laps") or []), list(plan.get("compounds") or [])
+        ) == (list(other.get("box_laps") or []), list(other.get("compounds") or []))
+
+    @classmethod
+    def _alternative_view(cls, plan: dict[str, Any], recommended: dict[str, Any]) -> dict[str, Any]:
+        if recommended and cls._same_plan(plan, recommended):
+            return {**cls._pick(plan, cls._PLAN_IDENTITY_FIELDS), "is_recommended": True}
+        view = cls._pick(plan, cls._ALTERNATIVE_PLAN_FIELDS)
+        try:
+            view["delta_vs_recommended_s"] = round(
+                float(plan["risk_adjusted_time_s"]) - float(recommended["risk_adjusted_time_s"]), 2
+            )
+        except (KeyError, TypeError, ValueError):
+            view["risk_adjusted_time_s"] = plan.get("risk_adjusted_time_s")
+        return view
+
+    @classmethod
+    def _override_view(cls, override: Any, recommended: dict[str, Any]) -> dict[str, Any]:
+        if not isinstance(override, dict) or not override:
+            return {}
+        view = cls._pick(override, (
+            "active", "honored", "following_plan", "warning",
+            "delta_vs_automatic_s", "requested", "plan_remaining",
+        ), drop_empty=True)
+        evaluation = override.get("requested_plan_evaluation")
+        if isinstance(evaluation, dict) and evaluation:
+            view["requested_plan_evaluation"] = cls._alternative_view(evaluation, {})
+        return view
+
+    @classmethod
+    def _nearest_rival_projections(
+        cls, rivals: list[dict[str, Any]], own_finish: Any,
+    ) -> list[dict[str, Any]]:
+        def finish_gap(item: dict[str, Any]) -> float | None:
+            try:
+                return float(item["finish_time_s"]) - float(own_finish)
+            except (KeyError, TypeError, ValueError):
+                return None
+
+        def distance(item: dict[str, Any]) -> tuple[float, int]:
+            gap = finish_gap(item)
+            if gap is None:
+                try:
+                    gap = float(item.get("current_gap_s"))
+                except (TypeError, ValueError):
+                    gap = 1e9
+            return abs(gap), int(item.get("position") or 99)
+
+        nearest = sorted(rivals, key=distance)[: cls._NEAREST_RIVAL_PROJECTIONS]
+        projections = []
+        for item in sorted(nearest, key=lambda entry: int(entry.get("position") or 99)):
+            entry = cls._pick(item, cls._RIVAL_PROJECTION_FIELDS, drop_empty=True)
+            gap = finish_gap(item)
+            if gap is not None:
+                entry["projected_finish_gap_s"] = round(gap, 2)
+            if item.get("pending_finish_penalty_s"):
+                entry["pending_finish_penalty_s"] = item["pending_finish_penalty_s"]
+            if item.get("gap_assumed"):
+                entry["gap_assumed"] = True
+            projections.append(entry)
+        return projections
+
+    @classmethod
+    def strategy_decision_view(cls, plan: dict[str, Any]) -> dict[str, Any]:
+        """The model's view of the ranked strategy: the call and its evidence.
+
+        ``EngineerBrain._run`` compares the tool result it hands the model with
+        the live plan and qualifies the answer from it, so this view keeps, with
+        unchanged values, every field those guards read.
+        """
+        if not isinstance(plan, dict):
+            return plan
+        view: dict[str, Any] = cls._pick(plan, cls._STRATEGY_TOP_LEVEL_FIELDS)
+        recommended = plan.get("recommended")
+        recommended_source = recommended if isinstance(recommended, dict) else {}
+        if isinstance(recommended, dict):
+            rec_view = cls._pick(recommended, cls._RECOMMENDED_PLAN_FIELDS, drop_empty=True)
+            if "call_changes_if" not in rec_view and recommended.get("change_condition"):
+                rec_view["change_condition"] = recommended["change_condition"]
+            signals = {
+                key: value
+                for key, value in cls._pick(recommended, cls._RECOMMENDED_PLAN_SIGNALS).items()
+                if value not in (None, 0, 0.0, False)
+                and not (key == "feasible_without_driver_feedback" and value == recommended.get("feasible"))
+            }
+            rec_view.update(signals)
+            if signals.get("driver_feedback_lap") is not None:
+                rec_view.update(cls._pick(recommended, ("driver_feedback_factor", "driver_feedback_deg_factor")))
+            monte_carlo = recommended.get("monte_carlo")
+            if isinstance(monte_carlo, dict) and monte_carlo:
+                rec_view["finish_time_uncertainty"] = cls._pick(monte_carlo, ("uncertainty_s", "calibrated"))
+            stints = cls._stint_evidence(recommended)
+            if stints:
+                rec_view["stints"] = stints
+            override = cls._override_view(recommended.get("driver_override"), recommended)
+            if override:
+                rec_view["driver_override"] = override
+            defence = cls._pick(recommended.get("defence"), cls._DEFENCE_DECISION_FIELDS)
+            if defence:
+                rec_view["defence"] = defence
+            view["recommended"] = rec_view
+        if "plans" in plan:
+            view["plans"] = [
+                cls._alternative_view(item, recommended_source)
+                for item in plan.get("plans") or []
+                if isinstance(item, dict)
+            ]
+        if view.get("plans"):
+            view["plan_comparison_basis"] = (
+                "Plans rank on projected finishing position first; elapsed time breaks ties. "
+                "delta_vs_recommended_s is risk-adjusted race time minus the recommended "
+                "plan's; positive is slower. Each entry is a separate plan: never combine "
+                "laps from two entries."
+            )
+        raw_recommended = plan.get("raw_recommended")
+        if isinstance(raw_recommended, dict) and raw_recommended:
+            view["faster_plan_awaiting_confirmation"] = cls._alternative_view(
+                raw_recommended, recommended_source
+            )
+        if plan.get("shapes"):
+            view["shapes"] = [
+                cls._pick(shape, cls._SHAPE_FIELDS) for shape in plan["shapes"] if isinstance(shape, dict)
+            ]
+        if isinstance(plan.get("compound_rule"), dict):
+            view["compound_rule"] = cls._pick(plan["compound_rule"], cls._COMPOUND_RULE_FIELDS)
+            if plan["compound_rule"].get("wet_waiver"):
+                view["compound_rule"]["wet_waiver"] = True
+        if isinstance(plan.get("observed_compound_rule"), dict):
+            view["observed_compound_rule"] = cls._pick(
+                plan["observed_compound_rule"],
+                ("compliant", "change_outstanding", "dry_compounds_used", "eligible_next_compounds"),
+            )
+        if isinstance(plan.get("neutralisation"), dict):
+            view["neutralisation"] = cls._pick(
+                plan["neutralisation"], cls._NEUTRALISATION_FIELDS, drop_empty=True
+            )
+        if isinstance(plan.get("finish_penalty"), dict):
+            penalty = plan["finish_penalty"]
+            view["finish_penalty"] = cls._pick(
+                penalty, ("pending_s", "status", "basis") if penalty.get("pending_s") else ("pending_s", "status")
+            )
+        if isinstance(plan.get("weather_crossover"), dict):
+            view["weather_crossover"] = cls._pick(
+                plan["weather_crossover"], cls._WEATHER_DECISION_FIELDS, drop_empty=True
+            )
+        summary = plan.get("model_summary")
+        if isinstance(summary, dict):
+            summary_view = cls._pick(summary, cls._MODEL_SUMMARY_FIELDS, drop_empty=True)
+            compounds = summary.get("compounds")
+            if isinstance(compounds, dict):
+                # The compounds a ranked plan can use, plus the fitted one.
+                relevant = {
+                    str(name)
+                    for item in [recommended_source, *(plan.get("plans") or []), *(plan.get("shapes") or [])]
+                    if isinstance(item, dict)
+                    for name in item.get("compounds") or []
+                }
+                summary_view["compounds"] = {
+                    name: cls._pick(model, cls._COMPOUND_EVIDENCE_FIELDS, drop_empty=True)
+                    for name, model in compounds.items()
+                    if isinstance(model, dict) and (not relevant or name in relevant)
+                }
+            view["model_summary"] = summary_view
+        if isinstance(plan.get("pace_reference"), dict):
+            view["pace_reference"] = cls._pick(
+                plan["pace_reference"], ("source", "observed_lap_s", "sample_size"),
+            )
+        defence = cls._pick(plan.get("defence"), cls._DEFENCE_DECISION_FIELDS)
+        if defence:
+            view["defence"] = defence
+        rivals = [item for item in plan.get("rival_finish_projections") or [] if isinstance(item, dict)]
+        if rivals:
+            projections = cls._nearest_rival_projections(rivals, recommended_source.get("projected_time_s"))
+            view["rival_finish_projections"] = projections
+            basis = [(
+                f"The {len(projections)} of {len(rivals)} rivals projected to finish nearest you; "
+                "projected_finish_gap_s is their finish minus yours (negative: ahead of you)."
+            )]
+            for item in rivals:
+                for text in (item.get("pace_reference") or {}).get("assumptions") or []:
+                    if isinstance(text, str) and text not in basis:
+                        basis.append(text)
+            view["rival_projection_basis"] = basis
+        view["detail_scope"] = (
+            "Decision view: per-lap simulations, setup effects, Monte Carlo samples, "
+            "weather scenarios and other rivals are omitted."
+        )
+        return cls._round_floats(view)
 
     async def evaluate_undercut(self, driver: str = "ahead") -> dict[str, Any]:
         return await self.strategy.evaluate_undercut(driver)
@@ -3520,4 +3833,4 @@ class TelemetryTools:
         if function is None or name.startswith("_"):
             return {"error": f"Unknown tool: {name}"}
         result = await function(**arguments)
-        return self._compact_strategy_for_radio(result) if name == "get_pit_strategy" else result
+        return self.strategy_decision_view(result) if name == "get_pit_strategy" else result
