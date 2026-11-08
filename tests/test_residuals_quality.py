@@ -14,6 +14,7 @@ import pytest
 from pitwall.brain import EngineerBrain
 from pitwall.proactive import ProactiveEngineer
 from pitwall.providers import ProviderResult
+from pitwall.strategy import StrategyEngine
 
 QUALIFIER = "provisional, confidence low, tyre estimates include track defaults"
 
@@ -232,3 +233,65 @@ async def test_how_are_the_tyres_while_paused_is_labelled_as_last_confirmed(stac
 def test_tyre_questions_about_something_else_still_go_to_the_model(utterance):
     state = {"drivers": [{"name": "NORRIS", "driver_id": 3, "car_idx": 1, "position": 5}]}
     assert EngineerBrain._defers_to_model(state, utterance)
+
+
+# ------------------------------------------------------- the car behind
+
+
+@pytest.mark.asyncio
+async def test_defence_and_pace_verdict_agree_on_the_car_behind(stack):
+    """He caught 1.2 s in the first lap and lost 0.4 s in the last.
+
+    Over the whole history he is catching; over the last lap he is not. The
+    pace verdict reads the last lap, so the defence plan for the same car must
+    too, or the engineer says "being caught" and "pulling away" about one car.
+    """
+    store, _database, _strategy, _setup, _analysis, tools = stack
+    for group in (2, 7):
+        await store.mark_packet(2026, 26, 42, packet_id=group)
+
+    def seed(state):
+        state.connected = True
+        state.current_lap = 12
+        state.total_laps = 30
+        state.player_position = 6
+        state.player_car_index = 0
+        state.mode_profile = "race"
+        player, rival = state.drivers[0], state.drivers[1]
+        player.car_idx, player.position, player.active, player.is_player = 0, 6, True, True
+        player.name = "PLAYER"
+        rival.car_idx, rival.position, rival.active = 1, 7, True
+        rival.name, rival.driver_id = "HULKENBERG", 10
+        rival.gap_to_player_s = 2.2
+        rival.last_lap_ms = 90_000
+        rival.gap_history = [
+            {"session_time_s": 1000.0, "lap": 10, "gap_s": 3.0},
+            {"session_time_s": 1090.0, "lap": 11, "gap_s": 1.8},
+            {"session_time_s": 1180.0, "lap": 12, "gap_s": 2.2},
+        ]
+
+    await store.mutate(seed)
+    verdict = await tools.get_pace_verdict("Hulkenberg")
+    defence = (await tools.get_defence_plan("Hulkenberg"))["assessment"]
+    assert verdict["verdict"] == "pulling away"
+    assert defence["gap_trend"] == "pulling_away"
+    assert defence["gap_change_s_per_lap"] == verdict["gap_change_s_per_lap"] == 0.4
+    # Not being caught, so the defence holds to the flag.
+    assert defence["defence_laps_sustainable"] == 19
+
+
+def test_defence_trend_is_the_shared_lap_window_measure():
+    state = {
+        "player_position": 6, "player_car_index": 0, "current_lap": 12, "total_laps": 30,
+        "drivers": [
+            {"car_idx": 0, "position": 6},
+            {"car_idx": 1, "position": 7, "name": "Rival", "gap_to_player_s": 2.2, "last_lap_ms": 90_000,
+             "gap_history": [{"session_time_s": 1000.0 + 2.0 * k, "gap_s": 2.2 - 0.002 * k} for k in range(46)]},
+        ],
+        "analysis": {"corner_metrics": []},
+    }
+    # 0.09 s gained over the last 90 s: under the trend threshold every other
+    # gap answer uses, so this is holding station, not being caught.
+    result = StrategyEngine.defence_assessment(state)
+    assert result["gap_trend"] == "holding_station"
+    assert result["defence_laps_sustainable"] == 19
