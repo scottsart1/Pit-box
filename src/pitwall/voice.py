@@ -280,7 +280,7 @@ class NativeVoiceController:
     def busy_reason(self) -> str:
         """Which latch is holding the engineer, named.
 
-        ``is_busy`` is an OR of seven independent latches. When one of them
+        ``is_busy`` is an OR of eight independent latches. When one of them
         sticks — a conversation that never closes, a wake window that never
         disarms — every unsolicited call blocks behind it and the queue grows
         with nothing to say which. A driver then sees a dozen calls pending and
@@ -294,6 +294,8 @@ class NativeVoiceController:
             return "answering the driver"
         if self._signal_pressed:
             return "push-to-talk held"
+        if self._driver_turn_pending:
+            return "taking the driver's call"
         if self._wake_speaking:
             return "answering the wake word"
         armed_for = self._wake_armed_until - time.monotonic()
@@ -331,10 +333,26 @@ class NativeVoiceController:
         return self._wake_armed_until > time.monotonic()
 
     @property
+    def _driver_turn_pending(self) -> bool:
+        """Between the driver letting go of the button and the engineer
+        starting on what they said.
+
+        The release tone and handing the clip over take a moment in which
+        neither the button nor ``busy`` is set. An unsolicited call chosen in
+        that moment was spoken between the driver's question and its answer,
+        with the acknowledgement playing over it.
+        """
+        return bool(
+            self._release_in_progress
+            or (self._process_task and not self._process_task.done())
+        )
+
+    @property
     def is_busy(self) -> bool:
         return bool(
             self.busy
             or self._signal_pressed
+            or self._driver_turn_pending
             or self._wake_speaking
             or self._wake_armed_until > time.monotonic()
             # An open speech session means a conversation is in progress; an
