@@ -10,6 +10,11 @@ const html = fs.readFileSync(path.join(root, 'static/index.html'), 'utf8');
 const start = html.indexOf('function drawPace(');
 const renderer = html.slice(start, html.indexOf('\nfunction ', start + 1));
 assert.ok(start > 0 && renderer.length > 100);
+// renderLiveCar writes through the page's setHTML helper; load the production
+// definition rather than a stand-in so the check keeps exercising real code.
+const setHtmlStart = html.indexOf('const setHTML=');
+const setHtml = html.slice(setHtmlStart, html.indexOf('};', setHtmlStart) + 2);
+assert.ok(setHtmlStart > 0 && setHtml.endsWith('};'));
 const carStart = html.indexOf('function renderLiveCar(');
 const carRenderer = html.slice(carStart, html.indexOf('function renderRaceControl(', carStart));
 const damageStart = html.indexOf('function damageText(');
@@ -44,7 +49,7 @@ const strategyModule = fs.readFileSync(path.join(root, 'static/js/strategy.js'),
       await page.evaluate(() => document.getElementById('bootOverlay')?.remove());
       // The page's scripts were stripped above; the renderers need the screen-language runtime.
       await page.addScriptTag({ path: path.join(root, 'static/js/i18n.js') });
-      await page.addScriptTag({ content: `const $ = id => document.getElementById(id); const esc = v => String(v).replaceAll('&','&amp;').replaceAll('<','&lt;');\n${renderer}\n${damageRenderer}\n${carRenderer}\n${restartRenderer}\n${strategyRenderer}` });
+      await page.addScriptTag({ content: `const $ = id => document.getElementById(id); const esc = v => String(v).replaceAll('&','&amp;').replaceAll('<','&lt;');\n${setHtml}\n${renderer}\n${damageRenderer}\n${carRenderer}\n${restartRenderer}\n${strategyRenderer}` });
       await page.addScriptTag({ type: 'module', content: `${strategyModule}\nwindow.strategyQA={renderCall,renderPlans,drawTimeline};` });
       await page.waitForFunction(() => window.strategyQA);
       for (const [scenario, laps] of [['empty', []], ['recorded', [90500, 90300, 90100, 90200, 89900]]]) {
