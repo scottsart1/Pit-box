@@ -17,7 +17,10 @@ from .intent import (
     has_any_phrase,
     has_negation,
     has_phrase,
+    is_question,
     normalize_text,
+    strip_leading_fillers,
+    utterance_mood,
 )
 from .prerace import PreRacePlanner
 from .providers import ProviderDeadlineError, ProviderRequestError, ProviderResult, ProviderRouter
@@ -847,18 +850,33 @@ class EngineerBrain:
         # covers "do not", "don't", "don t" and "dont" with one branch.
         r"|(?:do[^a-z0-9]+not|don[^a-z0-9]*t)\s+(?:\w+\s+){0,3}?"
         r"(?:tell|telling|talk|mention|remind|want|need|give|say)"
-        r"|no\s+(?:more|further)"
-        r"|enough"
-        r"|stop\s+it\s+with"
+        # "No more" and "enough" only drop a subject when they introduce one:
+        # "no more about the fuel", "enough with the tyres". Bare, they are
+        # ordinary words - "is there enough grip left with these tyres" was
+        # filed as a lasting rule never to raise tyres again.
+        r"|no\s+(?:more|further)(?=\s+(?:about|regarding|concerning|updates?|calls?|"
+        r"reminders?|talk|talking|mentions?|warnings?|messages?|info|information|news)\b)"
+        r"|enough(?=\s+(?:about|with)\b)"
+        r"|stop\s+it(?=\s+with\b)"
         r")",
         re.IGNORECASE,
     )
     # The subject follows a preposition; leading determiners are dropped so the
     # stored rule reads as a topic rather than a fragment of the sentence.
-    _SUPPRESSION_SUBJECT = re.compile(
-        r"\b(?:about|regarding|concerning|on\s+the\s+subject\s+of|with)\s+"
+    _SUBJECT_DETERMINERS = (
         r"(?:my\s+|the\s+|any\s+|all\s+|these\s+|those\s+|further\s+|more\s+)*"
-        r"(?P<subject>[a-z0-9][a-z0-9\s]*)",
+    )
+    _SUPPRESSION_SUBJECT = re.compile(
+        r"\b(?:about|regarding|concerning|on\s+the\s+subject\s+of)\s+"
+        + _SUBJECT_DETERMINERS
+        + r"(?P<subject>[a-z0-9][a-z0-9\s]*)",
+        re.IGNORECASE,
+    )
+    # "With" names the subject only straight after the cue ("enough with the
+    # tyres", "shut up with the fuel"). Further on it is just a preposition:
+    # "I don't want to lose time with the traffic" is not about the traffic.
+    _SUPPRESSION_WITH_SUBJECT = re.compile(
+        r"\s+with\s+" + _SUBJECT_DETERMINERS + r"(?P<subject>[a-z0-9][a-z0-9\s]*)",
         re.IGNORECASE,
     )
 
@@ -876,13 +894,19 @@ class EngineerBrain:
         form drivers actually use.
         """
         text = cls._normalize_text(utterance)
+        # A question never sets a lasting rule. A request still does: "can you
+        # please confirm that I do not want reminders regarding my gearbox".
+        if is_question(text):
+            return None
 
         cue = cls._SUPPRESSION_CUE.search(text)
         if not cue:
             return None
         # The subject must come after the cue: "stop telling me about X", never
         # a stray "about" earlier in the sentence.
-        match = cls._SUPPRESSION_SUBJECT.search(text, cue.end())
+        match = cls._SUPPRESSION_WITH_SUBJECT.match(
+            text, cue.end()
+        ) or cls._SUPPRESSION_SUBJECT.search(text, cue.end())
         subject = match.group("subject").strip() if match else ""
         if not subject:
             return None
@@ -914,21 +938,136 @@ class EngineerBrain:
                 subjects.append(match.group(1).strip().lower())
         return subjects
 
+    # "You can talk about the tyres again": the way back from a standing rule.
+    # Without it a rule set by mistake was restored at every launch until
+    # eight newer ones pushed it out.
+    _RESUME_CUE = re.compile(
+        r"\b(?:you\s+can|feel\s+free\s+to|go\s+ahead\s+and|it\s+s\s+fine\s+to|"
+        r"(?:ok|okay)\s+to|start|resume|keep)\s+(?:\w+\s+){0,2}?"
+        r"(?:tell|telling|talk|talking|mention|mentioning|raise|raising|bring|bringing|"
+        r"remind|reminding|update|updating|warn|warning|report|reporting)\b"
+    )
+    _CLEAR_STANDING = re.compile(
+        r"\b(?:clear|cancel|forget|reset|remove|delete)\s+(?:all\s+)?(?:my\s+|the\s+)?"
+        r"standing\s+(?:instructions?|rules?)\b"
+    )
+
+    @classmethod
+    def _released_standing_instructions(
+        cls, utterance: str, standing: list[Any]
+    ) -> tuple[list[Any], str | None] | None:
+        """Standing rules left after the driver lifts one, and the subject lifted.
+
+        Returns None when nothing the driver said lifts a stored rule, so the
+        turn is answered normally. A subject of None means every rule went.
+        """
+        if not standing:
+            return None
+        text = cls._normalize_text(utterance)
+        # "Don't keep telling me about the fuel" and "you can stop telling me
+        # about the fuel" both contain the cue; neither lifts anything.
+        if is_question(text) or has_negation(text):
+            return None
+        words = " ".join(re.findall(r"[a-z0-9]+", text))
+        if cls._CLEAR_STANDING.search(words):
+            return [], None
+        cue = cls._RESUME_CUE.search(words)
+        if not cue:
+            return None
+        match = cls._SUPPRESSION_SUBJECT.search(words, cue.end())
+        if not match:
+            return None
+        requested: list[str] = []
+        for word in match.group("subject").split():
+            if word in {"again", "now", "please", "anymore", "if", "when", "unless",
+                        "because", "but", "from", "then", "as"}:
+                break
+            requested.append(word)
+        if not requested:
+            return None
+        if requested[0] in {"anything", "everything", "all"}:
+            return [], None
+
+        # Compared as content words, plural-blind: "tyre" lifts "the tyres",
+        # "damage" lifts "engine damage", "car ahead" never lifts "car behind".
+        minor = {"the", "a", "an", "to", "of", "my", "on", "in", "for", "with", "and"}
+
+        def stems(subject_words: list[str]) -> set[str]:
+            return {word.rstrip("s") for word in subject_words if word not in minor}
+
+        wanted = stems(requested)
+        kept: list[Any] = []
+        lifted: list[str] = []
+        for item in standing:
+            subjects = cls.suppressed_subjects([item])
+            stored = stems(subjects[0].split()) if subjects else set()
+            if stored and (wanted <= stored or stored <= wanted):
+                lifted.append(subjects[0])
+                continue
+            kept.append(item)
+        if not lifted:
+            return None
+        return kept, " and ".join(dict.fromkeys(lifted))
+
+    # Complaints about the engineer's own length. "Too long" and "very
+    # annoying" on their own are about anything - "is this stint too long",
+    # "this traffic is very annoying" - and each of those cut every later
+    # answer to one sentence.
+    _ABOUT_ENGINEER_LENGTH = re.compile(
+        r"\b(?:answers?|replies|reply|messages?|explanations?|radio\s+calls?|"
+        r"sentences?|updates?)\s+(?:are|is|were|was|re|s|get|getting|keep\s+getting)\s+"
+        r"(?:\w+\s+)?too\s+(?:long|wordy)\b"
+        r"|\byou\s+(?:are\s+|re\s+)?(?:talk|talking|speak|speaking|go\s+on|going\s+on|"
+        r"ramble|rambling|waffle|waffling)\s+(?:on\s+)?(?:for\s+)?"
+        r"(?:way\s+|far\s+|much\s+)?too\s+(?:long|much)\b"
+        r"|\b(?:you\s+are|you\s+re|you|your\s+(?:answers|replies|messages|calls|updates)"
+        r"\s+(?:are|re))\s+(?:so\s+|really\s+)?very\s+annoying\b"
+        r"|\btoo\s+long\s+winded\b|\btalking\s+too\s+much\b"
+        # "Stop going on" alone asks for less; "stop going on about the
+        # tyres" asks for the tyres to be dropped, which is a standing rule.
+        r"|\bstop\s+going\s+on\b(?!\s+(?:about|regarding|concerning|with)\b)"
+    )
+
     @classmethod
     def _requests_short_answers(cls, utterance: str) -> bool:
         text = cls._normalize_text(utterance)
+        if is_question(text) or cls._requests_standard_answers(text):
+            return False
+        words = " ".join(re.findall(r"[a-z0-9]+", text))
         return has_any_phrase(
             text,
             (
                 "keep your answers short", "keep answers short", "short answers",
-                "be brief", "keep it brief", "less talking", "too long",
-                "stop going on", "very annoying",
+                "shorter answers", "be brief", "keep it brief", "less talking",
+            ),
+        ) or cls._ABOUT_ENGINEER_LENGTH.search(words) is not None
+
+    @classmethod
+    def _requests_standard_answers(cls, utterance: str) -> bool:
+        """Whether the driver wants normal-length answers again.
+
+        Short answers persist across sessions, so a radio way back is needed;
+        otherwise the only exit from terse mode was the settings page.
+        """
+        text = cls._normalize_text(utterance)
+        if is_question(text):
+            return False
+        return has_any_phrase(
+            text,
+            (
+                "normal answers", "longer answers", "full answers", "detailed answers",
+                "normal length answers", "you can talk more", "you can say more",
+                "no more short answers", "no need to be brief",
+                "no need to keep it short", "standard verbosity", "normal verbosity",
             ),
         )
 
     @classmethod
     def _manual_session_override_mode(cls, utterance: str) -> str | None:
         text = cls._normalize_text(utterance)
+        # "So this is the race?" asks; it must not lock the session profile.
+        if is_question(text):
+            return None
         if has_any_phrase(text, ("auto detect session", "automatic session", "clear session override")):
             return "auto"
         # Require a declarative/command phrase. A generic request such as
@@ -961,11 +1100,11 @@ class EngineerBrain:
         if has_negation(text):
             return None
         # Questions may contain an imperative fragment ("switch to inters")
-        # after another clause. They must not mutate or clear the agreed plan.
-        if re.match(
-            r"^(?:should|shall|what|why|how|when|is|are|do|does|did|"
-            r"would|will|could|can)\b", text,
-        ) or re.search(r"\b(?:should|shall|could|would|can)\s+(?:i|we)\b", text):
+        # after another clause. They must not mutate or clear the agreed plan,
+        # however they open: "Okay, what if we switch to the hards" is still a
+        # question. A request ("can you put me on hards") is left to the model
+        # as well, as it always was; only a stated decision locks.
+        if utterance_mood(text) != "statement":
             return None
         if has_any_phrase(
             text,
@@ -1011,7 +1150,6 @@ class EngineerBrain:
             return None
         if not (is_start_plan or is_commitment or stop_preference is not None):
             return None
-
         action: dict[str, Any] = {
             "clear": False,
             "enabled": True,
@@ -1070,12 +1208,10 @@ class EngineerBrain:
         for intent, direction, phrases in cls._STRATEGY_INTENTS:
             if not has_any_phrase(text, phrases):
                 continue
-            # Only a decision counts. "What is the undercut worth?" is a
-            # question about one, and "the undercut is not on" rejects it.
-            if re.match(
-                r"^(?:how|what|when|where|why|would|could|can|is|are|do|does|should)\b",
-                text,
-            ):
+            # Only a decision counts. "What is the undercut worth?" and "So is
+            # the overcut on?" are questions about one, and "the undercut is
+            # not on" rejects it.
+            if utterance_mood(text) != "statement":
                 return None
             if has_negation(text) and not has_any_phrase(
                 text, ("rather than", "instead of", "not taking", "not boxing")
@@ -1091,52 +1227,131 @@ class EngineerBrain:
             }
         return None
 
+    # What makes a preference phrase a preference rather than a mention of
+    # one: "I want more traction", "give me more rotation", "let's play it
+    # safe on strategy". The phrase opening the sentence ("more rear stability
+    # please") counts too.
+    _PREFERENCE_DIRECTIVE = re.compile(
+        r"\b(?:want|wants|need|needs|give\s+(?:me|us)|prefer|rather|"
+        r"(?:i|we)\s+(?:d|would)\s+like|set\s+(?:\w+\s+){0,2}?up\s+for|"
+        r"go\s+for|go\s+with|let\s+s|lets|let\s+us|focus\s+on|"
+        r"make\s+(?:it|the\s+car)|dial\s+in|we\s+should|we\s+must|have\s+to|"
+        r"got\s+to|gotta|going\s+to|i\s+ll|we\s+ll)\b"
+    )
+    _PREFERENCE_PHRASES: tuple[tuple[tuple[str, ...], dict[str, Any]], ...] = (
+        (("more rear stability", "prioritize rear stability", "stable rear"),
+         {"rear_stability": 2, "setup_bias": "rear_stability"}),
+        (("more traction", "prioritize traction", "better traction"),
+         {"traction": 2, "setup_bias": "traction"}),
+        (("more rotation", "prioritize rotation", "sharper turn in"),
+         {"rotation": 2, "setup_bias": "rotation"}),
+        (("protect the tyres", "protect the tires", "prioritize tyre life", "prioritize tire life"),
+         {"tyre_life": 2, "strategy_priority": "safety"}),
+        (("straight line speed", "lower drag", "prioritize top speed"),
+         {"straight_line": 2, "setup_bias": "straight_line"}),
+    )
+    _RISK_APPETITE_PHRASES = (
+        (("conservative strategy", "conservative risk", "play it safe on strategy"), "conservative"),
+        (("aggressive strategy", "aggressive risk", "gamble on strategy"), "aggressive"),
+        (("balanced strategy risk", "balanced risk", "normal strategy risk"), "balanced"),
+    )
+
+    @classmethod
+    def _states_preference(cls, text: str, phrases: tuple[str, ...]) -> bool:
+        """Whether one of ``phrases`` is asked for, not merely mentioned or refused."""
+        for phrase in phrases:
+            parts = re.findall(r"[a-z0-9]+", phrase)
+            pattern = (
+                r"(?<![a-z0-9])" + r"[^a-z0-9]+".join(map(re.escape, parts)) + r"(?![a-z0-9])"
+            )
+            for match in re.finditer(pattern, text):
+                before = text[: match.start()]
+                # Only the clause the phrase sits in: "push, but protect the
+                # tyres" asks for tyre life whatever came before the comma.
+                clause = re.split(r"[,.;:!?]|\bbut\b", before)[-1]
+                if has_negation(clause):
+                    continue
+                if (
+                    phrase.startswith(("prioritize", "play it safe", "gamble"))
+                    or cls._PREFERENCE_DIRECTIVE.search(clause)
+                    or not strip_leading_fillers(clause)
+                ):
+                    return True
+        return False
+
     @classmethod
     def _preference_updates(cls, utterance: str) -> dict[str, Any]:
+        """Setup and strategy preferences the driver asked for.
+
+        These are saved and restored at every launch, so only a stated
+        preference counts. A coaching question ("how do I get more traction
+        out of the slow corners"), a question about a plan ("what does a
+        conservative strategy look like") or a refusal ("don't protect the
+        tyres, I want to push") used to be saved as the opposite of what was
+        meant, and answered with a canned acknowledgement instead of the
+        answer.
+        """
         text = cls._normalize_text(utterance)
+        if is_question(text):
+            return {}
         updates: dict[str, Any] = {}
-        if has_any_phrase(text, ("more rear stability", "prioritize rear stability", "stable rear")):
-            updates["rear_stability"] = 2
-            updates["setup_bias"] = "rear_stability"
-        if has_any_phrase(text, ("more traction", "prioritize traction", "better traction")):
-            updates["traction"] = 2
-            updates["setup_bias"] = "traction"
-        if has_any_phrase(text, ("more rotation", "prioritize rotation", "sharper turn in")):
-            updates["rotation"] = 2
-            updates["setup_bias"] = "rotation"
-        if has_any_phrase(text, ("protect the tyres", "protect the tires", "prioritize tyre life", "prioritize tire life")):
-            updates["tyre_life"] = 2
-            updates["strategy_priority"] = "safety"
-        if has_any_phrase(text, ("straight line speed", "lower drag", "prioritize top speed")):
-            updates["straight_line"] = 2
-            updates["setup_bias"] = "straight_line"
-        if has_any_phrase(
-            text,
-            ("conservative strategy", "conservative risk", "play it safe on strategy"),
-        ):
-            updates["strategy_risk_appetite"] = "conservative"
-        elif has_any_phrase(
-            text,
-            ("aggressive strategy", "aggressive risk", "gamble on strategy"),
-        ):
-            updates["strategy_risk_appetite"] = "aggressive"
-        elif has_any_phrase(
-            text,
-            ("balanced strategy risk", "balanced risk", "normal strategy risk"),
-        ):
-            updates["strategy_risk_appetite"] = "balanced"
+        for phrases, values in cls._PREFERENCE_PHRASES:
+            if cls._states_preference(text, phrases):
+                updates.update(values)
+        for phrases, appetite in cls._RISK_APPETITE_PHRASES:
+            if cls._states_preference(text, phrases):
+                updates["strategy_risk_appetite"] = appetite
+                break
         return updates
+
+    # A first-person refusal of the stop itself. Mere co-occurrence of a
+    # negation and "pit stop" is not one: "I'm not happy with that pit stop"
+    # and "that pit stop was not great" each silenced pit calls for five laps.
+    # "Stop" is the pit stop only without an object: "I won't stop the rear
+    # stepping out" is about the car.
+    _PIT_VERB = (
+        r"(?:box|boxing|pit|pitting|come\s+in|coming\s+in|"
+        r"(?:stop|stopping)(?!\s+(?:the|it|that|him|her|them|my|our|a|an)\b))\b"
+    )
+    _FIRST_PERSON_PIT_REFUSAL = re.compile(
+        r"\b(?:i|we)\s+(?:(?:am|m|are|re|will|ll|shall|would|d)\s+)?"
+        r"(?:not|never|no\s+longer)\s+(?:be\s+)?(?:going\s+to\s+|gonna\s+)?"
+        r"(?:" + _PIT_VERB
+        + r"|(?:take|taking|make|making|do|doing)\s+(?:a\s+|another\s+|any\s+|the\s+)?"
+        r"(?:more\s+)?(?:pit\s+)?stops?\b)"
+        # "Can't" is left out on purpose: "I can't stop the rear stepping out"
+        # and "we can't box under the VSC" are not the driver declining a stop.
+        r"|\b(?:i|we)\s+(?:don\s*t|dont|do\s+not|won\s*t|wont|will\s+not|"
+        r"shan\s*t|shall\s+not)\s+(?:(?:want|need|plan|intend|have)\s+to\s+|wanna\s+)?"
+        r"(?:" + _PIT_VERB
+        + r"|(?:take|make|do)\s+(?:a\s+|another\s+|any\s+|the\s+)?(?:more\s+)?"
+        r"(?:pit\s+)?stops?\b)"
+        # Cancelling the stop outright: "skip the stop", "forget the box call"
+        # - but not "don't forget the pit stop".
+        r"|(?<!don t )(?<!dont )(?<!do not )(?<!never )(?<!not )"
+        r"\b(?:skip|cancel|forget|scrap|abort|ignore|disregard|avoid)\s+(?:about\s+)?"
+        r"(?:the\s+|this\s+|that\s+|our\s+|my\s+|another\s+|any\s+)?(?:pit\s+)?"
+        r"(?:stop|stops|box|pit|boxing|pitting|box\s+call|pit\s+call)\b"
+    )
+    # "Stay out" negated is the opposite of a refusal: "I can't stay out on
+    # these" asks for the stop the explicit phrase match used to cancel.
+    _NEGATED_STAY_OUT = re.compile(
+        r"\b(?:not|never|don\s*t|dont|can\s*t|cant|cannot|won\s*t|wont|shouldn\s*t|"
+        r"no\s+point|no\s+way)\s+(?:[a-z0-9]+\s+){0,3}?stay(?:ing)?\s+out\b"
+    )
 
     @classmethod
     def _strategy_refusal(cls, utterance: str) -> bool:
         text = cls._normalize_text(utterance)
-        # A sentence that opens as a question is never a refusal, whatever
-        # phrases it contains: "should we stay out" is asking, not deciding.
-        if re.match(
-            r"^(?:how|what|when|where|why|would|could|can|is|are|do|does|should)\b",
-            text,
-        ):
+        # A question is never a refusal, whatever phrases it contains and
+        # however it opens: "should we stay out", "Okay, should we stay out?"
+        # and "Pit now or stay out?" are all asking, not deciding.
+        if utterance_mood(text) != "statement":
             return False
+        # Words with clause punctuation kept as separate tokens, so a pattern
+        # never reaches across a comma: in "no way am I boxing, stay out" the
+        # "no way" is about boxing, not about staying out.
+        words = " ".join(re.findall(r"[a-z0-9]+|[,.;:!?]", text))
         # An explicit first-person refusal decides the matter even when the
         # driver also editorialises. In a real race, "No, I am not boxing, it
         # does not make sense" was classified as a question because the hedge
@@ -1147,9 +1362,12 @@ class EngineerBrain:
             (
                 "not boxing", "not pitting", "will not box", "won t box",
                 "will not pit", "won t pit", "do not box", "don t box",
-                "do not pit", "don t pit", "staying out", "stay out",
-                "no pit stop", "no more stops", "not in the mood for a box",
+                "do not pit", "don t pit", "no pit stop", "no more stops",
+                "not in the mood for a box",
             ),
+        ) or (
+            has_any_phrase(text, ("staying out", "stay out"))
+            and not cls._NEGATED_STAY_OUT.search(words)
         )
         if explicit:
             return True
@@ -1164,19 +1382,9 @@ class EngineerBrain:
             return False
         # ``has_negation`` deliberately treats the verb "stop" as a general
         # cancellation signal.  In strategy language, however, "one-stop" and
-        # "pit stop" are nouns, so refusal detection must use an explicit
-        # negation set instead of that broad helper.
-        actual_negation = has_any_phrase(
-            text,
-            (
-                "not", "dont", "don t", "do not", "wont", "won t",
-                "will not", "never", "no longer", "without", "avoid",
-                "skip", "cancel", "forget", "disregard", "ignore",
-            ),
-        )
-        return actual_negation and has_any_phrase(
-            text, ("box", "boxing", "pit", "pitting", "stop")
-        )
+        # "pit stop" are nouns, so refusal detection needs the negation to
+        # govern the stop itself, said by the driver about their own car.
+        return cls._FIRST_PERSON_PIT_REFUSAL.search(words) is not None
 
     @classmethod
     def _driver_position_claim(cls, utterance: str) -> int | None:
@@ -1924,9 +2132,24 @@ class EngineerBrain:
             await self.database.save_preference("driver_preferences", preferences)
             return "Driver preference saved; future setup and strategy recommendations will use it."
 
+        if self._requests_standard_answers(utterance):
+            await self.store.update(radio_verbosity="standard")
+            return "Copy, normal-length answers again."
+
         if self._requests_short_answers(utterance):
             await self.store.update(radio_verbosity="terse")
             return "Short answers confirmed."
+
+        released = self._released_standing_instructions(
+            utterance, list(state.get("standing_instructions", []) or [])
+        )
+        if released is not None:
+            standing, subject = released
+            await self.store.update(standing_instructions=standing)
+            await self.database.save_preference("standing_instructions", standing)
+            if subject is None:
+                return "Copy, standing instructions cleared."
+            return f"Copy, I'll report {subject} again."
 
         instruction = self._standing_instruction(utterance)
         if instruction:
@@ -2558,7 +2781,9 @@ class EngineerBrain:
             await self.store.update(temperature_unit="f")
         elif "celsius" in lowered or re.search(r"(?:°|degrees?\s*)c\b", lowered):
             await self.store.update(temperature_unit="c")
-        if self._requests_short_answers(utterance):
+        if self._requests_standard_answers(utterance):
+            await self.store.update(radio_verbosity="standard")
+        elif self._requests_short_answers(utterance):
             await self.store.update(radio_verbosity="terse")
 
         await self.store.append_radio("driver", utterance)
