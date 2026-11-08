@@ -5,8 +5,33 @@ synthetic UDP is running, then repeat the freshness cases by withholding only
 the named packet group. Save the response, request, contemporaneous state and
 tool results. A provider response passes only when every factual claim agrees
 with that evidence; exact wording may vary. Deterministic coverage is in
-`tests/test_engineer_command_matrix.py`; paid provider narration needs separate
-execution and review.
+`tests/test_engineer_command_matrix.py`; provider answers are graded by the
+evaluation below, and a live run still needs review.
+
+## Automated evaluation
+
+`tools/engineer_eval.py` runs the rows below that the synthetic states can
+express through the real `EngineerBrain.ask`. The cases, and why each other
+row is not seeded, are in `docs/engineer-eval-manifest.json`. Each answer is
+graded for its required facts, forbidden fragments, sentence limit, the output
+format row, an optional verdict (a yes or no first; no stay-out-to-the-flag
+endorsement while the engine's compound rule still needs a stop) and number
+grounding: numbers that nothing the model was shown backs.
+
+```
+python tools/engineer_eval.py --output /tmp/engineer-eval.json
+python tools/engineer_eval.py --live --output /tmp/engineer-eval-live.json
+python tools/engineer_eval.py --live --provider openai --provider deepseek --output /tmp/live.json
+```
+
+Without `--live`, a scripted provider answers from each case's scripted reply,
+so the run needs no network or credentials;
+`tests/test_grounding_eval_quality.py` runs it that way. `--live` sends the same
+cases to every provider with credentials configured, or to those named with
+`--provider`, and reports pass/fail and ungrounded numbers per provider. It
+costs money, and the test suite never runs it. `--source` evaluates another
+worktree with the same graders, for a before-and-after comparison. The graders
+are heuristics: a live failure is a lead to review, not a verdict.
 
 ## Command and expected response
 

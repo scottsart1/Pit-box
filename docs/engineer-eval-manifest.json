@@ -1,0 +1,267 @@
+{
+  "version": 1,
+  "description": "Driver commands for tools/engineer_eval.py, seeded from the rows of docs/engineer-command-matrix.md that the synthetic states can express. 'matrix' states start from the command matrix seed (lap 8/20, P3, mediums, fuel -0.4 laps, battery 62 percent); 'scenario' states replay a tools/scenarios.py race through the real packet parser. Fact paths read state.* (the state the command is asked in), tool.<name>.* (the deterministic tool on that state) or after.* (the state once answered). 'scripted' is the reply the offline provider gives, with {path|filter} placeholders filled from those facts; live runs ignore it. Cases whose command is answered locally never reach a provider.",
+  "not_seeded": {
+    "Pre-race agreement": "needs an open pre-race proposal, which neither synthetic state carries",
+    "Setup": "needs saved setups and a setup packet history",
+    "History": "needs saved practice runs from earlier sessions",
+    "Session best": "needs a recorded lap history with validity bits",
+    "Incomplete history": "needs a recorded lap history with gaps",
+    "Confirmed result": "needs a final classification packet",
+    "Strategy after finish": "needs a final classification packet",
+    "Result not received": "needs a final classification packet to contrast with",
+    "Notes": "needs recorded laps in the current timeline for the note to attach to",
+    "Red flag": "a known tyre inventory needs a tyre-set packet; the unknown-inventory case covers the suspension call itself",
+    "Red flag, worn same compound": "telling a fresh medium set from the fitted one needs a tyre-set packet; the unknown-inventory case runs on worn mediums"
+  },
+  "cases": [
+    {
+      "id": "pit-plan",
+      "matrix_row": "Pit plan",
+      "utterance": "Give me the full pit strategy and its best alternative.",
+      "state": {"builder": "scenario", "scenario": "hungaroring"},
+      "tools": ["get_pit_strategy"],
+      "required": [
+        {"path": "tool.get_pit_strategy.recommended.box_laps"},
+        {"path": "tool.get_pit_strategy.recommended.compounds.-1"},
+        {"text": ["alternative"]},
+        {"text": ["confidence", "provisional"]}
+      ],
+      "max_sentences": 4,
+      "verdict": {"compound_rule": true},
+      "scripted": {
+        "tools": [["get_pit_strategy", {}]],
+        "reply": "A second compound is mandatory: box lap {tool.get_pit_strategy.recommended.box_laps.0} for {tool.get_pit_strategy.recommended.compounds.-1|plural}. The alternative is lap {tool.get_pit_strategy.plans.1.box_laps.0} for {tool.get_pit_strategy.plans.1.compounds.-1|plural}. Confidence is {tool.get_pit_strategy.confidence}, so treat it as provisional."
+      }
+    },
+    {
+      "id": "box-or-stay",
+      "matrix_row": "Pit plan",
+      "utterance": "Mark, should I box now or stay out and defend?",
+      "state": {"builder": "scenario", "scenario": "hungaroring"},
+      "tools": ["get_pit_strategy"],
+      "required": [
+        {"path": "tool.get_pit_strategy.recommended.box_laps"}
+      ],
+      "max_sentences": 3,
+      "verdict": {"compound_rule": true},
+      "scripted": {
+        "tools": [["get_pit_strategy", {}]],
+        "reply": "Stay out for now and defend; box lap {tool.get_pit_strategy.recommended.box_laps.0} for {tool.get_pit_strategy.recommended.compounds.-1|plural}, because a second compound is still owed."
+      }
+    },
+    {
+      "id": "stay-out-to-the-end",
+      "matrix_row": "Pit plan",
+      "utterance": "Mark, can I hold Antonelli off if I stay out to the end?",
+      "state": {"builder": "scenario", "scenario": "hungaroring"},
+      "tools": ["get_pit_strategy"],
+      "required": [
+        {"path": "tool.get_pit_strategy.recommended.box_laps"}
+      ],
+      "max_sentences": 3,
+      "verdict": {"yes_no": "either", "compound_rule": true},
+      "scripted": {
+        "tools": [["get_pit_strategy", {}]],
+        "reply": "No, not to the end: a second compound is still owed, so box lap {tool.get_pit_strategy.recommended.box_laps.0} for {tool.get_pit_strategy.recommended.compounds.-1|plural}. Antonelli is {tool.get_pit_strategy.defence.gap_s} seconds behind; protect the exits until then."
+      }
+    },
+    {
+      "id": "tyre-situation-scenario",
+      "matrix_row": "Tyres",
+      "utterance": "Mark, what is my tire situation and how many laps are left?",
+      "state": {"builder": "scenario", "scenario": "hungaroring"},
+      "tools": ["get_pit_strategy"],
+      "required": [
+        {"path": "state.tyre.compound"},
+        {"path": "tool.get_pit_strategy.laps_remaining"}
+      ],
+      "max_sentences": 3,
+      "verdict": {"compound_rule": true},
+      "scripted": {
+        "tools": [["get_pit_strategy", {}]],
+        "reply": "{state.tyre.compound|plural|capital} are {state.tyre.age_laps} laps old at up to {state.tyre.wear|max|int} percent wear, with {tool.get_pit_strategy.laps_remaining} laps left. A second compound is still owed: box lap {tool.get_pit_strategy.recommended.box_laps.0}."
+      }
+    },
+    {
+      "id": "commit",
+      "matrix_row": "Commit",
+      "utterance": "Box lap 12 for hards.",
+      "required": [{"text": ["box lap 12 for hards"]}],
+      "forbidden": ["changed in the game", "set in the game"],
+      "expect_state": {"strategy_override.next_box_lap": 12, "strategy_override.next_compound": "HARD"},
+      "max_sentences": 2
+    },
+    {
+      "id": "clear",
+      "matrix_row": "Clear",
+      "before": ["Box lap 12 for hards."],
+      "utterance": "Clear my strategy override.",
+      "required": [{"text": ["automatic ranking restored"]}],
+      "expect_state": {"strategy_override.enabled": false, "strategy_override.next_box_lap": null},
+      "max_sentences": 2
+    },
+    {
+      "id": "tyres",
+      "matrix_row": "Tyres",
+      "utterance": "What tyres am I on?",
+      "required": [
+        {"path": "state.tyre.compound"},
+        {"path": "state.tyre.age_laps"},
+        {"path": "state.tyre.wear.3"},
+        {"text": ["rear-right", "rear right"]}
+      ],
+      "max_sentences": 2
+    },
+    {
+      "id": "temperatures-fahrenheit",
+      "matrix_row": "Temperatures",
+      "utterance": "Give me tyre temperatures in Fahrenheit.",
+      "required": [
+        {"path": "state.tyre.inner_temps_c", "unit": "temp_f"}
+      ],
+      "forbidden": ["Overtake Mode", " C;", " C."],
+      "max_sentences": 2
+    },
+    {
+      "id": "fuel-pace",
+      "matrix_row": "Pace/fuel",
+      "utterance": "Do I need to save fuel, and what pace will that cost?",
+      "tools": ["get_pace_mode_options"],
+      "required": [
+        {"path": "state.fuel_laps_delta"},
+        {"text": ["estimate", "planning", "not measured"]}
+      ],
+      "forbidden": ["richer", "rich mix", "fuel mix"],
+      "max_sentences": 3,
+      "verdict": {"yes_no": "yes"},
+      "scripted": {
+        "tools": [["get_pace_mode_options", {}]],
+        "reply": "Yes, we are {state.fuel_laps_delta|abs} laps short, so lift and coast. Over the {tool.get_pace_mode_options.laps_remaining} laps left that is an estimated {tool.get_pace_mode_options.estimated_cost_s_per_lap} seconds a lap, a planning figure, not a measured loss."
+      }
+    },
+    {
+      "id": "battery",
+      "matrix_row": "Energy",
+      "utterance": "Battery.",
+      "required": [{"path": "state.ers_pct"}, {"text": ["Overtake Mode"]}],
+      "max_sentences": 2
+    },
+    {
+      "id": "active-aero",
+      "matrix_row": "Aero",
+      "utterance": "Active aero.",
+      "required": [{"text": ["Cornering Mode"]}],
+      "forbidden": ["Overtake Mode is active"],
+      "max_sentences": 2
+    },
+    {
+      "id": "legacy-drs",
+      "matrix_row": "Legacy energy",
+      "utterance": "With low battery, can I use DRS?",
+      "state": {"builder": "matrix", "update": {"regulations_2026": false, "ers_pct": 10, "drs_allowed": true}},
+      "required": [{"text": ["DRS"]}],
+      "forbidden": ["cannot use DRS", "can't use DRS", "DRS is disabled"],
+      "max_sentences": 2,
+      "verdict": {"yes_no": "yes"},
+      "scripted": {
+        "reply": "Yes, DRS is yours when you are eligible; a {state.ers_pct} percent battery does not switch off the flap, it only limits deployment."
+      }
+    },
+    {
+      "id": "attack",
+      "matrix_row": "Attack",
+      "utterance": "Can I attack the car ahead next lap?",
+      "state": {"builder": "matrix", "update": {"overtake_available": false},
+                "rivals": [{"index": 1, "name": "Rival", "active": true, "position": 2, "gap_to_player_s": -0.5, "restricted": true}]},
+      "tools": ["get_attack_plan"],
+      "required": [{"path": "tool.get_attack_plan.gap_s"}],
+      "forbidden": ["guaranteed", "will have Overtake Mode"],
+      "max_sentences": 3,
+      "scripted": {
+        "tools": [["get_attack_plan", {"driver": "ahead"}]],
+        "reply": "Not yet: the gap is {tool.get_attack_plan.gap_s|abs} seconds and Overtake Mode is not available now, so a close gap today does not promise it next lap. Battery is {state.ers_pct} percent; build the run out of the last corner."
+      }
+    },
+    {
+      "id": "defence",
+      "matrix_row": "Defence",
+      "utterance": "How should I defend against the car behind?",
+      "state": {"builder": "matrix",
+                "rivals": [{"index": 1, "name": "Rival", "active": true, "position": 4, "gap_to_player_s": 0.8}]},
+      "tools": ["get_defence_plan"],
+      "required": [{"path": "tool.get_defence_plan.gap_s"}],
+      "max_sentences": 3,
+      "scripted": {
+        "tools": [["get_defence_plan", {"driver": "behind"}]],
+        "reply": "{tool.get_defence_plan.driver} is {tool.get_defence_plan.gap_s} seconds behind. Pick one defensive line into the braking zone and protect your exit; no weaving."
+      }
+    },
+    {
+      "id": "weather",
+      "matrix_row": "Weather",
+      "utterance": "Weather forecast.",
+      "required": [{"text": ["Clear"]}, {"path": "state.rain_next_15_pct"}],
+      "max_sentences": 2
+    },
+    {
+      "id": "flags-penalties",
+      "matrix_row": "Flags",
+      "utterance": "What flags or penalties do I need to react to?",
+      "required": [{"path": "state.penalties_s"}, {"path": "state.corner_cutting_warnings"}],
+      "max_sentences": 3,
+      "scripted": {
+        "reply": "Green flag, nothing from race control. You carry a {state.penalties_s} second penalty and {state.corner_cutting_warnings} track-limit warnings, with nothing unserved."
+      }
+    },
+    {
+      "id": "red-flag-unknown-inventory",
+      "matrix_row": "Red flag, unknown inventory",
+      "utterance": "Red flag: can I change tyres, and what is the best restart strategy and alternative?",
+      "state": {"builder": "matrix", "update": {
+        "connected": false, "red_flag_active": true, "race_control_phase": "red_flag",
+        "radio_verbosity": "terse", "current_lap": 10, "total_laps": 17, "tyre_sets": [],
+        "tyre": {"compound": "MEDIUM", "age_laps": 10, "wear": [65, 65, 65, 65], "inner_temps_c": [92, 94, 96, 98]},
+        "completed_laps": [{"lap_num": 1, "compound": "HARD", "valid": true, "lap_time_ms": 90000}]
+      }},
+      "required": [{"text": ["Tyres can be changed"]}, {"text": ["Alternative"]}, {"text": ["inventory is unknown"]}],
+      "forbidden": ["fresh ", "box"]
+    },
+    {
+      "id": "stale-fuel",
+      "matrix_row": "Stale group",
+      "utterance": "Fuel status.",
+      "state": {"builder": "matrix", "stale_groups": [7]},
+      "required": [{"text": ["stale"]}],
+      "forbidden": ["0.4"],
+      "max_sentences": 2
+    },
+    {
+      "id": "missing-overtake-flags",
+      "matrix_row": "Missing group",
+      "utterance": "Battery.",
+      "state": {"builder": "matrix", "missing_groups": [16]},
+      "required": [{"path": "state.ers_pct"}, {"text": ["unknown"]}],
+      "forbidden": ["not available"],
+      "max_sentences": 2
+    },
+    {
+      "id": "paused",
+      "matrix_row": "Paused",
+      "utterance": "Fuel status.",
+      "state": {"builder": "matrix", "update": {"game_paused": true, "connected": false}},
+      "required": [{"text": ["Paused, last confirmed"]}],
+      "forbidden": ["push", "attack"],
+      "max_sentences": 2
+    },
+    {
+      "id": "session-switch",
+      "matrix_row": "Session switch",
+      "utterance": "Fuel status.",
+      "state": {"builder": "matrix", "new_session": true},
+      "required": [{"text": ["unavailable", "unknown"]}],
+      "forbidden": ["0.4"],
+      "max_sentences": 2
+    }
+  ]
+}

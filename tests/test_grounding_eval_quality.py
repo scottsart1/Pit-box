@@ -1,14 +1,19 @@
-"""Numbers the engineer says are numbers it was given.
+"""Numbers the engineer says are numbers it was given, and a harness that grades answers.
 
 The unsolicited calls are narrated from a closed set of evidence: the
 situation header and the call's own facts, with no tools. A narration that
 says a number found nowhere in that evidence is replaced by the call's
-deterministic template, and the saved call says so.
+deterministic template, and the saved call says so. The answer evaluation
+harness (tools/engineer_eval.py) runs driver commands through the real
+EngineerBrain.ask against a scripted provider, so the graders themselves are
+exercised here with no network.
 """
 
 from __future__ import annotations
 
+import sys
 import types
+from pathlib import Path
 
 import pytest
 
@@ -16,7 +21,11 @@ from pitwall.brain import EngineerBrain
 from pitwall.config import settings
 from pitwall.grounding import SpokenNumber, lap_counts, place_counts, spoken_numbers, unsupported
 from pitwall.proactive import ProactiveEngineer
-from pitwall.providers import ProviderResult
+from pitwall.providers import ProviderResult, ProviderRouter
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from tools import engineer_eval  # noqa: E402
 
 FUEL_TEMPLATE = "Fuel is short by 0.4 laps. Start lifting and coasting on the long straights."
 INVENTED = (
@@ -270,3 +279,90 @@ def test_counts_of_laps_and_places_the_line_works_out_pass_but_not_bare_numbers(
 def test_invented_numbers_are_found():
     evidence = 'fuel delta -0.4 laps | PROACTIVE EVENT: {"facts": {"fuel_laps_delta": -0.4}}'
     assert _texts(unsupported(INVENTED, evidence, FUEL_TEMPLATE)) == ["1.4", "1", "4", "12", "0.3"]
+
+
+# ------------------------------------------------------ the answer harness
+
+
+def _case(case_id):
+    return next(case for case in engineer_eval.load_manifest()["cases"] if case["id"] == case_id)
+
+
+@pytest.mark.asyncio
+async def test_the_answer_harness_runs_every_manifest_case_offline(monkeypatch):
+    async def no_network(*args, **kwargs):
+        pytest.fail("the offline harness must never reach a provider")
+
+    monkeypatch.setattr(ProviderRouter, "generate", no_network)
+    cases = engineer_eval.load_manifest()["cases"]
+    rows = await engineer_eval.run_cases(cases, [engineer_eval.SCRIPTED])
+    failures = {row["case"]: (row["answer"], row["checks"], row["error"]) for row in rows if not row["passed"]}
+    assert failures == {}
+    assert {row["case"]: row["ungrounded"] for row in rows if row["ungrounded"]} == {}
+    summary = engineer_eval.summarize(rows)[engineer_eval.SCRIPTED]
+    assert summary["cases"] == summary["passed"] == len(cases)
+    # Both paths are exercised: commands answered locally and by the provider.
+    assert 0 < summary["answered_locally"] < len(cases)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("case_id,reply,problem", [
+    (
+        "tyre-situation-scenario",
+        "Hard tyres are well used: 48–51% wear, with balanced inner temperatures around 99–100°C. "
+        "Fourteen laps remain, so manage them cleanly; they should be serviceable to the flag.",
+        "endorses finishing on the current set",
+    ),
+    (
+        "stay-out-to-the-end",
+        "Yes, you can hold him for now. Gap is steady at 3.6 seconds; protect your exits and "
+        "don't compromise the line until he closes.",
+        "affirms staying out to the end",
+    ),
+])
+async def test_the_harness_flags_a_stay_out_the_engine_says_is_not_legal(case_id, reply, problem):
+    """The published Hungaroring transcript: hards 'serviceable to the flag' while a stop is owed."""
+    case = {**_case(case_id), "scripted": {"tools": [["get_pit_strategy", {}]], "reply": reply}}
+    app = engineer_eval._app_modules(engineer_eval.REPO)
+    row = await engineer_eval.run_case(app, case, engineer_eval.SCRIPTED)
+    assert not row["passed"]
+    assert any(problem in item for item in row["checks"]["verdict_problems"]), row["checks"]
+
+
+@pytest.mark.asyncio
+async def test_the_harness_reports_a_box_lap_the_model_was_never_shown():
+    case = {**_case("box-or-stay"), "scripted": {"tools": [["get_pit_strategy", {}]],
+                                                 "reply": "Box lap 58 for softs."}}
+    app = engineer_eval._app_modules(engineer_eval.REPO)
+    row = await engineer_eval.run_case(app, case, engineer_eval.SCRIPTED)
+    assert row["ungrounded"] == ["58"]
+    assert not row["passed"] and row["checks"]["required_missing"]
+
+
+def test_the_harness_grades_a_fact_in_the_unit_it_was_asked_for():
+    context = {"state": {"tyre": {"inner_temps_c": [92, 94, 96, 98]}}, "tool": {}}
+    asked = [{"path": "state.tyre.inner_temps_c", "unit": "temp_f"}]
+    assert engineer_eval._check_required("Front 198/201 F; rear 205/208 F.", asked, context) == []
+    assert engineer_eval._check_required("Front 92/94 C; rear 96/98 C.", asked, context) != []
+
+
+def test_a_stay_out_the_answer_rules_out_is_not_an_endorsement():
+    context = {"state": {}, "tool": {"get_pit_strategy": {"compound_rule": {
+        "applies": True, "compliant": True, "conditional_on_future_use": True}}}}
+    question = "Can I stay out to the end?"
+    verdict = {"yes_no": "either", "compound_rule": True}
+    assert engineer_eval._check_verdict(
+        verdict, question, "No, you cannot stay out to the end; box lap 62 for softs.", context
+    ) == []
+    assert engineer_eval._check_verdict(
+        verdict, question, "You can't run to the flag on these; box lap 62.", context
+    ) == []
+    assert engineer_eval._check_verdict(
+        verdict, question, "Yes, stay out to the end and defend.", context
+    ) != []
+
+
+@pytest.mark.parametrize("argv", [["--provider", "openai"], ["--live", "--provider", "bogus"]])
+def test_the_harness_calls_a_real_provider_only_when_asked_to_by_name(argv):
+    with pytest.raises(SystemExit):
+        engineer_eval.main(argv)
