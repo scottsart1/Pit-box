@@ -31,7 +31,9 @@ from .intent import (
     extract_lap,
     has_any_phrase,
     has_negation,
+    is_question,
     normalize_text,
+    strip_leading_fillers,
 )
 from .race_plan import (
     UNRESOLVED_COMPOUNDS,
@@ -61,6 +63,36 @@ QUESTION_PHRASES = (
     "why", "what if", "what does that cost", "how much", "what about",
     "explain", "talk me through", "what are my options", "options",
 )
+
+# Words that can stand beside an agreement or a refusal on the radio without
+# making the sentence about anything else. "Copy" and "yes" are the commonest
+# words on the radio: "Radio check, do you copy?" and "yes, how much fuel have
+# we got" each locked the whole race to the proposal, so a radio agreement has
+# to be made of agreement and plan words only.
+_PLAN_COMPANIONS = frozenset({
+    "i", "m", "im", "am", "we", "re", "are", "s", "is", "it", "its", "that",
+    "this", "the", "a", "plan", "strategy", "with", "me", "for", "us", "go",
+    "lets", "let", "in", "please", "thanks", "thank", "mate", "ok", "okay",
+    "alright", "right", "then", "and", "so", "good", "great", "fine", "nice",
+    "cool", "really", "very", "all", "sounds", "looks", "works", "just", "do",
+    "on", "one", "two", "three", "stop", "stops", "stopper", "lock", "locked",
+    "commit", "run", "happy", "sure", "absolutely", "definitely", "totally",
+    "deal", "not", "like", "don", "t", "dont", "something", "else", "another",
+    "option", "alternative", "different", "other", "yes", "yeah", "yep", "no",
+    "nope", "negative", "copy", "agreed", "agree", "perfect", "confirm",
+    "confirmed", "mark", "marc",
+})
+_PLAN_COMPANION_PHRASES = ("thank you", "for me", "with me", "to me")
+_PLAN_WORDS = ("plan", "strategy", "stop", "stops", "tyre", "tire")
+
+
+def _only_plan_talk(text: str) -> bool:
+    """Whether every word is agreement, refusal or plan vocabulary."""
+    words = f" {strip_leading_fillers(text)} "
+    for phrase in sorted(ACCEPT_PHRASES + REJECT_PHRASES + _PLAN_COMPANION_PHRASES, key=len, reverse=True):
+        words = words.replace(f" {phrase} ", " ")
+    return all(word in _PLAN_COMPANIONS for word in words.split())
+
 
 EARLIER_PHRASES = ("earlier", "sooner", "bring it forward", "before that", "undercut")
 LATER_PHRASES = ("later", "extend", "go longer", "stay out longer", "push it back", "overcut")
@@ -289,25 +321,53 @@ class PreRacePlanner:
 
         recognised = (
             self._requested_change(text, proposal, alternatives, state) is not None
-            or has_any_phrase(text, ACCEPT_PHRASES)
-            or has_any_phrase(text, REJECT_PHRASES)
+            or self._radio_agreement(text)
+            or self._radio_refusal(text)
             # A bare "why" mid-discussion is about the plan; the same word in a
             # sentence about anything else is not, so it has to be paired with
             # something plan-shaped to count.
             or (
                 has_any_phrase(text, QUESTION_PHRASES)
-                and has_any_phrase(text, ("plan", "strategy", "stop", "stops", "tyre", "tire"))
+                and has_any_phrase(text, _PLAN_WORDS)
             )
         )
         if not recognised:
             return None
-        return await self.respond(utterance)
+        return await self.respond(utterance, radio=True)
 
-    async def respond(self, utterance: str) -> dict[str, Any]:
+    @staticmethod
+    def _radio_refusal(text: str) -> bool:
+        """Whether a radio turn turns the plan down.
+
+        "No" is everywhere on the radio, so it counts only as the whole
+        sentence ("no, I don't like that"); "no grip at all on the formation
+        lap" is about the car. The longer refusals ("not happy", "another
+        option") count when they are said about the plan.
+        """
+        if not has_any_phrase(text, REJECT_PHRASES):
+            return False
+        if _only_plan_talk(text) and not is_question(text):
+            return True
+        longer = tuple(phrase for phrase in REJECT_PHRASES if phrase not in {"no", "nope", "negative"})
+        return has_any_phrase(text, longer) and has_any_phrase(text, _PLAN_WORDS)
+
+    @staticmethod
+    def _radio_agreement(text: str) -> bool:
+        """Whether a radio turn agrees to the plan and says nothing else."""
+        return (
+            has_any_phrase(text, ACCEPT_PHRASES)
+            and not has_negation(text)
+            and not is_question(text)
+            and _only_plan_talk(text)
+        )
+
+    async def respond(self, utterance: str, *, radio: bool = False) -> dict[str, Any]:
         """Take one driver turn and answer it.
 
         Returns the updated briefing. ``committed`` is True only when the driver
-        agreed and the plan is now constraining the race.
+        agreed and the plan is now constraining the race. Over the radio
+        (``radio=True``) only a turn made of agreement commits; "why that
+        strategy, copy?" is answered, not taken as a yes.
         """
         briefing = await self.snapshot()
         state = await self.store.snapshot_analysis()
@@ -327,7 +387,12 @@ class PreRacePlanner:
         # Agreement first, and only when nothing else was asked for in the same
         # breath. "Yes, but make it a two-stop" is a change, not a commitment.
         change = self._requested_change(text, proposal, alternatives, state)
-        if change is None and has_any_phrase(text, ACCEPT_PHRASES) and not has_negation(text):
+        agreed = (
+            self._radio_agreement(text)
+            if radio
+            else has_any_phrase(text, ACCEPT_PHRASES) and not has_negation(text)
+        )
+        if change is None and agreed:
             return await self.commit(proposal, transcript_turn=utterance)
 
         if change is not None:

@@ -95,6 +95,45 @@ async def test_everything_else_falls_through_to_the_engineer(stack, said) -> Non
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "said",
+    [
+        "radio check, do you copy?",
+        "copy, what's the weather looking like",
+        "yes, how much fuel have we got",
+        "confirm the tyre temps",
+        "yeah, what's the gap to norris",
+        "what are the tyre temps, are they perfect for the start",
+        "no rain expected today?",
+        "no grip at all on the formation lap",
+        "is there an alternative line into turn one",
+        "Copy?",
+    ],
+)
+async def test_common_radio_words_do_not_make_a_sentence_plan_talk(stack, said) -> None:
+    """"Copy", "yes", "confirm", "perfect" and "no" are everywhere on the radio.
+
+    Any one of them used to take the turn, and an accept word committed the
+    whole race: "Radio check, do you copy?" answered "Locked in. 2-stop..."
+    with nothing asked of the engineer answered at all.
+    """
+    store, _, planner = await _open_discussion(stack)
+    assert await planner.try_respond(said) is None, said
+    override = (await store.snapshot_analysis())["strategy_override"]
+    assert not override.get("plan_agreed"), said
+
+
+@pytest.mark.asyncio
+async def test_a_plan_question_with_an_acknowledgement_is_answered_not_committed(stack) -> None:
+    store, _, planner = await _open_discussion(stack)
+    briefing = await planner.try_respond("why that strategy, copy?")
+    assert briefing is not None
+    assert not briefing.get("committed")
+    override = (await store.snapshot_analysis())["strategy_override"]
+    assert not override.get("plan_agreed")
+
+
+@pytest.mark.asyncio
 async def test_nothing_is_taken_when_no_discussion_is_open(stack) -> None:
     store, _, strategy, _, _, _ = stack
     await store.mutate(_on_the_grid)
@@ -152,6 +191,22 @@ async def test_agreeing_over_the_radio_commits_the_plan(stack) -> None:
     override = (await store.snapshot_analysis())["strategy_override"]
     assert override["plan_agreed"] is True
     assert override["plan"]["compounds"]
+
+
+@pytest.mark.asyncio
+async def test_a_radio_check_reaches_the_engineer_and_locks_nothing(stack) -> None:
+    from pitwall.brain import EngineerBrain
+
+    store, database, strategy, _, _, tools = stack
+    await store.mutate(_on_the_grid)
+    planner = PreRacePlanner(store, strategy)
+    await planner.propose()
+
+    brain = EngineerBrain(store, tools, database)
+    assert await brain._fast_answer("Radio check, do you copy?") is None
+    override = (await store.snapshot_analysis())["strategy_override"]
+    assert not override.get("locked")
+    assert not override.get("plan_agreed")
 
 
 @pytest.mark.asyncio
