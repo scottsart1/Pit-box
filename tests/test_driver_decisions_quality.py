@@ -333,10 +333,14 @@ async def test_a_setting_with_a_quick_question_survives_a_provider_failure(stack
 
 def test_the_setup_brief_does_not_order_a_tool_the_route_does_not_offer():
     race = {"mode_profile": "race"}
-    assert SETUP_PERSONA in persona_addenda(race, "should I add front wing", set())
-    flat = " ".join(SETUP_PERSONA.split())
-    assert "Only when the generate_setup tool is offered: Use generate_setup with basis reference" in flat
-    assert "Without that tool, do not describe a reference setup you have not retrieved" in flat
+    without = persona_addenda(race, "should I add front wing", set())
+    assert SETUP_PERSONA in without
+    flat = " ".join(" ".join(without).split())
+    assert "generate_setup" not in flat
+    assert "Do not describe a reference setup you have not retrieved" in flat
+    offered = " ".join(" ".join(persona_addenda(race, "should I add front wing", {"generate_setup"})).split())
+    assert "Use generate_setup with basis reference" in offered
+    assert "reference setup you have not retrieved" not in offered
 
 
 def test_a_saved_session_question_reaches_the_saved_session_tools():
