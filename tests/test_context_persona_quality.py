@@ -378,6 +378,39 @@ async def test_the_plan_qualifier_lands_on_the_drivers_call_not_a_rivals_stop(st
     assert heard.startswith("Norris made his stop two laps ago. Box lap 14 for hards; provisional")
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("call", [
+    "Undercut Norris with a stop on lap 14.",
+    "Lap 14 for hards to cover Norris.",
+    "Norris pitted, so lap 14 for hards.",
+])
+async def test_a_call_made_to_answer_a_rival_keeps_its_qualifier_and_survives_the_cut(stack, monkeypatch, call):
+    """A call that names the rival it answers is still the driver's call: it
+    lost the plan's low-confidence qualifier, and the radio cut dropped it."""
+    reply = f"Norris made his stop two laps ago. He is on hards. He rejoined in P6. {call}"
+    store, brain, captured = await _scripted(stack, monkeypatch, reply, strategy=_plan())
+
+    def field(state):
+        state.player_car_index = 0
+        for index, name in enumerate(("PLAYER", "NORRIS")):
+            state.drivers[index].name = name
+            state.drivers[index].active = True
+
+    await store.mutate(field)
+    heard = await brain.ask("Norris has stopped, what's our strategy now?")
+    assert captured, "the model answers"
+    assert call.rstrip(".") + "; provisional, confidence low" in heard
+    assert "two laps ago; provisional" not in heard
+
+    async def compare(**_kwargs):
+        return {"results": {"test": {"reply": reply}}}
+
+    brain.router.compare = compare
+    # A comparison shows each reply as the radio would speak it.
+    compared = await brain.compare("Norris has stopped, what's our strategy now?")
+    assert compared["results"]["test"]["as_spoken"] == heard
+
+
 @pytest.mark.parametrize("utterance", [
     "they're gone", "the rears are going away", "no grip left", "holding", "plenty left in these",
     "I'm losing the rears",
