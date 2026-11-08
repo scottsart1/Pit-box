@@ -764,6 +764,154 @@ async def test_keying_the_radio_over_a_call_does_not_silence_every_later_call(st
             await deliver
 
 
+def _call_rows(database, kind):
+    with database._connect() as db:
+        rows = db.execute(
+            "SELECT outcome, delivered FROM proactive_calls WHERE event_type=? ORDER BY rowid",
+            (kind,),
+        ).fetchall()
+    return [(row["outcome"], row["delivered"]) for row in rows]
+
+
+async def _wait_for(predicate, attempts: int = 300) -> None:
+    import asyncio
+
+    for _ in range(attempts):
+        if predicate():
+            return
+        await asyncio.sleep(0.01)
+
+
+async def _press_and_release(controller) -> None:
+    import asyncio
+
+    await controller._transition(True, real_time.monotonic(), "mask_press")
+    await asyncio.sleep(0.05)
+    await controller._transition(False, real_time.monotonic(), "explicit_release")
+
+
+@pytest.mark.asyncio
+async def test_a_penalty_the_driver_talked_over_is_said_again_after_their_exchange(stack, monkeypatch, tmp_path):
+    """Keying the radio over a penalty call lost it: "voice delivery failed", never again."""
+    import asyncio
+
+    monkeypatch.setattr(settings, "data_dir", tmp_path)
+    monkeypatch.setattr(settings, "voice_realtime_enabled", False)
+    monkeypatch.setattr(settings, "native_voice", False)
+    monkeypatch.setattr(settings, "voice_stream_tts", True)
+    monkeypatch.setattr(settings, "ptt_release_tail_s", 0.0)
+    monkeypatch.setattr(settings, "proactive_safe_hold_s", 0.0)
+    monkeypatch.setattr(proactive_module, "DELIVER_INTERVAL_S", 0.01)
+    store, database, *_ = stack
+    played: list[str] = []
+    controller = _voice_controller(store, _Brain(database), played, playback_s=0.3)
+    store, engineer, _voice = await _race(stack)
+    engineer.voice = controller
+    deliver = asyncio.create_task(engineer._run_deliver())
+    try:
+        await store.update(penalties_s=5)
+        await engineer._detect(await store.snapshot_radio())
+        await _wait_for(lambda: bool(played))
+        assert played and "penalty" in played[0]
+        await _press_and_release(controller)
+        await _wait_for(lambda: len(played) > 1)
+        assert played[1] == played[0]
+        await _wait_for(lambda: len(_call_rows(database, "penalty")) > 1)
+        # The cut attempt and the delivery, each recorded once.
+        assert _call_rows(database, "penalty") == [
+            ("cut short by the driver; requeued", 0),
+            ("delivered", 1),
+        ]
+        assert not engineer.pending
+    finally:
+        deliver.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await deliver
+
+
+@pytest.mark.asyncio
+async def test_a_cut_call_no_longer_true_does_not_come_back(stack, monkeypatch, tmp_path):
+    """A flashback took the penalty back while the driver was talking."""
+    import asyncio
+
+    monkeypatch.setattr(settings, "data_dir", tmp_path)
+    monkeypatch.setattr(settings, "voice_realtime_enabled", False)
+    monkeypatch.setattr(settings, "native_voice", False)
+    monkeypatch.setattr(settings, "voice_stream_tts", True)
+    monkeypatch.setattr(settings, "proactive_safe_hold_s", 0.0)
+    store, database, *_ = stack
+    played: list[str] = []
+    controller = _voice_controller(store, _Brain(database), played, playback_s=0.3)
+    store, engineer, _voice = await _race(stack)
+    engineer.voice = controller
+    await store.update(penalties_s=5)
+    await engineer._detect(await store.snapshot_radio())
+    speaking = asyncio.create_task(engineer._deliver(await store.snapshot_radio()))
+    await _wait_for(lambda: bool(played))
+    await controller._transition(True, real_time.monotonic(), "mask_press")
+    await speaking
+    assert [event["type"] for event in engineer.pending] == ["penalty"]
+    # Held while the driver has the radio, not spoken over them.
+    await engineer._deliver(await store.snapshot_radio())
+    assert len(played) == 1
+    await store.update(penalties_s=0)
+    controller._signal_pressed = False
+    await store.update(ptt_pressed=False)
+    for _ in range(3):
+        await engineer._deliver(await store.snapshot_radio())
+    assert len(played) == 1
+    assert not engineer.pending
+    assert _call_rows(database, "penalty") == [
+        ("cut short by the driver; requeued", 0),
+        ("superseded", 0),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_routine_news_cut_short_and_a_second_cut_are_not_repeated(stack, monkeypatch, tmp_path):
+    import asyncio
+
+    monkeypatch.setattr(settings, "data_dir", tmp_path)
+    monkeypatch.setattr(settings, "voice_realtime_enabled", False)
+    monkeypatch.setattr(settings, "native_voice", False)
+    monkeypatch.setattr(settings, "voice_stream_tts", True)
+    store, database, *_ = stack
+    played: list[str] = []
+    controller = _voice_controller(store, _Brain(database), played, playback_s=0.3)
+    store, engineer, _voice = await _race(stack)
+    engineer.voice = controller
+
+    async def cut(event, text):
+        played.clear()
+        speaking = asyncio.create_task(engineer._speak(event, text, await store.snapshot_radio()))
+        await _wait_for(lambda: bool(played))
+        await controller._transition(True, real_time.monotonic(), "mask_press")
+        await speaking
+        controller._signal_pressed = False
+
+    routine = {
+        "type": "progress_update", "priority": proactive_module.ROUTINE, "payload": {},
+        "session_uid": 7, "queued_at": real_time.time(), "expires_at": real_time.time() + 60,
+    }
+    await cut(routine, "Lap ten, P5, gap ahead two seconds.")
+    assert not engineer.pending
+    penalty = {
+        "type": "penalty", "critical": True, "priority": proactive_module.CRITICAL,
+        "payload": {"penalties_s": 5}, "session_uid": 7,
+        "queued_at": real_time.time(), "expires_at": real_time.time() + 60,
+    }
+    await cut(penalty, "You have picked up a 5 second penalty.")
+    assert engineer.pending and engineer.pending[0] is penalty
+    engineer.pending.clear()
+    await cut(penalty, "You have picked up a 5 second penalty.")
+    assert not engineer.pending
+    assert _call_rows(database, "progress_update") == [("cut short by the driver", 0)]
+    assert _call_rows(database, "penalty") == [
+        ("cut short by the driver; requeued", 0),
+        ("cut short by the driver", 0),
+    ]
+
+
 @pytest.mark.asyncio
 async def test_a_flag_is_not_held_by_the_reply_window_after_the_engineers_question(stack, monkeypatch, tmp_path):
     monkeypatch.setattr(settings, "data_dir", tmp_path)

@@ -114,6 +114,11 @@ class NativeVoiceController:
         self._interaction_lap_origins: dict[str, dict] = {}
 
         self._signal_pressed = False
+        # How many of the engineer's lines the driver has kept from being heard
+        # in full by keying the radio, over the line or just before it. Only
+        # ever rises, so a caller can compare it across one line to tell a
+        # line the driver cut short from one that failed to play.
+        self.speech_cut_count = 0
         self._transition_lock = asyncio.Lock()
         self._speech_lock = asyncio.Lock()
         self._process_task: asyncio.Task[None] | None = None
@@ -642,6 +647,10 @@ class NativeVoiceController:
                 self._last_voice_at = now
                 self._last_audio_rms = 0.0
                 self._release_in_progress = False
+                if self._tts_playing or (
+                    self._speech_task and not self._speech_task.done()
+                ):
+                    self.speech_cut_count += 1
                 await self.store.update(
                     ptt_pressed=True,
                     ptt_release_reason="",
@@ -1568,7 +1577,10 @@ class NativeVoiceController:
 
     @session_scoped(discarded=False, raise_on_change=False)
     async def speak_text(self, text: str) -> bool:
-        if not text.strip() or self._signal_pressed:
+        if not text.strip():
+            return False
+        if self._signal_pressed:
+            self.speech_cut_count += 1
             return False
         if not getattr(self.audio, "voice_ready", True):
             # TTS is OpenAI-backed. The text still reaches the dashboard radio
@@ -1596,6 +1608,7 @@ class NativeVoiceController:
         async def perform() -> bool:
             async with self._speech_lock:
                 if self._signal_pressed:
+                    self.speech_cut_count += 1
                     return False
                 self._tts_playing = True
                 self._clear_wake_capture()
@@ -1612,6 +1625,7 @@ class NativeVoiceController:
                     )
                 await self.audio.synthesize(text, target, "wav")
                 if self._signal_pressed:
+                    self.speech_cut_count += 1
                     return False
                 await first_audio()
                 await self.audio.play_wav(target)
