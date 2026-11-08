@@ -389,3 +389,16 @@ def is_question(text: str) -> bool:
     """Whether a driver turn asks rather than tells. See ``utterance_mood``."""
     return utterance_mood(text) == "question"
 
+
+def sentences(text: str) -> list[str]:
+    """The utterance split into its spoken sentences, normalised.
+
+    A turn often carries a question and an instruction together: "What's the
+    gap behind? And stop telling me about the tyres." The question must not
+    cancel the instruction, so settings that outlive the turn are judged one
+    sentence at a time. The split is on sentence punctuation only; a comma
+    is too often a pause inside one question ("should I box this lap, or
+    protect the tyres").
+    """
+    parts = re.split(r"(?<=[.?!;])\s+", normalize_text(text))
+    return [part for part in parts if re.search(r"[a-z0-9]", part)]

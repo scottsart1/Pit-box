@@ -19,6 +19,7 @@ from .intent import (
     has_phrase,
     is_question,
     normalize_text,
+    sentences,
     spoken_numbers_to_digits,
     strip_leading_fillers,
     utterance_mood,
@@ -894,27 +895,29 @@ class EngineerBrain:
         about…", because normalisation keeps the apostrophe — and that is the
         form drivers actually use.
         """
-        text = cls._normalize_text(utterance)
-        # A question never sets a lasting rule. A request still does: "can you
-        # please confirm that I do not want reminders regarding my gearbox".
-        if is_question(text):
-            return None
-
-        cue = cls._SUPPRESSION_CUE.search(text)
-        if not cue:
-            return None
-        # The subject must come after the cue: "stop telling me about X", never
-        # a stray "about" earlier in the sentence.
-        match = cls._SUPPRESSION_WITH_SUBJECT.match(
-            text, cue.end()
-        ) or cls._SUPPRESSION_SUBJECT.search(text, cue.end())
-        subject = match.group("subject").strip() if match else ""
-        if not subject:
-            return None
-        subject = " ".join(subject.split()[:6])
-        return (
-            f"Do not raise {subject} unless the driver asks or it is safety-critical."
-        )
+        for text in sentences(utterance):
+            # A question never sets a lasting rule. A request still does: "can
+            # you please confirm that I do not want reminders regarding my
+            # gearbox". Each sentence is judged on its own, so "What's the gap?
+            # And stop telling me about the tyres." still drops the tyres.
+            if is_question(text):
+                continue
+            cue = cls._SUPPRESSION_CUE.search(text)
+            if not cue:
+                continue
+            # The subject must come after the cue: "stop telling me about X",
+            # never a stray "about" earlier in the sentence.
+            match = cls._SUPPRESSION_WITH_SUBJECT.match(
+                text, cue.end()
+            ) or cls._SUPPRESSION_SUBJECT.search(text, cue.end())
+            subject = match.group("subject").strip() if match else ""
+            if not subject:
+                continue
+            subject = " ".join(subject.split()[:6])
+            return (
+                f"Do not raise {subject} unless the driver asks or it is safety-critical."
+            )
+        return None
 
     @staticmethod
     def suppressed_subjects(standing_instructions: list[Any] | None) -> list[str]:
@@ -1037,19 +1040,27 @@ class EngineerBrain:
         r"|\bstop\s+going\s+on\b(?!\s+(?:about|regarding|concerning|with)\b)"
     )
 
+    # "I don't want short answers" asks for the opposite of short answers.
+    _NOT_SHORT_ANSWERS = re.compile(
+        r"\b(?:don\s*t|dont|do\s+not|no\s+more|no\s+need\s+for|stop\s+giving\s+me)\s+"
+        r"(?:\w+\s+){0,3}?(?:short|shorter|brief|one\s+line)\s+(?:answers?|replies)\b"
+    )
+
     @classmethod
     def _requests_short_answers(cls, utterance: str) -> bool:
-        text = cls._normalize_text(utterance)
-        if is_question(text) or cls._requests_standard_answers(text):
-            return False
-        words = " ".join(re.findall(r"[a-z0-9]+", text))
-        return has_any_phrase(
-            text,
-            (
-                "keep your answers short", "keep answers short", "short answers",
-                "shorter answers", "be brief", "keep it brief", "less talking",
-            ),
-        ) or cls._ABOUT_ENGINEER_LENGTH.search(words) is not None
+        for text in sentences(utterance):
+            if is_question(text) or cls._requests_standard_answers(text):
+                continue
+            words = " ".join(re.findall(r"[a-z0-9]+", text))
+            if has_any_phrase(
+                text,
+                (
+                    "keep your answers short", "keep answers short", "short answers",
+                    "shorter answers", "be brief", "keep it brief", "less talking",
+                ),
+            ) or cls._ABOUT_ENGINEER_LENGTH.search(words) is not None:
+                return True
+        return False
 
     @classmethod
     def _requests_standard_answers(cls, utterance: str) -> bool:
@@ -1058,18 +1069,26 @@ class EngineerBrain:
         Short answers persist across sessions, so a radio way back is needed;
         otherwise the only exit from terse mode was the settings page.
         """
-        text = cls._normalize_text(utterance)
-        if is_question(text):
-            return False
-        return has_any_phrase(
-            text,
-            (
-                "normal answers", "longer answers", "full answers", "detailed answers",
-                "normal length answers", "you can talk more", "you can say more",
-                "no more short answers", "no need to be brief",
-                "no need to keep it short", "standard verbosity", "normal verbosity",
-            ),
-        )
+        for text in sentences(utterance):
+            if is_question(text):
+                continue
+            words = " ".join(re.findall(r"[a-z0-9]+", text))
+            if cls._NOT_SHORT_ANSWERS.search(words):
+                return True
+            # "I don't want normal answers" is not a request for them.
+            if has_negation(text):
+                continue
+            if has_any_phrase(
+                text,
+                (
+                    "normal answers", "longer answers", "full answers", "detailed answers",
+                    "normal length answers", "you can talk more", "you can say more",
+                    "no more short answers", "no need to be brief",
+                    "no need to keep it short", "standard verbosity", "normal verbosity",
+                ),
+            ):
+                return True
+        return False
 
     @classmethod
     def _manual_session_override_mode(cls, utterance: str) -> str | None:
@@ -1262,6 +1281,13 @@ class EngineerBrain:
         r"make\s+(?:it|the\s+car)|dial\s+in|we\s+should|we\s+must|have\s+to|"
         r"got\s+to|gotta|going\s+to|i\s+ll|we\s+ll)\b"
     )
+    # Words that turn "I'm going to ... straight line speed" or "I need to
+    # know how much ... straight line speed" into a report or a question
+    # rather than a request for it.
+    _PREFERENCE_BLOCKERS = frozenset({
+        "lose", "losing", "lost", "lack", "lacking", "missing", "without",
+        "know", "see", "check", "find", "understand", "hear",
+    })
     _PREFERENCE_PHRASES: tuple[tuple[tuple[str, ...], dict[str, Any]], ...] = (
         (("more rear stability", "prioritize rear stability", "stable rear"),
          {"rear_stability": 2, "setup_bias": "rear_stability"}),
@@ -1295,12 +1321,20 @@ class EngineerBrain:
                 clause = re.split(r"[,.;:!?]|\bbut\b", before)[-1]
                 if has_negation(clause):
                     continue
-                if (
-                    phrase.startswith(("prioritize", "play it safe", "gamble"))
-                    or cls._PREFERENCE_DIRECTIVE.search(clause)
-                    or not strip_leading_fillers(clause)
-                ):
+                if phrase.startswith(("prioritize", "play it safe", "gamble")):
                     return True
+                if not strip_leading_fillers(clause):
+                    return True
+                # Contractions arrive as "i'd" and "let's"; the directive is
+                # matched on bare words. It must govern the phrase: a few
+                # words at most in between, none of them a report or a
+                # question ("going to lose", "need to know how much").
+                words = " ".join(re.findall(r"[a-z0-9]+", clause))
+                directives = list(cls._PREFERENCE_DIRECTIVE.finditer(words))
+                if directives:
+                    between = words[directives[-1].end():].split()
+                    if len(between) <= 3 and not cls._PREFERENCE_BLOCKERS.intersection(between):
+                        return True
         return False
 
     @classmethod
@@ -1315,17 +1349,18 @@ class EngineerBrain:
         meant, and answered with a canned acknowledgement instead of the
         answer.
         """
-        text = cls._normalize_text(utterance)
-        if is_question(text):
-            return {}
         updates: dict[str, Any] = {}
-        for phrases, values in cls._PREFERENCE_PHRASES:
-            if cls._states_preference(text, phrases):
-                updates.update(values)
-        for phrases, appetite in cls._RISK_APPETITE_PHRASES:
-            if cls._states_preference(text, phrases):
-                updates["strategy_risk_appetite"] = appetite
-                break
+        for text in sentences(utterance):
+            # A question saves nothing; a statement beside it still does.
+            if is_question(text):
+                continue
+            for phrases, values in cls._PREFERENCE_PHRASES:
+                if cls._states_preference(text, phrases):
+                    updates.update(values)
+            for phrases, appetite in cls._RISK_APPETITE_PHRASES:
+                if cls._states_preference(text, phrases):
+                    updates["strategy_risk_appetite"] = appetite
+                    break
         return updates
 
     # A first-person refusal of the stop itself. Mere co-occurrence of a
@@ -2149,6 +2184,13 @@ class EngineerBrain:
             # the deterministic state mutation above is the safety invariant.
             return None
 
+        # Settings below are judged one sentence at a time, so a turn can set
+        # one and ask something in the same breath: "What's the gap behind?
+        # And stop telling me about the tyres." The setting is still stored,
+        # but the turn then goes to the model, which answers the question
+        # too, instead of a fixed acknowledgement that drops it.
+        also_asks = any(is_question(sentence) for sentence in sentences(utterance))
+
         preference_updates = self._preference_updates(utterance)
         if preference_updates:
             preferences = dict(state.get("driver_preferences", {}))
@@ -2160,15 +2202,17 @@ class EngineerBrain:
                 ]
             await self.store.update(**update_values)
             await self.database.save_preference("driver_preferences", preferences)
+            if also_asks:
+                return None
             return "Driver preference saved; future setup and strategy recommendations will use it."
 
         if self._requests_standard_answers(utterance):
             await self.store.update(radio_verbosity="standard")
-            return "Copy, normal-length answers again."
+            return None if also_asks else "Copy, normal-length answers again."
 
         if self._requests_short_answers(utterance):
             await self.store.update(radio_verbosity="terse")
-            return "Short answers confirmed."
+            return None if also_asks else "Short answers confirmed."
 
         released = self._released_standing_instructions(
             utterance, list(state.get("standing_instructions", []) or [])
@@ -2191,6 +2235,8 @@ class EngineerBrain:
             standing.append({"rule": instruction, "added_at": time.time()})
             await self.store.update(standing_instructions=standing[-8:])
             await self.database.save_preference("standing_instructions", standing[-8:])
+            if also_asks:
+                return None
             return "Copy, understood. I won't bring that up again."
 
         # A confirmed suspension has a complete authoritative restart summary.
