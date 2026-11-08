@@ -117,3 +117,26 @@ async def test_new_session_and_unconfirmed_final_lap_still_allow_planning(stack,
 def test_terminal_pit_guard_preserves_hypothetical_history_and_other_driver_scope(question):
     state = {"drivers": [{"name": "Norris", "driver_id": 54}]}
     assert not EngineerBrain._requests_current_pit_instruction(state, question)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("question",["what position am I","where am I running","what's my position?","current position"])
+async def test_a_position_question_after_the_flag_answers_from_the_final_classification(stack,monkeypatch,question):
+    """Live timing still said P1; the classification, with a penalty applied, said P3."""
+    store,db,*_,tools=stack
+    await store.mark_packet(2026,26,1234,packet_id=8)
+    await store.update(final_classification={**RESULT,"position":3},player_position=1,current_lap=31,total_laps=31)
+    brain=EngineerBrain(store,tools,db)
+    async def no_provider(**kwargs):
+        raise AssertionError("A confirmed result does not need a provider")
+    monkeypatch.setattr(brain.router,"generate",no_provider)
+    answer=await brain.ask(question)
+    assert answer=="Confirmed final classification: P3."
+
+
+@pytest.mark.asyncio
+async def test_a_position_question_before_the_classification_still_reads_timing(stack):
+    store,db,*_,tools=stack
+    await store.mark_packet(2026,26,1234,packet_id=2)
+    await store.update(player_position=4,current_lap=20,total_laps=31)
+    assert await EngineerBrain(store,tools,db).ask("what position am I")=="Timing currently reports P4."
