@@ -17,6 +17,7 @@ from pitwall.brain import (
     _limit_radio_sentences,
     compose_persona,
 )
+from pitwall.briefing import BriefingEngine
 from pitwall.proactive import ProactiveEngineer
 from pitwall.providers import ProviderResult
 
@@ -366,3 +367,26 @@ async def test_pre_session_brief_is_not_told_to_be_one_clause(stack, monkeypatch
     assert "five to eight concise sentences" in instructions
     assert "Verbosity: terse" not in instructions
     assert "at most 8 sentences" in instructions
+
+
+@pytest.mark.parametrize("payload,spoken", [
+    ({"available": True, "lap_num": 7, "lap_ms": 81712, "delta_to_personal_best_s": 0.0,
+      "verdict": {"instruction": "Brake later into turn 1."}},
+     "Lap 7, 1:21.712, your best lap so far. Brake later into turn 1."),
+    ({"available": True, "lap_num": 8, "lap_ms": 82024, "delta_to_personal_best_s": 0.312,
+      "verdict": {"instruction": "Brake later into turn 1."}},
+     "Lap 8, 1:22.024, 0.3 off your best. Brake later into turn 1."),
+])
+def test_qualifying_lap_fallback_reads_like_radio(payload, spoken):
+    assert BriefingEngine.fallback_text("post_qualifying_lap", payload) == spoken
+
+
+@pytest.mark.parametrize("payload,spoken", [
+    ({"finish_position": 5, "net_places": 3, "points": 10,
+      "top_time_losses": [{"name": "Turn 4", "avg_loss_s": 0.21}]},
+     "Race complete: P5, gained 3 places, 10 points. Next session, work on Turn 4: it cost about 0.2 seconds a lap."),
+    ({"finish_position": 5, "net_places": None, "points": 10, "top_time_losses": []},
+     "Race complete: P5, 10 points. Next session, prioritise repeatable clean laps."),
+])
+def test_race_fallback_ends_on_an_instruction(payload, spoken):
+    assert BriefingEngine.fallback_text("post_race", payload) == spoken
