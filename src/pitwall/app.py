@@ -1072,7 +1072,8 @@ async def radio_trace(message_id: int) -> dict[str, object]:
     Ids come from the radio rows /api/history lists; ``has_trace`` there says
     which lines carry one. Read-only.
     """
-    record = await database.radio_trace(message_id) if message_id > 0 else None
+    # Row ids are positive SQLite integers; anything else names no message.
+    record = await database.radio_trace(message_id) if 0 < message_id < 2**63 else None
     if record is None:
         raise HTTPException(404, "No radio message with that id")
     return record

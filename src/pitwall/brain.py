@@ -1052,9 +1052,9 @@ _PLAN_VERDICT_AGAINST = (
     "unhappy", "disagree",
 )
 _REPEAT_REQUEST_PHRASES = (
-    "say again", "say that again", "repeat that", "repeat it", "repeat the last",
+    "say again", "say that again", "repeat that", "repeat the last",
     "repeat your last", "come again", "didn t catch", "did not catch", "didn t hear",
-    "did not hear", "missed that", "you broke up", "you re breaking up",
+    "did not hear", "you broke up", "you re breaking up",
 )
 _OFF_TARGET_PHRASES = (
     "answer my question", "answer the question", "not what i asked", "i asked",
@@ -1070,6 +1070,13 @@ _CORRECTION_PHRASES = (
     "you re wrong", "you are wrong", "wrong tyre", "wrong tyres", "wrong tire",
     "wrong tires", "wrong compound", "wrong lap", "wrong car", "i told you",
 )
+# A verdict word ("stupid", "terrible", "not happy") disputes the engineer only
+# when it is aimed at what the engineer said. "That strategy is stupid" and
+# "that's ridiculous" are; "the rear is terrible in the slow corners" and "I
+# hate this car" are car feedback, which routing also sends to the model but
+# which says nothing about the answer before it.
+_DISPUTE_TARGETS = ("that", "strategy", "plan", "call", "idea", "you")
+_DISPUTE_PHRASES = ("disagree",)
 # A turn that asks only for the last message again. Whole-utterance only: "say
 # again the gap" wants a fresh number, not the old line.
 _REPEAT_REQUEST = re.compile(
@@ -1079,9 +1086,9 @@ _REPEAT_REQUEST = re.compile(
     r"|(?:i )?(?:didn t|did not) (?:catch|get|hear) (?:that|it|you)|(?:i )?missed (?:that|it))"
     r"(?: please)?(?: mate)?"
 )
-# A replay is skipped this soon after a race-control change: the line the
-# driver missed may describe the track before the flag. Only a line from the
-# current lap is replayed, so this covers more than a lap.
+# A replay is skipped this soon after a race-control change, and after one
+# at any point in the current lap: the line the driver missed may describe the
+# track before the flag. A lap behind the safety car can take longer than this.
 _REPEAT_RACE_CONTROL_WINDOW_S = 120.0
 
 
@@ -1093,15 +1100,19 @@ def _driver_reaction(utterance: str) -> str:
     already said, it was wrong, or the driver rejects the call.
     """
     text = normalize_text(utterance)
+    if any(_REPEAT_REQUEST.fullmatch(form) for form in _request_forms(utterance)):
+        return "repeat_request"
     for label, phrases in (
         ("repeat_request", _REPEAT_REQUEST_PHRASES),
         ("off_target", _OFF_TARGET_PHRASES),
         ("redundant", _REDUNDANT_PHRASES),
         ("correction", _CORRECTION_PHRASES),
-        ("dispute", _CALL_CHALLENGES + _PLAN_VERDICT_AGAINST),
+        ("dispute", _CALL_CHALLENGES + _DISPUTE_PHRASES),
     ):
         if has_any_phrase(text, phrases):
             return label
+    if has_any_phrase(text, _PLAN_VERDICT_AGAINST) and has_any_phrase(text, _DISPUTE_TARGETS):
+        return "dispute"
     return ""
 
 
@@ -1120,6 +1131,20 @@ _TRACE_ARGUMENT_CHARS = 500
 def _trace_text(value: Any, limit: int = _TRACE_TEXT_CHARS) -> str:
     text = str(value or "")
     return text if len(text) <= limit else text[:limit] + " [truncated]"
+
+
+def _trace_prompt(prompt: str) -> str:
+    """The prompt as the trace keeps it: its start and, whole, its end.
+
+    The end holds the request focus, the recent radio and the driver's line,
+    which is what an answer is judged against; a long header is what gives.
+    """
+    if len(prompt) <= _TRACE_PROMPT_CHARS:
+        return prompt
+    head = _TRACE_PROMPT_CHARS // 3
+    tail = _TRACE_PROMPT_CHARS - head
+    omitted = len(prompt) - head - tail
+    return f"{prompt[:head]} [{omitted} characters left out] {prompt[-tail:]}"
 
 
 def _trace_json(value: Any) -> str:
@@ -3172,6 +3197,39 @@ class EngineerBrain:
         return "Paused, last confirmed: " + answer if freshness["status"] == "paused" else answer
 
     @staticmethod
+    def _asks_how_to_clear_override(utterance: str) -> bool:
+        """"How do I clear my strategy override?", answered with the command."""
+        return bool(re.fullmatch(
+            r"(?:can i|can we|how do i|how do we|how can i|how can we) "
+            r"(?:clear|cancel) (?:(?:my|the) )?strategy override",
+            " ".join(re.findall(r"[a-z0-9]+", normalize_text(utterance))),
+        ))
+
+    @classmethod
+    def _asks_for_restart_summary(cls, state: dict[str, Any], utterance: str) -> bool:
+        """A plan request under a red flag that the restart summary answers.
+
+        A confirmed suspension has a complete authoritative restart summary.
+        Give its primary, alternative and stock limits together even when a
+        request for the full plan would otherwise defer to model narration.
+        Hypotheticals, disputes and rival-specific questions still need tools.
+        A pit question with a second subject or a condition is not answered
+        by the summary either, for the same reason as on a green track.
+        """
+        text = cls._normalize_text(utterance)
+        return bool(
+            (state.get("red_flag_active") or state.get("race_control_phase") == "red_flag")
+            and cls._is_strategy_request(utterance)
+            and (_is_bare_pit_call(utterance) or not _asks_for_pit_call(utterance))
+            and not has_negation(text)
+            and not match_drivers(state.get("drivers", []), utterance)
+            and not has_any_phrase(text, _HYPOTHETICAL_MARKERS + (
+                "instead", "compare", "why", "how much", "car ahead", "car behind",
+                "if the", "if there", "if it", "in case", "unless",
+            ))
+        )
+
+    @staticmethod
     def _requests_current_final_result(state: dict[str, Any], utterance: str) -> bool:
         text = normalize_text(utterance)
         return (has_any_phrase(text, ("final classification", "final result", "final position", "race result", "result confirmed"))
@@ -3238,30 +3296,10 @@ class EngineerBrain:
         if commands.handled:
             return commands.reply
 
-        if re.fullmatch(
-            r"(?:can i|can we|how do i|how do we|how can i|how can we) "
-            r"(?:clear|cancel) (?:(?:my|the) )?strategy override",
-            " ".join(re.findall(r"[a-z0-9]+", text)),
-        ):
+        if self._asks_how_to_clear_override(utterance):
             return 'Yes; say "Clear my strategy override" to restore automatic planning; your current plan is unchanged.'
 
-        # A confirmed suspension has a complete authoritative restart summary.
-        # Give its primary, alternative and stock limits together even when a
-        # request for the full plan would otherwise defer to model narration.
-        # Hypotheticals, disputes and rival-specific questions still need tools.
-        # A pit question with a second subject or a condition is not answered
-        # by the summary either, for the same reason as on a green track.
-        if (
-            (state.get("red_flag_active") or state.get("race_control_phase") == "red_flag")
-            and self._is_strategy_request(utterance)
-            and (_is_bare_pit_call(utterance) or not _asks_for_pit_call(utterance))
-            and not has_negation(text)
-            and not match_drivers(state.get("drivers", []), utterance)
-            and not has_any_phrase(text, _HYPOTHETICAL_MARKERS + (
-                "instead", "compare", "why", "how much", "car ahead", "car behind",
-                "if the", "if there", "if it", "in case", "unless",
-            ))
-        ):
+        if self._asks_for_restart_summary(state, utterance):
             strategy = await self.tools.get_pit_strategy()
             restart = strategy.get("red_flag_restart", {})
             if restart.get("active") and restart.get("instruction"):
@@ -4118,7 +4156,7 @@ class EngineerBrain:
                 recorded, omitted = _trace_tool_calls(calls)
                 trace.update(
                     route=route,
-                    prompt=_trace_text(prompt, _TRACE_PROMPT_CHARS),
+                    prompt=_trace_prompt(prompt),
                     provider_error=type(exc).__name__,
                     tool_calls=recorded,
                     tool_calls_omitted=omitted,
@@ -4155,7 +4193,7 @@ class EngineerBrain:
                 model=result.model,
                 latency_ms=round(result.latency_ms, 1),
                 tool_rounds=result.tool_rounds,
-                prompt=_trace_text(prompt, _TRACE_PROMPT_CHARS),
+                prompt=_trace_prompt(prompt),
                 tool_calls=recorded,
                 tool_calls_omitted=omitted,
                 raw_text=_trace_text(raw_text),
@@ -4329,13 +4367,21 @@ class EngineerBrain:
         """Whether the radio would answer this turn from telemetry, not a model.
 
         Read without side effects, for the comparison; the fast path itself
-        stores commands as it goes.
+        stores commands as it goes. It follows the fast path's own gates: the
+        answers given before the model gate (a finished race, the final
+        result, the override how-to, the red-flag restart summary), then
+        _defers_to_model, past which a plain pit or plan question gets the
+        ranked plan and a simple lookup gets its value. A driver command is
+        not read here, because the comparison does not apply commands.
         """
         if cls._requests_current_pit_instruction(state, utterance) and cls._finished_strategy_answer(state):
             return True
-        if cls._requests_current_final_result(state, utterance):
+        if cls._requests_current_final_result(state, utterance) or cls._asks_how_to_clear_override(utterance):
             return True
-        return cls._is_simple_lookup(utterance) and not cls._defers_to_model(state, utterance)
+        restart = (state.get("strategy", {}) or {}).get("red_flag_restart") or {}
+        if cls._asks_for_restart_summary(state, utterance) and restart.get("active") and restart.get("instruction"):
+            return True
+        return not cls._defers_to_model(state, utterance)
 
     @session_scoped()
     async def compare(self, utterance: str) -> dict[str, Any]:
@@ -4408,31 +4454,31 @@ class EngineerBrain:
 
         Given verbatim, with no model call, so the driver hears the message
         they missed rather than a new paraphrase of it. Only a line said on
-        this lap, with no race-control change since shortly before it: a "box
-        this lap" from the previous lap, or a call made before a flag, no
-        longer means what it said, and the model, which sees the current
-        state, answers instead. A line the driver only partly heard is not
-        replayed either.
+        this lap, with no race-control change during this lap or the last two
+        minutes: a "box this lap" from the previous lap, or a call made before
+        a flag, no longer means what it said, and the model, which sees the
+        current state, answers instead. A line the driver only partly heard is
+        not replayed either.
         """
         if not any(_REPEAT_REQUEST.fullmatch(form) for form in _request_forms(utterance)):
             return None
+        # The log ends with this turn, and the line before it is the
+        # engineer's. After an earlier question that got no answer, "say
+        # again" asks for that answer, not for whatever was said before it.
         log = list(state.get("radio_log", []) or [])
-        if not log or log[-1].get("role") != "driver":
+        if len(log) < 2 or log[-1].get("role") != "driver" or log[-2].get("role") != "engineer":
             return None
-        while log and log[-1].get("role") == "driver":
-            log.pop()
-        if not log or log[-1].get("role") != "engineer":
-            return None
-        line = " ".join(str(log[-1].get("text", "") or "").split())
-        lap = log[-1].get("lap")
+        line = " ".join(str(log[-2].get("text", "") or "").split())
+        lap = log[-2].get("lap")
         if not line or line.endswith("—") or _contains_deliberation_for_history(line):
             return None
         if not isinstance(lap, int) or isinstance(lap, bool) or lap != int(state.get("current_lap", 0) or 0):
             return None
-        if state.get("red_flag_active"):
+        if state.get("red_flag_active") or state.get("race_control_phase") == "red_flag":
             return None
         changed_at = float(state.get("race_control_changed_at", 0.0) or 0.0)
-        if changed_at and time.time() - changed_at < _REPEAT_RACE_CONTROL_WINDOW_S:
+        lap_elapsed_s = max(0.0, float(state.get("current_lap_time_ms", 0) or 0) / 1000.0)
+        if changed_at and time.time() - changed_at < max(_REPEAT_RACE_CONTROL_WINDOW_S, lap_elapsed_s + 5.0):
             return None
         return line
 
