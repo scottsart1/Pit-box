@@ -54,6 +54,9 @@ _AUDIO_BYTES_PER_S = REALTIME_RATE * 2
 # after it is sent for the session to report it spoken.
 CALL_HOLD_S = 8.0
 CALL_DELIVERY_S = 20.0
+# A line sent this recently may still be started by the server, so at the
+# delivery deadline it is not handed to the other audio path as well.
+_CALL_START_S = 2.0
 # Metadata key that marks a response as a pit-wall line rather than a reply.
 _CALL_TAG = "pitwall_call"
 
@@ -122,10 +125,11 @@ You are in a live conversation. The driver is driving, so:
   and then say why in one sentence.
 - When that decision declines a pit call, the driver said no to this stop, not to having a
   strategy: after the confirmation, give the next option from get_pit_strategy and its cost in one
-  clause ("Copy, staying out. Next option is lap 17 for hards, about two seconds slower.").
-- A pit wall note in the conversation records what the driver's last message stored: a strategy
-  lock, a refused stop, a standing instruction, a setting. Confirm that outcome and nothing else;
-  if it says nothing was stored, say so.
+  clause, with its lap, compound and cost exactly as the tool gives them.
+- A pit wall note in the conversation records what a driver message actually stored: a strategy
+  lock, a refused stop, a standing instruction, a setting. It can arrive after you have answered
+  that message. If it differs from what you told the driver (nothing locked, no lap given), correct
+  that in one short clause at the start of your next reply; otherwise do not repeat it.
 - If you did not catch something, ask once, briefly.
 
 Every number you say must come from a tool call in this session. Never estimate, never recall a
@@ -199,6 +203,11 @@ class _PitWallCall:
     future: asyncio.Future[bool | None]
     dispatched: asyncio.Event = field(default_factory=asyncio.Event)
     sent: bool = False
+    # The server created a response for it, so the driver may have heard some.
+    started: bool = False
+    attempts: int = 0
+    event_id: str = ""
+    sent_at: float = 0.0
 
 
 class RealtimeRadio:
@@ -271,6 +280,8 @@ class RealtimeRadio:
         # Storing a driver turn can wait on a strategy recompute, so it runs
         # beside the receive loop rather than stalling the reply's audio.
         self._turn_task: asyncio.Task[None] | None = None
+        # When the audio handed to the speaker so far will have finished playing.
+        self._playback_ends_at = 0.0
         self._reset_audio_accounting("")
 
     # ------------------------------------------------------------------ state
@@ -668,6 +679,7 @@ class RealtimeRadio:
                 tag = self._call_tag(response)
                 if tag in self._calls:
                     self._call_responses[response_id] = tag
+                    self._calls[tag].started = True
             self._response_active = True
             self._reply_requested = False
             self._assistant_text = []
@@ -717,7 +729,11 @@ class RealtimeRadio:
             log.warning("Realtime error event: %s", message)
             self._reply_requested = False
             # A pit-wall line the server refused outright was never spoken.
-            call = self._calls.get(str(getattr(detail, "event_id", "") or ""))
+            event_id = str(getattr(detail, "event_id", "") or "")
+            call = next(
+                (held for held in self._calls.values() if event_id and held.event_id == event_id),
+                None,
+            )
             if call is not None and call.tag not in self._call_responses.values():
                 self._settle_call(call, None)
             await self.store.update(last_error=f"Realtime radio error: {message}")
@@ -743,7 +759,12 @@ class RealtimeRadio:
 
         tag = self._call_responses.pop(response_id, None)
         call = self._calls.get(tag) if tag else None
-        if call is not None:
+        if call is not None and status == "cancelled" and not heard:
+            # Cut off before a word of it played: the driver heard nothing,
+            # so it goes out again once their own turn has been answered.
+            call.sent = False
+            call.started = False
+        elif call is not None:
             # The caller logs a delivered line itself, exactly once.
             if status == "cancelled":
                 await self._record("engineer", heard)
@@ -848,9 +869,15 @@ class RealtimeRadio:
             stream.write(data)
         except Exception:
             return
+        # A response's audio starts playing only once the audio already queued
+        # ahead of it has played: a held pit-wall line waits behind the end of
+        # the reply it was held for.
+        now = time.monotonic()
+        queue_end = max(now, self._playback_ends_at)
         if not self._audio_written:
-            self._audio_started_at = time.monotonic()
+            self._audio_started_at = queue_end
         self._audio_written += len(data)
+        self._playback_ends_at = queue_end + len(data) / _AUDIO_BYTES_PER_S
 
     # --------------------------------------------------- what the driver heard
 
@@ -928,6 +955,7 @@ class RealtimeRadio:
 
     def _flush_output(self) -> None:
         """Discard buffered engineer audio so barge-in is immediate."""
+        self._playback_ends_at = 0.0
         stream = self._output_stream
         if stream is None:
             return
@@ -994,7 +1022,7 @@ class RealtimeRadio:
                     "role": "system",
                     "content": [{
                         "type": "input_text",
-                        "text": f"Pit wall note on the driver's last message. Stored: {note}",
+                        "text": f'Pit wall note on the driver saying "{transcript}": {note}',
                     }],
                 },
             })
@@ -1233,11 +1261,13 @@ class RealtimeRadio:
 
         Only one response can be open at a time, so a line that arrives while
         the engineer is replying is held and spoken as soon as that reply
-        closes, ahead of any tool reply. Delivery is reported only once the
-        session says the line was spoken in full: True when it was, False when
-        the driver talked over it, None when the session never spoke it (no
-        session, refused, failed, or still held after ``CALL_HOLD_S``), so the
-        caller can still use the other audio path.
+        closes, ahead of any tool reply. A line the driver talks over before
+        a word of it has played is held again the same way. Delivery is
+        reported only once the session says the line was spoken in full: True
+        when it was, False when the driver talked over part of it, None when
+        the session never spoke it (no session, refused, failed, or still held
+        after ``CALL_HOLD_S`` or ``CALL_DELIVERY_S``), so the caller can still
+        use the other audio path.
         """
         line = " ".join((text or "").split())
         if self._connection is None or self._closing or not line:
@@ -1261,7 +1291,11 @@ class RealtimeRadio:
             async with asyncio.timeout(CALL_DELIVERY_S):
                 return await call.future
         except TimeoutError:
-            return False
+            # Started and never finished: some of it may have been heard, so
+            # it is not repeated. Just sent: the session may still speak it.
+            # Otherwise the session never spoke it.
+            just_sent = call.sent and asyncio.get_running_loop().time() - call.sent_at < _CALL_START_S
+            return False if call.started or just_sent else None
         finally:
             self._calls.pop(call.tag, None)
 
@@ -1283,11 +1317,17 @@ class RealtimeRadio:
         connection = self._connection
         if connection is None or self._closing:
             return False
+        # Marked before the send is awaited, so a caller whose hold runs out
+        # meanwhile does not hand the line to the other audio path as well.
+        call.sent = True
+        call.sent_at = asyncio.get_running_loop().time()
+        call.attempts += 1
+        call.event_id = f"{call.tag}-{call.attempts}"
         try:
             await connection.send(
                 {
                     "type": "response.create",
-                    "event_id": call.tag,
+                    "event_id": call.event_id,
                     "response": {
                         "metadata": {_CALL_TAG: call.tag},
                         "instructions": (
@@ -1299,8 +1339,8 @@ class RealtimeRadio:
             )
         except Exception as exc:
             log.warning("Realtime pit-wall call could not be sent: %s", exc)
+            call.sent = False
             return False
-        call.sent = True
         call.dispatched.set()
         return True
 
