@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+import sqlite3
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -801,3 +802,24 @@ async def test_a_cancelled_reply_nobody_heard_is_not_logged_and_asks_for_nothing
         assert not connection.of_type("response.create")
     finally:
         await radio.client.close()
+
+
+@pytest.mark.asyncio
+async def test_speech_session_driver_lines_carry_the_same_reaction_labels(stack, realtime_on):
+    store, brain = await _brain(stack)
+    database = stack[1]
+    controller, _radio, _connection = await _controller(store, brain)
+
+    await controller._persist_realtime_transcript("driver", "Say again?")
+    await controller._persist_realtime_transcript("driver", "That's wrong, I'm on hards.")
+    await controller._persist_realtime_transcript("driver", "What's the gap behind?")
+    await controller._persist_realtime_transcript("engineer", "Say again: box lap 14 for hards.")
+
+    with sqlite3.connect(database.path) as db:
+        rows = db.execute("SELECT role, text, label FROM radio_messages ORDER BY id").fetchall()
+    assert rows == [
+        ("driver", "Say again?", "repeat_request"),
+        ("driver", "That's wrong, I'm on hards.", "correction"),
+        ("driver", "What's the gap behind?", ""),
+        ("engineer", "Say again: box lap 14 for hards.", ""),
+    ]

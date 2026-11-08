@@ -15,7 +15,7 @@ from typing import Any
 import numpy as np
 
 from .audio import AudioService
-from .brain import DriverCommands, EngineerBrain
+from .brain import DriverCommands, EngineerBrain, _driver_reaction
 from .config import settings
 from .engineering_context import (
     lap_note_context,
@@ -208,8 +208,12 @@ class NativeVoiceController:
 
     async def _persist_realtime_transcript(self, role: str, text: str) -> None:
         state = await self.store.snapshot_analysis()
+        # Driver lines heard by the speech session are labelled like typed and
+        # push-to-talk ones, so a "say again" or a dispute counts the same way
+        # whichever radio heard it.
+        label = _driver_reaction(text) if role == "driver" else ""
         await self.brain.database.save_radio_message(
-            state, role, text, "user" if role == "driver" else "response:realtime"
+            state, role, text, "user" if role == "driver" else "response:realtime", label=label
         )
 
     async def _apply_realtime_commands(self, text: str) -> str | None:
