@@ -5,6 +5,7 @@ import re
 import time
 from collections.abc import Callable
 from copy import deepcopy
+from dataclasses import dataclass, field
 from typing import Any
 
 from . import rain
@@ -654,12 +655,16 @@ _PROVIDER_FALLBACK_PREFIXES = {
 }
 
 _FEEDBACK_PATTERNS = {
+    # First, so the generic "tyres are gone" below does not claim the fronts.
+    "no_front_grip": ("no front grip", "fronts are gone", "front tyres are gone", "front tires are gone"),
     "tyres_gone": (
         "they're gone", "they are gone", "tyres gone", "tires gone",
-        "no grip left", "falling off a cliff",
+        "tyres are gone", "tires are gone", "rears are gone", "tyres are dead",
+        "tires are dead", "no grip left", "falling off a cliff",
     ),
     "tyres_going": (
         "starting to go", "dropping off", "losing the rears",
+        "rears are going away", "tyres are going away", "tires are going away",
     ),
     "tyres_fine": (
         "still good", "plenty left", "tyres are fine", "tires are fine",
@@ -667,7 +672,6 @@ _FEEDBACK_PATTERNS = {
         "the rears are holding",
     ),
     "understeer": ("understeer", "won't turn", "does not turn", "front won't bite"),
-    "no_front_grip": ("no front grip", "fronts are gone", "front tyres are gone"),
     "oversteer": ("oversteer", "rear is loose", "rear steps out"),
     "rear_instability": ("rear unstable", "rear instability", "snappy rear"),
     "traction": ("no traction", "wheelspin", "spinning the rears"),
@@ -1006,6 +1010,21 @@ def _states_change_condition(text: str, condition: str) -> bool:
 
 def _spoken_compound(compound: Any) -> str:
     return f"{str(compound).lower()}s"
+
+
+@dataclass
+class DriverCommands:
+    """What one driver turn stored, and how the radio answers it.
+
+    ``handled`` means a command took the turn: the text path then says
+    ``reply``, or lets the model word the acknowledgement when ``reply`` is
+    None. ``notes`` say in plain words what was stored, for the speech
+    session, whose model has to confirm the real outcome rather than guess it.
+    """
+
+    handled: bool = False
+    reply: str | None = None
+    notes: list[str] = field(default_factory=list)
 
 
 class EngineerBrain:
@@ -1467,6 +1486,67 @@ class EngineerBrain:
         spending a conversational turn discovering them.
         """
         return await self._header(include_strategy=include_strategy)
+
+    @classmethod
+    def spoken_pit_call(cls, plan: dict[str, Any] | None) -> str | None:
+        """The pit call worded as the text path speaks it, from one plan.
+
+        A text reply is post-processed: the plan's provisional qualifier and
+        the condition that would change the call are attached to it. Speech
+        from a realtime session cannot be edited after the fact, so it is
+        handed the finished wording to say instead.
+        """
+        plan = plan or {}
+        restart = plan.get("red_flag_restart") or {}
+        if restart.get("active") and restart.get("instruction"):
+            return cls.qualify_strategy_text(str(restart["instruction"]).strip(), plan)
+        recommended = plan.get("recommended") or {}
+        instruction = str(recommended.get("instruction") or "").strip()
+        if not instruction:
+            return None
+        if not (recommended.get("legal") and recommended.get("feasible")):
+            return "No current, legal and feasible pit plan is confirmed; give no new pit instruction."
+        return cls._with_strategy_change_condition(cls.qualify_strategy_text(instruction, plan), plan)
+
+    async def realtime_instructions(self, persona: str) -> str:
+        """The speech session's brief, composed the way the text path composes its own.
+
+        A speech session is a fresh conversation every time it opens, and it
+        opens for nearly every exchange a lap or more apart. Its instructions
+        therefore carry what the text path carries in its prompt: the live
+        situation, the plan worded as it is spoken, a refused stop, and the
+        recent radio. The driver's standing instructions, verbosity, call sign,
+        custom persona and brutal mode are folded in by compose_persona after
+        all of that, so the safety anchor is still the last word.
+        """
+        state = await self.store.snapshot_analysis()
+        situation = [await self._header(include_strategy=False)]
+        if state.get("mode_profile") != "qualifying":
+            call = self._finished_strategy_answer(state) or self.spoken_pit_call(state.get("strategy"))
+            if call:
+                situation.append(f"PIT CALL AS SPOKEN: {call}")
+            hold = state.get("strategy_hold", {}) or {}
+            if hold.get("active"):
+                situation.append(
+                    "DRIVER DECLINED THE PIT CALL: the strategy hold runs until lap "
+                    f"{hold.get('until_lap')}. Do not call the stop again unless the driver asks."
+                )
+        recent = [
+            entry for entry in state.get("radio_log", [])[-8:]
+            if not _contains_deliberation_for_history(str(entry.get("text", "")))
+        ]
+        brief = f"{persona}\n\nCURRENT SITUATION\n" + "\n".join(situation)
+        if recent:
+            brief += (
+                "\n\nRECENT RADIO (earlier exchanges, for what the driver refers to; "
+                "the situation above is current):\n"
+                + "\n".join(f"{str(entry.get('role', '')).upper()}: {entry.get('text', '')}" for entry in recent)
+            )
+        return compose_persona(
+            brief,
+            str(state.get("radio_verbosity", "standard")),
+            state.get("standing_instructions", []),
+        )
 
     async def _strategy_fallback_answer(self, prefix: str) -> str:
         """A failed narration must not hide an independently computed plan."""
@@ -3012,120 +3092,12 @@ class EngineerBrain:
                 facts.append(f"{int(classification['penalties_s'])} seconds of penalties")
             return "; ".join(facts) + "."
 
-        session_override = self._manual_session_override_mode(utterance)
-        if session_override is not None:
-            if session_override == "auto":
-                label = str(state.get("raw_session_type", state.get("session_type", "Unknown")))
-                profile = str(state.get("mode_profile", "idle"))
-                source = "udp"
-                reason = "Manual override cleared; the next Session packet is authoritative."
-            else:
-                mapping = {
-                    "race": ("Race", "race"),
-                    "sprint": ("Sprint", "sprint"),
-                    "qualifying": ("Qualifying", "qualifying"),
-                    "practice": ("Practice", "practice"),
-                    "time_trial": ("Time Trial", "time_trial"),
-                }
-                label, profile = mapping[session_override]
-                source = "manual"
-                reason = f"Driver radio override selected {label}."
-            await self.store.update(
-                session_mode_override=session_override,
-                session_type=label,
-                mode_profile=profile,
-                session_detection_source=source,
-                session_detection_reason=reason,
-            )
-            await self.tools.strategy.recompute()
-            if session_override == "auto":
-                return f"Session override cleared; detection now says {label}."
-            asks_start_tyre = has_any_phrase(
-                text,
-                ("first tyre", "first tire", "start tyre", "start tire", "race start tyre", "race start tire"),
-            )
-            if profile in {"race", "sprint"} and asks_start_tyre:
-                total_laps = int(state.get("total_laps", 0) or 0)
-                prefs = state.get("driver_preferences", {}) or {}
-                priority = str(prefs.get("strategy_priority", "balanced")).lower()
-                # On the grid there are no lap times to read, so the surface
-                # estimate is the conditions themselves — but it is still the
-                # surface being asked about, not the rain percentage, and a
-                # full wet is the answer only when the track is truly flooded.
-                start_wetness = rain.equilibrium_wetness(
-                    str(state.get("weather", "Unknown")),
-                )
-                if start_wetness >= rain.WETNESS_SLICK_INTER:
-                    start_compound = rain.best_compound_for(
-                        start_wetness, ("MEDIUM", "INTER", "WET")
-                    )
-                    tyre_call = (
-                        "Start on full wets"
-                        if start_compound == "WET"
-                        else "Start on intermediates"
-                    )
-                elif priority in {"tyre_life", "safety", "one_stop"}:
-                    tyre_call = "Start on hards for tyre-life priority"
-                elif 0 < total_laps <= 15:
-                    tyre_call = "Start on softs for the short race"
-                else:
-                    tyre_call = "Start on mediums as the balanced dry default"
-                # One sentence, start tyre first: it is what was asked, and the
-                # radio cut must not leave only the lock confirmation.
-                qualifier = "; I’ll validate the stop lap when race distance, grid and live conditions arrive" if not state.get("connected") or total_laps <= 0 else ""
-                return f"{tyre_call}; session locked to {label}{qualifier}."
-            return f"Session locked to {label}. I’ll use {profile.replace('_', ' ')} logic until you clear it."
-
-        # A pre-race plan discussion, if one is open, owns strategy talk until
-        # it is settled. It has to come before the single-stop override below:
-        # "make it a one-stop" during a plan discussion means reshape the whole
-        # race, not pin the next stop, and the narrow override would take it
-        # first and silently answer the smaller question.
-        planner = PreRacePlanner(self.store, self.tools.strategy)
-        plan_turn = await planner.try_respond(utterance)
-        if plan_turn is not None:
-            return str(plan_turn.get("spoken") or "")
-
-        override_action = self._strategy_override_action(
-            utterance, int(state.get("current_lap", 0))
-        )
-        if override_action is not None:
-            if override_action.get("needs_lap"):
-                compound = override_action.get("next_compound")
-                tyre = f" for the {str(compound).lower()}s" if compound else ""
-                return f"Which lap{tyre}? Nothing is locked until I have the lap."
-            current = dict(state.get("strategy_override", {}))
-            if override_action.get("clear"):
-                current.update(
-                    enabled=False, locked=False, start_compound=None,
-                    start_compound_explicit=False, start_compound_seen_fitted="",
-                    plan={}, plan_agreed=False,
-                    next_box_lap=None, next_compound=None, preferred_stops=None,
-                    source="driver_radio", note="cleared by driver", updated_at=time.time(),
-                )
-                await self.store.update(strategy_override=current)
-                await self.tools.strategy.recompute()
-                return "Strategy override cleared; automatic ranking restored."
-            current.update({key: value for key, value in override_action.items() if key != "clear"})
-            if override_action.get("start_compound_explicit"):
-                current["start_compound_seen_fitted"] = str(
-                    state.get("tyre", {}).get("compound", "") or ""
-                ).upper()
-            current["note"] = utterance
-            await self.store.update(strategy_override=current)
-            await self.tools.strategy.recompute()
-            parts: list[str] = []
-            if current.get("start_compound"):
-                parts.append(f"start on {str(current['start_compound']).lower()}s")
-            if current.get("next_box_lap") and current.get("next_compound"):
-                parts.append(
-                    f"box lap {int(current['next_box_lap'])} for {str(current['next_compound']).lower()}s"
-                )
-            elif current.get("next_compound"):
-                parts.append(f"take {str(current['next_compound']).lower()}s next")
-            if current.get("preferred_stops") is not None:
-                parts.append(f"{int(current['preferred_stops'])}-stop priority")
-            return "Driver strategy locked: " + ", then ".join(parts) + "."
+        # The explicit driver commands, shared with the speech session. ask()
+        # applies them before it gets here and answers a command itself, so on
+        # its turns this finds nothing left to store.
+        commands = await self._apply_command_branches(utterance, state, plan_discussion=True)
+        if commands.handled:
+            return commands.reply
 
         if re.fullmatch(
             r"(?:can i|can we|how do i|how do we|how can i|how can we) "
@@ -3133,128 +3105,6 @@ class EngineerBrain:
             " ".join(re.findall(r"[a-z0-9]+", text)),
         ):
             return 'Yes; say "Clear my strategy override" to restore automatic planning; your current plan is unchanged.'
-
-        # A named tactic outranks refusal phrasing: "we're doing the overcut
-        # — I'm staying out" is the tactic, and the tactic branch sets the
-        # same hold. Checking refusal first filed exactly that utterance as a
-        # bare refusal, and the AGREED chip never appeared.
-        intent = self._strategy_intent(utterance, int(state.get("current_lap", 0) or 0))
-        if intent is not None:
-            await self.store.update(strategy_intent=intent)
-            if intent["direction"] == "stay_out":
-                # Agreeing to overcut IS declining the next stop. Without this
-                # the engineer said "we'll run the overcut" and then called
-                # "Box lap 12" two laps later.
-                current_lap = int(state.get("current_lap", 0) or 0)
-                hold = dict(state.get("strategy_hold", {}) or {})
-                hold.update(
-                    {
-                        "active": True,
-                        "until_lap": current_lap + 5,
-                        "reason": f"agreed {intent['intent'].replace('_', ' ')}: {utterance.strip()}",
-                        "set_at": time.time(),
-                        "set_at_lap": current_lap,
-                    }
-                )
-                hold.setdefault("baseline", {})
-                hold.setdefault("change_reason", "")
-                hold.setdefault("raised_after_release", False)
-                await self.store.update(strategy_hold=hold)
-            # The model acknowledges in the driver's own words; the state
-            # mutation above is what makes it binding on later calls.
-            return None
-
-        if self._strategy_refusal(utterance):
-            current_lap = int(state.get("current_lap", 0) or 0)
-            damage = state.get("damage", {}) or {}
-            hold = {
-                "active": True,
-                "until_lap": current_lap + 5,
-                "reason": utterance,
-                "set_at": time.time(),
-                "set_at_lap": current_lap,
-                "baseline": {
-                    "race_control_phase": state.get("race_control_phase", "green"),
-                    "wet": rain.surface_is_wet(state),
-                    "damage": {
-                        key: damage.get(key, 0)
-                        for key in (
-                            "front_left_wing", "front_right_wing", "rear_wing",
-                            "floor", "diffuser", "sidepod", "gearbox", "engine",
-                            "drs_fault", "ers_fault",
-                        )
-                    },
-                    "max_wear_pct": max(
-                        [
-                            float(value)
-                            for value in state.get("tyre", {}).get("wear", [0])
-                        ]
-                        or [0.0]
-                    ),
-                    "compound": state.get("tyre", {}).get("compound"),
-                },
-                "change_reason": "",
-                "raised_after_release": False,
-            }
-            await self.store.update(strategy_hold=hold)
-            # Let the language route acknowledge the driver's exact wording;
-            # the deterministic state mutation above is the safety invariant.
-            return None
-
-        # Settings below are judged one sentence at a time, so a turn can set
-        # one and ask something in the same breath: "What's the gap behind?
-        # And stop telling me about the tyres." The setting is still stored,
-        # but the turn then goes to the model, which answers the question
-        # too, instead of a fixed acknowledgement that drops it.
-        also_asks = any(is_question(sentence) for sentence in sentences(utterance))
-
-        preference_updates = self._preference_updates(utterance)
-        if preference_updates:
-            preferences = dict(state.get("driver_preferences", {}))
-            preferences.update(preference_updates)
-            update_values: dict[str, Any] = {"driver_preferences": preferences}
-            if "strategy_risk_appetite" in preference_updates:
-                update_values["strategy_risk_appetite"] = preference_updates[
-                    "strategy_risk_appetite"
-                ]
-            await self.store.update(**update_values)
-            await self.database.save_preference("driver_preferences", preferences)
-            if also_asks:
-                return None
-            return "Driver preference saved; future setup and strategy recommendations will use it."
-
-        if self._requests_standard_answers(utterance):
-            await self.store.update(radio_verbosity="standard")
-            return None if also_asks else "Copy, normal-length answers again."
-
-        if self._requests_short_answers(utterance):
-            await self.store.update(radio_verbosity="terse")
-            return None if also_asks else "Short answers confirmed."
-
-        released = self._released_standing_instructions(
-            utterance, list(state.get("standing_instructions", []) or [])
-        )
-        if released is not None:
-            standing, subject = released
-            await self.store.update(standing_instructions=standing)
-            await self.database.save_preference("standing_instructions", standing)
-            if subject is None:
-                return "Copy, standing instructions cleared."
-            return f"Copy, I'll report {subject} again."
-
-        instruction = self._standing_instruction(utterance)
-        if instruction:
-            standing = [
-                item
-                for item in list(state.get("standing_instructions", []))
-                if item.get("rule") != instruction
-            ]
-            standing.append({"rule": instruction, "added_at": time.time()})
-            await self.store.update(standing_instructions=standing[-8:])
-            await self.database.save_preference("standing_instructions", standing[-8:])
-            if also_asks:
-                return None
-            return "Copy, understood. I won't bring that up again."
 
         # A confirmed suspension has a complete authoritative restart summary.
         # Give its primary, alternative and stock limits together even when a
@@ -3667,6 +3517,329 @@ class EngineerBrain:
 
         return None
 
+    @staticmethod
+    def _command_applied(reply: str, *, also_asks: bool = False) -> DriverCommands:
+        """A command whose fixed confirmation is also what the speech session is told.
+
+        When the turn also asks something, the model answers it and confirms
+        the setting in the same reply, so there is no fixed reply.
+        """
+        return DriverCommands(handled=True, reply=None if also_asks else reply, notes=[reply])
+
+    async def apply_driver_commands(
+        self, utterance: str, *, plan_discussion: bool = False
+    ) -> DriverCommands:
+        """Store everything one driver turn tells the pit wall, before any reply.
+
+        Both radio paths run this on every driver turn: the text path from
+        ask(), the speech session on each final transcript. Whatever the
+        engineer says back, the strategy engine, the proactive queue, the tools
+        and the situation header read the state written here, so a refusal, a
+        strategy lock or "stop telling me about fuel" must be stored whichever
+        path heard it. Every command predicate is gated by the question/
+        directive reading in intent.py, so a question about a setting changes
+        nothing.
+
+        ``plan_discussion`` lets an open pre-race plan discussion take the
+        turn first. Only the text path enables it, because the discussion
+        answers with its own spoken turns.
+        """
+        origin = await self.store.snapshot_analysis()
+        await self._capture_feedback(utterance)
+        if not await self.store.matches_session(origin):
+            raise SessionChangedError("Session changed; the previous radio request was discarded.")
+        notes: list[str] = []
+        lowered = utterance.lower()
+        unit = None
+        if "fahrenheit" in lowered or re.search(r"(?:°|degrees?\s*)f\b", lowered):
+            unit = "f"
+        elif "celsius" in lowered or re.search(r"(?:°|degrees?\s*)c\b", lowered):
+            unit = "c"
+        if unit is not None:
+            await self.store.update(temperature_unit=unit)
+            if str(origin.get("temperature_unit", "c")).lower() != unit:
+                notes.append(
+                    "Tyre temperatures are now given in "
+                    + ("Fahrenheit." if unit == "f" else "Celsius.")
+                )
+        if self._requests_standard_answers(utterance):
+            await self.store.update(radio_verbosity="standard")
+        elif self._requests_short_answers(utterance):
+            await self.store.update(radio_verbosity="terse")
+        state = await self.store.snapshot_analysis()
+        commands = await self._apply_command_branches(
+            utterance, state, plan_discussion=plan_discussion
+        )
+        commands.notes[:0] = notes
+        return commands
+
+    async def _apply_command_branches(
+        self, utterance: str, state: dict[str, Any], *, plan_discussion: bool
+    ) -> DriverCommands:
+        """The explicit driver commands, in their order of precedence.
+
+        The first one the turn states is stored and ends the search. A command
+        that leaves the wording to the model (an agreed tactic, a declined
+        stop, a setting said alongside a question) is handled with no reply.
+        """
+        text = self._normalize_text(utterance)
+        session_override = self._manual_session_override_mode(utterance)
+        if session_override is not None:
+            if session_override == "auto":
+                label = str(state.get("raw_session_type", state.get("session_type", "Unknown")))
+                profile = str(state.get("mode_profile", "idle"))
+                source = "udp"
+                reason = "Manual override cleared; the next Session packet is authoritative."
+            else:
+                mapping = {
+                    "race": ("Race", "race"),
+                    "sprint": ("Sprint", "sprint"),
+                    "qualifying": ("Qualifying", "qualifying"),
+                    "practice": ("Practice", "practice"),
+                    "time_trial": ("Time Trial", "time_trial"),
+                }
+                label, profile = mapping[session_override]
+                source = "manual"
+                reason = f"Driver radio override selected {label}."
+            await self.store.update(
+                session_mode_override=session_override,
+                session_type=label,
+                mode_profile=profile,
+                session_detection_source=source,
+                session_detection_reason=reason,
+            )
+            await self.tools.strategy.recompute()
+            if session_override == "auto":
+                return self._command_applied(f"Session override cleared; detection now says {label}.")
+            asks_start_tyre = has_any_phrase(
+                text,
+                ("first tyre", "first tire", "start tyre", "start tire", "race start tyre", "race start tire"),
+            )
+            if profile in {"race", "sprint"} and asks_start_tyre:
+                total_laps = int(state.get("total_laps", 0) or 0)
+                prefs = state.get("driver_preferences", {}) or {}
+                priority = str(prefs.get("strategy_priority", "balanced")).lower()
+                # On the grid there are no lap times to read, so the surface
+                # estimate is the conditions themselves — but it is still the
+                # surface being asked about, not the rain percentage, and a
+                # full wet is the answer only when the track is truly flooded.
+                start_wetness = rain.equilibrium_wetness(
+                    str(state.get("weather", "Unknown")),
+                )
+                if start_wetness >= rain.WETNESS_SLICK_INTER:
+                    start_compound = rain.best_compound_for(
+                        start_wetness, ("MEDIUM", "INTER", "WET")
+                    )
+                    tyre_call = (
+                        "Start on full wets"
+                        if start_compound == "WET"
+                        else "Start on intermediates"
+                    )
+                elif priority in {"tyre_life", "safety", "one_stop"}:
+                    tyre_call = "Start on hards for tyre-life priority"
+                elif 0 < total_laps <= 15:
+                    tyre_call = "Start on softs for the short race"
+                else:
+                    tyre_call = "Start on mediums as the balanced dry default"
+                # One sentence, start tyre first: it is what was asked, and the
+                # radio cut must not leave only the lock confirmation.
+                qualifier = "; I’ll validate the stop lap when race distance, grid and live conditions arrive" if not state.get("connected") or total_laps <= 0 else ""
+                return self._command_applied(f"{tyre_call}; session locked to {label}{qualifier}.")
+            return self._command_applied(
+                f"Session locked to {label}. I’ll use {profile.replace('_', ' ')} logic until you clear it."
+            )
+
+        # A pre-race plan discussion, if one is open, owns strategy talk until
+        # it is settled. It has to come before the single-stop override below:
+        # "make it a one-stop" during a plan discussion means reshape the whole
+        # race, not pin the next stop, and the narrow override would take it
+        # first and silently answer the smaller question. The discussion is a
+        # conversation with its own spoken turns, so only the text path, which
+        # speaks them, opens it.
+        if plan_discussion:
+            planner = PreRacePlanner(self.store, self.tools.strategy)
+            plan_turn = await planner.try_respond(utterance)
+            if plan_turn is not None:
+                return DriverCommands(handled=True, reply=str(plan_turn.get("spoken") or ""))
+
+        override_action = self._strategy_override_action(
+            utterance, int(state.get("current_lap", 0))
+        )
+        if override_action is not None:
+            if override_action.get("needs_lap"):
+                compound = override_action.get("next_compound")
+                tyre = f" for the {str(compound).lower()}s" if compound else ""
+                return DriverCommands(
+                    handled=True,
+                    reply=f"Which lap{tyre}? Nothing is locked until I have the lap.",
+                    notes=[f"Nothing is locked: the driver gave no lap{tyre}. Ask which lap."],
+                )
+            current = dict(state.get("strategy_override", {}))
+            if override_action.get("clear"):
+                current.update(
+                    enabled=False, locked=False, start_compound=None,
+                    start_compound_explicit=False, start_compound_seen_fitted="",
+                    plan={}, plan_agreed=False,
+                    next_box_lap=None, next_compound=None, preferred_stops=None,
+                    source="driver_radio", note="cleared by driver", updated_at=time.time(),
+                )
+                await self.store.update(strategy_override=current)
+                await self.tools.strategy.recompute()
+                return self._command_applied("Strategy override cleared; automatic ranking restored.")
+            current.update({key: value for key, value in override_action.items() if key != "clear"})
+            if override_action.get("start_compound_explicit"):
+                current["start_compound_seen_fitted"] = str(
+                    state.get("tyre", {}).get("compound", "") or ""
+                ).upper()
+            current["note"] = utterance
+            await self.store.update(strategy_override=current)
+            await self.tools.strategy.recompute()
+            parts: list[str] = []
+            if current.get("start_compound"):
+                parts.append(f"start on {str(current['start_compound']).lower()}s")
+            if current.get("next_box_lap") and current.get("next_compound"):
+                parts.append(
+                    f"box lap {int(current['next_box_lap'])} for {str(current['next_compound']).lower()}s"
+                )
+            elif current.get("next_compound"):
+                parts.append(f"take {str(current['next_compound']).lower()}s next")
+            if current.get("preferred_stops") is not None:
+                parts.append(f"{int(current['preferred_stops'])}-stop priority")
+            return self._command_applied("Driver strategy locked: " + ", then ".join(parts) + ".")
+
+        # A named tactic outranks refusal phrasing: "we're doing the overcut
+        # — I'm staying out" is the tactic, and the tactic branch sets the
+        # same hold. Checking refusal first filed exactly that utterance as a
+        # bare refusal, and the AGREED chip never appeared.
+        intent = self._strategy_intent(utterance, int(state.get("current_lap", 0) or 0))
+        if intent is not None:
+            await self.store.update(strategy_intent=intent)
+            if intent["direction"] == "stay_out":
+                # Agreeing to overcut IS declining the next stop. Without this
+                # the engineer said "we'll run the overcut" and then called
+                # "Box lap 12" two laps later.
+                current_lap = int(state.get("current_lap", 0) or 0)
+                hold = dict(state.get("strategy_hold", {}) or {})
+                hold.update(
+                    {
+                        "active": True,
+                        "until_lap": current_lap + 5,
+                        "reason": f"agreed {intent['intent'].replace('_', ' ')}: {utterance.strip()}",
+                        "set_at": time.time(),
+                        "set_at_lap": current_lap,
+                    }
+                )
+                hold.setdefault("baseline", {})
+                hold.setdefault("change_reason", "")
+                hold.setdefault("raised_after_release", False)
+                await self.store.update(strategy_hold=hold)
+            agreed = f"Agreed with the driver: {intent['intent'].replace('_', ' ')}"
+            if intent["direction"] == "stay_out":
+                agreed += f"; no pit call before lap {current_lap + 5} unless the race changes"
+            # The model acknowledges in the driver's own words; the state
+            # mutation above is what makes it binding on later calls.
+            return DriverCommands(handled=True, notes=[agreed + "."])
+
+        if self._strategy_refusal(utterance):
+            current_lap = int(state.get("current_lap", 0) or 0)
+            damage = state.get("damage", {}) or {}
+            hold = {
+                "active": True,
+                "until_lap": current_lap + 5,
+                "reason": utterance,
+                "set_at": time.time(),
+                "set_at_lap": current_lap,
+                "baseline": {
+                    "race_control_phase": state.get("race_control_phase", "green"),
+                    "wet": rain.surface_is_wet(state),
+                    "damage": {
+                        key: damage.get(key, 0)
+                        for key in (
+                            "front_left_wing", "front_right_wing", "rear_wing",
+                            "floor", "diffuser", "sidepod", "gearbox", "engine",
+                            "drs_fault", "ers_fault",
+                        )
+                    },
+                    "max_wear_pct": max(
+                        [
+                            float(value)
+                            for value in state.get("tyre", {}).get("wear", [0])
+                        ]
+                        or [0.0]
+                    ),
+                    "compound": state.get("tyre", {}).get("compound"),
+                },
+                "change_reason": "",
+                "raised_after_release": False,
+            }
+            await self.store.update(strategy_hold=hold)
+            # Let the language route acknowledge the driver's exact wording;
+            # the deterministic state mutation above is the safety invariant.
+            return DriverCommands(handled=True, notes=[(
+                f"The driver declined the pit stop; the strategy hold runs to lap {current_lap + 5}. "
+                "Do not repeat the refused call."
+            )])
+
+        # Settings below are judged one sentence at a time, so a turn can set
+        # one and ask something in the same breath: "What's the gap behind?
+        # And stop telling me about the tyres." The setting is still stored,
+        # but the turn then goes to the model, which answers the question
+        # too, instead of a fixed acknowledgement that drops it.
+        also_asks = any(is_question(sentence) for sentence in sentences(utterance))
+
+        preference_updates = self._preference_updates(utterance)
+        if preference_updates:
+            preferences = dict(state.get("driver_preferences", {}))
+            preferences.update(preference_updates)
+            update_values: dict[str, Any] = {"driver_preferences": preferences}
+            if "strategy_risk_appetite" in preference_updates:
+                update_values["strategy_risk_appetite"] = preference_updates[
+                    "strategy_risk_appetite"
+                ]
+            await self.store.update(**update_values)
+            await self.database.save_preference("driver_preferences", preferences)
+            return self._command_applied(
+                "Driver preference saved; future setup and strategy recommendations will use it.",
+                also_asks=also_asks,
+            )
+
+        if self._requests_standard_answers(utterance):
+            await self.store.update(radio_verbosity="standard")
+            return self._command_applied("Copy, normal-length answers again.", also_asks=also_asks)
+
+        if self._requests_short_answers(utterance):
+            await self.store.update(radio_verbosity="terse")
+            return self._command_applied("Short answers confirmed.", also_asks=also_asks)
+
+        released = self._released_standing_instructions(
+            utterance, list(state.get("standing_instructions", []) or [])
+        )
+        if released is not None:
+            standing, subject = released
+            await self.store.update(standing_instructions=standing)
+            await self.database.save_preference("standing_instructions", standing)
+            if subject is None:
+                return self._command_applied("Copy, standing instructions cleared.")
+            return self._command_applied(f"Copy, I'll report {subject} again.")
+
+        instruction = self._standing_instruction(utterance)
+        if instruction:
+            standing = [
+                item
+                for item in list(state.get("standing_instructions", []))
+                if item.get("rule") != instruction
+            ]
+            standing.append({"rule": instruction, "added_at": time.time()})
+            await self.store.update(standing_instructions=standing[-8:])
+            await self.database.save_preference("standing_instructions", standing[-8:])
+            return DriverCommands(
+                handled=True,
+                reply=None if also_asks else "Copy, understood. I won't bring that up again.",
+                notes=[f"Standing instruction stored: {instruction}"],
+            )
+
+        return DriverCommands()
+
     async def _capture_feedback(self, utterance: str) -> None:
         lowered = utterance.lower()
         state = await self.store.snapshot_analysis()
@@ -3910,27 +4083,26 @@ class EngineerBrain:
 
     @session_scoped()
     @lap_note_context
-    async def ask(self, utterance: str) -> str:
-        origin = await self.store.snapshot_analysis()
-        await self._capture_feedback(utterance)
-        if not await self.store.matches_session(origin):
-            raise SessionChangedError("Session changed; the previous radio request was discarded.")
-        lowered = utterance.lower()
-        if "fahrenheit" in lowered or re.search(r"(?:°|degrees?\s*)f\b", lowered):
-            await self.store.update(temperature_unit="f")
-        elif "celsius" in lowered or re.search(r"(?:°|degrees?\s*)c\b", lowered):
-            await self.store.update(temperature_unit="c")
-        if self._requests_standard_answers(utterance):
-            await self.store.update(radio_verbosity="standard")
-        elif self._requests_short_answers(utterance):
-            await self.store.update(radio_verbosity="terse")
+    async def ask(self, utterance: str, *, recorded: DriverCommands | None = None) -> str:
+        """Answer one driver turn on the text path.
 
-        await self.store.append_radio("driver", utterance)
-        state = await self.store.snapshot_analysis()
-        await self.database.save_radio_message(state, "driver", utterance, "user")
+        ``recorded`` is for a turn the speech session already logged and
+        applied, answered here because its own reply failed: the driver line
+        is not logged again and its commands are not stored twice.
+        """
+        origin = await self.store.snapshot_analysis()
+        if recorded is None:
+            commands = await self.apply_driver_commands(utterance, plan_discussion=True)
+            await self.store.append_radio("driver", utterance)
+            state = await self.store.snapshot_analysis()
+            await self.database.save_radio_message(state, "driver", utterance, "user")
+        else:
+            commands = recorded
 
         route = self.classify_request(utterance)
-        direct = await self._fast_answer(utterance)
+        # A command answers with its stored outcome, or leaves the wording to
+        # the model; any other turn takes the fast path.
+        direct = commands.reply if commands.handled else await self._fast_answer(utterance)
         if direct:
             direct = _limit_radio_sentences(
                 direct,
