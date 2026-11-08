@@ -914,6 +914,18 @@ async def test_a_silenced_gearbox_does_not_silence_a_wing_hit_and_an_ers_fault(s
 
 
 @pytest.mark.asyncio
+async def test_silencing_the_gearbox_damage_leaves_a_wing_hit_audible(stack, clock):
+    store, engineer, voice = await _race(stack)
+    await store.update(standing_instructions=[
+        {"rule": "Do not raise gearbox damage unless the driver asks or it is safety-critical.", "added_at": 1.0}
+    ])
+    await _damage(store, engineer, clock, gearbox=30)
+    assert voice.spoken == []
+    await _damage(store, engineer, clock, front_left_wing=30)
+    assert len(voice.spoken) == 1 and voice.spoken[0].startswith("Front-wing damage 30 percent")
+
+
+@pytest.mark.asyncio
 async def test_a_silenced_tyre_subject_still_warns_past_the_hard_limit(stack, clock):
     store, engineer, voice = await _race(stack)
     await store.update(standing_instructions=[

@@ -2563,18 +2563,23 @@ class ProactiveEngineer:
             # Drivers say "tyres", "updates", "rivals"; the topic table is
             # singular. Compare both forms rather than requiring an exact word.
             words |= {word.rstrip("s") for word in words if word.endswith("s")}
-            for keyword, covered in SUPPRESSIBLE_SUBJECTS.items():
-                if event_type not in covered:
+            matched = [
+                keyword for keyword, covered in SUPPRESSIBLE_SUBJECTS.items()
+                if event_type in covered and (
+                    keyword in subject if " " in keyword
+                    else keyword in words or keyword.rstrip("s") in words
+                )
+            ]
+            if payload is not None and event_type == "damage":
+                named = [keyword for keyword in matched if keyword in DAMAGE_COMPONENT_SUBJECTS]
+                if named:
+                    # "The gearbox damage" names the gearbox; "damage" there
+                    # only says what about it. Read as its own subject it
+                    # silenced a 30% front-wing hit as well.
+                    for keyword in named:
+                        components |= DAMAGE_COMPONENT_SUBJECTS[keyword]
                     continue
-                if " " in keyword:
-                    matched = keyword in subject
-                else:
-                    matched = keyword in words or keyword.rstrip("s") in words
-                if not matched:
-                    continue
-                if payload is not None and event_type == "damage" and keyword in DAMAGE_COMPONENT_SUBJECTS:
-                    components |= DAMAGE_COMPONENT_SUBJECTS[keyword]
-                    continue
+            if matched:
                 return True
         if components and payload is not None:
             news = payload.get("changed")
