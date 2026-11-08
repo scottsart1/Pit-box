@@ -42,6 +42,14 @@ class ProviderContentError(ProviderResponseError):
     """
 
 
+class ProviderToolRoundsError(ProviderResponseError):
+    """Raised when a model still requests tools after the final answer round.
+
+    Every adapter reserves its last request for an answer, so this is model
+    behaviour within a healthy service and never counts toward the circuit.
+    """
+
+
 class ProviderDeadlineError(ProviderError):
     """Raised when a provider exceeds the race-radio route deadline."""
 
@@ -333,12 +341,13 @@ def _provider_failure_kind(exc: BaseException) -> str:
 
 def _is_health_failure(exc: BaseException) -> bool:
     """Return True only for failures that indicate provider availability trouble."""
-    # Truncation and a final text made only of exposed deliberation both come
-    # from a service that answered. Counting them would let model phrasing open
-    # the circuit and turn the next, unrelated radio question into
-    # "temporarily unavailable".
+    # Truncation, a final text made only of exposed deliberation, and a model
+    # still calling tools after its final round all come from a service that
+    # answered. Counting them would let model phrasing open the circuit and
+    # turn the next, unrelated radio question into "temporarily unavailable".
     if isinstance(exc, (
-        ProviderConfigurationError, ProviderTruncationError, ProviderContentError,
+        ProviderConfigurationError, ProviderTruncationError,
+        ProviderContentError, ProviderToolRoundsError,
     )):
         return False
     if isinstance(exc, (ProviderDeadlineError, asyncio.TimeoutError, TimeoutError)):
@@ -378,6 +387,13 @@ def _is_health_failure(exc: BaseException) -> bool:
     return isinstance(exc, ProviderResponseError) or not isinstance(exc, ProviderError)
 
 
+_FINAL_SYNTHESIS_DIRECTIVE = (
+    "Give the final radio answer now using only the evidence already supplied. "
+    "State what remains unknown if that evidence is insufficient. "
+    "Do not invent missing values or claim an action without a successful tool result."
+)
+
+
 def _spoken_final_text(raw: str, provider: str, empty_message: str) -> str:
     """Return the radio answer from a final text, or raise the right error.
 
@@ -393,6 +409,20 @@ def _spoken_final_text(raw: str, provider: str, empty_message: str) -> str:
             f"{provider} returned only exposed deliberation as its final text."
         )
     raise ProviderResponseError(empty_message)
+
+
+def _with_system_directive(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Chat messages for the final round, with the answer-now directive appended.
+
+    The conversation itself is not changed, so a truncation retry rebuilds the
+    same request. The directive sits in the system message, the one position
+    every OpenAI-compatible server accepts.
+    """
+    system = messages[0]
+    return [
+        {**system, "content": f"{system['content']}\n{_FINAL_SYNTHESIS_DIRECTIVE}"},
+        *messages[1:],
+    ]
 
 
 def _openai_response_truncated(response: Any) -> bool:
@@ -564,11 +594,7 @@ class OpenAIResponsesProvider:
                     request["reasoning"] = {"effort": effort}
                 if final_synthesis:
                     request["tool_choice"] = "none"
-                    request["instructions"] += (
-                        "\nGive the final radio answer now using only the evidence already supplied. "
-                        "State what remains unknown if that evidence is insufficient. "
-                        "Do not invent missing values or claim an action without a successful tool result."
-                    )
+                    request["instructions"] += f"\n{_FINAL_SYNTHESIS_DIRECTIVE}"
 
                 response = await self.client.responses.create(**request)
                 _merge_usage(total_usage, _usage_dict(getattr(response, "usage", None)))
@@ -587,7 +613,7 @@ class OpenAIResponsesProvider:
                 if getattr(item, "type", None) == "function_call"
             ]
             if calls and final_synthesis:
-                raise ProviderResponseError(
+                raise ProviderToolRoundsError(
                     "OpenAI requested another tool after the final answer was required."
                 )
             if not calls:
@@ -635,7 +661,7 @@ class OpenAIResponsesProvider:
                     }
                 )
 
-        raise ProviderResponseError(
+        raise ProviderToolRoundsError(
             "OpenAI did not produce a final answer within the tool-round limit."
         )
 
@@ -753,12 +779,19 @@ class DeepSeekChatProvider:
         rounds = min(max_rounds, self.config.deepseek_max_tool_rounds)
 
         for round_index in range(rounds):
+            # The last request is reserved for an answer from the evidence
+            # already gathered, as on OpenAI, instead of running one more tool
+            # and then discarding every result with a radio error.
+            final_synthesis = bool(chat_tools) and round_index == rounds - 1
             if thinking_enabled:
                 base_budget = self.config.deepseek_deep_max_tokens
                 retry_budget = self.config.deepseek_deep_retry_max_tokens
             else:
                 base_budget = 650
                 retry_budget = 1400
+            round_messages = (
+                _with_system_directive(messages) if final_synthesis else messages
+            )
 
             response: Any | None = None
             choice: Any | None = None
@@ -766,7 +799,7 @@ class DeepSeekChatProvider:
             for attempt, token_budget in enumerate((base_budget, retry_budget)):
                 request: dict[str, Any] = {
                     "model": model,
-                    "messages": messages,
+                    "messages": round_messages,
                     "max_tokens": token_budget,
                     "extra_body": {
                         "thinking": {
@@ -774,12 +807,14 @@ class DeepSeekChatProvider:
                         }
                     },
                 }
-                if chat_tools:
+                if chat_tools and not (final_synthesis and thinking_enabled):
                     request["tools"] = chat_tools
                     # DeepSeek V4 thinking mode rejects tool_choice on some official
-                    # integrations. Omit it entirely there; non-thinking mode accepts auto.
+                    # integrations. Omit it entirely there; non-thinking mode accepts
+                    # auto, and none on the final round. Thinking mode's final round
+                    # sends no tools at all, which forces the same answer.
                     if not thinking_enabled:
-                        request["tool_choice"] = "auto"
+                        request["tool_choice"] = "none" if final_synthesis else "auto"
                 if thinking_enabled:
                     request["reasoning_effort"] = self.config.deepseek_thinking_effort
 
@@ -799,6 +834,10 @@ class DeepSeekChatProvider:
 
             assert response is not None and choice is not None and message is not None
             calls = list(getattr(message, "tool_calls", None) or [])
+            if calls and final_synthesis:
+                raise ProviderToolRoundsError(
+                    "DeepSeek requested another tool after the final answer was required."
+                )
             if not calls:
                 reason = getattr(choice, "finish_reason", "unknown")
                 text = _spoken_final_text(
@@ -846,7 +885,7 @@ class DeepSeekChatProvider:
                     }
                 )
 
-        raise ProviderResponseError(
+        raise ProviderToolRoundsError(
             "DeepSeek did not produce a final answer within the tool-round limit."
         )
 
@@ -923,6 +962,24 @@ class AnthropicMessagesProvider:
         return result
 
     @staticmethod
+    def _with_final_directive(message: dict[str, Any]) -> dict[str, Any]:
+        """The last user turn with the answer-now directive appended.
+
+        It goes after the tool_result blocks, where the API allows text, and
+        not into the system prompt, so the cached persona prefix stays intact.
+        """
+        content = message["content"]
+        blocks = (
+            [{"type": "text", "text": content}]
+            if isinstance(content, str)
+            else list(content)
+        )
+        return {
+            **message,
+            "content": [*blocks, {"type": "text", "text": _FINAL_SYNTHESIS_DIRECTIVE}],
+        }
+
+    @staticmethod
     def _raise_for_error(response: httpx.Response) -> None:
         if response.status_code < 400:
             return
@@ -977,12 +1034,21 @@ class AnthropicMessagesProvider:
             transport=self._transport,
         ) as client:
             for round_index in range(max_rounds):
+                # The last request is reserved for an answer from the evidence
+                # already gathered, as on OpenAI, instead of running one more
+                # tool and then discarding every result with a radio error.
+                final_synthesis = bool(anthropic_tools) and round_index == max_rounds - 1
                 if thinking_enabled:
                     base_budget = self.config.anthropic_deep_max_tokens
                     retry_budget = self.config.anthropic_deep_retry_max_tokens
                 else:
                     base_budget = 520
                     retry_budget = 1200
+                round_messages = (
+                    [*messages[:-1], self._with_final_directive(messages[-1])]
+                    if final_synthesis
+                    else messages
+                )
 
                 payload: dict[str, Any] | None = None
                 for attempt, token_budget in enumerate((base_budget, retry_budget)):
@@ -999,10 +1065,13 @@ class AnthropicMessagesProvider:
                                 "cache_control": {"type": "ephemeral"},
                             }
                         ],
-                        "messages": messages,
+                        "messages": round_messages,
                     }
                     if anthropic_tools:
                         request["tools"] = anthropic_tools
+                    if final_synthesis:
+                        # Allowed with extended thinking, unlike "any"/"tool".
+                        request["tool_choice"] = {"type": "none"}
                     if thinking_enabled:
                         # The budget must stay inside max_tokens or nothing is
                         # left for the visible answer.
@@ -1029,6 +1098,10 @@ class AnthropicMessagesProvider:
                 calls = [
                     block for block in content if block.get("type") == "tool_use"
                 ]
+                if calls and final_synthesis:
+                    raise ProviderToolRoundsError(
+                        "Anthropic requested another tool after the final answer was required."
+                    )
                 if not calls:
                     reason = payload.get("stop_reason", "unknown")
                     text = _spoken_final_text(
@@ -1086,7 +1159,7 @@ class AnthropicMessagesProvider:
                     }
                 )
 
-        raise ProviderResponseError(
+        raise ProviderToolRoundsError(
             "Anthropic did not produce a final answer within the tool-round limit."
         )
 
@@ -1217,6 +1290,10 @@ class OpenAICompatibleChatProvider:
         total_usage: dict[str, int] = {}
 
         for round_index in range(max_rounds):
+            # The last request is reserved for an answer from the evidence
+            # already gathered, as on OpenAI, instead of running one more tool
+            # and then discarding every result with a radio error.
+            final_synthesis = bool(chat_tools) and round_index == max_rounds - 1
             if route == "deep":
                 # Same deep budget shape as the first-class providers; a
                 # thinking-capable model spends part of it on reasoning tokens.
@@ -1225,18 +1302,21 @@ class OpenAICompatibleChatProvider:
             else:
                 base_budget = 650
                 retry_budget = 1400
+            round_messages = (
+                _with_system_directive(messages) if final_synthesis else messages
+            )
 
             choice: Any | None = None
             message: Any | None = None
             for attempt, token_budget in enumerate((base_budget, retry_budget)):
                 request: dict[str, Any] = {
                     "model": model,
-                    "messages": messages,
+                    "messages": round_messages,
                     "max_tokens": token_budget,
                 }
                 if chat_tools:
                     request["tools"] = chat_tools
-                    request["tool_choice"] = "auto"
+                    request["tool_choice"] = "none" if final_synthesis else "auto"
 
                 response = await self.client.chat.completions.create(**request)
                 _merge_usage(total_usage, _usage_dict(getattr(response, "usage", None)))
@@ -1256,6 +1336,12 @@ class OpenAICompatibleChatProvider:
 
             assert choice is not None and message is not None
             calls = list(getattr(message, "tool_calls", None) or [])
+            if calls and final_synthesis:
+                # Some compatible servers ignore tool_choice; the late call is
+                # still never executed.
+                raise ProviderToolRoundsError(
+                    f"{self.name} requested another tool after the final answer was required."
+                )
             if not calls:
                 reason = getattr(choice, "finish_reason", "unknown")
                 text = _spoken_final_text(
@@ -1301,7 +1387,7 @@ class OpenAICompatibleChatProvider:
                     }
                 )
 
-        raise ProviderResponseError(
+        raise ProviderToolRoundsError(
             f"{self.name} did not produce a final answer within the tool-round limit."
         )
 

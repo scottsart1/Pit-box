@@ -34,6 +34,21 @@ The route deadline covers the provider's complete text/tool loop. Both provider 
 
 When OpenAI is selected, the configured GPT model receives the matching reasoning effort. Deep calls receive a larger output-token allowance because reasoning tokens share the model budget.
 
+## Final answer round
+
+Every provider reserves its last allowed request for an answer built from the evidence already gathered, with an instruction to answer now, state what is unknown, and not invent values or claim actions without a successful tool result:
+
+```text
+OpenAI       tool_choice "none"; instruction appended to instructions
+Anthropic    tool_choice {"type": "none"}; instruction as a text block after the tool results,
+             so the cached system prefix is unchanged
+DeepSeek     non-thinking: tool_choice "none"; thinking: no tools sent (thinking mode
+             rejects tool_choice); instruction appended to the system message
+Kimi/custom  tool_choice "none"; instruction appended to the system message
+```
+
+If a model or server still returns a tool call on that round, the call is never executed and the request fails without counting against the provider's health.
+
 ## DeepSeek tool loop
 
 DeepSeek uses Chat Completions. Pit Wall converts each Responses-style tool schema:
@@ -60,7 +75,7 @@ into Chat Completions format:
 
 Thinking mode uses the documented `thinking` toggle and `reasoning_effort`. If a thinking turn makes a tool call, the assistant's `reasoning_content` is sent back with that tool-call message on subsequent requests, as required by the DeepSeek tool-call contract. It is never shown in the dashboard or written to Pit Wall history.
 
-`tool_choice` is omitted in thinking mode. Empty tool lists are omitted entirely to avoid sending unnecessary tool parameters during basic text diagnostics.
+`tool_choice` is omitted in thinking mode. Empty tool lists are omitted entirely to avoid sending unnecessary tool parameters during basic text diagnostics. The final answer round in thinking mode sends no tools at all.
 
 ## Local tool validation
 
@@ -103,7 +118,8 @@ Failures that require user/configuration action, or that come from a service tha
 - insufficient quota/credit or billing hard limit;
 - invalid tool arguments;
 - token-budget truncation;
-- a final text that held only exposed deliberation (see below).
+- a final text that held only exposed deliberation (see below);
+- a model still requesting tools after the final answer round.
 
 Two consecutive health failures open the configured short cooldown. One failure still permits immediate fallback.
 

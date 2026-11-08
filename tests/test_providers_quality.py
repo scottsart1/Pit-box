@@ -1,27 +1,35 @@
 """What the driver receives from the provider layer.
 
 These pin properties of every provider's final answer: ordinary radio
-phrasing is never mistaken for leaked reasoning, and leaked reasoning
-(including inline <think> blocks) never reaches TTS or opens the circuit.
+phrasing is never mistaken for leaked reasoning, leaked reasoning (including
+inline <think> blocks) never reaches TTS, and the evidence a model gathered is
+answered from instead of discarded when its tool rounds run out.
 """
 
 from __future__ import annotations
 
 import contextlib
+import json
 from typing import Any
 
 import httpx
 import pytest
 from openai import AsyncOpenAI
 
+from pitwall import providers
 from pitwall.config import Settings
 from pitwall.providers import (
+    AnthropicMessagesProvider,
     CustomChatProvider,
+    DeepSeekChatProvider,
+    KimiChatProvider,
     OpenAIResponsesProvider,
     ProviderRequestError,
+    ProviderResponseError,
     ProviderResult,
     ProviderRouter,
     _final_answer_only,
+    _is_health_failure,
 )
 
 
@@ -282,3 +290,219 @@ async def test_a_provider_that_sends_nothing_still_counts_as_unhealthy() -> None
         with pytest.raises(ProviderRequestError):
             await _router_request(router)
     assert router.circuits["openai"].failures == 1
+
+
+# ---------------------------------------------------------------------------
+# The last tool round answers from gathered evidence on every provider
+# ---------------------------------------------------------------------------
+
+EVIDENCE = {
+    "get_session_overview": {"track": "Madrid", "lap": 12},
+    "get_cars_ahead_progress": {"driver": "Norris", "gap_s": 1.4},
+    "get_weather": {"weather": "dry"},
+}
+DIRECTIVE = "Give the final radio answer now using only the evidence already supplied."
+
+
+def _chat_tool_call(name: str, sequence: int) -> dict[str, Any]:
+    return _chat_payload({
+        "role": "assistant", "content": None,
+        "tool_calls": [{
+            "id": f"call_{sequence}", "type": "function",
+            "function": {"name": name, "arguments": "{}"},
+        }],
+    }, "tool_calls")
+
+
+def _anthropic_payload(content: list[dict[str, Any]], stop: str = "end_turn") -> dict[str, Any]:
+    return {
+        "id": "msg", "type": "message", "role": "assistant", "content": content,
+        "stop_reason": stop, "usage": {"input_tokens": 10, "output_tokens": 5},
+    }
+
+
+def _forced(kind: str, body: dict[str, Any]) -> bool:
+    if kind == "anthropic":
+        return body.get("tool_choice") == {"type": "none"}
+    return body.get("tool_choice") == "none" or "tools" not in body
+
+
+def _evidence_in(kind: str, body: dict[str, Any]) -> list[dict[str, Any]]:
+    if kind == "anthropic":
+        return [
+            json.loads(block["content"])
+            for message in body["messages"] if isinstance(message["content"], list)
+            for block in message["content"] if block.get("type") == "tool_result"
+        ]
+    return [json.loads(m["content"]) for m in body["messages"] if m["role"] == "tool"]
+
+
+def _respond_with(kind: str, sequence: int, name: str | None, text: str) -> httpx.Response:
+    if kind == "anthropic":
+        if name is None:
+            return httpx.Response(200, json=_anthropic_payload([{"type": "text", "text": text}]))
+        return httpx.Response(200, json=_anthropic_payload(
+            [{"type": "tool_use", "id": f"toolu_{sequence}", "name": name, "input": {}}],
+            "tool_use",
+        ))
+    if name is None:
+        return httpx.Response(200, json=_chat_payload({"role": "assistant", "content": text}))
+    return httpx.Response(200, json=_chat_tool_call(name, sequence))
+
+
+@contextlib.asynccontextmanager
+async def _provider(kind: str, handler: Any):
+    config = _settings()
+    if kind == "anthropic":
+        yield AnthropicMessagesProvider(config, transport=httpx.MockTransport(handler))
+        return
+    async with _openai_client(handler) as client:
+        provider_type = {
+            "deepseek": DeepSeekChatProvider,
+            "kimi": KimiChatProvider,
+            "custom": CustomChatProvider,
+        }[kind]
+        yield provider_type(config, client=client)
+
+
+PROVIDER_ROUTES = [
+    ("anthropic", "normal"), ("anthropic", "deep"),
+    ("deepseek", "normal"), ("deepseek", "deep"),
+    ("kimi", "normal"), ("kimi", "deep"),
+    ("custom", "normal"),
+]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("kind", "route"), PROVIDER_ROUTES)
+async def test_final_round_answers_from_gathered_tools_on_every_provider(kind, route):
+    requests: list[dict[str, Any]] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        requests.append(body)
+        if _forced(kind, body):
+            evidence = _evidence_in(kind, body)
+            assert evidence == [
+                EVIDENCE["get_session_overview"], EVIDENCE["get_cars_ahead_progress"],
+            ]
+            ahead = evidence[1]
+            return _respond_with(
+                kind, len(requests), None, f"{ahead['driver']} is {ahead['gap_s']} seconds ahead."
+            )
+        # A model that would keep gathering for as long as it is allowed to.
+        return _respond_with(kind, len(requests), list(EVIDENCE)[len(requests) - 1], "")
+
+    executed: list[str] = []
+
+    async def execute(name: str, arguments: dict[str, Any]) -> dict[str, Any]:
+        executed.append(name)
+        return EVIDENCE[name]
+
+    async with _provider(kind, respond) as provider:
+        result = await provider.generate(
+            prompt="Who am I chasing?", instructions="Use measured evidence.",
+            route=route, effort="high" if route == "deep" else "low",
+            tools=[_schema(name) for name in EVIDENCE], execute_tool=execute, max_rounds=3,
+        )
+
+    assert result.text == "Norris is 1.4 seconds ahead."
+    assert result.tool_rounds == 2
+    assert executed == ["get_session_overview", "get_cars_ahead_progress"]
+    assert len(requests) == 3
+    final = requests[-1]
+    if kind == "anthropic":
+        assert all("tool_choice" not in body for body in requests[:-1])
+        # The directive follows the tool results; the cached system prefix is untouched.
+        last_turn = final["messages"][-1]["content"]
+        assert [block["type"] for block in last_turn] == ["tool_result", "text"]
+        assert DIRECTIVE in last_turn[-1]["text"]
+        assert final["system"] == requests[0]["system"]
+        assert final["tools"] == requests[0]["tools"]
+    else:
+        assert DIRECTIVE in final["messages"][0]["content"]
+        assert all(DIRECTIVE not in body["messages"][0]["content"] for body in requests[:-1])
+        if kind == "deepseek" and route == "deep":
+            # Thinking mode rejects tool_choice, so the answer is forced by
+            # sending no tools at all.
+            assert "tools" not in final and "tool_choice" not in final
+            assert all("tool_choice" not in body for body in requests)
+        else:
+            assert final["tool_choice"] == "none"
+            assert final["tools"] == requests[0]["tools"]
+            assert [body["tool_choice"] for body in requests[:-1]] == ["auto", "auto"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("kind", "route"), PROVIDER_ROUTES)
+async def test_late_tool_call_after_final_round_is_never_executed(kind, route):
+    requests: list[dict[str, Any]] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        requests.append(json.loads(request.content))
+        # A server that ignores tool_choice and asks for a mutating tool.
+        name = "get_session_overview" if len(requests) == 1 else "record_lap_observation"
+        return _respond_with(kind, len(requests), name, "")
+
+    executed: list[str] = []
+
+    async def execute(name: str, arguments: dict[str, Any]) -> dict[str, Any]:
+        executed.append(name)
+        return {"lap": 3}
+
+    async with _provider(kind, respond) as provider:
+        with pytest.raises(ProviderResponseError, match="final answer") as caught:
+            await provider.generate(
+                prompt="review lap", instructions="Use telemetry.", route=route,
+                effort="high" if route == "deep" else "low",
+                tools=[_schema("get_session_overview"), _schema("record_lap_observation")],
+                execute_tool=execute, max_rounds=2,
+            )
+    assert executed == ["get_session_overview"]
+    assert len(requests) == 2
+    # Model behaviour inside a healthy service: never an availability failure.
+    assert _is_health_failure(caught.value) is False
+
+
+@pytest.mark.asyncio
+async def test_round_exhaustion_does_not_put_the_provider_in_cooldown() -> None:
+    sent: list[dict[str, Any]] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        sent.append(body)
+        if not body.get("tools"):
+            return httpx.Response(200, json=_anthropic_payload(
+                [{"type": "text", "text": "Box this lap for mediums."}]
+            ))
+        return httpx.Response(200, json=_anthropic_payload(
+            [{"type": "tool_use", "id": f"toolu_{len(sent)}", "name": "get_weather", "input": {}}],
+            "tool_use",
+        ))
+
+    config = _settings(llm_provider="anthropic")
+    router = ProviderRouter(config, providers={
+        "anthropic": AnthropicMessagesProvider(config, transport=httpx.MockTransport(respond)),
+    })
+
+    async def execute(name: str, arguments: dict[str, Any]) -> dict[str, Any]:
+        return {"weather": "dry"}
+
+    for _ in range(2):
+        with pytest.raises(ProviderRequestError):
+            await router.generate(
+                prompt="Weather?", instructions="Use telemetry.", route="normal", effort="low",
+                tools=[_schema("get_weather")], execute_tool=execute, max_rounds=2,
+            )
+    assert router.circuits["anthropic"].failures == 0
+    result = await router.generate(
+        prompt="Box?", instructions="Brief.", route="normal", effort="low",
+        tools=[], execute_tool=execute, max_rounds=1,
+    )
+    assert result.text == "Box this lap for mediums."
+
+
+def test_new_error_types_keep_the_response_kind_for_spoken_feedback() -> None:
+    for error_type in (providers.ProviderContentError, providers.ProviderToolRoundsError):
+        assert issubclass(error_type, ProviderResponseError)
+        assert providers._provider_failure_kind(error_type("x")) == "response"
