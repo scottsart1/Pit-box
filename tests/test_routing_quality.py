@@ -487,3 +487,42 @@ async def test_the_model_receives_the_planning_route_for_a_stop_simulation(stack
     await brain.ask("How slow would a one-stop to hards on lap 14 be?")
     assert calls and calls[0]["route"] == "deep"
     assert "what_if" in {schema["name"] for schema in calls[0]["tools"]}
+
+
+# --- a quick request has a quick answer ----------------------------------------
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["race", "qualifying"])
+@pytest.mark.parametrize("utterance,expected", [
+    ("can you hear me", "Radio check, loud and clear"),
+    ("check the rain", "rain risk 20 percent"),
+    ("report the weather", "rain risk 20 percent"),
+    ("best lap", "1:32.100"),
+    ("pole", "VERSTAPPEN"),
+])
+async def test_every_quick_lookup_is_answered_without_the_model(stack, monkeypatch, mode, utterance, expected):
+    """These were routed as quick lookups with no answer behind them, so they
+    went to the model on the quick tier, and a provider failure on them had
+    no readout to give."""
+    store, brain = await _race(stack)
+
+    def field(state):
+        state.mode_profile = mode
+        state.session_type = "Race" if mode == "race" else "Qualifying"
+        for driver, grid, best in zip(state.drivers[:3], (3, 1, 2), (92_100, 91_900, 92_000)):
+            driver.grid_position = grid
+            driver.best_lap_ms = best
+
+    await store.mutate(field)
+    assert EngineerBrain._is_simple_lookup(utterance)
+    assert EngineerBrain.classify_request(utterance) == "fast"
+    _forbid_provider(brain, monkeypatch)
+    assert expected in await brain.ask(utterance)
+
+
+@pytest.mark.asyncio
+async def test_pole_without_a_grid_says_so(stack, monkeypatch):
+    store, brain = await _race(stack)
+    _forbid_provider(brain, monkeypatch)
+    assert await brain.ask("pole") == "The starting grid is not available for this session."
