@@ -6,10 +6,15 @@ everyday "how are the tyres", and the trend reported for the car behind.
 """
 
 import re
+from copy import deepcopy
 
 import pytest
 
 from pitwall.brain import EngineerBrain
+from pitwall.proactive import ProactiveEngineer
+from pitwall.providers import ProviderResult
+
+QUALIFIER = "provisional, confidence low, tyre estimates include track defaults"
 
 
 def _race_state(state):
@@ -83,3 +88,77 @@ async def test_the_ranking_assumption_describes_the_ranking_actually_used(stack)
     assert ranking.startswith("Plans are ranked by projected finishing position first")
     assert "elapsed time only breaks" not in ranking
     assert ranking.index("later first stop") < ranking.index("risk-adjusted time")
+
+
+# ------------------------------------------- volunteered strategy template
+
+
+def _low_confidence_plan():
+    best = {
+        "box_lap": 14, "fit_compound": "HARD", "box_laps": [14], "compounds": ["MEDIUM", "HARD"],
+        "feasible": True, "legal": True, "instruction": "Box lap 14 for HARD.",
+        "positions_gained_vs_stay_out": 1, "positions_lost_by_stopping": 0,
+    }
+    return {
+        "recommended": best, "plans": [best], "confidence": "low",
+        "tyre_inventory": {"status": "known"},
+        "model_summary": {"selected_stint_wear_source": "track_default",
+                          "selected_stint_deg_source": "track_default"},
+    }
+
+
+def _template_state(plan):
+    return {
+        "current_lap": 6, "total_laps": 31, "mode_profile": "race",
+        "tyre": {"compound": "MEDIUM", "age_laps": 6, "wear": [20, 21, 24, 25]},
+        "strategy": plan,
+    }
+
+
+def test_the_strategy_change_template_is_provisional_when_the_plan_is():
+    state = _template_state(_low_confidence_plan())
+    payload = ProactiveEngineer._spoken_advice(state["strategy"]["recommended"], state)
+    spoken = ProactiveEngineer._fallback_text({"type": "strategy_change", "payload": payload}, state)
+    assert spoken == f"Box lap 14 for hards; {QUALIFIER}."
+
+
+def test_a_released_hold_keeps_its_reason_first_and_qualifies_the_call():
+    state = _template_state(_low_confidence_plan())
+    payload = {
+        **ProactiveEngineer._spoken_advice(state["strategy"]["recommended"], state),
+        "hold_released_reason": "the rears passed the wear limit",
+    }
+    spoken = ProactiveEngineer._fallback_text({"type": "strategy_change", "payload": payload}, state)
+    assert spoken == (
+        "Your strategy hold is released because the rears passed the wear limit. "
+        f"Box lap 14 for hards; {QUALIFIER}."
+    )
+
+
+@pytest.mark.parametrize("confidence", ["medium", "high"])
+def test_a_supported_plan_is_still_called_firmly(confidence):
+    plan = {**_low_confidence_plan(), "confidence": confidence}
+    state = _template_state(plan)
+    payload = ProactiveEngineer._spoken_advice(plan["recommended"], state)
+    spoken = ProactiveEngineer._fallback_text({"type": "strategy_change", "payload": payload}, state)
+    assert spoken == "Box lap 14 for hards."
+
+
+@pytest.mark.asyncio
+async def test_template_and_narrated_strategy_calls_say_the_same_thing(stack, monkeypatch):
+    store, database, _, _, _, tools = stack
+    for group in (1, 2, 6, 7, 10):
+        await store.mark_packet(2026, 26, 1234, packet_id=group)
+    plan = _low_confidence_plan()
+    await store.update(current_lap=6, total_laps=31, mode_profile="race", strategy=deepcopy(plan))
+    brain = EngineerBrain(store, tools, database)
+
+    async def generate(**kwargs):
+        return ProviderResult("Box lap 14 for hards.", "test", "test", 1)
+
+    monkeypatch.setattr(brain.router, "generate", generate)
+    state = await store.snapshot_analysis()
+    event = {"type": "strategy_change", "payload": ProactiveEngineer._spoken_advice(plan["recommended"], state)}
+    narrated = await brain.proactive(deepcopy(event))
+    template = ProactiveEngineer._fallback_text(event, state)
+    assert template == narrated == f"Box lap 14 for hards; {QUALIFIER}."
