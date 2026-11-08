@@ -135,6 +135,10 @@ async def _router_request(router: ProviderRouter) -> ProviderResult:
     "Copy. I have to give you the bad news, rears are at 80 percent.",
     "Using the soft tyre, you can go 18 laps from here.",
     "Tyre plan is medium_hard; box lap 18.",
+    "I need to check the data, stay out for now.",
+    "Stay out. I need to check the data on the rears.",
+    "I have to answer honestly: the hards won't make it, box lap 22.",
+    "I have to respond to race control first; stay out.",
 ])
 def test_radio_phrasing_that_resembles_deliberation_is_spoken_unchanged(answer: str) -> None:
     assert _final_answer_only(answer) == answer
@@ -201,6 +205,65 @@ def test_radio_phrasing_that_resembles_deliberation_is_spoken_unchanged(answer: 
 def test_leaked_reasoning_is_removed_and_the_answer_after_it_kept(
     leaked: str, spoken: str
 ) -> None:
+    assert _final_answer_only(leaked) == spoken
+
+
+@pytest.mark.parametrize(("answer", "spoken"), [
+    (
+        "get_flag_status shows a red flag; slow down and return to the pits.",
+        "Flag status shows a red flag; slow down and return to the pits.",
+    ),
+    (
+        "Safety Car deployed, box box box, get_flag_status confirms it.",
+        "Safety Car deployed, box box box, flag status confirms it.",
+    ),
+    (
+        "Yellow in sector two per get_flag_status, no overtaking.",
+        "Yellow in sector two, no overtaking.",
+    ),
+    (
+        "Box this lap for mediums; get_pit_strategy has the undercut at 1.2 seconds.",
+        "Box this lap for mediums; pit strategy has the undercut at 1.2 seconds.",
+    ),
+    (
+        "The what_if says two stops is quicker, box lap 18 for hards.",
+        "The what if says two stops is quicker, box lap 18 for hards.",
+    ),
+])
+def test_an_instruction_that_names_a_tool_is_spoken_with_the_name_as_words(
+    answer: str, spoken: str
+) -> None:
+    # A tool name in an answer is attribution, not narration: the instruction
+    # is kept and the identifier is never read out.
+    assert _final_answer_only(answer) == spoken
+
+
+@pytest.mark.parametrize(("leaked", "spoken"), [
+    ("The driver wants the gap, Norris is 1.4 ahead.", "Norris is 1.4 ahead."),
+    ("The user is asking for the gap — Norris 1.4 ahead.", "Norris 1.4 ahead."),
+    (
+        "Let me check with the strategists and come back; stay out for now.",
+        "Stay out for now.",
+    ),
+    (
+        "I need to check the strategy result, box lap 18 for hards.",
+        "Box lap 18 for hards.",
+    ),
+    (
+        "I should answer briefly: undercut works if you box this lap.",
+        "Undercut works if you box this lap.",
+    ),
+    ("Let me check get_flag_status - red flag, slow down.", "Red flag, slow down."),
+    # A question inside the narration is never spoken as if it were the call.
+    ("Let me reconsider: box this lap? No, stay out.", "No, stay out."),
+    # Clauses that continue the narration stay with it.
+    ("The driver wants to know the gap ahead, which is 1.4 to Norris.", ""),
+    ("The driver asked whether to box, so I'll say stay out.", ""),
+    ("I'll call get_gaps, then answer.", ""),
+    # A labelled scratchpad section is scratchpad to its end.
+    ("Key facts: lap 13, RR at 41 percent.", ""),
+])
+def test_the_answer_clause_after_leaked_narration_is_kept(leaked: str, spoken: str) -> None:
     assert _final_answer_only(leaked) == spoken
 
 
