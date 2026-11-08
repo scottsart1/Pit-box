@@ -2609,15 +2609,23 @@ class TelemetryTools:
                 if isinstance(item, dict)
             ]
         if view.get("plans"):
+            # The order StrategyEngine's ranking_key sorts by. A faster plan
+            # at the same finishing position ranks below a later stop, so a
+            # negative delta alone is no reason to change the call.
             view["plan_comparison_basis"] = (
-                "Plans rank on projected finishing position first; elapsed time breaks ties. "
+                "Plans rank on legality, feasibility, then projected finishing position and "
+                "points; among equal finishes the later first stop ranks higher (except for a "
+                "red-flag tyre change) and risk-adjusted time only breaks the remaining ties. "
                 "delta_vs_recommended_s is risk-adjusted race time minus the recommended "
                 "plan's; positive is slower. Each entry is a separate plan: never combine "
                 "laps from two entries."
             )
         raw_recommended = plan.get("raw_recommended")
         if isinstance(raw_recommended, dict) and raw_recommended:
-            view["faster_plan_awaiting_confirmation"] = cls._alternative_view(
+            # Set whenever stability holds the spoken call: the plan now ranked
+            # first, which may be awaiting confirmation or may have too small a
+            # gain to switch to. stability.reason says which.
+            view["newly_ranked_plan_held_back"] = cls._alternative_view(
                 raw_recommended, recommended_source
             )
         if plan.get("shapes"):
