@@ -11,7 +11,7 @@ from typing import Any
 
 from . import rain
 from .analysis import fmt_ms
-from .brain import EngineerBrain, _plan_call_index, _radio_sentences
+from .brain import EngineerBrain, _plan_call_index, _radio_sentences, hold_material_change
 from .config import settings
 from .grounding import lap_counts, place_counts, unsupported
 from .session_guard import session_key, session_scoped
@@ -1217,8 +1217,7 @@ class ProactiveEngineer:
                 or state.get("pit_stop_should_serve_penalty")
             )
         if kind == "strategy_change":
-            hold = state.get("strategy_hold", {}) or {}
-            if hold.get("active"):
+            if EngineerBrain._hold_running(state):
                 return False
             # The call that was queued is only worth speaking while it is
             # still the call. Plans move between queueing and a safe moment
@@ -1240,7 +1239,7 @@ class ProactiveEngineer:
                 (event.get("payload", {}) or {}).get("corner_cutting_warnings", 0) or 0
             )
         if kind == "driver_check":
-            if (state.get("strategy_hold", {}) or {}).get("active"):
+            if EngineerBrain._hold_running(state):
                 return False
             box_lap = (
                 state.get("strategy", {}).get("recommended", {}).get("box_lap")
@@ -1460,8 +1459,7 @@ class ProactiveEngineer:
         hold releases itself on wear past the hard limit, new damage, a flag
         change or rain, and the warnings themselves are still spoken.
         """
-        hold = state.get("strategy_hold", {}) or {}
-        if hold.get("active"):
+        if EngineerBrain._hold_running(state):
             return False
         if not ProactiveEngineer.is_suppressed(
             "strategy_change", state.get("standing_instructions", []) or []
@@ -1559,40 +1557,7 @@ class ProactiveEngineer:
     def _hold_material_change(
         state: dict[str, Any], hold: dict[str, Any]
     ) -> str | None:
-        baseline = hold.get("baseline", {}) or {}
-        phase = str(state.get("race_control_phase", "green"))
-        if phase != str(baseline.get("race_control_phase", "green")):
-            return f"race control changed to {phase.replace('_', ' ')}"
-        wet_now = rain.surface_is_wet(state)
-        if wet_now != bool(baseline.get("wet")):
-            # Both directions are material. A track drying out under a hold is
-            # exactly as much a reason to speak as one getting wet, and only the
-            # wetting half used to count.
-            return (
-                "the track crossed the wet-strategy threshold"
-                if wet_now
-                else "the track dried back below the wet-strategy threshold"
-            )
-        if str(state.get("tyre", {}).get("compound")) != str(
-            baseline.get("compound")
-        ):
-            return "the fitted tyre changed"
-        current_damage = state.get("damage", {}) or {}
-        for key, old_value in (baseline.get("damage", {}) or {}).items():
-            new_value = current_damage.get(key, 0)
-            if isinstance(old_value, bool) or isinstance(new_value, bool):
-                increased = bool(new_value) and not bool(old_value)
-            else:
-                increased = float(new_value or 0) > float(old_value or 0) + 1.0
-            if increased:
-                return f"new {str(key).replace('_', ' ')} damage arrived"
-        max_wear = max(
-            [float(value) for value in state.get("tyre", {}).get("wear", [0])]
-            or [0.0]
-        )
-        if max_wear >= 82.0 and float(baseline.get("max_wear_pct", 0.0)) < 82.0:
-            return f"limiting tyre wear crossed the hard safety limit at {max_wear:.0f}%"
-        return None
+        return hold_material_change(state, hold)
 
     async def _evaluate_strategy_hold(
         self, state: dict[str, Any]
@@ -1746,10 +1711,13 @@ class ProactiveEngineer:
     async def _detect(self, state: dict[str, Any]) -> None:
         if not state.get("connected") or (state.get("game_paused") and not self._red_flag_active(state)):
             return
+        # A hold ends on its own terms whether or not unsolicited calls are
+        # on: a red flag or the stop made during a quiet stretch must not
+        # leave it binding the radio once the race has moved on.
+        state, released_hold_reason = await self._evaluate_strategy_hold(state)
         if not bool(state.get("proactive", {}).get("enabled", settings.proactive_enabled)):
             return
         state = await self._refresh_strategy_if_needed(state)
-        state, released_hold_reason = await self._evaluate_strategy_hold(state)
         self._standing_instructions = state.get("standing_instructions", [])
         proactive = state.get("proactive", {})
         analyzed_lap = int(state.get("analysis", {}).get("last_lap_analyzed", 0))

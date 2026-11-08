@@ -146,6 +146,75 @@ async def test_an_agreed_tactic_is_spent_once_the_stop_it_was_about_is_made(stac
 
 
 @pytest.mark.asyncio
+async def test_a_hold_ends_at_the_stop_with_unsolicited_calls_switched_off(stack, monkeypatch):
+    """Only the unsolicited loop released a hold; switched off, it bound the
+    radio after the stop it was about had been made."""
+    store, brain, captured = await _race(stack, monkeypatch, ["Copy, staying out."])
+    await store.mutate(lambda state: state.proactive.update({"enabled": False}))
+    await brain.ask("I'm not boxing")
+    assert "STRATEGY HOLD" in await brain.situation_header()
+    # The driver boxes for hards a lap later after all.
+    after = _plan(box_lap=None, box_laps=[], compounds=["HARD"], fit_compound="HARD",
+                  stops_remaining=0, instruction="Stay out to the flag on HARD.")
+    after["plans"] = [after["recommended"]]
+
+    def stopped(state):
+        state.current_lap = 14
+        state.tyre.compound = "HARD"
+        state.tyre.age_laps = 0
+        state.strategy = after
+
+    await store.mutate(stopped)
+    heard = await brain.ask("what's the plan")
+    assert len(captured) == 1, "the plan answers; the hold was about the stop now made"
+    assert heard.startswith("Stay out to the flag on HARD")
+    assert "STRATEGY HOLD" not in await brain.situation_header()
+
+
+@pytest.mark.asyncio
+async def test_a_red_flag_ends_the_hold_for_good_with_unsolicited_calls_switched_off(stack, monkeypatch):
+    from pitwall.proactive import ProactiveEngineer
+
+    class _Quiet:
+        is_busy = False
+        busy_reason = ""
+        realtime_active = False
+
+    store, brain, captured = await _race(stack, monkeypatch, ["Copy, staying out.", "Restart on hards."])
+    await store.mutate(lambda state: state.proactive.update({"enabled": False}))
+    await brain.ask("I'm not boxing")
+    engineer = ProactiveEngineer(store, brain, _Quiet(), None, None)  # type: ignore[arg-type]
+    await store.update(race_control_phase="red_flag", red_flag_active=True)
+    await brain.ask("what tyres for the restart?")
+    assert "STRATEGY HOLD" not in captured[-1]["prompt"]
+    assert "PLAN DURING THE HOLD" not in captured[-1]["prompt"]
+    await engineer._detect(await store.snapshot_radio())
+    # Back to green inside the hold's laps: the suspension still ended it.
+    await store.update(race_control_phase="green", red_flag_active=False)
+    await engineer._detect(await store.snapshot_radio())
+    hold = (await store.snapshot_analysis())["strategy_hold"]
+    assert not hold["active"]
+    assert hold["change_reason"] == "race control changed to red flag"
+    assert "STRATEGY HOLD" not in await brain.situation_header()
+    assert not engineer.pending
+
+
+@pytest.mark.asyncio
+async def test_an_agreed_overcut_is_not_released_on_the_next_tick(stack, monkeypatch):
+    """The agreement's hold had no baseline, which read as "the fitted tyre
+    changed", so the pit call came straight back."""
+    from pitwall.proactive import ProactiveEngineer
+
+    store, brain, _captured = await _race(stack, monkeypatch, ["Copy, we'll run the overcut."])
+    await store.mutate(lambda state: setattr(state.tyre, "compound", "MEDIUM"))
+    await brain.ask("Let's do the overcut")
+    engineer = ProactiveEngineer(store, brain, None, None, None)  # type: ignore[arg-type]
+    _state, released = await engineer._evaluate_strategy_hold(await store.snapshot_radio())
+    assert released is None
+    assert EngineerBrain._hold_running(await store.snapshot_analysis())
+
+
+@pytest.mark.asyncio
 async def test_a_pit_question_during_the_hold_with_no_provider_gets_the_next_option(stack, monkeypatch):
     store, brain, _captured = await _race(stack, monkeypatch, ["Copy, staying out.", _timeout()])
     await brain.ask("I'm not boxing")
