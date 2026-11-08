@@ -939,3 +939,30 @@ async def test_a_turn_that_could_not_be_transcribed_is_flagged_to_the_model_and_
         assert not (await store.snapshot_analysis())["strategy_hold"].get("active")
     finally:
         await radio.client.close()
+
+
+@pytest.mark.asyncio
+async def test_a_transcript_lost_while_the_reply_plays_is_corrected_after_it(stack, realtime_on):
+    store, brain = await _brain(stack)
+    _controller_, radio, connection = await _controller(store, brain)
+    radio._ensure_output_stream = lambda: None
+    try:
+        await radio._handle_event(Event(type="input_audio_buffer.speech_started"))
+        await radio._handle_event(Event(type="input_audio_buffer.speech_stopped"))
+        await radio._handle_event(Event(type="response.created", response=Event(id="r1")))
+        await radio._handle_event(Event(type="response.output_audio_transcript.delta",
+                                        delta="Copy, staying out. We won't call that stop again."))
+        # The transcription fails while that reply, built before any note, is
+        # still open: it cannot carry the correction.
+        await radio._handle_event(Event(type="conversation.item.input_audio_transcription.failed"))
+        assert not connection.of_type("response.create")
+        await radio._handle_event(Event(type="response.done", response=Event(id="r1", status="completed")))
+        assert len(connection.of_type("response.create")) == 1, "one reply, after the note, says it"
+        # A new driver turn instead carries the note itself; no extra reply.
+        await radio._handle_event(Event(type="conversation.item.input_audio_transcription.failed"))
+        await radio._handle_event(Event(type="response.created", response=Event(id="r2")))
+        await radio._handle_event(Event(type="input_audio_buffer.speech_started"))
+        await radio._handle_event(Event(type="response.done", response=Event(id="r2", status="completed")))
+        assert len(connection.of_type("response.create")) == 1
+    finally:
+        await radio.client.close()
