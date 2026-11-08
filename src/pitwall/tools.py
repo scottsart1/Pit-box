@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import sqlite3
 import time
 from statistics import median
@@ -21,6 +22,102 @@ if TYPE_CHECKING:
     from .comparison_service import ComparisonService
     from .field_service import FieldAnalysisService
     from .network_service import NetworkService
+
+
+# F1 25 UDP specification appendices. The events log stores the packet's raw
+# integers; these turn them into words the engineer can say. A code missing
+# here is reported as unknown rather than guessed.
+PENALTY_TYPES = {
+    0: "drive-through", 1: "stop-go", 2: "grid penalty", 3: "penalty reminder",
+    4: "time penalty", 5: "warning", 6: "disqualified",
+    7: "removed from formation lap", 8: "parked too long timer",
+    9: "tyre regulations", 10: "this lap invalidated",
+    11: "this and next lap invalidated", 12: "this lap invalidated without reason",
+    13: "this and next lap invalidated without reason",
+    14: "this and previous lap invalidated",
+    15: "this and previous lap invalidated without reason", 16: "retired",
+    17: "black flag timer",
+}
+INFRINGEMENT_TYPES = {
+    0: "blocking by slow driving", 1: "blocking by wrong-way driving",
+    2: "reversing off the start line", 3: "big collision", 4: "small collision",
+    5: "collision, failed to hand back one position",
+    6: "collision, failed to hand back multiple positions",
+    7: "corner cutting, gained time", 8: "corner cutting, overtook one car",
+    9: "corner cutting, overtook multiple cars", 10: "crossed pit exit lane",
+    11: "ignoring blue flags", 12: "ignoring yellow flags",
+    13: "ignoring drive-through", 14: "too many drive-throughs",
+    15: "drive-through reminder, serve within n laps",
+    16: "drive-through reminder, serve this lap", 17: "pit lane speeding",
+    18: "parked for too long", 19: "ignoring tyre regulations",
+    20: "too many penalties", 21: "multiple warnings",
+    22: "approaching disqualification", 23: "tyre regulations, select single",
+    24: "tyre regulations, select multiple", 25: "lap invalidated, corner cutting",
+    26: "lap invalidated, running wide",
+    27: "corner cutting, ran wide, gained minor time",
+    28: "corner cutting, ran wide, gained significant time",
+    29: "corner cutting, ran wide, gained extreme time",
+    30: "lap invalidated, wall riding", 31: "lap invalidated, flashback used",
+    32: "lap invalidated, reset to track", 33: "blocking the pit lane",
+    34: "jump start", 35: "safety car to car collision",
+    36: "safety car illegal overtake", 37: "safety car exceeding allowed pace",
+    38: "virtual safety car exceeding allowed pace",
+    39: "formation lap below allowed speed", 40: "formation lap parking",
+    41: "retired, mechanical failure", 42: "retired, terminally damaged",
+    43: "safety car, falling too far back", 44: "black flag timer",
+    45: "unserved stop-go penalty", 46: "unserved drive-through penalty",
+    47: "engine component change", 48: "gearbox change",
+    49: "parc ferme change", 50: "league grid penalty", 51: "retry penalty",
+    52: "illegal time gain", 53: "mandatory pit stop", 54: "attribute assigned",
+}
+RETIREMENT_REASONS = {
+    0: "invalid", 1: "retired", 2: "finished", 3: "terminal damage",
+    4: "inactive", 5: "not enough laps completed", 6: "black flagged",
+    7: "red flagged", 8: "mechanical failure", 9: "session skipped",
+    10: "session simulated",
+}
+DRS_DISABLED_REASONS = {
+    0: "wet track", 1: "safety car deployed", 2: "red flag",
+    3: "minimum lap not reached",
+}
+ERS_DEPLOY_MODES = {0: "none", 1: "medium", 2: "hotlap", 3: "overtake"}
+
+# Event codes as the radio speaks of them. The filter accepts these kinds,
+# the codes themselves and a few spoken synonyms.
+EVENT_KINDS = {
+    "SSTA": "session_started", "SEND": "session_ended", "FTLP": "fastest_lap",
+    "RTMT": "retirement", "DRSE": "drs_enabled", "DRSD": "drs_disabled",
+    "TMPT": "teammate_in_pits", "CHQF": "chequered_flag", "RCWN": "race_winner",
+    "PENA": "penalty", "SPTP": "speed_trap", "STLG": "start_lights",
+    "LGOT": "lights_out", "DTSV": "drive_through_served",
+    "SGSV": "stop_go_served", "FLBK": "flashback", "BUTN": "button",
+    "RDFL": "red_flag", "OVTK": "overtake", "SCAR": "safety_car",
+    "COLL": "collision",
+}
+EVENT_FILTER_GROUPS = {
+    "penalty": {"PENA", "DTSV", "SGSV"},
+    "safety_car": {"SCAR"},
+    "red_flag": {"RDFL"},
+    "overtake": {"OVTK"},
+    "retirement": {"RTMT"},
+    "collision": {"COLL"},
+    "fastest_lap": {"FTLP"},
+    "drs": {"DRSE", "DRSD"},
+    "speed_trap": {"SPTP"},
+    "flashback": {"FLBK"},
+    "teammate_in_pits": {"TMPT"},
+    "session": {"SSTA", "SEND", "STLG", "LGOT", "CHQF", "RCWN"},
+    "race_control": {"SCAR", "RDFL", "DRSE", "DRSD", "PENA", "DTSV", "SGSV", "CHQF"},
+}
+EVENT_FILTER_SYNONYMS = {
+    "penalties": "penalty", "pen": "penalty", "drive_through": "penalty",
+    "stop_go": "penalty", "sc": "safety_car", "vsc": "safety_car",
+    "virtual_safety_car": "safety_car", "safety_cars": "safety_car",
+    "red_flags": "red_flag", "overtakes": "overtake", "pass": "overtake",
+    "passes": "overtake", "retirements": "retirement", "retired": "retirement",
+    "dnf": "retirement", "crash": "collision", "crashes": "collision",
+    "collisions": "collision", "contact": "collision", "fastest_laps": "fastest_lap",
+}
 
 
 class TelemetryTools:
@@ -640,19 +737,150 @@ class TelemetryTools:
         state = await self.store.snapshot_analysis()
         return self.qualifying_summary(state, top_n)
 
+    @staticmethod
+    def _event_codes(types: str) -> tuple[set[str] | None, list[str]]:
+        """Event codes for a comma-separated filter, and the unrecognised words.
+
+        ``None`` means every event. Kinds ("penalty"), their spoken plurals and
+        synonyms ("penalties", "VSC") and the packet codes ("PENA") all match.
+        """
+        words = [word for word in re.split(r"[,;/]|\band\b", str(types or "")) if word.strip()]
+        if not words or any(word.strip().lower() in {"all", "any", "everything"} for word in words):
+            return None, []
+        codes: set[str] = set()
+        unknown: list[str] = []
+        for word in words:
+            token = re.sub(r"[\s\-]+", "_", word.strip().lower()).strip("_")
+            token = EVENT_FILTER_SYNONYMS.get(token, token)
+            if token.upper() in EVENT_KINDS:
+                codes.add(token.upper())
+            elif token in EVENT_FILTER_GROUPS:
+                codes |= EVENT_FILTER_GROUPS[token]
+            elif token.rstrip("s") in EVENT_FILTER_GROUPS:
+                codes |= EVENT_FILTER_GROUPS[token.rstrip("s")]
+            else:
+                kind = next((code for code, name in EVENT_KINDS.items() if name == token), None)
+                if kind:
+                    codes.add(kind)
+                else:
+                    unknown.append(word.strip())
+        return codes, unknown
+
+    def _event_record(self, event: dict[str, Any], state: dict[str, Any], now: float) -> dict[str, Any]:
+        """One logged packet event as the radio would describe it."""
+        drivers = list(state.get("drivers", []) or [])
+        player_index = int(state.get("player_car_index", -1))
+
+        def car(index: Any) -> str | None:
+            try:
+                index = int(index)
+            except (TypeError, ValueError):
+                return None
+            if index < 0 or index == 255:
+                return None
+            match = next((item for item in drivers if item.get("car_idx") == index), None)
+            if match is None and index < len(drivers) and "car_idx" not in drivers[index]:
+                match = drivers[index]
+            if match is None:
+                return f"car {index}"
+            return "you" if index == player_index else display_name(match)
+
+        def label(table: dict[int, str], value: Any) -> str:
+            try:
+                return table.get(int(value), f"unknown code {int(value)}")
+            except (TypeError, ValueError):
+                return "unknown"
+
+        code = str(event.get("type", "")).upper()
+        payload = event.get("payload") or {}
+        record: dict[str, Any] = {
+            "lap": event.get("lap"),
+            "kind": EVENT_KINDS.get(code, code.lower() or "unknown"),
+        }
+        try:
+            record["seconds_ago"] = max(0, round(now - float(event["time"])))
+        except (KeyError, TypeError, ValueError):
+            pass
+        if code == "PENA":
+            record["driver"] = car(payload.get("vehicle_idx"))
+            record["penalty"] = label(PENALTY_TYPES, payload.get("type"))
+            record["infringement"] = label(INFRINGEMENT_TYPES, payload.get("infringement"))
+            other = car(payload.get("other_vehicle_idx"))
+            if other:
+                record["other_driver"] = other
+            seconds = payload.get("time")
+            if isinstance(seconds, (int, float)) and 0 < seconds < 255:
+                record["time_s"] = seconds
+            if payload.get("places_gained"):
+                record["places_gained"] = payload["places_gained"]
+            if payload.get("lap"):
+                record["infringement_lap"] = payload["lap"]
+        elif code == "OVTK":
+            record["driver"] = car(payload.get("overtaking"))
+            record["other_driver"] = car(payload.get("overtaken"))
+            record["detail"] = f"{record['driver']} passed {record['other_driver']}"
+        elif code == "COLL":
+            record["driver"] = car(payload.get("vehicle1_idx"))
+            record["other_driver"] = car(payload.get("vehicle2_idx"))
+            if payload.get("involves_player"):
+                record["involves_you"] = True
+        elif code == "SCAR":
+            vehicle = {
+                "full": "safety car", "virtual": "virtual safety car",
+                "formation": "formation lap safety car",
+            }.get(str(payload.get("safety_car")), "safety car")
+            record["detail"] = f"{vehicle} {payload.get('event') or 'event unknown'}"
+        elif code == "RTMT":
+            record["driver"] = car(payload.get("vehicle_idx"))
+            record["reason"] = label(RETIREMENT_REASONS, payload.get("reason"))
+        elif code == "DRSD":
+            record["reason"] = label(DRS_DISABLED_REASONS, payload.get("reason"))
+        elif code == "FTLP":
+            record["driver"] = car(payload.get("vehicle_idx"))
+            if payload.get("lap_time_s"):
+                record["lap_time"] = fmt_ms(float(payload["lap_time_s"]) * 1000)
+        elif code == "SPTP":
+            record["driver"] = car(payload.get("vehicle_idx"))
+            record["speed_kph"] = payload.get("speed_kph")
+            if payload.get("overall_fastest"):
+                record["session_fastest"] = True
+        elif code in {"DTSV", "SGSV", "TMPT", "RCWN"}:
+            record["driver"] = car(payload.get("vehicle_idx"))
+            if payload.get("stop_time_s"):
+                record["stop_time_s"] = payload["stop_time_s"]
+        elif code == "CHQF":
+            record["your_position"] = payload.get("position")
+        elif code == "STLG":
+            record["lights"] = payload.get("num_lights")
+        return {key: value for key, value in record.items() if value is not None}
+
     async def get_session_events(
         self,
         last_n: int = 10,
         types: str = "all",
     ) -> dict[str, Any]:
         state = await self.store.snapshot_analysis()
-        events = state.get("events_log", [])
-        if types.strip().lower() not in {"", "all"}:
-            allowed = {value.strip().upper() for value in types.split(",")}
-            events = [
-                event for event in events if event.get("type", "").upper() in allowed
-            ]
-        return {"events": events[-last_n:]}
+        logged = list(state.get("events_log", []) or [])
+        codes, unknown = self._event_codes(types)
+        events = (
+            logged if codes is None
+            else [event for event in logged if str(event.get("type", "")).upper() in codes]
+        )
+        now = time.time()
+        result: dict[str, Any] = {
+            "events": [self._event_record(event, state, now) for event in events[-max(1, int(last_n)):]],
+            "events_in_log": len(logged),
+        }
+        if unknown:
+            result["unrecognised_types"] = unknown
+            result["accepted_types"] = sorted({*EVENT_FILTER_GROUPS, "all"})
+        if codes is not None and not events:
+            result["filter_matched_nothing"] = True
+            result["interpretation"] = (
+                "No logged event matches this filter. With unrecognised_types, the filter "
+                "was not understood; otherwise none of these events has been received."
+            )
+        return result
 
     async def get_weather_forecast(self, horizon_min: int = 30) -> dict[str, Any]:
         state = await self.store.snapshot_analysis()
@@ -1677,6 +1905,13 @@ class TelemetryTools:
             "positions": match.get("position_history", [])[-laps:],
         }
 
+    @staticmethod
+    def _ers_mode_label(mode: Any) -> str:
+        try:
+            return ERS_DEPLOY_MODES.get(int(mode), f"unknown mode {int(mode)}")
+        except (TypeError, ValueError):
+            return "unknown"
+
     async def get_my_car_state(self) -> dict[str, Any]:
         state = await self.store.snapshot_analysis()
         result = {
@@ -1709,6 +1944,7 @@ class TelemetryTools:
                 "pit_stop_should_serve_penalty",
             )
         }
+        result["ers_mode"] = self._ers_mode_label(result["ers_mode"])
         result["field_freshness"] = self.field_freshness(state)
         result["interpretation"] = "Only fields marked live are current; paused values describe the paused state. Stale fields are historical and unavailable fields must not be quoted."
         return result
@@ -1791,7 +2027,7 @@ class TelemetryTools:
         return {
             "field_freshness": {"battery": energy, "overtaking_aid": aid},
             "store_pct": state["ers_pct"] if energy["available"] else None,
-            "deploy_mode": state["ers_mode"] if energy["available"] else None,
+            "deploy_mode": self._ers_mode_label(state["ers_mode"]) if energy["available"] else None,
             "deployed_this_lap_j": state["ers_deployed_lap_j"] if energy["available"] else None,
             "harvested_this_lap_j": state["ers_harvested_lap_j"] if energy["available"] else None,
             "overtaking_aid": "Overtake Mode" if state.get("regulations_2026") else "DRS",
@@ -3561,10 +3797,20 @@ class TelemetryTools:
             ),
             (
                 "get_session_events",
-                "Get recent safety-car, penalty, overtake, retirement and session events.",
+                (
+                    "Get recent safety-car, penalty, overtake, retirement and session events, "
+                    "decoded: who, what infringement and penalty, on which lap."
+                ),
                 {
                     "last_n": {"type": "integer", "minimum": 1, "maximum": 50},
-                    "types": {"type": "string"},
+                    "types": {
+                        "type": "string",
+                        "description": (
+                            "all, or a comma-separated list of: penalty, safety_car, red_flag, "
+                            "overtake, retirement, collision, fastest_lap, drs, race_control, "
+                            "session, speed_trap, flashback, teammate_in_pits."
+                        ),
+                    },
                 },
             ),
             (

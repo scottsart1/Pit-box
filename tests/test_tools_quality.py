@@ -227,6 +227,91 @@ async def test_what_if_is_framed_against_the_ranked_plan_it_cannot_replace(stack
     assert same_stop["ranked_equivalent"]["is_recommended"] is True
 
 
+# ------------------------------------------------------------ session events
+
+
+async def _named_field(store):
+    def apply(state):
+        state.connected = True
+        state.player_car_index = 4
+        for index, name in ((4, "PLAYER"), (6, "SAINZ"), (18, "ANTONELLI")):
+            state.drivers[index].name = name
+            state.drivers[index].active = True
+            state.drivers[index].position = index
+    await store.mutate(apply)
+    # Payloads exactly as udp.handle_PacketEventData builds them.
+    await store.append_event("PENA", {"vehicle_idx": 6, "type": 4, "infringement": 7,
+                                      "other_vehicle_idx": 255, "places_gained": 0, "time": 5, "lap": 33})
+    await store.append_event("OVTK", {"overtaking": 18, "overtaken": 4})
+    await store.append_event("SCAR", {"safety_car_type": 2, "safety_car": "virtual",
+                                      "event_type": 0, "event": "deployed"})
+    await store.append_event("RTMT", {"vehicle_idx": 18, "reason": 8})
+
+
+@pytest.mark.asyncio
+async def test_session_events_name_the_driver_and_decode_the_penalty(stack):
+    store, tools = stack[0], stack[5]
+    await _named_field(store)
+
+    result = await tools.call("get_session_events", {"last_n": 10, "types": "penalty"})
+
+    assert len(result["events"]) == 1
+    penalty = result["events"][0]
+    assert penalty["kind"] == "penalty"
+    assert penalty["driver"] != "car 6" and "SAINZ" in penalty["driver"].upper()
+    assert penalty["penalty"] == "time penalty"
+    assert penalty["infringement"] == "corner cutting, gained time"
+    assert penalty["time_s"] == 5 and penalty["infringement_lap"] == 33
+    encoded = json.dumps(result)
+    assert "PENA" not in encoded and "vehicle_idx" not in encoded
+    assert "time" not in penalty and penalty["seconds_ago"] >= 0  # no epoch timestamp
+
+    everything = (await tools.call("get_session_events", {"last_n": 10, "types": "all"}))["events"]
+    overtake = next(event for event in everything if event["kind"] == "overtake")
+    assert overtake["other_driver"] == "you"
+    assert next(event for event in everything if event["kind"] == "safety_car")["detail"] == "virtual safety car deployed"
+    assert next(event for event in everything if event["kind"] == "retirement")["reason"] == "mechanical failure"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("types", "kinds"), [
+    ("penalties", ["penalty"]),
+    ("Safety Car", ["safety_car"]),
+    ("VSC", ["safety_car"]),
+    ("overtakes, retirements", ["overtake", "retirement"]),
+    ("PENA,OVTK", ["penalty", "overtake"]),
+    ("race control", ["penalty", "safety_car"]),
+])
+async def test_session_event_filter_understands_spoken_kinds(stack, types, kinds):
+    store, tools = stack[0], stack[5]
+    await _named_field(store)
+    result = await tools.call("get_session_events", {"last_n": 10, "types": types})
+    assert [event["kind"] for event in result["events"]] == kinds
+    assert "unrecognised_types" not in result
+
+
+@pytest.mark.asyncio
+async def test_session_event_filter_says_when_it_matched_nothing(stack):
+    store, tools = stack[0], stack[5]
+    await _named_field(store)
+    unknown = await tools.call("get_session_events", {"last_n": 10, "types": "weather"})
+    assert unknown["events"] == [] and unknown["filter_matched_nothing"] is True
+    assert unknown["unrecognised_types"] == ["weather"] and "penalty" in unknown["accepted_types"]
+    none_yet = await tools.call("get_session_events", {"last_n": 10, "types": "red flag"})
+    assert none_yet["events"] == [] and none_yet["filter_matched_nothing"] is True
+    assert "unrecognised_types" not in none_yet and none_yet["events_in_log"] == 4
+
+
+@pytest.mark.asyncio
+async def test_ers_deploy_mode_is_named(stack):
+    store, tools = stack[0], stack[5]
+    await store.update(ers_mode=2, connected=True)
+    assert (await tools.get_ers_report())["deploy_mode"] == "hotlap"
+    assert (await tools.get_my_car_state())["ers_mode"] == "hotlap"
+    await store.update(ers_mode=9)
+    assert (await tools.get_my_car_state())["ers_mode"] == "unknown mode 9"
+
+
 # ------------------------------------------------------------- realtime bound
 
 
