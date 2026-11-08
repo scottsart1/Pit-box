@@ -370,7 +370,8 @@ class SessionState:
     # Spoken tyre-temperature unit selected by the driver. Telemetry itself
     # remains Celsius.
     temperature_unit: str = "c"
-    # Driver-selected spoken length persists across sessions, just like units.
+    # Spoken length in force. It starts from the Settings choice, the driver
+    # can change it by radio, and it persists across sessions, like units.
     radio_verbosity: str = "standard"
     # Mirror of settings.brutal_mode so the DRIVE toggle reflects the saved
     # value; the setting itself is the source of truth.

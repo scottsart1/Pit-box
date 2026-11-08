@@ -671,7 +671,12 @@ async def lifespan(app: FastAPI):
     await proactive.configure(settings.proactive_enabled, settings.proactive_cadence_laps)
     await proactive.start()
     # The DRIVE toggle reads the saved value from state; settings own it.
-    await store.update(brutal_mode=bool(settings.brutal_mode))
+    # The engineer reads the spoken length from state too, so the saved
+    # Settings choice is where every run starts.
+    await store.update(
+        brutal_mode=bool(settings.brutal_mode),
+        radio_verbosity=str(settings.radio_verbosity),
+    )
     listener_config = network_service.listener_snapshot()
     if settings.raw_capture != "off":
         try:
@@ -1420,12 +1425,21 @@ async def _persist_app_settings(changes: dict[str, object]) -> dict[str, object]
     return merged
 
 
+async def _app_settings_view(saved: object) -> list[dict[str, object]]:
+    view = settings_view(settings, saved if isinstance(saved, dict) else {})
+    # The driver can change the spoken length by radio ("keep it brief"). Show
+    # the length actually in force, so Settings can also change it back.
+    live = (await store.peek("radio_verbosity")).get("radio_verbosity")
+    for entry in view:
+        if entry["name"] == "radio_verbosity" and live:
+            entry["value"] = live
+    return view
+
+
 @app.get("/api/v1/app-settings")
 async def get_app_settings() -> dict[str, object]:
     saved = await database.load_preference(APP_SETTINGS_KEY, None)
-    return {
-        "settings": settings_view(settings, saved if isinstance(saved, dict) else {})
-    }
+    return {"settings": await _app_settings_view(saved)}
 
 
 _app_settings_lock = asyncio.Lock()
@@ -1478,10 +1492,12 @@ async def _save_app_settings(changes: dict[str, object]) -> dict[str, object]:
         _rebind_provider_clients()
     if "brutal_mode" in coerced:
         await store.update(brutal_mode=bool(settings.brutal_mode))
+    if "radio_verbosity" in coerced:
+        await store.update(radio_verbosity=str(settings.radio_verbosity))
     saved = await database.load_preference(APP_SETTINGS_KEY, None)
     return {
         "results": results,
-        "settings": settings_view(settings, saved if isinstance(saved, dict) else {}),
+        "settings": await _app_settings_view(saved),
     }
 
 

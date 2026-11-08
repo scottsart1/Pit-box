@@ -11,6 +11,7 @@ from copy import deepcopy
 
 import pytest
 
+from pitwall import app as application
 from pitwall.brain import (
     PERSONA,
     EngineerBrain,
@@ -390,3 +391,40 @@ def test_qualifying_lap_fallback_reads_like_radio(payload, spoken):
 ])
 def test_race_fallback_ends_on_an_instruction(payload, spoken):
     assert BriefingEngine.fallback_text("post_race", payload) == spoken
+
+
+# ------------------------------------------------------- Settings verbosity
+
+
+@pytest.mark.asyncio
+async def test_the_settings_verbosity_reaches_the_radio_and_can_undo_a_radio_change(stack, monkeypatch):
+    store, database, _, _, _, tools = stack
+    monkeypatch.setattr(application, "store", store)
+    monkeypatch.setattr(application, "database", database)
+    monkeypatch.setattr(application, "voice", None)
+    monkeypatch.setattr(application, "proactive", None)
+    monkeypatch.setattr(application.settings, "radio_verbosity", "standard")
+
+    await application._save_app_settings({"radio_verbosity": "terse"})
+    assert (await store.snapshot_analysis())["radio_verbosity"] == "terse"
+
+    captured = []
+    brain = EngineerBrain(store, tools, database)
+
+    async def generate(**kwargs):
+        captured.append(kwargs)
+        return ProviderResult("Closing on Alonso. Two tenths a lap.", "test", "test", 1)
+
+    monkeypatch.setattr(brain.router, "generate", generate)
+    assert await brain.ask("how am I doing against Alonso") == "Closing on Alonso."
+    assert "Verbosity: terse" in captured[0]["instructions"]
+
+    # A radio change shows in Settings, which can then change it back.
+    await brain.ask("normal answers please")
+    view = {entry["name"]: entry for entry in (await application.get_app_settings())["settings"]}
+    assert view["radio_verbosity"]["value"] == "standard"
+    await brain.ask("keep it brief")
+    view = {entry["name"]: entry for entry in (await application.get_app_settings())["settings"]}
+    assert view["radio_verbosity"]["value"] == "terse"
+    await application._save_app_settings({"radio_verbosity": "standard"})
+    assert (await store.snapshot_analysis())["radio_verbosity"] == "standard"
