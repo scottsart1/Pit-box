@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import math
 import re
 import time
 from collections import deque
@@ -34,6 +35,44 @@ DELIVER_INTERVAL_S = 0.10
 # racing speed: far enough to lift or move, near enough that it is still true
 # when the driver arrives.
 YELLOW_LOOKAHEAD_M = 600.0
+
+# Fuel margin, in laps, below which the driver is told to save. The same line
+# the fuel model draws between "save fuel" and "on target"
+# (AnalysisEngine.compute_fuel_model). The warning used to fire below +0.3
+# laps and drop the sign, so a deliberate light-fuel margin of +0.2 was read
+# out as "short by 0.2 laps, lift and coast" every few minutes while every
+# other path, the fuel model included, said the fuel was on target.
+FUEL_SAVE_DELTA_LAPS = -0.1
+
+# Race-control phases as the radio says them. The template used to read the
+# internal value aloud: "Race control: vsc ending."
+RACE_CONTROL_LABELS = {
+    "green": "Green flag",
+    "safety_car": "Safety car",
+    "safety_car_ending": "Safety car in this lap",
+    "vsc": "VSC",
+    "vsc_ending": "VSC ending",
+    "formation": "Formation lap",
+    "formation_ending": "Formation lap ending",
+}
+
+# Power-unit components as they are said, not as they are stored: the old
+# template read "MGUH" and "TC" aloud.
+COMPONENT_LABELS = {
+    "ice": "ICE", "mguk": "MGU-K", "mguh": "MGU-H",
+    "es": "Energy store", "ce": "Control electronics", "tc": "Turbo",
+}
+
+# Repeat control at delivery. A call is compared with the last delivered call
+# of its own type by what it says materially (see _material_signature), and
+# only calls of different types are compared by their wording.
+REPEAT_HORIZON_S = 120.0
+# The same race-control phase announced twice this close together is the phase
+# flapping between the safety-car event and the session packet, not news.
+RACE_CONTROL_REPEAT_S = 20.0
+# How many times a narrated call may go back to the queue because the race
+# moved on while it was being worded, before it is dropped.
+MAX_REQUEUES = 2
 
 # Reliability damage matters as much as aero damage, but gearbox, engine and
 # DRS/ERS faults were previously invisible to the radio: they are captured in
@@ -275,6 +314,10 @@ class ProactiveEngineer:
         # differently-worded "Practice complete, P8" calls went out inside 30
         # seconds because separate event types converged on the same content.
         self._last_spoken_text = ""
+        self._last_spoken_type = ""
+        # Event type -> (material signature, monotonic time) of the last call
+        # of that type the driver actually heard.
+        self._delivered_signatures: dict[str, tuple[Any, float]] = {}
         self._cooldowns: dict[str, float] = {}
         self._safe_since = 0.0
         self._wide_safe_since = 0.0
@@ -469,7 +512,13 @@ class ProactiveEngineer:
         critical: bool = False,
         cooldown_s: float = 60.0,
         expires_s: float | None = None,
-    ) -> None:
+    ) -> bool:
+        """Queue a call. Returns whether it was queued.
+
+        A detector that records "already reported" state must only do so when
+        this returns True: a call refused by the cooldown leaves no trace, so
+        recording it anyway marks news as told that the driver never heard.
+        """
         now_mono = time.monotonic()
         # Rival pace is a continuously improving observation. Refresh the
         # payload of the already queued call in place, preserving its original
@@ -482,11 +531,11 @@ class ProactiveEngineer:
             if existing is not None:
                 existing["payload"] = payload
                 existing["last_updated_at"] = time.time()
-                return
+                return True
         if now_mono - self._cooldowns.get(event_type, -1e9) < cooldown_s:
-            return
+            return False
         if self.is_suppressed(event_type, self._standing_instructions):
-            return
+            return False
         self._cooldowns[event_type] = now_mono
         # Race control is deliberately NOT coalesced. Every other call here
         # reports a level that a later reading replaces, so the newest is the
@@ -546,6 +595,7 @@ class ProactiveEngineer:
             dropped.setdefault("blocked_reasons", []).append("queue full")
             self._discarded.append(dropped)
         self.pending.appendleft(event) if critical else self.pending.append(event)
+        return True
 
     async def _reset_for_session(self, session_uid: int) -> None:
         self._session_uid = int(session_uid)
@@ -578,6 +628,8 @@ class ProactiveEngineer:
         self._race_start_done = False
         self._last_roast_lap = 0
         self._driver_check_stints = {}
+        self._last_spoken_text = self._last_spoken_type = ""
+        self._delivered_signatures = {}
         self._cooldowns.clear()
         self._safe_since = 0.0
         self._wide_safe_since = 0.0
@@ -593,6 +645,45 @@ class ProactiveEngineer:
             str(damage.get(key, 0))
             for key in (*DAMAGE_KEYS, *DAMAGE_FAULT_KEYS)
         )
+
+    @staticmethod
+    def _metres_to_zone(zone: dict[str, Any], state: dict[str, Any]) -> float:
+        """Distance along the lap from the car to a marshal zone's start."""
+        track_length = float(state.get("track_length_m", 0) or 0)
+        lap_distance = float(state.get("lap_distance_m", 0) or 0)
+        ahead = float(zone.get("start_m", 0.0)) - lap_distance
+        if ahead < 0 and track_length:
+            ahead += track_length
+        return ahead
+
+    @staticmethod
+    def _flagged_zone_ahead(
+        payload: dict[str, Any], state: dict[str, Any]
+    ) -> tuple[str, float] | None:
+        """(flag, metres) for a called zone the car has not yet reached.
+
+        None once the car has reached the zone, the zone has gone green, or the
+        track has been neutralised. A yellow is called about six seconds out,
+        and a call queued behind a narrated one could otherwise be spoken after
+        the car was already in the zone, with the distance measured at
+        detection.
+        """
+        if str(state.get("race_control_phase", "green")) != "green":
+            return None
+        zone = next(
+            (
+                item
+                for item in state.get("marshal_zones", []) or []
+                if int(item.get("index", -1)) == int(payload.get("zone", -2))
+            ),
+            None,
+        )
+        if zone is None or str(zone.get("flag", "none")) not in {"yellow", "red"}:
+            return None
+        ahead = ProactiveEngineer._metres_to_zone(zone, state)
+        if not 0.0 <= ahead <= YELLOW_LOOKAHEAD_M:
+            return None
+        return str(zone.get("flag")), round(ahead, 1)
 
     def _detect_marshal_yellow(self, state: dict[str, Any]) -> None:
         """Call a yellow in a zone the driver is about to reach.
@@ -616,8 +707,6 @@ class ProactiveEngineer:
         zones = list(state.get("marshal_zones", []) or [])
         if not zones:
             return
-        track_length = float(state.get("track_length_m", 0) or 0)
-        lap_distance = float(state.get("lap_distance_m", 0) or 0)
         current_lap = int(state.get("current_lap", 0))
 
         nearest: dict[str, Any] | None = None
@@ -625,9 +714,7 @@ class ProactiveEngineer:
             flag = str(zone.get("flag", "none"))
             if flag not in {"yellow", "red"}:
                 continue
-            ahead = float(zone.get("start_m", 0.0)) - lap_distance
-            if ahead < 0 and track_length:
-                ahead += track_length
+            ahead = self._metres_to_zone(zone, state)
             if 0.0 <= ahead <= YELLOW_LOOKAHEAD_M and (
                 nearest is None or ahead < nearest["distance_ahead_m"]
             ):
@@ -707,18 +794,40 @@ class ProactiveEngineer:
             return
         # Track a per-component band so a second component crossing 70% is not
         # suppressed by the first (a single shared band hid every later one).
+        #
+        # Every component that crossed a band in this pass goes into ONE call.
+        # One call per component shared a cooldown, so on an already-worn
+        # power unit only the first was queued while all of them were marked
+        # as told; and the bands are recorded only once the call is queued, so
+        # a crossing held back by the cooldown is called when it ends.
+        crossed: list[tuple[str, float, int]] = []
         for key, raw in wear.items():
             value = float(raw)
             band = (int(value) // 10) * 10
             if value >= 70.0 and band > self._component_alert_bands.get(key, 0):
+                crossed.append((str(key), value, band))
+        if not crossed:
+            return
+        crossed.sort(key=lambda item: item[1], reverse=True)
+        worst_key, worst_value, _ = crossed[0]
+        queued = self._enqueue(
+            "component_wear",
+            {
+                "component": worst_key,
+                "wear_pct": round(worst_value, 1),
+                "components": [
+                    {"component": key, "wear_pct": round(value, 1), "band": band}
+                    for key, value, band in crossed
+                ],
+                "all": wear,
+            },
+            critical=worst_value >= 90.0,
+            cooldown_s=120.0,
+            expires_s=120.0,
+        )
+        if queued:
+            for key, _value, band in crossed:
                 self._component_alert_bands[key] = band
-                self._enqueue(
-                    "component_wear",
-                    {"component": key, "wear_pct": round(value, 1), "all": wear},
-                    critical=value >= 90.0,
-                    cooldown_s=120.0,
-                    expires_s=120.0,
-                )
 
     def _detect_energy(self, state: dict[str, Any]) -> None:
         """Low-battery warning while attacking, at most once per lap."""
@@ -861,7 +970,7 @@ class ProactiveEngineer:
                 or bool(published.get("ask_driver"))
             )
         if kind == "fuel_warning":
-            return float(state.get("fuel_laps_delta", 1.0)) < 0.3
+            return float(state.get("fuel_laps_delta", 1.0)) < FUEL_SAVE_DELTA_LAPS
         if kind == "tyre_wear":
             return max(state.get("tyre", {}).get("wear", [0]) or [0]) >= 62
         if kind == "damage":
@@ -881,6 +990,8 @@ class ProactiveEngineer:
             return bool(state.get("strategy", {}).get("compound_rule", {}).get("change_outstanding"))
         if kind == "blue_flag":
             return state.get("fia_flag") == "blue"
+        if kind == "yellow_ahead":
+            return ProactiveEngineer._flagged_zone_ahead(event.get("payload", {}) or {}, state) is not None
         if kind == "lap_deleted":
             return bool(state.get("current_lap_invalid"))
         if kind == "penalty_service":
@@ -913,6 +1024,8 @@ class ProactiveEngineer:
                 (event.get("payload", {}) or {}).get("corner_cutting_warnings", 0) or 0
             )
         if kind == "driver_check":
+            if (state.get("strategy_hold", {}) or {}).get("active"):
+                return False
             box_lap = (
                 state.get("strategy", {}).get("recommended", {}).get("box_lap")
             )
@@ -1018,7 +1131,7 @@ class ProactiveEngineer:
             return event.get("type") == "race_control" and event.get("payload", {}).get("to") == "red_flag"
         if bool(getattr(self.voice, "realtime_active", False)) and self._priority_of(
             event
-        ) != CRITICAL:
+        ) > CRITICAL:
             # Non-critical chatter still waits for the driver to finish talking.
             self._mark_blocked(event, "conversation open")
             return False
@@ -1094,6 +1207,62 @@ class ProactiveEngineer:
         return None if ProactiveEngineer._event_still_relevant(event, state) else "superseded"
 
     @staticmethod
+    def _strategy_advice_allowed(state: dict[str, Any]) -> bool:
+        """Whether an unsolicited call may carry the pit plan at all.
+
+        A driver declines a stop in one of two ways: refusing the call, which
+        sets a five-lap hold, or asking for the pit stop not to be raised, which
+        saves a standing instruction. Both used to stop only the strategy_change
+        call, so the tyre warning and the progress update went on saying "Box
+        lap 18 for HARD" through the hold. Safety is not traded away here: the
+        hold releases itself on wear past the hard limit, new damage, a flag
+        change or rain, and the warnings themselves are still spoken.
+        """
+        hold = state.get("strategy_hold", {}) or {}
+        if hold.get("active"):
+            return False
+        return not ProactiveEngineer.is_suppressed(
+            "strategy_change", state.get("standing_instructions", []) or []
+        )
+
+    @staticmethod
+    def _spoken_advice(
+        recommended: dict[str, Any], state: dict[str, Any]
+    ) -> dict[str, Any]:
+        """The plan with its instruction worded as the radio says it.
+
+        The driver-asked answer applies two guards the engine string does not:
+        a stop that gains nothing and loses places is "Stay out", and a stop
+        for the compound just fitted is never called. The unsolicited calls
+        used to read the engine string verbatim, so one plan produced "Stay
+        out" when asked and "Box lap 33 for SOFT" in the next flag call. The
+        engine's own wording is kept when it says more than a box lap (the
+        mandatory-compound and disqualification sentences).
+        """
+        if not recommended:
+            return {}
+        current_lap = int(state.get("current_lap", 0) or 0)
+        tyre = state.get("tyre", {}) or {}
+        engine = str(recommended.get("instruction") or "").strip()
+        override = EngineerBrain._strategy_guard_override(recommended, current_lap, tyre)
+        box_lap, fit = recommended.get("box_lap"), recommended.get("fit_compound")
+        if override is not None:
+            spoken = override
+        elif engine and box_lap is not None and fit and engine == f"Box lap {box_lap} for {fit}.":
+            spoken = EngineerBrain._spoken_strategy_instruction(recommended, current_lap, tyre)
+        else:
+            return dict(recommended)
+        return {**recommended, "instruction": spoken}
+
+    @staticmethod
+    def _advice(state: dict[str, Any]) -> dict[str, Any]:
+        """The current plan as a proactive call may carry it, or nothing."""
+        if not ProactiveEngineer._strategy_advice_allowed(state):
+            return {}
+        recommended = state.get("strategy", {}).get("recommended", {}) or {}
+        return ProactiveEngineer._spoken_advice(recommended, state)
+
+    @staticmethod
     def _urgent_strategy(state: dict[str, Any]) -> dict[str, Any]:
         if state.get("mode_profile") == "qualifying":
             return {}
@@ -1107,7 +1276,7 @@ class ProactiveEngineer:
             or wear >= 82.0
             or (box_lap is not None and int(box_lap) <= current_lap + 1)
         )
-        return recommended if urgent else {}
+        return ProactiveEngineer._advice(state) if urgent else {}
 
     async def _refresh_strategy_if_needed(self, state: dict[str, Any]) -> dict[str, Any]:
         if state.get("mode_profile") == "qualifying":
@@ -1201,6 +1370,12 @@ class ProactiveEngineer:
         if str(state.get("race_control_phase", "green")) != "green":
             return
         if self.voice.is_busy or state.get("ptt_pressed"):
+            return
+        if not self._strategy_advice_allowed(state):
+            # Asking about the tyres two laps before a window the driver has
+            # just declined presses the stop they said no to. Not recorded as
+            # asked, so the check is still made if the window stands once the
+            # hold is over.
             return
         recommended = state.get("strategy", {}).get("recommended", {}) or {}
         box_lap = recommended.get("box_lap")
@@ -1358,9 +1533,7 @@ class ProactiveEngineer:
             # race-control call that suppression could never reach. The
             # agreement evaporating is a worse failure than the advice being
             # wrong: it teaches the driver that nothing they say is retained.
-            strategy_advice = state.get("strategy", {}).get("recommended", {})
-            if self.is_suppressed("strategy_change", self._standing_instructions):
-                strategy_advice = {}
+            strategy_advice = self._advice(state)
             payload = {"from": previous, "to": phase, "strategy": strategy_advice, "neutralisation": state.get("strategy", {}).get("neutralisation", {})}
             if phase == "red_flag":
                 # A suspension change is a new opportunity, not the paid pit
@@ -1465,9 +1638,23 @@ class ProactiveEngineer:
         # 40-second penalty", both from the Suzuka race before it, and three
         # fuel warnings were spoken to a car sitting still at the grid.
         car_running = not in_garage and self._car_moving(state)
-        if car_running and float(state.get("fuel_laps_delta", 1.0)) < 0.3:
-            self._enqueue("fuel_warning", state.get("analysis", {}).get("fuel_model", {}), cooldown_s=90.0)
+        fuel_delta = float(state.get("fuel_laps_delta", 1.0))
+        if fuel_delta >= FUEL_SAVE_DELTA_LAPS:
+            # Back on target: the next shortfall is news again.
+            self._delivered_signatures.pop("fuel_warning", None)
+        elif car_running:
+            self._enqueue(
+                "fuel_warning",
+                {
+                    **(state.get("analysis", {}).get("fuel_model", {}) or {}),
+                    "fuel_laps_delta": round(fuel_delta, 2),
+                },
+                cooldown_s=90.0,
+            )
         wear = max(state.get("tyre", {}).get("wear", [0]) or [0])
+        if wear < 62:
+            # Fresh tyres: the next stint's warnings start from scratch.
+            self._delivered_signatures.pop("tyre_wear", None)
         if not in_garage and wear >= 65:
             self._enqueue("tyre_wear", {"wear_fl_fr_rl_rr": state.get("tyre", {}).get("wear"), "strategy": self._urgent_strategy(state)}, critical=wear >= 82, cooldown_s=60.0)
 
@@ -1475,7 +1662,19 @@ class ProactiveEngineer:
         if in_garage:
             pass
         elif penalties > self._last_penalties:
-            self._enqueue("penalty", {"penalties_s": penalties}, critical=True, cooldown_s=0.0)
+            # penalties_s is the game's running total. Saying only the total
+            # told a driver already on 5 s that he had "picked up a 10 second
+            # penalty", so he believed he now carried 15.
+            self._enqueue(
+                "penalty",
+                {
+                    "penalties_s": penalties,
+                    "added_s": penalties - self._last_penalties,
+                    "total_s": penalties,
+                },
+                critical=True,
+                cooldown_s=0.0,
+            )
         elif warnings >= 2 and warnings > self._last_warnings:
             self._enqueue("warning", {"corner_cutting_warnings": warnings}, critical=True, cooldown_s=0.0)
         self._last_penalties, self._last_warnings = penalties, warnings
@@ -1497,16 +1696,29 @@ class ProactiveEngineer:
         self._reported_damage_band = min(self._reported_damage_band, band)
         # A fault that cleared is news again if it comes back.
         self._reported_damage_faults &= set(faults)
-        new_fault = any(fault not in self._reported_damage_faults for fault in faults)
-        if not in_garage and ((band > self._reported_damage_band and maximum > 10) or new_fault):
-            self._reported_damage_band = max(band, self._reported_damage_band)
-            self._reported_damage_faults.update(faults)
-            self._enqueue(
+        new_faults = [fault for fault in faults if fault not in self._reported_damage_faults]
+        escalated = band > self._reported_damage_band and maximum > 10
+        if not in_garage and (escalated or new_faults):
+            # No cooldown: the band and fault memory is the throttle, and a
+            # cooldown in front of it silently refused the second hit of an
+            # incident (25% wing, then 65% thirty seconds later) after the
+            # tracker had already recorded it as told, so it was never said.
+            # The tracker is only advanced once the call is actually queued.
+            queued = self._enqueue(
                 "damage",
-                {**damage, "max_damage_pct": maximum, "repairable": ["front wing"]},
-                critical=maximum >= 40 or bool(new_fault),
-                cooldown_s=90.0,
+                {
+                    **damage,
+                    "max_damage_pct": maximum,
+                    "new_faults": new_faults,
+                    "escalated": escalated,
+                    "repairable": ["front wing"],
+                },
+                critical=maximum >= 40 or bool(new_faults),
+                cooldown_s=0.0,
             )
+            if queued:
+                self._reported_damage_band = max(band, self._reported_damage_band)
+                self._reported_damage_faults.update(faults)
 
         invalid = bool(state.get("current_lap_invalid"))
         if (
@@ -1586,7 +1798,7 @@ class ProactiveEngineer:
                     "drive_through": unserved[0],
                     "stop_go": unserved[1],
                     "serve_at_stop": bool(state.get("pit_stop_should_serve_penalty")),
-                    "strategy": state.get("strategy", {}).get("recommended", {}),
+                    "strategy": self._advice(state),
                 },
                 critical=True,
                 cooldown_s=15.0,
@@ -1642,16 +1854,15 @@ class ProactiveEngineer:
         rule = state.get("strategy", {}).get("compound_rule", {})
         laps_remaining = max(0, int(state.get("total_laps", 0)) - int(state.get("current_lap", 0)))
         if rule.get("change_outstanding") and (laps_remaining <= 6 or int(state.get("current_lap", 0)) >= max(1, int(state.get("total_laps", 0)) // 2)):
-            self._enqueue("compound_requirement", {"laps_remaining": laps_remaining, "used": rule.get("dry_compounds_used", []), "eligible": rule.get("eligible_next_compounds", []), "strategy": state.get("strategy", {}).get("recommended", {})}, critical=laps_remaining <= 3, cooldown_s=90.0)
+            self._enqueue("compound_requirement", {"laps_remaining": laps_remaining, "used": rule.get("dry_compounds_used", []), "eligible": rule.get("eligible_next_compounds", []), "strategy": self._advice(state)}, critical=laps_remaining <= 3, cooldown_s=90.0)
 
         recommended = state.get("strategy", {}).get("recommended", {})
         strategy_signature = f"{recommended.get('box_lap')}:{recommended.get('fit_compound')}:{recommended.get('stops_remaining')}"
         hold = state.get("strategy_hold", {}) or {}
         if released_hold_reason and recommended and not hold.get("raised_after_release"):
             payload = {
-                **recommended,
+                **self._spoken_advice(recommended, state),
                 "hold_released_reason": released_hold_reason,
-                "instruction": recommended.get("instruction"),
             }
             self._enqueue("strategy_change", payload, cooldown_s=0.0)
             hold = dict(hold)
@@ -1667,7 +1878,7 @@ class ProactiveEngineer:
             self._last_strategy_signature = strategy_signature
             stability = state.get("strategy", {}).get("stability", {})
             if old and not stability.get("held") and self._urgent_strategy(state):
-                self._enqueue("strategy_change", recommended, cooldown_s=15.0)
+                self._enqueue("strategy_change", self._spoken_advice(recommended, state), cooldown_s=15.0)
 
         current_stops = {int(d.get("car_idx", -1)): int(d.get("pit_stops", 0)) for d in state.get("drivers", [])}
         if self._last_pit_stops:
@@ -1680,7 +1891,7 @@ class ProactiveEngineer:
                         "position": driver.get("position"),
                         "tyre": driver.get("tyre_compound"),
                         "gap_to_player_s": gap,
-                        "strategy": recommended,
+                        "strategy": self._advice(state),
                     }
                     self._enqueue("rival_pitted", payload, cooldown_s=0.0)
                     if gap is not None and 0 < float(gap) <= 25.0:
@@ -1719,19 +1930,24 @@ class ProactiveEngineer:
                     str(opportunity.get("instruction") or "").strip()
                     or "keep the lap clean"
                 )
+            opportunity = ProactiveEngineer._sentence(opportunity)
             if payload.get("mode_profile") == "qualifying":
                 quali = payload.get("qualifying", {})
                 return (
                     f"Qualifying update: session best "
                     f"{quali.get('session_best') or 'unavailable'}, target "
-                    f"{quali.get('target') or 'building'}. {opportunity}."
+                    f"{quali.get('target') or 'building'}. {opportunity}"
                 )
-            strategy = payload.get("strategy", {})
-            pace = target.get("target") or target.get("target_lap") or "target unavailable"
-            action = strategy.get("instruction")
-            if action:
-                return f"Lap {payload.get('lap')}: target {pace}. {action}"
-            return f"Lap {payload.get('lap')}: target {pace}. {opportunity}."
+            strategy = payload.get("strategy", {}) or {}
+            pace = target.get("target") or target.get("target_lap")
+            # "Lap 12: target target unavailable." was the old no-target line.
+            heading = (
+                f"Lap {payload.get('lap')}: target {pace}."
+                if pace
+                else f"Lap {payload.get('lap')}: target still building."
+            )
+            action = ProactiveEngineer._sentence(strategy.get("instruction"))
+            return f"{heading} {action or opportunity}"
         if kind == "race_control":
             if payload.get("to") == "red_flag":
                 restart = payload.get("red_flag_restart") or {}
@@ -1745,15 +1961,19 @@ class ProactiveEngineer:
             # only when there is some, so a driver who has declined pit advice
             # hears the flag alone instead of a hollow "stand by for the
             # revised plan".
-            phase = str(payload.get("to", "change")).replace("_", " ")
-            advice = str((payload.get("strategy") or {}).get("instruction") or "").strip()
+            raw_phase = str(payload.get("to", "change"))
+            phase = RACE_CONTROL_LABELS.get(raw_phase, raw_phase.replace("_", " ").capitalize())
+            advice = ProactiveEngineer._sentence((payload.get("strategy") or {}).get("instruction"))
             return f"Race control: {phase}." + (f" {advice}" if advice else "")
         if kind == "yellow_ahead":
             # Short on purpose. This is spoken while the driver is arriving at
             # the incident, so it leads with the instruction, not the detail.
-            colour = "Red flag" if payload.get("flag") == "red" else "Yellow"
             metres = int(float(payload.get("distance_ahead_m", 0)))
-            return f"{colour} flag, sector ahead, {metres} metres. Lift and no overtaking."
+            if payload.get("flag") == "red":
+                # A red zone is not a yellow with a different colour: "no
+                # overtaking" is not the instruction, slowing to stop is.
+                return f"Red flag in the sector ahead, {metres} metres. Slow down and be ready to stop."
+            return f"Yellow flag, sector ahead, {metres} metres. Lift and no overtaking."
         if kind == "strategy_change":
             changed = payload.get("hold_released_reason")
             prefix = f"Your strategy hold is released because {changed}. " if changed else ""
@@ -1763,7 +1983,7 @@ class ProactiveEngineer:
         if kind == "driver_check":
             laps = int(payload.get("laps_to_window", 2) or 2)
             return (
-                f"{laps} laps to the window. How are the rears â€” holding, "
+                f"{laps} laps to the window. How are the rears — holding, "
                 "or going away?"
             )
         if kind == "tyre_wear":
@@ -1822,16 +2042,27 @@ class ProactiveEngineer:
                 or f"Repeated time loss at {payload.get('name', 'the same corner')}; rebuild that corner next lap."
             )
         if kind == "fuel_warning":
-            delta = state.get("fuel_laps_delta")
+            delta = state.get("fuel_laps_delta", payload.get("fuel_laps_delta"))
+            if not isinstance(delta, (int, float)):
+                return "Fuel is short of race distance. Start lifting and coasting on the long straights."
+            if float(delta) >= 0:
+                # Never read a surplus out as a shortfall.
+                return f"Fuel is plus {float(delta):.1f} laps. No saving needed."
             return (
-                f"Fuel is short by {abs(float(delta)):.1f} laps. Start lifting and coasting on the long straights."
-                if isinstance(delta, (int, float))
-                else "Fuel is short of race distance. Start lifting and coasting on the long straights."
+                f"Fuel is short by {abs(float(delta)):.1f} laps. Start lifting "
+                "and coasting on the long straights."
             )
         if kind == "damage":
-            if payload.get("ers_fault"):
+            # Lead with what is new. A DRS fault reported a minute ago is not
+            # the news when the front wing has just gone from 25 to 65 percent.
+            faults = (
+                set(payload.get("new_faults") or [])
+                if "new_faults" in payload
+                else {key for key in DAMAGE_FAULT_KEYS if payload.get(key)}
+            )
+            if "ers_fault" in faults:
                 return "ERS fault reported. Expect reduced deployment; we are reassessing the plan."
-            if payload.get("drs_fault"):
+            if "drs_fault" in faults:
                 return "DRS fault reported. Do not rely on the overtaking aid this lap."
             # Only the front wing can be changed at a stop, so reliability damage
             # is reported as something to manage, never as a reason to box.
@@ -1866,7 +2097,8 @@ class ProactiveEngineer:
             if payload.get("worth_stopping") and payload.get("compound"):
                 box = payload.get("box_lap")
                 where = f"Box lap {box}" if box else "Box this lap"
-                return f"{payload.get('reason')} {where} for {payload.get('compound')}."
+                tyre = ProactiveEngineer._compound_plural(payload.get("compound"))
+                return f"{payload.get('reason')} {where} for {tyre}."
             if payload.get("reason"):
                 return str(payload["reason"])
             return (
@@ -1874,7 +2106,14 @@ class ProactiveEngineer:
                 "Stand by for a crossover call."
             )
         if kind == "penalty":
-            return f"You have picked up a {payload.get('penalties_s')} second penalty. Keep it clean from here."
+            total = payload.get("total_s", payload.get("penalties_s"))
+            added = payload.get("added_s", total)
+            if isinstance(added, (int, float)) and isinstance(total, (int, float)) and added < total:
+                return (
+                    f"Another {added:g} second penalty; that is {total:g} seconds in total. "
+                    "Keep it clean from here."
+                )
+            return f"You have picked up a {total} second penalty. Keep it clean from here."
         if kind == "warning":
             return (
                 f"That is {payload.get('corner_cutting_warnings')} track-limit warnings. "
@@ -1903,8 +2142,23 @@ class ProactiveEngineer:
                 f"before using sustained {aid} again."
             )
         if kind == "component_wear":
+            components = [
+                item for item in (payload.get("components") or [])
+                if isinstance(item, dict) and item.get("component")
+            ]
+            if len(components) > 1:
+                named = [
+                    f"{ProactiveEngineer._component_label(item['component'])} "
+                    f"{float(item.get('wear_pct', 0) or 0):.0f}"
+                    for item in components
+                ]
+                listed = ", ".join(named[:-1]) + f" and {named[-1]}"
+                return (
+                    f"Power-unit wear: {listed} percent. Manage it to avoid a "
+                    "component penalty later in the season."
+                )
             return (
-                f"{str(payload.get('component', 'engine')).upper()} wear at "
+                f"{ProactiveEngineer._component_label(payload.get('component', 'engine'))} wear at "
                 f"{payload.get('wear_pct')} percent. Manage it to avoid a component "
                 "penalty later in the season."
             )
@@ -1923,6 +2177,32 @@ class ProactiveEngineer:
         if kind == "pace_roast":
             return ProactiveEngineer.roast_text(payload)
         return "Engineer update available on the dashboard."
+
+    @staticmethod
+    def _component_label(key: Any) -> str:
+        """A power-unit component as it is said, not as it is stored."""
+        raw = str(key or "engine")
+        return COMPONENT_LABELS.get(
+            raw.lower(), raw.upper().replace("_", "-")
+        )
+
+    @staticmethod
+    def _compound_plural(compound: Any) -> str:
+        """'INTER' -> 'inters', the way the radio names a tyre to fit."""
+        name = str(compound or "").strip().lower()
+        if not name:
+            return ""
+        return name if name.endswith("s") else f"{name}s"
+
+    @staticmethod
+    def _sentence(text: Any) -> str:
+        """One spoken sentence: capitalised, ending in exactly one stop."""
+        cleaned = " ".join(str(text or "").split()).rstrip(" .")
+        if not cleaned:
+            return ""
+        if cleaned[-1] not in "!?":
+            cleaned += "."
+        return cleaned[0].upper() + cleaned[1:]
 
     @staticmethod
     def roast_text(payload: dict[str, Any]) -> str:
@@ -1979,6 +2259,11 @@ class ProactiveEngineer:
 
     @staticmethod
     def _priority_of(event: dict[str, Any]) -> int:
+        # FLASH first. Every FLASH call is also critical, and checking critical
+        # first ranked a yellow queued behind a penalty as level with it, so
+        # the flag waited for the penalty's narration and playback.
+        if event.get("flash"):
+            return FLASH
         if event.get("critical"):
             return CRITICAL
         return int(event.get("priority", EVENT_PRIORITY.get(event.get("type"), ROUTINE)))
@@ -2058,8 +2343,8 @@ class ProactiveEngineer:
             ),
         )
 
-    @session_scoped(raise_on_change=False)
-    async def _deliver(self, state: dict[str, Any]) -> None:
+    async def _flush_records(self, state: dict[str, Any]) -> None:
+        """Save what was discarded or went stale, then drop the stale calls."""
         while self._discarded:
             discarded = self._discarded.popleft()
             outcome = str(discarded.get("delivery_outcome") or "superseded")
@@ -2074,8 +2359,45 @@ class ProactiveEngineer:
                 await self.database.save_proactive_call(
                     state, event, reason, False
                 )
-
         self._prune(state)
+
+    def _next_speakable(
+        self, state: dict[str, Any], *, flash_only: bool = False
+    ) -> dict[str, Any] | None:
+        """The most important call that can be spoken now, if any.
+
+        Walks the queue in priority order and returns the first call that can
+        be spoken. Stopping at the first blocked call was the bug this
+        replaces: every condition left in _safe_to_speak varies from call to
+        call, so the one at the head being unspeakable said nothing about the
+        rest. A battery warning with a deliberately wider window, a critical
+        call allowed into an open conversation, an overdue call that accepts a
+        rougher stretch of road — each of them sat behind a call that could not
+        use its relaxation, and waited there until it expired.
+        """
+        for candidate in self._candidates(state):
+            if flash_only and not candidate.get("flash"):
+                continue
+            if not self._safe_to_speak(state, candidate):
+                continue
+            # Only routine chatter waits out the full spacing interval; an
+            # important call gets a much shorter one so it is still current
+            # when spoken.
+            if self._priority_of(candidate) > CRITICAL:
+                interval = (
+                    settings.proactive_min_interval_s
+                    if self._priority_of(candidate) == ROUTINE
+                    else settings.proactive_important_interval_s
+                )
+                if time.monotonic() - self._last_spoken_at < interval:
+                    self._mark_blocked(candidate, "minimum interval")
+                    continue
+            return candidate
+        return None
+
+    @session_scoped(raise_on_change=False)
+    async def _deliver(self, state: dict[str, Any]) -> None:
+        await self._flush_records(state)
         if not self.pending:
             return
 
@@ -2088,52 +2410,109 @@ class ProactiveEngineer:
                 self._mark_blocked(held, engine_blocked)
             return
 
-        # Otherwise walk the queue in priority order and speak the first call
-        # that can be spoken. Stopping at the first blocked call was the bug
-        # this replaces: every condition left in _safe_to_speak varies from
-        # call to call, so the one at the head being unspeakable said nothing
-        # about the rest. A battery warning with a deliberately wider window, a
-        # critical call allowed into an open conversation, an overdue call that
-        # accepts a rougher stretch of road — each of them sat behind a call
-        # that could not use its relaxation, and waited there until it expired.
         self._update_safe_window(state)
-        event = None
-        for candidate in self._candidates(state):
-            if not self._safe_to_speak(state, candidate):
-                continue
-            # Only routine chatter waits out the full spacing interval; an
-            # important call gets a much shorter one so it is still current
-            # when spoken.
-            if self._priority_of(candidate) != CRITICAL:
-                interval = (
-                    settings.proactive_min_interval_s
-                    if self._priority_of(candidate) == ROUTINE
-                    else settings.proactive_important_interval_s
-                )
-                if time.monotonic() - self._last_spoken_at < interval:
-                    self._mark_blocked(candidate, "minimum interval")
-                    continue
-            event = candidate
-            break
+        event = self._next_speakable(state)
         if event is None:
             return
+        await self._deliver_event(event, state)
 
+    async def _deliver_event(self, event: dict[str, Any], state: dict[str, Any]) -> None:
+        """Word, re-check and speak one call that has been chosen."""
         with contextlib.suppress(ValueError):
             self.pending.remove(event)
         self._refresh_payload(event, state)
+        unchanged = self._unchanged_reason(event)
+        if unchanged is not None:
+            await self._discard(event, unchanged, state)
+            return
         await self.store.mutate(lambda s: s.proactive.update({"queued": len(self.pending), "delivery_state": "generating"}))
+        advice_before = self._carried_advice(event)
         text = await self._narrate(event, state)
         if not await self.store.matches_session(state):
             return
-        # Different event types can converge on the same content: a real
-        # session heard "Practice complete, P8" three times in thirty seconds,
-        # worded three ways by the model. The per-type cooldown cannot see
-        # that, so the spoken text itself is the last line of defence.
-        if self._is_near_repeat(text):
-            event["delivery_outcome"] = "near-duplicate of the previous call"
-            self._mark_blocked(event, "near-duplicate of the previous call")
-            await self.database.save_proactive_call(state, event, text, False)
+        if not event.get("flash"):
+            # Wording this call can take seconds, and the race does not wait.
+            # A FLASH call queued meanwhile goes first: it is short and only
+            # worth saying while it is true.
+            await self._speak_waiting_flash()
+            # Everything checked before narration was checked against the
+            # race as it was then. A driver who declined the stop, silenced the
+            # subject or keyed the radio while this was being worded must not
+            # hear it anyway: "Box this lap for hards" was spoken straight
+            # after "Copy, we stay out".
+            fresh = await self.store.snapshot_radio()
+            stale = self._relevance_reason(event, fresh)
+            if stale is None and self.is_suppressed(
+                str(event.get("type", "")), fresh.get("standing_instructions", [])
+            ):
+                stale = "silenced by the driver"
+            if stale is not None:
+                await self._discard(event, f"{stale} while it was being worded", fresh, text)
+                return
+            self._refresh_payload(event, fresh)
+            if self._carried_advice(event) != advice_before:
+                # Still worth saying, but not in those words.
+                self._requeue(event, "the plan changed while it was being worded")
+                return
+            blocked = self._engine_block_reason(fresh)
+            if blocked is not None:
+                self._requeue(event, blocked)
+                return
+            state = fresh
+        repeat = self._repeat_reason(event, text)
+        if repeat is not None:
+            await self._discard(event, repeat, state, text)
             return
+        await self._speak(event, text, state)
+
+    async def _speak_waiting_flash(self) -> None:
+        """Speak FLASH calls that became speakable while another was worded."""
+        for _ in range(3):
+            state = await self.store.snapshot_radio()
+            await self._flush_records(state)
+            if not self.pending or self._engine_block_reason(state) is not None:
+                return
+            flash = self._next_speakable(state, flash_only=True)
+            if flash is None:
+                return
+            with contextlib.suppress(ValueError):
+                self.pending.remove(flash)
+            self._refresh_payload(flash, state)
+            unchanged = self._unchanged_reason(flash)
+            if unchanged is not None:
+                await self._discard(flash, unchanged, state)
+                continue
+            await self._speak(flash, self._fallback_text(flash, state), state)
+
+    async def _discard(
+        self,
+        event: dict[str, Any],
+        reason: str,
+        state: dict[str, Any],
+        text: str | None = None,
+    ) -> None:
+        event["delivery_outcome"] = reason
+        self._mark_blocked(event, reason)
+        await self.database.save_proactive_call(state, event, text or reason, False)
+
+    def _requeue(self, event: dict[str, Any], reason: str) -> None:
+        """Put a still-relevant call back at the front, a limited number of times."""
+        count = int(event.get("requeued", 0) or 0) + 1
+        self._mark_blocked(event, reason)
+        if count > MAX_REQUEUES:
+            event["delivery_outcome"] = f"{reason}; dropped after {MAX_REQUEUES} retries"
+            self._discarded.append(event)
+            return
+        event["requeued"] = count
+        maxlen = getattr(self.pending, "maxlen", None)
+        if maxlen is not None and len(self.pending) >= maxlen:
+            dropped = self.pending.pop()
+            dropped["delivery_outcome"] = "queue_full"
+            dropped.setdefault("blocked_reasons", []).append("queue full")
+            self._discarded.append(dropped)
+        self.pending.insert(0, event)
+
+    async def _speak(self, event: dict[str, Any], text: str, state: dict[str, Any]) -> None:
         delivered = False
         try:
             delivered = await self.voice.speak_text(text)
@@ -2143,6 +2522,12 @@ class ProactiveEngineer:
         if delivered:
             self._last_spoken_at = time.monotonic()
             self._last_spoken_text = text
+            self._last_spoken_type = str(event.get("type", ""))
+            signature = self._material_signature(event)
+            if signature is not None:
+                self._delivered_signatures[self._last_spoken_type] = (
+                    signature[0], time.monotonic(),
+                )
             # Only a call the driver actually heard becomes conversation history.
             await self.brain.record_spoken_call(text)
             await self.store.mutate(lambda s: s.proactive.update({
@@ -2155,6 +2540,150 @@ class ProactiveEngineer:
                 open_window = getattr(self.voice, "open_reply_window", None)
                 if open_window is not None:
                     await open_window("engineer asked a question")
+
+    @staticmethod
+    def _carried_advice(event: dict[str, Any]) -> str:
+        """The pit instruction a call would speak, for spotting a change."""
+        payload = event.get("payload") or {}
+        if not isinstance(payload, dict):
+            return ""
+        if event.get("type") == "strategy_change":
+            return str(payload.get("instruction") or "")
+        strategy = payload.get("strategy")
+        if isinstance(strategy, dict):
+            return str(strategy.get("instruction") or "")
+        return ""
+
+    @staticmethod
+    def _material_signature(
+        event: dict[str, Any],
+    ) -> tuple[tuple[Any, ...], float | None] | None:
+        """What a call says that matters, and how long an unchanged one is a repeat.
+
+        Two calls of one type that say materially the same thing are a repeat
+        however they are worded; two that differ are news however alike they
+        sound. Comparing wording alone dropped "VSC ending" as a duplicate of
+        "VSC", a second safety-car delta breach, a 5 s penalty becoming 10 s and
+        a front wing going from 25 to 65 percent, while letting an unchanged
+        tyre warning back every few minutes. A horizon of None means the call
+        is not repeated while the level holds, however long that is.
+
+        Types with no signature here are either one-off edges (a penalty, a
+        blue flag, a yellow per lap and zone) or are compared by wording.
+        """
+        kind = event.get("type")
+        payload = event.get("payload") or {}
+        if not isinstance(payload, dict):
+            return None
+        if kind == "race_control":
+            return (str(payload.get("to")),), RACE_CONTROL_REPEAT_S
+        if kind == "sc_restart":
+            return (str(payload.get("phase")),), RACE_CONTROL_REPEAT_S
+        # Tyre and fuel warnings are levels: an unchanged reading is not news
+        # on a timer, however long it lasts. _detect clears their memory when
+        # the reading recovers, so the next stint or shortfall starts afresh.
+        if kind == "tyre_wear":
+            wear = [
+                float(value)
+                for value in payload.get("wear_fl_fr_rl_rr") or []
+                if isinstance(value, (int, float))
+            ]
+            worst = max(wear) if wear else 0.0
+            advice = str((payload.get("strategy") or {}).get("instruction") or "")
+            return ((int(worst) // 10) * 10, worst >= 82.0, advice), None
+        if kind == "fuel_warning":
+            delta = payload.get("fuel_laps_delta")
+            band = math.floor(float(delta) * 2) if isinstance(delta, (int, float)) else None
+            return (band, ""), None
+        if kind == "damage":
+            faults = tuple(sorted(key for key in DAMAGE_FAULT_KEYS if payload.get(key)))
+            band = (int(payload.get("max_damage_pct", 0) or 0) // 20) * 20
+            return (band, faults), REPEAT_HORIZON_S
+        if kind == "component_wear":
+            components = payload.get("components") or [
+                {
+                    "component": payload.get("component"),
+                    "band": (int(float(payload.get("wear_pct", 0) or 0)) // 10) * 10,
+                }
+            ]
+            return (
+                tuple(sorted(
+                    (str(item.get("component")), int(item.get("band", 0) or 0))
+                    for item in components
+                    if isinstance(item, dict)
+                )),
+            ), REPEAT_HORIZON_S
+        if kind == "penalty_service":
+            return (
+                int(payload.get("drive_through", 0) or 0),
+                int(payload.get("stop_go", 0) or 0),
+                bool(payload.get("serve_at_stop")),
+            ), REPEAT_HORIZON_S
+        if kind == "compound_requirement":
+            return (bool(event.get("critical")),), REPEAT_HORIZON_S
+        if kind == "weather_crossover":
+            return (
+                bool(payload.get("worth_stopping")),
+                bool(payload.get("ask_driver")),
+                str(payload.get("compound") or ""),
+                payload.get("box_lap"),
+            ), REPEAT_HORIZON_S
+        if kind == "strategy_change":
+            return (
+                *ProactiveEngineer._call_signature(payload),
+                str(payload.get("instruction") or ""),
+                bool(payload.get("hold_released_reason")),
+            ), REPEAT_HORIZON_S
+        return None
+
+    def _unchanged_reason(self, event: dict[str, Any]) -> str | None:
+        """Why this call would only repeat the last one of its type, if it would."""
+        spec = self._material_signature(event)
+        if spec is None:
+            return None
+        signature, horizon = spec
+        kind = str(event.get("type", ""))
+        previous = getattr(self, "_delivered_signatures", {}).get(kind)
+        if previous is None:
+            return None
+        old, spoken_at = previous
+        if horizon is not None and time.monotonic() - spoken_at > horizon:
+            return None
+        same = old == signature
+        if not same and kind == "tyre_wear":
+            # Pit advice withdrawn (the driver declined the stop) is not news
+            # about the tyres; only a new level or new advice is.
+            same = old[:-1] == signature[:-1] and not signature[-1]
+        return "unchanged since the last call" if same else None
+
+    @staticmethod
+    def _exempt_from_wording_check(event: dict[str, Any]) -> bool:
+        return bool(
+            event.get("flash")
+            or event.get("critical")
+            or event.get("type") in NEVER_SUPPRESSED
+        )
+
+    def _repeat_reason(self, event: dict[str, Any], text: str) -> str | None:
+        """Whether the wording repeats the previous call of another type.
+
+        Different event types can converge on the same content: a real session
+        heard "Practice complete, P8" three times in thirty seconds, worded
+        three ways by the model. The per-type cooldown cannot see that, so the
+        wording is compared across types. Safety, legality and FLASH calls are
+        never dropped for their wording, and a call of the same type as the
+        last one has already been judged by what it says.
+        """
+        if self._exempt_from_wording_check(event):
+            return None
+        if (
+            self._material_signature(event) is not None
+            and getattr(self, "_last_spoken_type", "") == event.get("type")
+        ):
+            return None
+        if self._is_near_repeat(text):
+            return "near-duplicate of the previous call"
+        return None
 
     # Events whose payload carries the strategy call alongside their own news.
     _STRATEGY_BEARING = frozenset(
@@ -2179,20 +2708,26 @@ class ProactiveEngineer:
             return
         if kind == "race_control" and payload.get("to") == "red_flag":
             payload["red_flag_restart"] = state.get("strategy", {}).get("red_flag_restart", {})
+        if kind == "yellow_ahead":
+            # Say the distance as it is now, not as it was when the call was
+            # queued: a car at racing speed covers 80 metres a second.
+            zone = self._flagged_zone_ahead(payload, state)
+            if zone is not None:
+                payload["flag"], payload["distance_ahead_m"] = zone
         if kind in {"progress_update", "tyre_wear"} and "strategy" in payload:
             payload["strategy"] = self._urgent_strategy(state)
         elif kind in self._STRATEGY_BEARING and payload.get("strategy"):
             # An empty strategy was a deliberate omission (suppressed advice);
-            # only a call that carried advice gets the current advice.
-            payload["strategy"] = state.get("strategy", {}).get("recommended", {}) or {}
+            # only a call that carried advice gets the current advice, and
+            # only while the driver has not declined it since.
+            payload["strategy"] = self._advice(state)
         elif kind == "strategy_change":
             current = state.get("strategy", {}).get("recommended", {}) or {}
             if current and self._call_signature(current) == self._call_signature(payload):
                 released = payload.get("hold_released_reason")
-                payload.update(current)
+                payload.update(self._spoken_advice(current, state))
                 if released:
                     payload["hold_released_reason"] = released
-                    payload["instruction"] = current.get("instruction")
 
     _REPEAT_STOPWORDS = frozenset(
         "a an and are at be but for in is it its no not of on or so the "
@@ -2210,7 +2745,7 @@ class ProactiveEngineer:
         """
         if not self._last_spoken_text:
             return False
-        if time.monotonic() - self._last_spoken_at > 120.0:
+        if time.monotonic() - self._last_spoken_at > REPEAT_HORIZON_S:
             return False
 
         def normalize(value: str) -> list[str]:
