@@ -401,6 +401,19 @@ def test_a_stay_out_the_answer_rules_out_is_not_an_endorsement():
     ) != []
 
 
+def test_a_negation_elsewhere_in_the_sentence_does_not_undo_an_endorsement():
+    context = {"state": {}, "tool": {"get_pit_strategy": {"compound_rule": {
+        "applies": True, "compliant": True, "conditional_on_future_use": True}}}}
+    verdict = {"compound_rule": True}
+    question = "How are the tyres?"
+    assert engineer_eval._check_verdict(
+        verdict, question, "The hards are good to the flag, no worries.", context
+    ) == ["endorses finishing on the current set while the compound rule needs a stop"]
+    assert engineer_eval._check_verdict(
+        verdict, question, "They will not last to the flag; box lap 62 for softs.", context
+    ) == []
+
+
 @pytest.mark.parametrize("argv", [["--provider", "openai"], ["--live", "--provider", "bogus"]])
 def test_the_harness_calls_a_real_provider_only_when_asked_to_by_name(argv):
     with pytest.raises(SystemExit):
