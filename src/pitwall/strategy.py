@@ -4311,7 +4311,7 @@ class StrategyEngine:
             "model_summary": model_summary,
             "personal_wear_model": style_evidence,
             "assumptions": [
-                "Plans are ranked by projected finishing position first; among equal finishes the later first stop is preferred (a free red-flag tyre change excepted), and risk-adjusted time only breaks the ties that remain.",
+                "Plans are ranked by projected finishing position first, then by the risk appetite's finish and expected points; among plans still level the later first stop is preferred (a free red-flag tyre change excepted), and risk-adjusted time only breaks the ties that remain.",
                 f"Risk appetite is {risk_appetite}; it selects the distribution used between plans with the same central finish.",
                 f"Overtaking difficulty is {overtaking_difficulty:.2f}; unknown circuits use 0.60 with lower confidence.",
                 "Clean live wear and fuel-corrected stint pace blend with personal history as samples accumulate; untested tyres keep low confidence.",
