@@ -33,6 +33,15 @@ class ProviderTruncationError(ProviderResponseError):
     """Raised when a provider exhausts its output budget after one larger retry."""
 
 
+class ProviderContentError(ProviderResponseError):
+    """Raised when a provider's final text was nothing but exposed deliberation.
+
+    The provider answered; the local final-text filter declined to speak what
+    it said. That is model phrasing, not provider availability, so it never
+    counts toward the circuit breaker.
+    """
+
+
 class ProviderDeadlineError(ProviderError):
     """Raised when a provider exceeds the race-radio route deadline."""
 
@@ -68,30 +77,108 @@ class ProviderRequestError(ProviderError):
         )
 
 
+# Phrases that appear when a model narrates its own working instead of talking
+# to the driver: the request described in the third person, plans to look
+# something up, tool-selection notes, and the labelled scratchpad sections
+# seen in leaked output. Each is anchored to its scratchpad form. Interjections
+# such as "hold on", "wait" or "confirm it" are deliberately absent: they are
+# also ordinary radio ("Hold on to P4", "Wait - not this lap, box next lap"),
+# and a filter that deletes them can delete or reverse an instruction.
 _DELIBERATION_MARKERS = re.compile(
-    r"(?:^|\b)(?:let me(?: check| think| give| reconcile| inspect| review| answer)|i (?:need|should|will) "
-    r"(?:check|reconcile|give|answer|use|inspect)|wait\s*(?:[—:-]|$)|hold on|"
-    r"the (?:driver|user) asked|the question is|key facts\s*:|critical concern\s*:|"
-    r"the current call\s*:|i have the tyre|i have the tire|i should give a brief|"
+    r"\b(?:"
+    r"the (?:driver|user) (?:asked|asks|is asking|was asking|wants|wanted|needs|"
+    r"is requesting|requested)\b|the (?:driver|user)(?:'s|’s) (?:question|request)\b|"
+    r"the question (?:is asking|asks)\b|"
+    r"let me (?:check|think|reconcile|inspect|review|reconsider|re-?check|verify)\b|"
+    r"i (?:need|have) to (?:check|reconcile|inspect|review|reconsider|verify|look at|"
+    r"figure out|work out|answer|respond)\b|"
+    r"i (?:need|have) to give (?:a |the )?(?:brief|short|concise) (?:answer|reply|response)\b|"
+    r"i should (?:give|answer|respond|reply|check|reconcile|inspect|use|call|lead with)\b|"
+    r"i(?: will|'ll|’ll| need to| should) (?:call|use|query|run|invoke|check) "
+    r"(?:the |a |an )?(?:[\w-]+ ){0,3}(?:tool|function)s?\b|"
+    r"(?:looking at|based on|according to) (?:the )?(?:tool|function) "
+    r"(?:output|result|call|data)s?\b|"
+    r"key facts\s*:|critical concern\s*:|the current call\s*:|"
+    r"i have the tyre|i have the tire|"
     r"the strategy engine ranks|the current deterministic strategy|deterministic primary|"
-    r"however,? the earlier recent calls|i note|confirm it)",
+    r"however,? the earlier recent calls"
+    r")",
     re.IGNORECASE,
 )
 
+# A raw tool name (get_gaps, compare_practice_groups) never belongs in radio
+# copy; it only appears when a model narrates which tool it used. Only the
+# verb prefixes the engineer's tools use are matched, so a snake_case value
+# echoed from a briefing payload is not treated as deliberation.
+_TOOL_NAME = r"(?:get|record|compare|predict|evaluate|generate|list|what)_[a-z0-9_]*[a-z0-9]"
+_TOOL_IDENTIFIER = re.compile(rf"\b{_TOOL_NAME}\b")
+
+# "Looking at get_gaps, Norris is 1.4 ahead." keeps its answer once the
+# tool-attribution lead-in is removed.
+_TOOL_LEAD_IN = re.compile(
+    r"(^|(?<=[.!?])\s+)(?:looking at|based on|according to|using|from|per) "
+    r"(?:the )?(?:(?:[\w-]+ ){0,2}(?:tool|function)(?: (?:output|result|call|data)s?)?"
+    rf"|{_TOOL_NAME}(?: (?:tool|output|result|data)s?)?)\s*,\s*(\w)",
+    re.IGNORECASE | re.MULTILINE,
+)
+# "Norris is 1.4 ahead per get_gaps." and "... (from get_gaps)." likewise.
+_TOOL_TAIL = re.compile(
+    rf",?\s+(?:per|from|according to|via|using) (?:the )?{_TOOL_NAME}"
+    r"(?: (?:tool|output|result|data)s?)?(?=[.!?;]|$)"
+    rf"|\s*\((?:(?:per|from|via|using) )?(?:the )?{_TOOL_NAME}(?: tool)?\)",
+    re.IGNORECASE | re.MULTILINE,
+)
+
+# Local reasoning models served through an OpenAI-compatible endpoint often
+# inline their thinking. Servers whose chat template opens the block inside
+# the prompt return only the closing tag.
+_THINK_BLOCK = re.compile(r"<(think|thinking)>.*?</\1\s*>", re.IGNORECASE | re.DOTALL)
+_THINK_CLOSE = re.compile(r"</(?:think|thinking)\s*>", re.IGNORECASE)
+_THINK_OPEN = re.compile(r"<(?:think|thinking)>", re.IGNORECASE)
+
 
 def _contains_deliberation(text: str) -> bool:
-    return bool(_DELIBERATION_MARKERS.search(text.strip()))
+    stripped = text.strip()
+    return bool(
+        _DELIBERATION_MARKERS.search(stripped) or _TOOL_IDENTIFIER.search(stripped)
+    )
+
+
+def _strip_inline_reasoning(text: str) -> str:
+    """Drop <think>/<thinking> blocks and keep the answer that follows them."""
+    without_blocks = _THINK_BLOCK.sub("\n\n", text)
+    closes = list(_THINK_CLOSE.finditer(without_blocks))
+    if closes:
+        without_blocks = without_blocks[closes[-1].end():]
+    unterminated = _THINK_OPEN.search(without_blocks)
+    if unterminated:
+        # The model stopped inside its reasoning: nothing after the tag is an
+        # answer, and none of it may be spoken.
+        without_blocks = without_blocks[: unterminated.start()]
+    return without_blocks
+
+
+def _strip_tool_attribution(text: str) -> str:
+    """Remove "according to <tool>" wording and keep the rest of the sentence."""
+    text = _TOOL_TAIL.sub("", text)
+    return _TOOL_LEAD_IN.sub(
+        lambda match: f"{match.group(1)}{match.group(2).upper()}", text
+    )
 
 
 def _final_answer_only(text: str) -> str:
     """Remove accidentally exposed scratchpad prose from a provider's final content.
 
     A provider can occasionally imitate deliberation inside its final text. This guard
-    keeps only the trailing radio answer and never exposes scratchpad-like prose to
-    history or TTS.
+    removes inline <think> blocks and tool attributions, then keeps the radio answer:
+    the paragraphs after the last scratchpad paragraph, or else every sentence that
+    carries no deliberation marker. It never exposes scratchpad-like prose to history
+    or TTS, and it returns an empty string only when nothing but deliberation was said.
     """
     cleaned = text.replace("\r\n", "\n").replace("\r", "\n").strip()
+    cleaned = _strip_inline_reasoning(cleaned).strip()
     cleaned = re.sub(r"^```(?:text|markdown)?\s*|\s*```$", "", cleaned, flags=re.I)
+    cleaned = _strip_tool_attribution(cleaned)
     if not cleaned:
         return ""
 
@@ -246,7 +333,13 @@ def _provider_failure_kind(exc: BaseException) -> str:
 
 def _is_health_failure(exc: BaseException) -> bool:
     """Return True only for failures that indicate provider availability trouble."""
-    if isinstance(exc, (ProviderConfigurationError, ProviderTruncationError)):
+    # Truncation and a final text made only of exposed deliberation both come
+    # from a service that answered. Counting them would let model phrasing open
+    # the circuit and turn the next, unrelated radio question into
+    # "temporarily unavailable".
+    if isinstance(exc, (
+        ProviderConfigurationError, ProviderTruncationError, ProviderContentError,
+    )):
         return False
     if isinstance(exc, (ProviderDeadlineError, asyncio.TimeoutError, TimeoutError)):
         return True
@@ -283,6 +376,23 @@ def _is_health_failure(exc: BaseException) -> bool:
     # Malformed/empty provider responses and unknown transport failures should
     # count, while known request/configuration failures above should not.
     return isinstance(exc, ProviderResponseError) or not isinstance(exc, ProviderError)
+
+
+def _spoken_final_text(raw: str, provider: str, empty_message: str) -> str:
+    """Return the radio answer from a final text, or raise the right error.
+
+    A provider that sent nothing is an unusable response. A provider whose
+    text held only exposed deliberation answered, but nothing in it may be
+    spoken; that is reported without marking the provider unhealthy.
+    """
+    text = _final_answer_only(raw)
+    if text:
+        return text
+    if raw.strip():
+        raise ProviderContentError(
+            f"{provider} returned only exposed deliberation as its final text."
+        )
+    raise ProviderResponseError(empty_message)
 
 
 def _openai_response_truncated(response: Any) -> bool:
@@ -481,9 +591,9 @@ class OpenAIResponsesProvider:
                     "OpenAI requested another tool after the final answer was required."
                 )
             if not calls:
-                text = _final_answer_only(response.output_text or "")
-                if not text:
-                    raise ProviderResponseError("OpenAI returned no final text.")
+                text = _spoken_final_text(
+                    response.output_text or "", "OpenAI", "OpenAI returned no final text."
+                )
                 return ProviderResult(
                     text=text,
                     provider=self.name,
@@ -690,12 +800,12 @@ class DeepSeekChatProvider:
             assert response is not None and choice is not None and message is not None
             calls = list(getattr(message, "tool_calls", None) or [])
             if not calls:
-                text = _final_answer_only(getattr(message, "content", None) or "")
-                if not text:
-                    reason = getattr(choice, "finish_reason", "unknown")
-                    raise ProviderResponseError(
-                        f"DeepSeek returned no final text (finish_reason={reason})."
-                    )
+                reason = getattr(choice, "finish_reason", "unknown")
+                text = _spoken_final_text(
+                    getattr(message, "content", None) or "",
+                    "DeepSeek",
+                    f"DeepSeek returned no final text (finish_reason={reason}).",
+                )
                 return ProviderResult(
                     text=text,
                     provider=self.name,
@@ -920,18 +1030,16 @@ class AnthropicMessagesProvider:
                     block for block in content if block.get("type") == "tool_use"
                 ]
                 if not calls:
-                    text = _final_answer_only(
+                    reason = payload.get("stop_reason", "unknown")
+                    text = _spoken_final_text(
                         " ".join(
                             str(block.get("text", ""))
                             for block in content
                             if block.get("type") == "text"
-                        )
+                        ),
+                        "Anthropic",
+                        f"Anthropic returned no final text (stop_reason={reason}).",
                     )
-                    if not text:
-                        reason = payload.get("stop_reason", "unknown")
-                        raise ProviderResponseError(
-                            f"Anthropic returned no final text (stop_reason={reason})."
-                        )
                     return ProviderResult(
                         text=text,
                         provider=self.name,
@@ -1149,12 +1257,12 @@ class OpenAICompatibleChatProvider:
             assert choice is not None and message is not None
             calls = list(getattr(message, "tool_calls", None) or [])
             if not calls:
-                text = _final_answer_only(getattr(message, "content", None) or "")
-                if not text:
-                    reason = getattr(choice, "finish_reason", "unknown")
-                    raise ProviderResponseError(
-                        f"{self.name} returned no final text (finish_reason={reason})."
-                    )
+                reason = getattr(choice, "finish_reason", "unknown")
+                text = _spoken_final_text(
+                    getattr(message, "content", None) or "",
+                    self.name,
+                    f"{self.name} returned no final text (finish_reason={reason}).",
+                )
                 return ProviderResult(
                     text=text,
                     provider=self.name,

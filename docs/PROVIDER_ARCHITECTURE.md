@@ -96,13 +96,14 @@ Failures that indicate availability trouble count toward the circuit:
 - server-side 5xx failure;
 - malformed or empty provider response.
 
-Failures that require user/configuration action do not mark the provider temporarily unhealthy:
+Failures that require user/configuration action, or that come from a service that did answer, do not mark the provider temporarily unhealthy:
 
 - invalid or missing credentials;
 - permission or bad-request errors;
 - insufficient quota/credit or billing hard limit;
 - invalid tool arguments;
-- token-budget truncation.
+- token-budget truncation;
+- a final text that held only exposed deliberation (see below).
 
 Two consecutive health failures open the configured short cooldown. One failure still permits immediate fallback.
 
@@ -116,6 +117,16 @@ OpenAI deep:   2,200 -> 6,000 max output tokens
 ```
 
 If the enlarged retry also truncates, the fallback may answer, but the primary provider's circuit failure count remains unchanged.
+
+## Final-text filter
+
+Each provider's final text passes through one filter before it reaches history or TTS:
+
+1. `<think>`/`<thinking>` blocks are removed and the answer after them is kept. A text that only closes the block (a chat template opened it inside the prompt) keeps what follows the closing tag; an unterminated block is never spoken.
+2. A tool attribution ("Looking at get_gaps, ...", "Based on the tool output, ...", "... per get_gaps.") is removed and the rest of the sentence kept.
+3. Deliberation markers identify scratchpad text: the request described in the third person ("the driver asked/wants"), plans to look something up ("let me check", "I need to reconcile"), tool-selection notes ("I'll call the tyre tool"), raw tool names (`get_gaps`), and the labelled scratchpad sections seen in leaked output ("Key facts:"). When whole paragraphs are scratchpad, the paragraphs after the last of them are the answer; otherwise every sentence without a marker is kept.
+
+Interjections such as "hold on", "wait", "I noted" or "confirm it" are not markers: they are also ordinary radio ("Hold on to P4", "Wait - not this lap, box next lap"), and removing them can delete or reverse an instruction. A single-paragraph answer therefore loses only the sentences that carry a marker. If nothing is left, the request fails as an unusable response without counting against the provider's health.
 
 ## Live provider shakedown
 
