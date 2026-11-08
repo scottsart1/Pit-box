@@ -96,8 +96,9 @@ _NO = re.compile(
 )
 # From the stay-out check: an answer may not endorse running the current set
 # to the flag, or affirm a question about doing so, while a stop is still owed.
-# A sentence that negates the stay-out ("you cannot stay out to the end") is
-# the opposite of an endorsement.
+# A clause that negates the stay-out ("you cannot stay out to the end") is the
+# opposite of an endorsement; a negation elsewhere in the sentence ("good to
+# the flag, no worries") does not undo one.
 _ENDORSES_FINISH = re.compile(
     r"\b(?:serviceable|last|make it|fine|good)\b[^.]{0,20}\bto the (?:flag|end|finish)\b"
     r"|\bstay(?:ing)? out (?:to|until) the (?:end|flag|finish)\b",
@@ -105,6 +106,7 @@ _ENDORSES_FINISH = re.compile(
 )
 _NO_STOP_NEEDED = re.compile(r"\bno (?:need|reason) to (?:stop|pit|box)\b", re.I)
 _NEGATION = re.compile(r"\b(?:not|no|never|can't|cannot|won't|don't|shouldn't|isn't|aren't)\b|n['’]t\b", re.I)
+_CLAUSE_BREAK = re.compile(r"[,;:—–]|\s-\s")
 _ASKS_FINISH = re.compile(r"stay out (?:to|until) the (?:end|flag|finish)|to the end|to the flag", re.I)
 _AFFIRMS = re.compile(r"^\s*(?:yes|yeah|affirm)\b|^\s*you can\b(?!['’]t|not)", re.I)
 _SENTENCE_BREAK = re.compile(r"(?<=[.!?])\s+(?=[A-Z0-9\"'])")
@@ -314,7 +316,7 @@ def _states(answer: str, value: Any, unit: str | None = None) -> bool:
         if unit == "temp_f":
             target = target * 9 / 5 + 32
         return any(
-            spoken.unit == unit and abs(spoken.value - abs(target)) <= 0.5 * 10.0 ** -spoken.decimals + 1e-9
+            spoken.unit == unit and abs(spoken.value - abs(target)) <= spoken.tolerance + 1e-9
             for spoken in grounding.spoken_numbers(answer)
         )
     text = str(value).strip().lower()
@@ -397,8 +399,9 @@ def _check_verdict(verdict: dict[str, Any], utterance: str, answer: str, context
             problems.append(f"first sentence says {said}, expected {expected}")
     if verdict.get("compound_rule") and _stop_still_required(context):
         if _NO_STOP_NEEDED.search(answer) or any(
-            _ENDORSES_FINISH.search(sentence) and not _NEGATION.search(sentence)
+            _ENDORSES_FINISH.search(clause) and not _NEGATION.search(clause)
             for sentence in sentences
+            for clause in _CLAUSE_BREAK.split(sentence)
         ):
             problems.append("endorses finishing on the current set while the compound rule needs a stop")
         if _ASKS_FINISH.search(utterance) and _AFFIRMS.search(answer):
