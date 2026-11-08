@@ -7,6 +7,7 @@ could not use, or would misread and repeat to the driver as fact.
 from __future__ import annotations
 
 import json
+import re
 import sys
 import time
 from collections import Counter
@@ -218,11 +219,16 @@ async def test_what_if_is_framed_against_the_ranked_plan_it_cannot_replace(stack
     # Like-for-like baseline of the recommended plan: two stints and one stop.
     baseline = 500.0 * 2 + 21.0
 
-    async def engine_what_if(scenario, **_):
-        lap = 56 if "this lap" in scenario else int(scenario.split()[2])
+    async def engine_what_if(scenario, *, lap=None, compound=None):
+        # Parses like StrategyEngine.what_if: an explicit lap wins, then the
+        # first number in the text, then the next lap; never a past lap.
+        digits = re.search(r"(\d{1,2})", scenario)
+        lap = lap if lap is not None else int(digits.group(1)) if digits else 56
+        lap = max(55, lap)
+        compound = next((name for name in ("SOFT", "MEDIUM", "HARD") if name.lower() in scenario.lower()), "SOFT")
         return {
-            "available": True, "scenario": f"Box lap {lap} for SOFT", "box_lap": lap,
-            "compound": "SOFT", "projected_time_s": 1015.123456, "risk_adjusted_time_s": 1016.0,
+            "available": True, "scenario": f"Box lap {lap} for {compound}", "box_lap": lap,
+            "compound": compound, "projected_time_s": 1015.123456, "risk_adjusted_time_s": 1016.0,
             # Engine delta against the ranked plan's traffic-inclusive time.
             "delta_to_best_s": -538.08, "projected_finish_wear_pct": 75.1, "feasible": True,
             "pending_finish_penalty_s": 0.0,
@@ -235,19 +241,69 @@ async def test_what_if_is_framed_against_the_ranked_plan_it_cannot_replace(stack
 
     early = await tools.call("what_if", {"scenario": "box this lap for softs"})
     assert "delta_to_best_s" not in early
+    # "This lap" is the current lap, as in the ranked plans, not the next one.
+    assert early["box_lap"] == 55 and "assumed" not in early
     assert early["time_delta_vs_recommended_s"] == round(1016.0 - baseline, 2)
     assert early["ranked_equivalent"] is None
     assert early["recommended_plan"]["instruction"] == "Box lap 62 for SOFT."
     assert "does not replace the recommended call" in early["basis"]
+    assert "prefers the later stop" in early["basis"]
     assert early["legal"] is True and early["feasible"] is True
 
     ranked_stop = await tools.call("what_if", {"scenario": "box lap 60 for softs"})
     assert ranked_stop["ranked_equivalent"] == {
         "rank": 2, "is_recommended": False, "feasible": True, "legal": True,
         "projected_finish_position": 7, "projected_rejoin_position": 9, "traffic_cost_s": 1.0,
+        "delta_vs_recommended_s": -3.63,
     }
     same_stop = await tools.call("what_if", {"scenario": "box lap 62 for softs"})
     assert same_stop["ranked_equivalent"]["is_recommended"] is True
+
+    assert (await tools.call("what_if", {"scenario": "box in two laps for hards"}))["box_lap"] == 57
+
+
+@pytest.mark.asyncio
+async def test_what_if_never_prices_a_stop_the_driver_did_not_name(stack, monkeypatch):
+    store, _, strategy, _, _, tools = stack
+    recommended = {
+        **_plan([62], ["HARD", "SOFT"], risk=1554.08, position=7),
+        "box_lap": 62, "fit_compound": "SOFT", "action": "pit_stop",
+        "instruction": "Box lap 62 for SOFT.",
+    }
+    await store.update(current_lap=55, total_laps=70, mode_profile="race", session_type="Race",
+                       strategy={"available": True, "recommended": recommended, "plans": [recommended],
+                                 "confidence": "low",
+                                 "neutralisation": {"phase": "green", "pit_this_lap_available": False}})
+    calls = []
+
+    async def engine_what_if(scenario, *, lap=None, compound=None):
+        calls.append(scenario)
+        digits = re.search(r"(\d{1,2})", scenario)
+        lap = max(55, lap if lap is not None else int(digits.group(1)) if digits else 56)
+        compound = next((name for name in ("SOFT", "MEDIUM", "HARD") if name.lower() in scenario.lower()), "SOFT")
+        return {"available": True, "scenario": f"Box lap {lap} for {compound}", "box_lap": lap,
+                "compound": compound, "risk_adjusted_time_s": 1016.0, "feasible": True,
+                "compound_rule": {"compliant": True}}
+
+    monkeypatch.setattr(strategy, "what_if", engine_what_if)
+
+    # The engine would price "Box lap 56 for SOFT" for each of these.
+    for scenario in ("stay out to the end", "can we go long on this set", "two stop"):
+        refused = await tools.call("what_if", {"scenario": scenario})
+        assert refused["available"] is False and "get_pit_strategy" in refused["reason"], scenario
+    assert calls == []
+
+    no_lap = await tools.call("what_if", {"scenario": "what if we pit for hards"})
+    assert no_lap["assumed"] == ["The scenario named no lap; lap 56 was priced."]
+    no_compound = await tools.call("what_if", {"scenario": "box lap 58"})
+    assert no_compound["assumed"] == ["The scenario named no compound; SOFT was priced."]
+    past = await tools.call("what_if", {"scenario": "box lap 12 for hards"})
+    assert past["assumed"] == ["Lap 12 has already passed; lap 55 was priced."]
+
+    # Pit entry for this lap has gone: the stop is priced but flagged.
+    now = await tools.call("what_if", {"scenario": "box now for mediums"})
+    assert now["box_lap"] == 55 and now["pit_entry_passed"] is True
+    assert now["earliest_reachable_box_lap"] == 56
 
 
 # ------------------------------------------------------------ session events

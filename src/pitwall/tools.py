@@ -81,6 +81,11 @@ DRS_DISABLED_REASONS = {
     3: "minimum lap not reached",
 }
 ERS_DEPLOY_MODES = {0: "none", 1: "medium", 2: "hotlap", 3: "overtake"}
+# "Box in two laps": spoken lap counts a what_if scenario may use.
+SPOKEN_LAP_COUNTS = {
+    "one": 1, "two": 2, "three": 3, "four": 4, "five": 5,
+    "six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10,
+}
 
 # Event codes as the radio speaks of them. The filter accepts these kinds,
 # the codes themselves and a few spoken synonyms.
@@ -2731,6 +2736,33 @@ class TelemetryTools:
         except (KeyError, TypeError, ValueError):
             return None
 
+    _WHAT_IF_COMPOUND_WORDS = ("soft", "medium", "hard", "inter", "wet")
+
+    @classmethod
+    def _what_if_relative_lap(cls, text: str, current_lap: int) -> int | None:
+        """The stop lap a relative phrase names, or None to let the engine read it.
+
+        The engine takes the first number in the text as the stop lap and
+        prices the next lap when there is none, so "box this lap" priced the
+        lap after and "box in 3 laps" priced lap 3. In the ranked plans a stop
+        on the current lap is "box lap <current>", so "this lap" and "now" are
+        the current lap.
+        """
+        count = r"(\d{1,2}|" + "|".join(SPOKEN_LAP_COUNTS) + r")"
+        relative = re.search(
+            rf"\b(?:in|after)\s+{count}\s+(?:more\s+)?laps?\b|\b{count}\s+laps?\s+from\s+now\b", text
+        )
+        if relative:
+            word = relative.group(1) or relative.group(2)
+            return current_lap + int(SPOKEN_LAP_COUNTS.get(word, word))
+        if re.search(r"\d", text):
+            return None
+        if re.search(r"\bnext\s+lap\b", text):
+            return current_lap + 1
+        if re.search(r"\b(?:this\s+lap|now|immediately|box\s+box)\b", text):
+            return current_lap
+        return None
+
     async def what_if(self, scenario: str) -> dict[str, Any]:
         """Price one hypothetical stop, framed against the ranked plan.
 
@@ -2743,12 +2775,45 @@ class TelemetryTools:
         the same simulation with a like-for-like time comparison, the ranked
         plan it matches when there is one, and the recommended plan it does not
         replace.
+
+        The engine fills a missing lap or compound with a default, so "stay
+        out", "go long" or "two-stop" came back priced as a stop nobody asked
+        about. A scenario naming neither a lap nor a compound is refused with a
+        pointer to the ranked plans, and a defaulted lap or compound is named
+        in ``assumed``.
         """
-        result = await self.strategy.what_if(scenario)
+        state = await self.store.snapshot_analysis()
+        current_lap = int(state.get("current_lap", 0) or 0)
+        text = " ".join(str(scenario or "").lower().split())
+        lap = self._what_if_relative_lap(text, current_lap)
+        explicit = re.search(r"(?:lap\s*)?(\d{1,2})", text) if lap is None else None
+        names_compound = any(word in text for word in self._WHAT_IF_COMPOUND_WORDS)
+        if lap is None and explicit is None and not names_compound:
+            return {
+                "available": False,
+                "scenario": scenario,
+                "reason": (
+                    "what_if prices one stop on a named lap for a named compound, such as "
+                    "'box lap 18 for hards'. Staying out, running longer or a different "
+                    "number of stops are compared in get_pit_strategy's ranked plans and shapes."
+                ),
+            }
+        result = await (
+            self.strategy.what_if(scenario) if lap is None else self.strategy.what_if(scenario, lap=lap)
+        )
         if not isinstance(result, dict) or not result.get("available"):
             return result
         plan = await self.get_pit_strategy()
         recommended = plan.get("recommended") or {}
+        assumed: list[str] = []
+        if lap is None and explicit is None:
+            assumed.append(f"The scenario named no lap; lap {result.get('box_lap')} was priced.")
+        elif explicit is not None and int(explicit.group(1)) != result.get("box_lap"):
+            assumed.append(
+                f"Lap {int(explicit.group(1))} has already passed; lap {result.get('box_lap')} was priced."
+            )
+        if not names_compound:
+            assumed.append(f"The scenario named no compound; {result.get('compound')} was priced.")
         rule = result.get("compound_rule") or {}
         view: dict[str, Any] = {
             key: result[key]
@@ -2757,6 +2822,12 @@ class TelemetryTools:
             if key in result
         }
         view["legal"] = rule.get("compliant") if rule else None
+        if assumed:
+            view["assumed"] = assumed
+        neutralisation = plan.get("neutralisation") or {}
+        if result.get("box_lap") == current_lap and neutralisation.get("pit_this_lap_available") is False:
+            view["pit_entry_passed"] = True
+            view["earliest_reachable_box_lap"] = current_lap + 1
         if rule:
             view["compound_rule"] = self._pick(
                 rule, ("compliant", "change_outstanding", "eligible_next_compounds")
@@ -2781,6 +2852,12 @@ class TelemetryTools:
                         "projected_rejoin_position", "traffic_cost_s",
                     )),
                 }
+                try:
+                    match["delta_vs_recommended_s"] = round(
+                        float(candidate["risk_adjusted_time_s"]) - float(recommended["risk_adjusted_time_s"]), 2
+                    )
+                except (KeyError, TypeError, ValueError):
+                    pass
                 break
         view["ranked_equivalent"] = match
         if recommended:
@@ -2792,10 +2869,13 @@ class TelemetryTools:
             "Simplified single-stop simulation: tyre-model stint time, pit loss and "
             "pending penalties only. It leaves out rejoin traffic and the finishing-"
             "position ranking that choose the recommended plan, so it answers the "
-            "hypothetical but does not replace the recommended call. "
-            "time_delta_vs_recommended_s compares the same tyre-time terms of both; "
-            "positive is slower. ranked_equivalent is this stop's entry in the ranked "
-            "plans, with its traffic and finishing position, when it is one of them."
+            "hypothetical but does not replace the recommended call. Among equal "
+            "finishing positions the ranking prefers the later stop, so time alone does "
+            "not change the call. time_delta_vs_recommended_s compares the same "
+            "tyre-time terms of both; positive is slower. ranked_equivalent is this "
+            "stop's entry in the ranked plans, with its traffic, finishing position and "
+            "risk-adjusted delta, when it is one of them. assumed lists any lap or "
+            "compound the scenario did not name."
         )
         return self._round_floats(view)
 
