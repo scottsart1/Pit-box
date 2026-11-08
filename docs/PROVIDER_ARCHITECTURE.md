@@ -30,7 +30,9 @@ normal  -> DeepSeek V4 Pro, thinking disabled; 12 s provider deadline
 deep    -> DeepSeek V4 Pro, thinking enabled; 25 s provider deadline
 ```
 
-The route deadline covers the provider's complete text/tool loop. Both provider SDK clients use `max_retries=0`; after the route deadline the router can immediately try the fallback. The SDK-level HTTP timeout remains a separate upper safety bound.
+The route deadline bounds the whole radio request, failover included. Provider SDK clients use `max_retries=0`. When a fallback is configured and ready (credentials present, not cooling down), the primary may use 65% of the route deadline (7.8 s of 12 s on the normal route, about 16 s of 25 s on the deep route) and the fallback gets whatever remains, so a hung primary still leaves the fallback time to answer from the tool results already gathered. Without a ready fallback the primary keeps the whole deadline. A fallback reached with no time left is skipped and recorded as a `deadline` failure. The SDK-level HTTP timeout remains a separate upper safety bound.
+
+When every provider fails, `ProviderRequestError.kind` reports the last provider attempted, which is what the driver is told. `kinds` lists every attempted provider's failure kind in order, and `any_deadline` is true when any provider hit, or was skipped for lack of, the route deadline, so a primary deadline is not hidden behind a fallback's later, different failure.
 
 When OpenAI is selected, the configured GPT model receives the matching reasoning effort. Deep calls receive a larger output-token allowance because reasoning tokens share the model budget.
 

@@ -2,14 +2,18 @@
 
 These pin properties of every provider's final answer: ordinary radio
 phrasing is never mistaken for leaked reasoning, leaked reasoning (including
-inline <think> blocks) never reaches TTS, and the evidence a model gathered is
-answered from instead of discarded when its tool rounds run out.
+inline <think> blocks) never reaches TTS, the evidence a model gathered is
+answered from instead of discarded when its tool rounds run out, and a failover
+stays inside the route deadline without hiding a deadline from the
+deterministic strategy fallback.
 """
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import json
+import time
 from typing import Any
 
 import httpx
@@ -24,6 +28,7 @@ from pitwall.providers import (
     DeepSeekChatProvider,
     KimiChatProvider,
     OpenAIResponsesProvider,
+    ProviderFailure,
     ProviderRequestError,
     ProviderResponseError,
     ProviderResult,
@@ -506,3 +511,96 @@ def test_new_error_types_keep_the_response_kind_for_spoken_feedback() -> None:
     for error_type in (providers.ProviderContentError, providers.ProviderToolRoundsError):
         assert issubclass(error_type, ProviderResponseError)
         assert providers._provider_failure_kind(error_type("x")) == "response"
+
+
+# ---------------------------------------------------------------------------
+# Failover stays inside the route deadline and keeps every failure kind
+# ---------------------------------------------------------------------------
+
+
+class _Hanging:
+    available = True
+
+    def __init__(self, name: str = "openai") -> None:
+        self.name = name
+
+    async def generate(self, **_: Any) -> ProviderResult:
+        await asyncio.Event().wait()
+        raise AssertionError("unreachable")
+
+
+class _Scripted:
+    available = True
+
+    def __init__(self, name: str, delay: float, outcome: Any) -> None:
+        self.name = name
+        self.delay = delay
+        self.outcome = outcome
+        self.calls = 0
+
+    async def generate(self, **_: Any) -> ProviderResult:
+        self.calls += 1
+        await asyncio.sleep(self.delay)
+        if isinstance(self.outcome, BaseException):
+            raise self.outcome
+        return ProviderResult(self.outcome, self.name, "test-model", self.delay * 1000)
+
+
+def _failover_router(primary: Any, fallback: Any, deadline: float) -> ProviderRouter:
+    config = _settings(
+        llm_provider="openai", llm_fallback_provider="deepseek",
+        llm_normal_deadline_s=deadline,
+    )
+    return ProviderRouter(config, providers={"openai": primary, "deepseek": fallback})
+
+
+@pytest.mark.asyncio
+async def test_failover_after_a_hung_primary_answers_inside_the_route_deadline() -> None:
+    fallback = _Scripted("deepseek", 0.2, "Gap 1.4.")
+    router = _failover_router(_Hanging(), fallback, deadline=1.0)
+    started = time.monotonic()
+    result = await _router_request(router)
+    elapsed = time.monotonic() - started
+    assert result.text == "Gap 1.4."
+    assert elapsed < 1.0
+    failure = router.status()["recent_failures"][0]
+    assert failure["provider"] == "openai" and failure["kind"] == "deadline"
+
+
+@pytest.mark.asyncio
+async def test_primary_deadline_stays_visible_when_the_fallback_fails_differently() -> None:
+    round_limit = ProviderResponseError(
+        "DeepSeek did not produce a final answer within the tool-round limit."
+    )
+    router = _failover_router(_Hanging(), _Scripted("deepseek", 0.01, round_limit), 0.3)
+    with pytest.raises(ProviderRequestError) as caught:
+        await _router_request(router)
+    error = caught.value
+    # The driver is told about the last attempt, but the deadline is not lost.
+    assert error.kind == "response"
+    assert error.kinds == ("deadline", "response")
+    assert error.any_deadline is True
+
+
+def test_request_error_reports_no_deadline_when_none_occurred() -> None:
+    error = ProviderRequestError([
+        ProviderFailure("openai", "service", "503"),
+        ProviderFailure("deepseek", "response", "empty"),
+    ])
+    assert error.kinds == ("service", "response")
+    assert error.any_deadline is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fallback_state", ["unconfigured", "cooling_down"])
+async def test_primary_keeps_the_whole_deadline_when_no_fallback_can_answer(fallback_state):
+    primary = _Scripted("openai", 0.75, "Slow but right.")
+    fallback = _Scripted("deepseek", 0.0, "unused")
+    if fallback_state == "unconfigured":
+        fallback.available = False
+    router = _failover_router(primary, fallback, deadline=1.0)
+    if fallback_state == "cooling_down":
+        router.circuits["deepseek"].blocked_until = time.monotonic() + 60
+    result = await _router_request(router)
+    assert result.text == "Slow but right."
+    assert fallback.calls == 0
