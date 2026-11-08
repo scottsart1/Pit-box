@@ -234,6 +234,31 @@ async def test_an_agreed_overcut_is_not_released_on_the_next_tick(stack, monkeyp
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("refusal", [
+    "I'm not boxing", "I'm not boxing, stay out", "No, stay out", "Negative, we stay out this lap",
+    "Not pitting, I'll stay out on these",
+])
+async def test_a_refusal_gets_the_same_route_whatever_words_it_uses(stack, monkeypatch, refusal):
+    """"Stay out" sent a refusal to the planning tier (main model, high effort,
+    25 s deadline) while "I'm not boxing" went on the normal one."""
+    from pitwall.brain import _driver_reaction
+
+    store, brain, captured = await _race(
+        stack, monkeypatch, ["Copy, staying out. Next option is box lap 17 for hards."]
+    )
+    await brain.ask(refusal)
+    assert captured[0]["route"] == "normal"
+    assert "DECLINED PIT CALL" in captured[0]["prompt"]
+    # A plain decision is not a dispute, and the labeller has no label for it.
+    assert _driver_reaction(refusal) == ""
+
+
+@pytest.mark.parametrize("proposal", ["I think we should stay out, what's the gap behind", "should we stay out?"])
+def test_a_proposal_to_stay_out_still_gets_the_planning_tier(proposal):
+    assert EngineerBrain.classify_request(proposal) == "deep"
+
+
+@pytest.mark.asyncio
 async def test_a_pit_question_during_the_hold_with_no_provider_gets_the_next_option(stack, monkeypatch):
     store, brain, _captured = await _race(stack, monkeypatch, ["Copy, staying out.", _timeout()])
     await brain.ask("I'm not boxing")
