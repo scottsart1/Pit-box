@@ -386,12 +386,19 @@ def compose_persona(
 _TYRE_AND_PLAN_TERMS = (
     "tyre", "tyres", "tire", "tires", "wear", "deg", "degradation", "plan",
     "override", "pit window", "window", "compound rule", "two compound", "restart",
+    "rears", "fronts", "going away", "graining", "blistering", "blisters", "overheating",
 )
+# The driver's own read of the tyres ("they're gone", "rears are holding",
+# the one-word answers to a tyre check) is what the strategy brief's rule on
+# driver feedback against the model is for, and it rarely names a tyre.
+_TYRE_FEEDBACK_CATEGORIES = ("tyres_gone", "tyres_going", "tyres_fine", "no_front_grip", "no_grip")
+_TYRE_CHECK_ANSWERS = frozenset({"holding", "they're holding", "they re holding", "still holding"})
 _NOTE_TERMS = (
     "note", "notes", "log", "record", "observation", "remember", "traffic",
     "because", "compromised", "ruined", "blocked", "held up", "exclude",
     "unrepresentative", "practice", "run", "runs", "stint", "stints", "test",
-    "testing", "compare", "group", "groups", "debrief",
+    "testing", "compare", "group", "groups", "debrief", "mark", "ignore",
+    "disregard", "mistake", "unusual",
 )
 _SETUP_TERMS = (
     "setup", "setups", "set up", "wing", "front wing", "rear wing", "pressure",
@@ -420,20 +427,29 @@ def persona_addenda(
     """The briefs a reply to the driver carries on top of the core persona.
 
     The question brief (tool directives, answering the latest request) always;
-    the strategy brief for anything about the stop, the tyres or the plan, a
-    declined call (``strategy``) or a red flag; the practice-notes brief where
-    the note tools are offered and the session or the request is about runs
-    and notes; the setup brief where setup tools are offered or the request is
-    about the car's setup; and the saved-session provenance contract wherever
-    the tools that return stored measurements are offered.
+    the strategy brief for anything about the stop, the tyres or the plan, the
+    driver's own report on the tyres, a declined call (``strategy``) or a red
+    flag; the practice-notes brief where the note tools are offered and the
+    session or the request is about runs and notes; the setup brief where
+    setup tools are offered or the request is about the car's setup; and the
+    saved-session provenance contract wherever the tools that return stored
+    measurements are offered.
     """
     text = normalize_text(utterance)
+    lowered = utterance.lower()
     addenda = [QUESTION_PERSONA]
     if (
         strategy
         or state.get("red_flag_active")
         or state.get("race_control_phase") == "red_flag"
         or has_any_phrase(text, _STRATEGY_SUBJECTS + _TYRE_AND_PLAN_TERMS)
+        or text.strip(" .!") in _TYRE_CHECK_ANSWERS
+        # The same reading _capture_feedback uses to record the report.
+        or any(
+            pattern in lowered
+            for category in _TYRE_FEEDBACK_CATEGORIES
+            for pattern in _FEEDBACK_PATTERNS[category]
+        )
     ):
         addenda.append(STRATEGY_PERSONA)
     if _NOTE_TOOLS & set(tool_names) and (

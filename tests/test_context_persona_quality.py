@@ -324,6 +324,18 @@ def test_each_reply_brief_is_attached_where_it_applies():
     assert composed.startswith(PERSONA + "\n\n" + QUESTION_PERSONA)
 
 
+@pytest.mark.parametrize("utterance", [
+    "they're gone", "the rears are going away", "no grip left", "holding", "plenty left in these",
+    "I'm losing the rears",
+])
+def test_the_drivers_tyre_report_carries_the_rule_on_feedback_against_the_model(utterance):
+    """The driver's read of the tyres rarely names a tyre, and it is exactly
+    what the rule on feedback against the model is for."""
+    addenda = persona_addenda({"mode_profile": "race"}, utterance, {"get_pit_strategy"})
+    assert STRATEGY_PERSONA in addenda
+    assert "Driver tyre feedback is evidence, not telemetry" in STRATEGY_PERSONA
+
+
 @pytest.mark.asyncio
 async def test_a_live_question_does_not_carry_the_saved_session_contract(stack, monkeypatch):
     _, brain, captured = await _scripted(stack, monkeypatch)
