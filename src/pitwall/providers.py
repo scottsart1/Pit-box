@@ -70,7 +70,14 @@ class ProviderFailure:
 
 
 class ProviderRequestError(ProviderError):
-    """All selected providers failed; retain why instead of implying lost audio."""
+    """All selected providers failed; retain why instead of implying lost audio.
+
+    ``kind`` describes the last provider attempted, which is what the driver is
+    told. ``kinds`` keeps every attempted provider's failure in order, and
+    ``any_deadline`` reports whether the request ran out of its route deadline
+    anywhere, so a primary deadline is not hidden behind a fallback's later,
+    different failure.
+    """
 
     def __init__(self, failures: list[ProviderFailure]) -> None:
         self.failures = tuple(failures)
@@ -78,11 +85,17 @@ class ProviderRequestError(ProviderError):
         waiting = [failure for failure in failures if failure.kind == "cooldown"]
         self.failure = (attempted or waiting or failures)[-1] if failures else None
         self.kind = self.failure.kind if self.failure else "unknown"
+        self.kinds = tuple(failure.kind for failure in attempted)
         self.retry_after_s = self.failure.retry_after_s if self.failure else 0.0
         super().__init__(
             "No LLM provider completed the request. "
             + " | ".join(f"{failure.provider}: {failure.message}" for failure in failures)
         )
+
+    @property
+    def any_deadline(self) -> bool:
+        """True when any provider hit, or was skipped for lack of, route deadline."""
+        return any(failure.kind == "deadline" for failure in self.failures)
 
 
 # Phrases that appear when a model narrates its own working instead of talking
@@ -1438,6 +1451,12 @@ class CustomChatProvider(OpenAICompatibleChatProvider):
         )
 
 
+# With a ready fallback, the primary may spend this share of the route
+# deadline. The rest stays reserved so the fallback, which reuses every tool
+# result already gathered, can still answer inside the same deadline.
+_PRIMARY_DEADLINE_SHARE = 0.65
+
+
 @dataclass(slots=True)
 class _CircuitState:
     failures: int = 0
@@ -1517,6 +1536,10 @@ class ProviderRouter:
             else self.config.llm_normal_deadline_s
         )
 
+    def _ready(self, name: str, now: float) -> bool:
+        """Whether a provider could take a request now: configured, not cooling down."""
+        return self.providers[name].available and self.circuits[name].blocked_until <= now
+
     async def generate(
         self,
         *,
@@ -1549,8 +1572,13 @@ class ProviderRouter:
                     tool_cache[key] = await execute_tool(tool_name, arguments)
                 return tool_cache[key]
 
+        # The route deadline bounds the whole radio request, failover included.
+        # When a fallback is ready the primary may use only its share, so a
+        # hung primary still leaves the fallback time to answer inside it.
         deadline = self._deadline_for(route)
-        for name in self._preferred_order(provider):
+        request_deadline = time.monotonic() + deadline
+        order = self._preferred_order(provider)
+        for index, name in enumerate(order):
             implementation = self.providers[name]
             circuit = self.circuits[name]
             now = time.monotonic()
@@ -1565,8 +1593,19 @@ class ProviderRouter:
                     attempted=False, retry_after_s=circuit.blocked_until - now,
                 ))
                 continue
+            remaining = request_deadline - now
+            if remaining <= 0:
+                errors.append(ProviderFailure(
+                    name, "deadline",
+                    f"no time left in the {deadline:.0f}-second {route} deadline",
+                    attempted=False,
+                ))
+                continue
+            budget = remaining
+            if any(self._ready(other, now) for other in order[index + 1:]):
+                budget = min(remaining, deadline * _PRIMARY_DEADLINE_SHARE)
             try:
-                timeout_scope = asyncio.timeout(deadline)
+                timeout_scope = asyncio.timeout(budget)
                 try:
                     async with timeout_scope:
                         result = await implementation.generate(
@@ -1581,8 +1620,13 @@ class ProviderRouter:
                 except TimeoutError as exc:
                     if not timeout_scope.expired():
                         raise
+                    allotted = (
+                        f" ({budget:.1f} s allotted to it)"
+                        if deadline - budget >= 0.05
+                        else ""
+                    )
                     raise ProviderDeadlineError(
-                        f"{name} exceeded the {deadline:.0f}-second {route} deadline."
+                        f"{name} exceeded the {deadline:.0f}-second {route} deadline{allotted}."
                     ) from exc
 
                 circuit.failures = 0
