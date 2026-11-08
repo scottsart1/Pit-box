@@ -717,3 +717,18 @@ async def test_a_long_prompt_keeps_the_drivers_line_in_the_trace(stack, monkeypa
     assert "ENGINEER: Box lap 14 for hards." in prompt
     assert prompt.endswith("DRIVER: How is the car behind doing on his tyres compared to me?")
     assert len(prompt) < 6_100
+
+
+@pytest.mark.asyncio
+async def test_the_session_export_carries_the_traces_it_flags(stack):
+    _, database, _, _, _, _ = stack
+    trace = {"path": "model", "raw_text": "Gap is 1.2 seconds. No, do not attack yet.",
+             "postprocess": [{"step": "sentence_cap", "text": "Gap is 1.2 seconds."}]}
+    await database.save_radio_message(
+        {"session_uid": 7, "track_id": 12, "current_lap": 4}, "engineer", "Gap is 1.2 seconds.", "x", trace=trace
+    )
+    listed = (await database.history_query(session_uid=7))["radio"][0]
+    assert listed["has_trace"] is True and "trace" not in listed and "trace_json" not in listed
+    exported = (await database.history_query(session_uid=7, include_traces=True))["radio"][0]
+    assert exported["has_trace"] is True and exported["trace"] == trace
+    assert "trace_json" not in exported

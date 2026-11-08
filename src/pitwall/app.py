@@ -1242,7 +1242,7 @@ async def export_session_json(
         else None
     )
     data = await database.history_query(
-        track_id=track_id, session_uid=session_uid, limit=limit
+        track_id=track_id, session_uid=session_uid, limit=limit, include_traces=True
     )
     return JSONResponse(
         data,
