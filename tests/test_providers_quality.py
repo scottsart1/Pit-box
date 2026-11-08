@@ -3,9 +3,9 @@
 These pin properties of every provider's final answer: ordinary radio
 phrasing is never mistaken for leaked reasoning, leaked reasoning (including
 inline <think> blocks) never reaches TTS, the evidence a model gathered is
-answered from instead of discarded when its tool rounds run out, and a failover
+answered from instead of discarded when its tool rounds run out, a failover
 stays inside the route deadline without hiding a deadline from the
-deterministic strategy fallback.
+deterministic strategy fallback, and output caps leave room for reasoning.
 """
 
 from __future__ import annotations
@@ -604,3 +604,54 @@ async def test_primary_keeps_the_whole_deadline_when_no_fallback_can_answer(fall
     result = await _router_request(router)
     assert result.text == "Slow but right."
     assert fallback.calls == 0
+
+
+# ---------------------------------------------------------------------------
+# Output budgets leave room for reasoning tokens
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_normal_route_reasoning_model_gets_a_reasoning_sized_output_cap() -> None:
+    requests: list[dict[str, Any]] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        requests.append(json.loads(request.content))
+        payload = _responses_payload("Gap is 1.2.")
+        payload["usage"]["output_tokens_details"] = {"reasoning_tokens": 3}
+        return httpx.Response(200, json=payload)
+
+    config = _settings()
+    async with _openai_client(respond) as client:
+        provider = OpenAIResponsesProvider(config, client=client)
+        result = await provider.generate(
+            prompt="gap?", instructions="Brief.", route="normal", effort="low",
+            tools=[], execute_tool=_unused_executor, max_rounds=1,
+        )
+    assert requests[0]["reasoning"] == {"effort": "low"}
+    assert requests[0]["max_output_tokens"] == config.openai_normal_max_output_tokens
+    assert config.openai_normal_max_output_tokens > 520
+    assert result.usage["reasoning_tokens"] == 3
+
+
+@pytest.mark.asyncio
+async def test_custom_endpoint_normal_route_budget_fits_inline_reasoning() -> None:
+    requests: list[dict[str, Any]] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        requests.append(json.loads(request.content))
+        return httpx.Response(200, json=_chat_payload({"role": "assistant", "content": "Copy."}))
+
+    config = _settings(custom_llm_normal_max_tokens=2048)
+    async with _openai_client(respond) as client:
+        await CustomChatProvider(config, client=client).generate(
+            prompt="radio check", instructions="Brief.", route="normal", effort="low",
+            tools=[], execute_tool=_unused_executor, max_rounds=1,
+        )
+        await KimiChatProvider(config, client=client).generate(
+            prompt="radio check", instructions="Brief.", route="normal", effort="low",
+            tools=[], execute_tool=_unused_executor, max_rounds=1,
+        )
+    assert requests[0]["max_tokens"] == 2048
+    # Kimi's normal model does not think; its answer-sized budget is unchanged.
+    assert requests[1]["max_tokens"] == 650

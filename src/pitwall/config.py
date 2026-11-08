@@ -113,6 +113,15 @@ class Settings(BaseSettings):
     llm_compare_cooldown_s: float = 30.0
     openai_deep_max_output_tokens: int = 2200
     openai_deep_retry_max_output_tokens: int = 6000
+    # Normal-route cap for GPT-5/GPT-6 reasoning models. Their low-effort
+    # reasoning shares this budget with the answer; radio length is bounded
+    # by the persona and the sentence limit, not by this cap.
+    openai_normal_max_output_tokens: int = 1600
+    openai_normal_retry_max_output_tokens: int = 4000
+    # Normal-route cap for the custom endpoint, whose model may be a local
+    # reasoning model that inlines <think> output before its answer.
+    custom_llm_normal_max_tokens: int = 1600
+    custom_llm_normal_retry_max_tokens: int = 4000
     deepseek_deep_max_tokens: int = 2200
     deepseek_deep_retry_max_tokens: int = 6000
 
