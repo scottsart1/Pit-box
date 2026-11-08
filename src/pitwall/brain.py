@@ -28,7 +28,13 @@ from .intent import (
     utterance_mood,
 )
 from .prerace import PreRacePlanner
-from .providers import ProviderDeadlineError, ProviderRequestError, ProviderResult, ProviderRouter
+from .providers import (
+    ProviderDeadlineError,
+    ProviderRequestError,
+    ProviderResult,
+    ProviderRouter,
+    _contains_deliberation,
+)
 from .session_guard import SessionChangedError, session_scoped
 from .state import StateStore
 from .tools import TelemetryTools
@@ -163,8 +169,9 @@ Driver tyre feedback is evidence, not telemetry. When the driver's report and th
 disagree, state the model's position once with the wear or degradation number that drives it. If the
 driver repeats the decision, acknowledge it and follow it; do not re-argue the same pit call.
 When the driver declines a pit call, never leave it at "copy": give the revised consequence in one
-clause and offer exactly one concrete alternative — a later box lap, or a different plan shape such
-as going long — with its cost. The driver said no to this stop, not to having a strategy.
+clause and the next option the DECLINED PIT CALL line names, with its cost. When it names none, give
+only the consequence and do not invent one; a compound change still owed is still owed. The driver
+said no to this stop, not to having a strategy.
 Tyre learning has separate live-session and saved-history evidence. A missing live degradation
 fit does not mean the driver has never tested that compound. Use the strategy model's per-compound
 recorded, eligible and fitted sample counts and source. Acknowledge relevant practice data before
@@ -179,7 +186,8 @@ not be described as verified for the same car, formula or conditions when those 
 PRACTICE_NOTES_PERSONA = """
 For practice runs, stint debriefs and what to test next, call get_practice_run_review.
 Use its measured evidence and next test; observed pace trend is not isolated tyre degradation.
-When the driver describes why a lap or stint was unusual, record it with record_lap_observation.
+When the driver describes why a lap or stint was unusual, record it with record_lap_observation
+when that tool is offered; without it, say the note was not saved.
 Preserve the driver's meaning and use source=driver; an engineer inference uses source=engineer.
 Resolve the affected lap explicitly: "this lap" is current, "last lap" is previous, numbered laps
 belong to the current timeline, and a named group must be resolved with get_practice_run_review.
@@ -204,8 +212,10 @@ A qualitative note is the driver's evidence, not corroboration from the gap-cove
 SETUP_PERSONA = """
 For setup advice, state that only the front wing is normally adjustable during a pit stop.
 Full Race, Quali, and Hybrid setup recommendations are for the garage or a future session.
-Use generate_setup with basis reference for a fresh circuit baseline, and personalized only
-when the driver wants applicable live feedback and preferences applied. Reference styles
+Only when the generate_setup tool is offered: Use generate_setup with basis reference for a fresh
+circuit baseline, and personalized only when the driver wants applicable live feedback and
+preferences applied. Without that tool, do not describe a reference setup you have not retrieved:
+give one or two changes the live data supports and leave a full setup for the garage. Reference styles
 stable and rotation are separate published starting points, not a ranking of fastest setups.
 State their game, conditions, source and any adaptations. An unavailable reference must not
 be filled with invented wet settings or values from another game. These tools do not change
@@ -396,7 +406,34 @@ _TYRE_AND_PLAN_TERMS = (
 # the one-word answers to a tyre check) is what the strategy brief's rule on
 # driver feedback against the model is for, and it rarely names a tyre.
 _TYRE_FEEDBACK_CATEGORIES = ("tyres_gone", "tyres_going", "tyres_fine", "no_front_grip", "no_grip")
-_TYRE_CHECK_ANSWERS = frozenset({"holding", "they're holding", "they re holding", "still holding"})
+# The two answers the engineer's tyre check asks for ("How are the rears —
+# holding, or going away?"), as plain words with any filler in front removed.
+_HOLDING_ANSWERS = frozenset({
+    "holding", "still holding", "they re holding", "they are holding", "rears are holding",
+    "the rears are holding", "rears holding", "they re still holding", "they are still holding",
+})
+_GOING_AWAY_ANSWERS = frozenset({
+    "going away", "they re going away", "they are going away", "rears are going away",
+    "the rears are going away", "rears going away", "starting to go away",
+})
+
+
+def _closed_tyre_answer(utterance: str) -> str | None:
+    """"holding" or "going away" when the turn is only that answer.
+
+    A transcript arrives as "Holding." or "Yeah, going away.", with the
+    capital, the full stop and a filler in front; an exact match on the bare
+    words recorded none of them, so the driver's answer never reached the
+    strategy model.
+    """
+    words = strip_leading_fillers(utterance)
+    if words in _HOLDING_ANSWERS:
+        return "holding"
+    if words in _GOING_AWAY_ANSWERS:
+        return "going away"
+    return None
+
+
 _NOTE_TERMS = (
     "note", "notes", "log", "record", "observation", "remember", "traffic",
     "because", "compromised", "ruined", "blocked", "held up", "exclude",
@@ -447,7 +484,7 @@ def persona_addenda(
         or state.get("red_flag_active")
         or state.get("race_control_phase") == "red_flag"
         or has_any_phrase(text, _STRATEGY_SUBJECTS + _TYRE_AND_PLAN_TERMS)
-        or text.strip(" .!") in _TYRE_CHECK_ANSWERS
+        or _closed_tyre_answer(utterance) is not None
         # The same reading _capture_feedback uses to record the report.
         or any(
             pattern in lowered
@@ -500,6 +537,17 @@ _DEEP_TERMS = (
     "stop again",
     "how many pit stops",
     "how many stops",
+    # Stored-session review: its tools are offered on the deep route only.
+    "saved session",
+    "saved sessions",
+    "last session",
+    "previous session",
+    "reference lap",
+    "reference laps",
+    "driver strengths",
+    "my strengths",
+    "corner rankings",
+    "data quality",
 )
 _PIT_DECISION_NOW = re.compile(r"\b(?:(?:pit|box) now|stay out)\b(?! of\b)")
 
@@ -766,14 +814,13 @@ def _contains_deliberation_for_history(text: str) -> bool:
     Only engineer lines are tested: "hold on", "wait -" and "the question is"
     are ordinary radio speech from a driver, and a driver turn dropped here
     left the follow-up ("well, answer my question") with nothing to refer to.
+    An engineer line was spoken through the provider's own deliberation
+    filter, so it is judged by the same markers: a wider list here dropped
+    "Stay out. Hold on, Safety Car is being deployed, box box box." from the
+    history and refused to replay it on "say again", though the driver heard
+    it.
     """
-    lowered = " ".join(text.lower().split())
-    return any(marker in lowered for marker in (
-        "let me check", "let me think", "wait —", "wait -", "hold on",
-        "the driver asked", "the question is", "key facts:",
-        "critical concern:", "the current call:", "i should give",
-        "the strategy engine ranks", "deterministic primary",
-    ))
+    return _contains_deliberation(" ".join(text.split()))
 
 
 # A radio line said this many laps ago or more is marked old: its gaps,
@@ -878,6 +925,21 @@ def _is_acknowledgement(sentence: str) -> bool:
     return " ".join(re.findall(r"[a-z]+", sentence.lower())) in _ACKNOWLEDGEMENTS
 
 
+# A sentence that only says the engineer is looking something up: "Okay,
+# looking at the data.", "Let me look at that." It carries no answer, and in
+# terse it was the whole reply.
+_PROCESS_OPENER = re.compile(
+    r"(?:(?:okay|ok|right|so|alright|copy)\s+)?"
+    r"(?:let me (?:look|see|check)(?: at)?|looking at|checking|one (?:moment|sec(?:ond)?)|"
+    r"give me a (?:moment|sec(?:ond)?)|bear with me)"
+    r"(?:\s+(?:the|that|this|it|at))?(?:\s+(?:data|telemetry|numbers|timing|that|it|now))?"
+)
+
+
+def _is_process_opener(sentence: str) -> bool:
+    return bool(_PROCESS_OPENER.fullmatch(" ".join(re.findall(r"[a-z]+", sentence.lower()))))
+
+
 def _is_free_lead_in(sentence: str) -> bool:
     """A short opener that is spoken without using up the sentence budget:
     an acknowledging lead-in ("Copy, staying out."), a bare answer or alert
@@ -916,7 +978,7 @@ def _limit_radio_sentences(
     budget = limit if limit is not None else _radio_sentence_limit(route, verbosity)
     if len(sentences) <= budget:
         return " ".join(sentences)
-    while len(sentences) > 1 and _is_acknowledgement(sentences[0]):
+    while len(sentences) > 1 and (_is_acknowledgement(sentences[0]) or _is_process_opener(sentences[0])):
         sentences = sentences[1:]
     lead: list[str] = []
     if len(sentences) > budget and _is_free_lead_in(sentences[0]):
@@ -949,6 +1011,16 @@ _PIT_CALL = re.compile(
     re.IGNORECASE,
 )
 _PIT_CALL_LAP = re.compile(r"\blap \d+(?![\d:])", re.IGNORECASE)
+# A call verb the sentence negates is not a call: "Copy, we won't box",
+# "no stop this lap" and "we're not pitting on lap 14" acknowledge a stop the
+# driver turned down, and the plan's qualifier on them read the driver's own
+# decision back as provisional.
+_NEGATED_CALL = re.compile(
+    r"\b(?:no|not|never|won[’']?t|don[’']?t|can[’']?t|shouldn[’']?t|isn[’']?t|aren[’']?t)\s+"
+    r"(?:\w+\s+){0,2}?(?:pit[- ]?stop|box(?:ing)?|pit(?:ting)?|stop(?:ping)?)\b"
+    r"(?:\s+(?:on\s+)?(?:lap\s+\d+|this lap|next lap|now|yet))?",
+    re.IGNORECASE,
+)
 _STATED_UNCERTAINTY = re.compile(
     r"\bprovisional\b|\blow confidence\b|\bconfidence (?:is )?(?:low|unreported)\b|\btrack[- ]defaults?\b",
     re.IGNORECASE,
@@ -973,10 +1045,11 @@ _CHANGE_TRIGGER_GROUPS = (
 def _pit_call_index(sentences: list[str]) -> int | None:
     """Which sentence makes the pit call: the first with a call verb, else the
     first that names a lap. A question is never the call."""
+    affirmed = [_NEGATED_CALL.sub(" ", sentence) for sentence in sentences]
     for pattern in (_PIT_CALL, _PIT_CALL_LAP):
         index = next(
-            (index for index, sentence in enumerate(sentences)
-             if pattern.search(sentence) and not sentence.endswith("?")),
+            (index for index, sentence in enumerate(affirmed)
+             if pattern.search(sentence) and not sentences[index].endswith("?")),
             None,
         )
         if index is not None:
@@ -1198,6 +1271,9 @@ class _RadioRequest:
     tools: list[dict[str, Any]]
     strategy_context: dict[str, Any] | None
     refresh_current_strategy: bool
+    # Which sentence of the reply is the pit call the plan's qualifier and
+    # the radio cut attach to; None means the first call sentence.
+    call_index: Callable[[list[str]], int | None] | None = None
 
 
 @dataclass
@@ -1213,6 +1289,14 @@ class DriverCommands:
     handled: bool = False
     reply: str | None = None
     notes: list[str] = field(default_factory=list)
+    # The turn refused the pit call and set the hold. Carried here rather
+    # than read back from the hold, because the speech session stores the
+    # hold before the text path answers a turn whose spoken reply failed.
+    declined: bool = False
+    # The fixed confirmation this command has when it is said on its own;
+    # spoken with the value asked for if the provider fails on a turn that
+    # also asks something.
+    confirmation: str | None = None
 
 
 class EngineerBrain:
@@ -1235,7 +1319,12 @@ class EngineerBrain:
         return f"provisional, {confidence_text}{basis}"
 
     @staticmethod
-    def qualify_strategy_text(text: str, plan: dict[str, Any] | None) -> str:
+    def qualify_strategy_text(
+        text: str,
+        plan: dict[str, Any] | None,
+        *,
+        call_index: Callable[[list[str]], int | None] | None = None,
+    ) -> str:
         """Attach a low-confidence plan's uncertainty to the pit call it qualifies.
 
         The qualifier is a clause on the call's own sentence, after the call,
@@ -1248,7 +1337,7 @@ class EngineerBrain:
         if qualifier is None or _STATED_UNCERTAINTY.search(text):
             return text
         sentences = _radio_sentences(text)
-        target = _pit_call_index(sentences)
+        target = (call_index or _pit_call_index)(sentences)
         if target is None:
             return text
         sentences[target] = sentences[target].rstrip(".!") + f"; {qualifier}."
@@ -1367,48 +1456,53 @@ class EngineerBrain:
         return engine or "strategy building"
 
     @staticmethod
-    def _declined_this_turn(origin: dict[str, Any], state: dict[str, Any], utterance: str) -> bool:
-        """Whether this utterance was a refusal of the pit call that set the hold.
+    def _hold_running(state: dict[str, Any]) -> bool:
+        """Whether a declined-stop hold still binds the pit call.
 
-        The refusal branch of the fast path records the driver's own words as
-        the hold's reason; an agreed tactic records its own reason and is
-        acknowledged through the AGREED clause instead.
+        The hold is released by the unsolicited-call loop, which does not run
+        while those calls are switched off, so past its last lap it is over
+        whatever its flag still says.
         """
-        before = origin.get("strategy_hold", {}) or {}
         hold = state.get("strategy_hold", {}) or {}
+        return bool(hold.get("active")) and int(state.get("current_lap", 0) or 0) < int(
+            hold.get("until_lap") or 0
+        )
+
+    @staticmethod
+    def _compound_change_owed(strategy: dict[str, Any]) -> bool:
+        """Whether the race still owes a second dry compound before the flag."""
+        rule = strategy.get("compound_rule", {}) or {}
+        recommended = strategy.get("recommended", {}) or {}
         return bool(
-            hold.get("active")
-            and hold.get("reason") == utterance
-            and hold.get("set_at") != before.get("set_at")
+            rule.get("change_outstanding")
+            or (rule.get("applies") and rule.get("conditional_on_future_use"))
+            or recommended.get("stop_required_reason") == "mandatory compound change"
         )
 
     @classmethod
-    def _declined_call_note(cls, state: dict[str, Any]) -> str:
-        """The declined call and the next feasible option, computed for the reply.
+    def _declined_option(cls, state: dict[str, Any]) -> dict[str, Any]:
+        """The declined call and the next feasible option after it.
 
-        The brief tells the engineer to answer a declined pit call with one
-        concrete alternative and its cost. Left to the model, that took a tool
-        round under a short deadline, beside a nearer instruction to confirm
-        briefly, so the likely reply was a bare "Copy, staying out." The
-        alternative is the best-ranked feasible, legal plan that does not stop
-        on or before the declined lap; its cost is the engine's own
-        risk-adjusted time difference.
+        One computation for everything that answers a declined stop: the
+        model's DECLINED PIT CALL line, the reply spoken when the provider
+        fails, the answer to a pit question while the hold runs and the
+        speech session's note. The alternative is the best-ranked feasible,
+        legal plan that does not stop on or before the declined lap; its cost
+        is the engine's own risk-adjusted time difference.
+
+        ``kind`` is "no_plan", "no_stop_now" (the call already makes no stop),
+        "no_alternative" or "option".
         """
         strategy = state.get("strategy", {}) or {}
         recommended = strategy.get("recommended", {}) or {}
         if not recommended:
-            return (
-                "DECLINED PIT CALL: there is no computed plan yet. Acknowledge in a few words; do not "
-                "invent an alternative."
-            )
+            return {"kind": "no_plan"}
         declined = cls._header_strategy_instruction(recommended, state)
         box_lap = recommended.get("box_lap")
         if box_lap is None or not recommended.get("fit_compound") or declined.lower().startswith("stay out"):
-            return (
-                f"DECLINED PIT CALL: the current call already makes no stop now ({declined}). "
-                "Acknowledge in a few words."
-            )
+            return {"kind": "no_stop_now", "declined": declined}
         declined = declined.rstrip(".")
+        owed = cls._compound_change_owed(strategy)
         current_lap = int(state.get("current_lap", 0) or 0)
         signature = (list(recommended.get("box_laps") or []), list(recommended.get("compounds") or []))
         alternative = None
@@ -1426,17 +1520,14 @@ class EngineerBrain:
             alternative = candidate
             break
         if alternative is None:
-            return (
-                f"DECLINED PIT CALL: the driver declined \"{declined}\". No other feasible, legal plan "
-                "is computed. Acknowledge in a few words and say the plan will be re-checked; do not "
-                "invent an alternative."
-            )
+            return {"kind": "no_alternative", "declined": declined, "owed": owed}
         stops = list(zip(alternative.get("box_laps") or [], (alternative.get("compounds") or [])[1:]))
         option = (
             ", then ".join(f"box lap {int(lap)} for {_spoken_compound(compound)}" for lap, compound in stops)
             if stops
             else "stay out to the finish on these tyres"
         )
+        cost = None
         mine, theirs = recommended.get("risk_adjusted_time_s"), alternative.get("risk_adjusted_time_s")
         if isinstance(mine, (int, float)) and isinstance(theirs, (int, float)):
             delta = float(theirs) - float(mine)
@@ -1445,6 +1536,50 @@ class EngineerBrain:
                 if abs(delta) < 0.5
                 else f"about {abs(delta):.1f} seconds {'slower' if delta > 0 else 'quicker'}"
             )
+        return {
+            "kind": "option", "declined": declined, "option": option, "cost": cost,
+            "alternative": alternative, "owed": owed,
+        }
+
+    @classmethod
+    def _declined_call_note(cls, state: dict[str, Any]) -> str:
+        """The declined call and the next feasible option, computed for the reply.
+
+        The brief tells the engineer to answer a declined pit call with one
+        concrete alternative and its cost. Left to the model, that took a tool
+        round under a short deadline, beside a nearer instruction to confirm
+        briefly, so the likely reply was a bare "Copy, staying out."
+        """
+        computed = cls._declined_option(state)
+        kind = computed["kind"]
+        if kind == "no_plan":
+            return (
+                "DECLINED PIT CALL: there is no computed plan yet. Acknowledge in a few words; do not "
+                "invent an alternative."
+            )
+        declined = computed["declined"]
+        if kind == "no_stop_now":
+            return (
+                f"DECLINED PIT CALL: the current call already makes no stop now ({declined}). "
+                "Acknowledge in a few words."
+            )
+        if kind == "no_alternative":
+            # Staying out to the flag is not an option while a second dry
+            # compound is owed, and a "Copy, we'll re-check" would leave the
+            # driver unaware of that for the whole hold.
+            owed = (
+                " A second dry compound is still owed before the flag, so say that the stop is still "
+                "required, later; never offer staying out to the finish."
+                if computed.get("owed")
+                else ""
+            )
+            return (
+                f"DECLINED PIT CALL: the driver declined \"{declined}\". No other feasible, legal plan "
+                "is computed. Acknowledge in a few words and say the plan will be re-checked; do not "
+                f"invent an alternative.{owed}"
+            )
+        option, cost = computed["option"], computed["cost"]
+        if cost is not None:
             return (
                 f"DECLINED PIT CALL: the driver declined \"{declined}\". NEXT FEASIBLE OPTION: {option}, "
                 f"{cost} over the race by the strategy model's risk-adjusted projection. Acknowledge in "
@@ -1457,6 +1592,49 @@ class EngineerBrain:
             f"that option in one clause, e.g. \"Copy, staying out. Next option is {option}.\" Do not "
             "repeat the declined call."
         )
+
+    @classmethod
+    def _hold_plan_note(cls, state: dict[str, Any]) -> str:
+        """What a plan question is answered with while the driver's hold runs."""
+        computed = cls._declined_option(state)
+        until = (state.get("strategy_hold", {}) or {}).get("until_lap")
+        if computed["kind"] == "option":
+            cost = f", {computed['cost']}" if computed.get("cost") else ""
+            return (
+                f"PLAN DURING THE HOLD (until lap {until}): the driver declined \"{computed['declined']}\". "
+                f"If they ask when to box or what the plan is, give the next option, {computed['option']}"
+                f"{cost}, not the declined stop, unless they now ask for that stop after all."
+            )
+        if computed["kind"] == "no_alternative":
+            owed = " A second dry compound is still owed, so the stop is still required later." if computed.get("owed") else ""
+            return (
+                f"PLAN DURING THE HOLD (until lap {until}): the driver declined \"{computed['declined']}\" "
+                f"and no other feasible, legal plan is computed. Do not repeat the declined stop; say the "
+                f"plan is being re-checked.{owed}"
+            )
+        return ""
+
+    @classmethod
+    def _declined_answer(cls, state: dict[str, Any], *, acknowledge: bool) -> str:
+        """The computed reply to a declined stop, for when no model words it.
+
+        ``acknowledge`` opens it with the stay-out confirmation (the turn that
+        declined); without it, it is the plan while the hold runs. Never the
+        declined call itself.
+        """
+        computed = cls._declined_option(state)
+        kind = computed["kind"]
+        opener = "copy, staying out" if acknowledge else "holding as agreed"
+        if kind == "option":
+            cost = f", {computed['cost']}" if computed.get("cost") else ""
+            return f"{opener}; next option is {computed['option']}{cost}."
+        if kind == "no_alternative":
+            if computed.get("owed"):
+                return f"{opener}; the compound change is still owed, so a stop is still required; I'll re-check the plan."
+            return f"{opener}; I'll re-check the plan."
+        if kind == "no_stop_now":
+            return f"{opener}; the current call already makes no stop now."
+        return f"{opener}."
 
     def _knockout_line(self, state: dict[str, Any]) -> str | None:
         """Where the elimination line is in a knockout session, and the driver's margin.
@@ -1550,6 +1728,7 @@ class EngineerBrain:
                 f"REQUIRED DELTA {delta_text} | "
                 f"{knockout_text}"
                 f"TYRE {tyre_compound} age {tyre_age} | "
+                f"TEMPS IN {'F' if str(state.get('temperature_unit', 'c')).lower() == 'f' else 'C'} | "
                 f"WEATHER {weather} rain15 {rain15_text} | "
                 f"OPPORTUNITY {corner_text}. "
                 "Do not volunteer gaps ahead/behind; use best-lap comparisons."
@@ -1659,7 +1838,9 @@ class EngineerBrain:
             f"fuel delta {fuel_delta} laps | "
             f"ERS {battery} | {overtaking_label} {aid_status} | "
             f"weather {weather} rain15 {rain15_text} | "
-            f"race control {state.get('race_control_phase', 'green')} | "
+            # Race control comes from the session packet, the "weather"
+            # freshness group; after a stall it is last confirmed, not current.
+            f"race control {self._confirmed(str(state.get('race_control_phase', 'green')), freshness['weather'])} | "
             f"FIA flag {self._confirmed(str(state.get('fia_flag', 'none')), freshness['fuel_battery_compound'])} | "
             f"penalties {penalties} | "
             f"target lap {target_lap or 'not set'} | opportunity {corner_text}"
@@ -1676,13 +1857,24 @@ class EngineerBrain:
         return await self._header(include_strategy=include_strategy)
 
     @classmethod
-    def spoken_pit_call(cls, plan: dict[str, Any] | None) -> str | None:
+    def spoken_pit_call(
+        cls, plan: dict[str, Any] | None, state: dict[str, Any] | None = None
+    ) -> str | None:
         """The pit call worded as the text path speaks it, from one plan.
 
         A text reply is post-processed: the plan's provisional qualifier and
         the condition that would change the call are attached to it. Speech
         from a realtime session cannot be edited after the fact, so it is
         handed the finished wording to say instead.
+
+        The sentence is the one push-to-talk speaks for the same state,
+        including its stop guards: a stop that gains nothing and costs places
+        is "Stay out", and a compound fitted a lap ago is not called again.
+        Worded from the engine's raw string, the speech radio said "Box lap 33
+        for SOFT" while the flag call said "Stay out". A legal plan that
+        cannot reach the flag inside the wear limit (a mandatory compound
+        change late in a stint) is still called, with that said; only an
+        illegal plan is refused.
         """
         plan = plan or {}
         restart = plan.get("red_flag_restart") or {}
@@ -1692,9 +1884,20 @@ class EngineerBrain:
         instruction = str(recommended.get("instruction") or "").strip()
         if not instruction:
             return None
-        if not (recommended.get("legal") and recommended.get("feasible")):
+        if not recommended.get("legal"):
             return "No current, legal and feasible pit plan is confirmed; I cannot give a new pit instruction."
-        return cls._with_strategy_change_condition(cls.qualify_strategy_text(instruction, plan), plan)
+        state = state or {}
+        if cls._hold_running(state):
+            # As on the text radio: while the driver's hold runs, the call to
+            # give is the next option, not the stop they declined.
+            held = cls._declined_answer({**state, "strategy": plan}, acknowledge=False)
+            return held[0].upper() + held[1:]
+        spoken = cls._spoken_strategy_instruction(
+            recommended, int(state.get("current_lap", 0) or 0), state.get("tyre") or {}
+        )
+        if not recommended.get("feasible") and not spoken.lower().startswith("stay out"):
+            spoken = spoken.rstrip(".") + "; no plan reaches the flag inside the wear limit."
+        return cls._with_strategy_change_condition(cls.qualify_strategy_text(spoken, plan), plan)
 
     async def realtime_instructions(self, persona: str) -> str:
         """The speech session's brief, composed the way the text path composes its own.
@@ -1710,25 +1913,31 @@ class EngineerBrain:
         state = await self.store.snapshot_analysis()
         situation = [await self._header(include_strategy=False)]
         if state.get("mode_profile") != "qualifying":
-            call = self._finished_strategy_answer(state) or self.spoken_pit_call(state.get("strategy"))
+            call = self._finished_strategy_answer(state) or self.spoken_pit_call(state.get("strategy"), state)
             if call:
                 situation.append(f"PIT CALL AS SPOKEN: {call}")
-            hold = state.get("strategy_hold", {}) or {}
-            if hold.get("active"):
+            # Gated like the header's STRATEGY HOLD clause: with unsolicited
+            # calls off nothing releases the hold, and past its last lap it
+            # is over whatever its flag says.
+            if self._hold_running(state):
+                hold = state.get("strategy_hold", {}) or {}
                 situation.append(
                     "DRIVER DECLINED THE PIT CALL: the strategy hold runs until lap "
                     f"{hold.get('until_lap')}. Do not call the stop again unless the driver asks."
                 )
-        recent = [
-            entry for entry in state.get("radio_log", [])[-8:]
-            if not _contains_deliberation_for_history(str(entry.get("text", "")))
-        ]
+        # The same history the text path reads: every driver line kept, each
+        # line tagged with its lap, (unsolicited) and [old], so a "box this
+        # lap" from thirteen laps ago does not read as current and a driver's
+        # "Hold on, the question is ..." is still there to be answered.
+        recent = _radio_history(
+            list(state.get("radio_log", []) or [])[-8:], int(state.get("current_lap", 0) or 0)
+        )
         brief = f"{persona}\n\nCURRENT SITUATION\n" + "\n".join(situation)
         if recent:
             brief += (
                 "\n\nRECENT RADIO (earlier exchanges, for what the driver refers to; "
-                "the situation above is current):\n"
-                + "\n".join(f"{str(entry.get('role', '')).upper()}: {entry.get('text', '')}" for entry in recent)
+                f"the situation above is current). {_RADIO_LABELS_NOTE}\n"
+                + "\n".join(recent)
             )
         return compose_persona(
             brief,
@@ -1764,6 +1973,12 @@ class EngineerBrain:
         restart = plan.get("red_flag_restart", {})
         if restart.get("active") and restart.get("instruction"):
             return self.qualify_strategy_text(prefix + str(restart["instruction"]), plan)
+        if self._hold_running(state):
+            # While the driver's hold runs, the plan is the next option after
+            # the stop they declined, never the declined stop itself: the
+            # provider fallback said "current computed plan: box lap 14" to a
+            # driver who had just turned lap 14 down.
+            return prefix + self._declined_answer({**state, "strategy": plan}, acknowledge=False)
         recommended = plan.get("recommended", {})
         current_lap = int(state.get("current_lap", 0) or 0)
 
@@ -1969,6 +2184,24 @@ class EngineerBrain:
         if trailing is None or not cls._is_narrative(trailing[0]):
             return None
         return trailing[1]
+
+    @classmethod
+    def _quick_question_in(cls, utterance: str) -> str | None:
+        """A one-value question asked in the same turn as a setting.
+
+        Each sentence is judged on its own: "Keep your answers short. What's
+        my fuel?" asks for the fuel, and the setting is already stored.
+        """
+        return next(
+            (
+                sentence
+                for sentence in sentences(utterance)
+                if is_question(sentence)
+                and cls._is_simple_lookup(sentence)
+                and not _asks_for_pit_call(sentence)
+            ),
+            None,
+        )
 
     @classmethod
     def _is_narrative(cls, words: str) -> bool:
@@ -2702,8 +2935,10 @@ class EngineerBrain:
     @classmethod
     def _driver_position_claim(cls, utterance: str) -> int | None:
         """Extract an explicit position report without trusting it blindly."""
-        # "I'm in P five" is the same report as "I'm in P5".
-        text = spoken_numbers_to_digits(utterance)
+        # "I'm in P five" is the same report as "I'm in P5". Read as plain
+        # words, the way the lookup routing reads it: with its apostrophe
+        # kept, "I'm in P4", the commonest wording, matched no form here.
+        text = _plain_words(spoken_numbers_to_digits(utterance))
         numeric = re.search(
             r"\b(?:i am|i m|im|we are|we re)\s+(?:currently\s+)?(?:in\s+|running\s+)?"
             r"(?:p|position\s+)?([1-9]|1[0-9]|2[0-4])\b",
@@ -2978,6 +3213,13 @@ class EngineerBrain:
         )
         return asks_for_the_pit_call or asks_aid_temperature or asks_rear_balance
 
+    @staticmethod
+    def _has_race_plan(state: dict[str, Any]) -> bool:
+        """Whether a ranked pit plan can answer the pit call in this session."""
+        if str(state.get("mode_profile", "")) in {"race", "sprint"}:
+            return True
+        return bool(((state.get("strategy", {}) or {}).get("recommended")))
+
     @classmethod
     def _defers_to_model(cls, state: dict[str, Any], utterance: str) -> bool:
         """Whether the deterministic path must stand aside for this request.
@@ -3043,6 +3285,16 @@ class EngineerBrain:
         if refers_to_another_car and asks_about_their_state:
             return True
 
+        # While a declined-stop hold or an agreed tactic stands, the standing
+        # ranked plan is the call the driver turned down: "when do we box
+        # then?" one breath after "Copy, staying out" was answered "Box lap 14
+        # for hards". The model has the hold, the agreement, the computed next
+        # option and the radio behind them.
+        if cls._is_strategy_request(utterance) and (
+            cls._hold_running(state) or (state.get("strategy_intent", {}) or {}).get("active")
+        ):
+            return True
+
         # Challenging the current pit call is answered deterministically, with
         # the projected wear, evidence source and confidence behind it. The
         # negation in "that does not make sense" disputes the engineer's call;
@@ -3083,7 +3335,12 @@ class EngineerBrain:
         # question. These are advisory in form but deterministic in substance:
         # the ranked pit plan, a factual correction, and a concrete setting
         # change. Deferring them would trade a precise answer for a vaguer one.
-        if cls._has_specific_deterministic_answer(text):
+        # The bare pit call is answered from the ranked race plan, which only
+        # a race has. In qualifying "should we box this lap?" means ending the
+        # run, and was answered "Strategy is still building." every time.
+        if cls._has_specific_deterministic_answer(text) and (
+            cls._has_race_plan(state) or not _is_bare_pit_call(text)
+        ):
             return False
         if has_any_phrase(
             text,
@@ -3502,6 +3759,10 @@ class EngineerBrain:
             if not recommended:
                 strategy = await self.tools.get_pit_strategy()
                 recommended = strategy.get("recommended", {})
+            if not recommended and not self._has_race_plan(state):
+                # Qualifying and practice have no race plan to build; the
+                # model answers from the session header instead.
+                return None
             if not recommended:
                 return "Strategy is still building."
             active_override = state.get("strategy_override", {})
@@ -3533,12 +3794,25 @@ class EngineerBrain:
                 override_meta = recommended.get("driver_override") or {}
                 warning = str(override_meta.get("warning") or "")
                 detail = warning or reason
-                answer = f"{prefix}{instruction}" + (f" {detail}" if detail else "")
+                # One sentence: the call, its qualifier, then the reason. As
+                # two, the terse cut kept the call and dropped the reason, so a
+                # driver disputing the call heard it repeated with nothing
+                # behind it.
+                because = "; ".join(
+                    sentence.rstrip(".!") for sentence in _radio_sentences(detail)
+                )
+                if because and not because[1:2].isupper():
+                    because = because[0].lower() + because[1:]
                 # Low or unreported confidence is said once, by the qualifier
                 # on the call; a supported level is stated plainly.
-                if self._strategy_qualifier(strategy) is None:
-                    return f"{answer.rstrip('.')}. Confidence {strategy.get('confidence')}."
-                return self.qualify_strategy_text(answer, strategy)
+                qualified = self._strategy_qualifier(strategy) is not None
+                call = f"{prefix}{instruction}"
+                if qualified:
+                    call = self.qualify_strategy_text(call, strategy)
+                answer = call.rstrip(".") + (f" — {because}" if because else "")
+                if not qualified:
+                    answer += f"; confidence {strategy.get('confidence')}"
+                return answer + "."
             return self.qualify_strategy_text(prefix + (f"No change — {instruction}" if previous == signature else instruction), strategy)
 
         asks_balance = has_any_phrase(text, ("differential", "diff setting", "brake bias"))
@@ -3696,6 +3970,37 @@ class EngineerBrain:
 
         return None
 
+    _TEMPERATURE_UNITS = (
+        ("f", re.compile(r"\bfahrenheit\b|(?:°|\bdegrees?\s*)f\b")),
+        ("c", re.compile(r"\bcelsius\b|\bcentigrade\b|(?:°|\bdegrees?\s*)c\b")),
+    )
+    _UNIT_REFUSED = re.compile(
+        r"\b(?:not|no|never|don\W?t|do not|stop|without|instead of|rather than|enough)\b"
+    )
+
+    @classmethod
+    def _requested_temperature_unit(cls, utterance: str) -> str | None:
+        """The temperature unit the driver asks for, if any.
+
+        Read clause by clause: a question about the unit ("is that in
+        Fahrenheit?", "what's 100 F in Celsius?") asks nothing to change, and
+        a unit the clause refuses ("not Fahrenheit, Celsius please", "stop
+        giving me Fahrenheit") is not the one asked for. Matched anywhere in
+        the turn, each of those switched the radio to the unit the driver had
+        rejected, for the rest of the run.
+        """
+        chosen = None
+        for sentence in sentences(utterance):
+            for clause in re.split(r"[,;:—–]|\s-\s", sentence):
+                clause = clause.strip()
+                if not clause or is_question(clause):
+                    continue
+                for unit, pattern in cls._TEMPERATURE_UNITS:
+                    match = pattern.search(clause)
+                    if match and not cls._UNIT_REFUSED.search(clause[: match.start()]):
+                        chosen = unit
+        return chosen
+
     @staticmethod
     def _command_applied(reply: str, *, also_asks: bool = False) -> DriverCommands:
         """A command whose fixed confirmation is also what the speech session is told.
@@ -3703,7 +4008,9 @@ class EngineerBrain:
         When the turn also asks something, the model answers it and confirms
         the setting in the same reply, so there is no fixed reply.
         """
-        return DriverCommands(handled=True, reply=None if also_asks else reply, notes=[reply])
+        return DriverCommands(
+            handled=True, reply=None if also_asks else reply, notes=[reply], confirmation=reply
+        )
 
     async def apply_driver_commands(
         self, utterance: str, *, plan_discussion: bool = False
@@ -3728,12 +4035,7 @@ class EngineerBrain:
         if not await self.store.matches_session(origin):
             raise SessionChangedError("Session changed; the previous radio request was discarded.")
         notes: list[str] = []
-        lowered = utterance.lower()
-        unit = None
-        if "fahrenheit" in lowered or re.search(r"(?:°|degrees?\s*)f\b", lowered):
-            unit = "f"
-        elif "celsius" in lowered or re.search(r"(?:°|degrees?\s*)c\b", lowered):
-            unit = "c"
+        unit = self._requested_temperature_unit(utterance)
         if unit is not None:
             await self.store.update(temperature_unit=unit)
             if str(origin.get("temperature_unit", "c")).lower() != unit:
@@ -3954,9 +4256,23 @@ class EngineerBrain:
             await self.store.update(strategy_hold=hold)
             # Let the language route acknowledge the driver's exact wording;
             # the deterministic state mutation above is the safety invariant.
-            return DriverCommands(handled=True, notes=[(
+            # The speech session is given the same computed next option the
+            # text path's DECLINED PIT CALL line carries, so it does not pick
+            # one from the plan list, where an earlier or infeasible plan sits.
+            computed = self._declined_option(await self.store.snapshot_analysis())
+            option = ""
+            if computed["kind"] == "option":
+                option = f" The next feasible option is {computed['option']}" + (
+                    f", {computed['cost']}." if computed.get("cost") else "."
+                )
+            elif computed["kind"] == "no_alternative":
+                option = " No other feasible, legal plan is computed; do not invent one." + (
+                    " A second dry compound is still owed, so the stop is still required later."
+                    if computed.get("owed") else ""
+                )
+            return DriverCommands(handled=True, declined=True, notes=[(
                 f"The driver declined the pit stop; the strategy hold runs to lap {current_lap + 5}. "
-                "Do not repeat the refused call."
+                "Do not repeat the refused call." + option
             )])
 
         # Settings below are judged one sentence at a time, so a turn can set
@@ -4011,10 +4327,12 @@ class EngineerBrain:
             standing.append({"rule": instruction, "added_at": time.time()})
             await self.store.update(standing_instructions=standing[-8:])
             await self.database.save_preference("standing_instructions", standing[-8:])
+            confirmation = "Copy, understood. I won't bring that up again."
             return DriverCommands(
                 handled=True,
-                reply=None if also_asks else "Copy, understood. I won't bring that up again.",
+                reply=None if also_asks else confirmation,
                 notes=[f"Standing instruction stored: {instruction}"],
+                confirmation=confirmation,
             )
 
         return DriverCommands()
@@ -4022,10 +4340,10 @@ class EngineerBrain:
     async def _capture_feedback(self, utterance: str) -> None:
         lowered = utterance.lower()
         state = await self.store.snapshot_analysis()
-        closed_answer = normalize_text(utterance)
-        if closed_answer in {"holding", "they're holding", "they re holding", "the rears are holding"}:
+        closed_answer = _closed_tyre_answer(utterance)
+        if closed_answer == "holding":
             lowered = "rears are holding"
-        elif closed_answer in {"going away", "they're going away", "they re going away", "the rears are going away"}:
+        elif closed_answer == "going away":
             lowered = "starting to go"
         await self._capture_conditions_feedback(utterance, lowered, state)
         tyre_life = _tyre_life_report(lowered)
@@ -4110,6 +4428,7 @@ class EngineerBrain:
         strategy_context: dict[str, Any] | None = None,
         refresh_current_strategy: bool = False,
         trace: dict[str, Any] | None = None,
+        call_index: Callable[[list[str]], int | None] | None = None,
     ) -> str:
         """Generate one radio line and shape it as the driver hears it.
 
@@ -4175,6 +4494,7 @@ class EngineerBrain:
             guard_origin=guard_origin,
             refresh_current_strategy=refresh_current_strategy,
             steps=steps,
+            call_index=call_index,
         )
         if guarded:
             result.provider = "local"
@@ -4215,6 +4535,7 @@ class EngineerBrain:
         guard_origin: dict[str, Any] | None,
         refresh_current_strategy: bool,
         steps: list[dict[str, str]],
+        call_index: Callable[[list[str]], int | None] | None = None,
     ) -> tuple[str, bool]:
         """A provider's reply as the radio speaks it, and whether the refresh
         guard replaced it with the computed plan.
@@ -4226,15 +4547,15 @@ class EngineerBrain:
         get_pit_strategy result).
         """
         if enforce_radio_limit:
-            live_state = await self.store.snapshot_analysis()
+            live_state = await self.store.peek("radio_verbosity")
             # On a strategy reply the cut keeps the pit call, so the qualifier
             # and change condition below are attached to the call, not to
             # whatever happened to come first.
             shaped = _limit_radio_sentences(
                 text,
                 route,
-                str(live_state.get("radio_verbosity", settings.radio_verbosity)),
-                protect=_pit_call_index if strategy_context is not None else None,
+                str(live_state.get("radio_verbosity") or settings.radio_verbosity),
+                protect=(call_index or _pit_call_index) if strategy_context is not None else None,
             )
             _note_step(steps, "sentence_cap", text, shaped)
             text = shaped
@@ -4256,7 +4577,9 @@ class EngineerBrain:
             if guarded:
                 steps.append({"step": "strategy_refresh_guard", "text": _trace_text(text)})
         if strategy_context is not None:
-            qualified = self.qualify_strategy_text(text, used_strategy)
+            qualified = self.qualify_strategy_text(
+                text, used_strategy, call_index=None if guarded else call_index
+            )
             _note_step(steps, "strategy_qualifier", text, qualified)
             text = qualified
         if refresh_current_strategy:
@@ -4332,9 +4655,12 @@ class EngineerBrain:
             if declined
             else "If the driver is correcting or refusing something, accept it and confirm briefly. "
         )
+        hold_note = ""
+        if not declined and include_strategy and self._hold_running(state):
+            hold_note = self._hold_plan_note(state) + "\n"
         prompt = (
             f"{await self._header(include_strategy=include_strategy)}\n"
-            + (f"{self._declined_call_note(state)}\n" if declined else "")
+            + (f"{self._declined_call_note(state)}\n" if declined else hold_note)
             + "REQUEST FOCUS: answer the latest driver request, using the earlier radio only "
             "as context for what it refers to. Do not append an unrelated pit call. "
             f"{refusal_focus}"
@@ -4347,6 +4673,21 @@ class EngineerBrain:
         )
         tools = self.tools.schemas_for_route(route)
         offered = {schema["name"] for schema in tools}
+        call_index = None
+        if declined:
+            # The reply's pit call is the next option, not the acknowledgement
+            # of the stop the driver refused: the qualifier and the radio cut
+            # both follow the option's own lap.
+            computed = self._declined_option(state)
+            current_lap = int(state.get("current_lap", 0) or 0)
+            if computed["kind"] == "option":
+                laps = list(computed["alternative"].get("box_laps") or [])
+                target = (
+                    {"box_lap": laps[0], "instruction": ""} if laps else {"instruction": "Stay out"}
+                )
+                call_index = lambda sentences: _plan_call_index(sentences, target, current_lap)  # noqa: E731
+            else:
+                call_index = lambda sentences: None  # noqa: E731
         return _RadioRequest(
             prompt=prompt,
             instructions=compose_persona(
@@ -4362,6 +4703,7 @@ class EngineerBrain:
             tools=tools,
             strategy_context=state.get("strategy", {}) if include_strategy else None,
             refresh_current_strategy=self._requests_current_strategy_plan(state, utterance),
+            call_index=call_index,
         )
 
     @classmethod
@@ -4526,7 +4868,9 @@ class EngineerBrain:
             commands = recorded
 
         # "Say again" wants the message the driver missed, word for word.
-        if not commands.handled:
+        if not commands.handled and any(
+            _REPEAT_REQUEST.fullmatch(form) for form in _request_forms(utterance)
+        ):
             repeat = self._repeat_of_last_call(await self.store.snapshot_analysis(), utterance)
             if repeat is not None:
                 return await self._say_locally(
@@ -4543,7 +4887,7 @@ class EngineerBrain:
             direct = _limit_radio_sentences(
                 direct,
                 route,
-                str((await self.store.snapshot_analysis()).get("radio_verbosity", "standard")),
+                str((await self.store.peek("radio_verbosity")).get("radio_verbosity") or "standard"),
                 # A computed plan's warning must not cost the driver its box call.
                 protect=_pit_call_index if self._is_strategy_request(utterance) else None,
             )
@@ -4564,7 +4908,7 @@ class EngineerBrain:
         # model. The reply needs the plan it is declining and the next
         # feasible option, computed here, or "Copy, staying out" is all it can
         # say; and the brief has to say what to do with them.
-        declined = self._declined_this_turn(origin, state, utterance)
+        declined = commands.declined
         request = await self._radio_request(
             utterance, state, state["radio_log"][-9:][:-1], declined=declined
         )
@@ -4581,6 +4925,7 @@ class EngineerBrain:
                 strategy_context=request.strategy_context,
                 refresh_current_strategy=request.refresh_current_strategy,
                 trace=trace,
+                call_index=request.call_index,
             )
             trace["path"] = "model"
         except (ProviderDeadlineError, ProviderRequestError) as exc:
@@ -4593,17 +4938,28 @@ class EngineerBrain:
             # value from being spoken as current.
             failure = self._provider_fallback_kind(exc)
             # The computed-plan fallback answers a request for the plan, not
-            # a turn that only carries the plan because a call was declined.
-            asks_for_plan = self._is_strategy_request(utterance)
+            # a turn that only carries the plan because a call was declined:
+            # "I'm not boxing, stay out" must never be answered with the call
+            # it refuses. That turn gets the computed acknowledgement and next
+            # option instead.
+            asks_for_plan = self._is_strategy_request(utterance) and not declined
             lookup = None
-            if not asks_for_plan and not match_drivers(state.get("drivers", []), utterance):
+            if not (asks_for_plan or declined) and not match_drivers(state.get("drivers", []), utterance):
                 lookup = self._quick_question_after_chat(utterance)
-            if failure is None or not (asks_for_plan or lookup):
+                if lookup is None and commands.handled:
+                    # A setting said with a quick question ("Keep your answers
+                    # short. What's my fuel?") is stored already; the value
+                    # it asks for does not need the model either.
+                    lookup = self._quick_question_in(utterance)
+            if failure is None or not (asks_for_plan or lookup or declined):
                 raise
             if not await self.store.matches_session(origin):
                 raise SessionChangedError("Session changed; the previous radio request was discarded.") from exc
             prefix = _PROVIDER_FALLBACK_PREFIXES[failure]
-            if asks_for_plan:
+            if declined:
+                text = prefix + self._declined_answer(await self.store.snapshot_analysis(), acknowledge=True)
+                fallback_model = "declined-call-fallback"
+            elif asks_for_plan:
                 text = await self._strategy_fallback_answer(prefix)
                 fallback_model = (
                     "strategy-deadline-fallback" if failure == "deadline" else "strategy-provider-fallback"
@@ -4614,9 +4970,10 @@ class EngineerBrain:
                     raise
                 # Trimmed as the same value asked on its own would be.
                 readout = _limit_radio_sentences(
-                    readout, route, str((await self.store.snapshot_analysis()).get("radio_verbosity", "standard"))
+                    readout, route, str((await self.store.peek("radio_verbosity")).get("radio_verbosity") or "standard")
                 )
-                text = prefix.rstrip("; ") + ". " + readout
+                confirmed = f"{commands.confirmation} " if commands.handled and commands.confirmation else ""
+                text = prefix.rstrip("; ") + ". " + confirmed + readout
                 fallback_model = "deterministic-radio-fallback"
             elapsed_ms = (time.monotonic() - narration_started) * 1000
             self.last_provider_result = ProviderResult(

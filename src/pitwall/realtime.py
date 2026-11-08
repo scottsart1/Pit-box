@@ -124,8 +124,10 @@ You are in a live conversation. The driver is driving, so:
   as a decision, not a question. Confirm it. Only push back if it is illegal, unsafe, or impossible,
   and then say why in one sentence.
 - When that decision declines a pit call, the driver said no to this stop, not to having a
-  strategy: after the confirmation, give the next option from get_pit_strategy and its cost in one
-  clause, with its lap, compound and cost exactly as the tool gives them.
+  strategy: after the confirmation, give the next feasible option and its cost in one clause, from
+  the pit wall note when it names one; otherwise the next option from get_pit_strategy that is
+  feasible, legal and stops later than the declined lap, with its lap, compound and cost exactly as
+  the tool gives them. With none, say the plan will be re-checked and invent nothing.
 - A pit wall note in the conversation records what a driver message actually stored: a strategy
   lock, a refused stop, a standing instruction, a setting. It can arrive after you have answered
   that message. If it differs from what you told the driver (nothing locked, no lap given), correct
@@ -222,15 +224,16 @@ class RealtimeRadio:
         instructions: Callable[[], Awaitable[str]] | None = None,
         on_driver_turn: Callable[[str], Awaitable[str | None]] | None = None,
         on_failed_turn: Callable[[str], Awaitable[None]] | None = None,
-        pit_call: Callable[[dict[str, Any]], str | None] | None = None,
+        pit_call: Callable[[dict[str, Any], dict[str, Any]], str | None] | None = None,
     ) -> None:
         """
         ``instructions`` builds the session brief; without it the bare persona
         is used. ``on_driver_turn`` stores what a final driver transcript tells
         the pit wall and returns a note of what was stored. ``on_failed_turn``
         answers a driver turn on the standard radio when the session's own
-        reply failed. ``pit_call`` words the strategy tool's plan as it is
-        spoken, so the session says the same call the text path would.
+        reply failed. ``pit_call`` words the strategy tool's plan, for the
+        current state, as it is spoken, so the session says the same call the
+        text path would.
         """
         self.store = store
         self.tools = tools
@@ -1141,7 +1144,7 @@ class RealtimeRadio:
                     else:
                         result = await self.tools.call(name, arguments)
                         if name == "get_pit_strategy":
-                            result = self._with_radio_call(result)
+                            result = await self._with_radio_call(result)
                         if name == "record_lap_observation":
                             self._note_call_results[call_id] = result
                             if len(self._note_call_results) > 100:
@@ -1176,7 +1179,7 @@ class RealtimeRadio:
             return
         self._tool_results_pending = True
 
-    def _with_radio_call(self, plan: Any) -> Any:
+    async def _with_radio_call(self, plan: Any) -> Any:
         """Add the pit call as the text path would speak it to a strategy result.
 
         Speech cannot be post-processed, so the provisional qualifier and the
@@ -1186,7 +1189,7 @@ class RealtimeRadio:
         if self.pit_call is None or not isinstance(plan, dict):
             return plan
         try:
-            call = self.pit_call(plan)
+            call = self.pit_call(plan, await self.store.snapshot_analysis())
         except Exception:
             log.warning("Spoken pit call could not be worded", exc_info=True)
             return plan
