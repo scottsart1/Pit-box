@@ -1378,7 +1378,7 @@ class EngineerBrain:
             # followed by a call that was never told the confidence.
             if compounds or plan:
                 strategy_clause += (
-                    f" | plan confidence {strategy.get('confidence', 'unknown')}: "
+                    f" | plan confidence {strategy.get('confidence') or 'unknown'}: "
                     f"{summary.get('confidence_basis', 'basis unavailable')}"
                     f" | history compatibility {summary.get('history_compatibility_basis', 'not supplied')}"
                 )
@@ -1396,9 +1396,12 @@ class EngineerBrain:
             )
         # A declined stop travels the same way. The unsolicited calls already
         # honour the hold; a reply that did not know about it could restate
-        # the very call the driver had just turned down.
+        # the very call the driver had just turned down. The hold is released
+        # by the unsolicited-call loop, which does not run while those calls
+        # are switched off, so past its last lap it is over whatever its flag
+        # still says.
         hold = state.get("strategy_hold", {}) or {}
-        if hold.get("active"):
+        if hold.get("active") and int(state.get("current_lap", 0) or 0) < int(hold.get("until_lap") or 0):
             declined_on = hold.get("set_at_lap")
             strategy_clause += (
                 f" | STRATEGY HOLD until lap {hold.get('until_lap')}: the driver declined the pit call"
