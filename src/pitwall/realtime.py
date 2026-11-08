@@ -759,6 +759,8 @@ class RealtimeRadio:
         # Shortening lists and strings cannot shrink a payload made of many
         # keys. Rather than return nothing, drop the largest top-level fields
         # and name them, so the small decision fields still reach the radio.
+        # The fields that remain are still shortened to one list item, so the
+        # note says both.
         fields = {key: value for key, value in bounded.items() if key not in {"truncated", "truncation_note"}}
         largest_first = sorted(fields, key=lambda name: len(json.dumps(fields[name], default=str)), reverse=True)
         omitted: list[str] = []
@@ -769,7 +771,10 @@ class RealtimeRadio:
                 **fields,
                 "truncated": True,
                 "omitted_fields": omitted,
-                "truncation_note": "omitted_fields were too large for radio; do not infer their contents.",
+                "truncation_note": (
+                    "Lists were cut to their first item and long text shortened, and "
+                    "omitted_fields were too large for radio; do not infer what was left out."
+                ),
             }, default=str)
             if len(encoded) <= 16_000:
                 return encoded
