@@ -83,13 +83,20 @@ async def test_the_spoken_change_condition_does_not_sound_like_a_compound(stack)
 
 @pytest.mark.asyncio
 async def test_the_ranking_assumption_describes_the_ranking_actually_used(stack):
-    """Equal finishes prefer the later first stop; time only settles what is left."""
+    """The tiers in ranking_key's order: finish, the appetite's finish and
+    expected points, the later first stop, then risk-adjusted time."""
     store, _database, strategy, _setup, _analysis, _tools = stack
     await store.mutate(_race_state)
     ranking = (await strategy.recompute())["assumptions"][0]
     assert ranking.startswith("Plans are ranked by projected finishing position first")
     assert "elapsed time only breaks" not in ranking
-    assert ranking.index("later first stop") < ranking.index("risk-adjusted time")
+    # Two plans with the same projected finish are separated by expected
+    # points before the stop lap is considered.
+    assert (
+        ranking.index("expected points")
+        < ranking.index("later first stop")
+        < ranking.index("risk-adjusted time")
+    )
 
 
 # ------------------------------------------- volunteered strategy template
