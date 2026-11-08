@@ -523,6 +523,6 @@ async def test_every_quick_lookup_is_answered_without_the_model(stack, monkeypat
 
 @pytest.mark.asyncio
 async def test_pole_without_a_grid_says_so(stack, monkeypatch):
-    store, brain = await _race(stack)
+    _store, brain = await _race(stack)
     _forbid_provider(brain, monkeypatch)
     assert await brain.ask("pole") == "The starting grid is not available for this session."

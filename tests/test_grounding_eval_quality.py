@@ -25,7 +25,7 @@ from pitwall.providers import ProviderResult, ProviderRouter
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from tools import engineer_eval  # noqa: E402
+from tools import engineer_eval
 
 FUEL_TEMPLATE = "Fuel is short by 0.4 laps. Start lifting and coasting on the long straights."
 INVENTED = (
@@ -157,7 +157,7 @@ async def test_a_call_worded_again_keeps_only_the_note_for_the_words_spoken(stac
 
 @pytest.mark.asyncio
 async def test_the_narrator_is_checked_against_exactly_what_it_was_shown(stack, monkeypatch):
-    store, _, _, _, prompts = await _narrating_race(stack, monkeypatch, "Copy.")
+    store, _, _, _, _prompts = await _narrating_race(stack, monkeypatch, "Copy.")
     brain = EngineerBrain(store, stack[5], stack[1])
     shown: list[str] = []
 

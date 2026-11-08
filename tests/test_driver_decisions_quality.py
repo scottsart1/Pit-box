@@ -99,7 +99,7 @@ async def _race(stack, monkeypatch, replies=("Copy.",), *, strategy=None, lap=13
     "Okay, so when do we box then?", "should we box", "what's the plan", "is it time to pit",
 ])
 async def test_a_pit_question_after_a_declined_stop_never_gets_the_declined_call(stack, monkeypatch, question):
-    store, brain, captured = await _race(
+    _store, brain, captured = await _race(
         stack, monkeypatch, ["Copy, staying out. Next option is box lap 17 for hards.", "Holding; next option is box lap 17."],
     )
     await brain.ask("I'm not boxing")
@@ -114,7 +114,7 @@ async def test_a_pit_question_after_a_declined_stop_never_gets_the_declined_call
 
 @pytest.mark.asyncio
 async def test_an_agreed_tactic_keeps_the_pit_question_off_the_standing_plan(stack, monkeypatch):
-    store, brain, captured = await _race(stack, monkeypatch, ["Copy, we go long.", "We go long; lap 17 earliest."])
+    _store, brain, captured = await _race(stack, monkeypatch, ["Copy, we go long.", "We go long; lap 17 earliest."])
     await brain.ask("We'll go long, I'm staying out")
     heard = await brain.ask("when do we box")
     assert len(captured) == 2
@@ -243,7 +243,7 @@ async def test_a_refusal_gets_the_same_route_whatever_words_it_uses(stack, monke
     25 s deadline) while "I'm not boxing" went on the normal one."""
     from pitwall.brain import _driver_reaction
 
-    store, brain, captured = await _race(
+    _store, brain, captured = await _race(
         stack, monkeypatch, ["Copy, staying out. Next option is box lap 17 for hards."]
     )
     await brain.ask(refusal)
@@ -260,7 +260,7 @@ def test_a_proposal_to_stay_out_still_gets_the_planning_tier(proposal):
 
 @pytest.mark.asyncio
 async def test_a_pit_question_during_the_hold_with_no_provider_gets_the_next_option(stack, monkeypatch):
-    store, brain, _captured = await _race(stack, monkeypatch, ["Copy, staying out.", _timeout()])
+    _store, brain, _captured = await _race(stack, monkeypatch, ["Copy, staying out.", _timeout()])
     await brain.ask("I'm not boxing")
     heard = await brain.ask("when do we box")
     assert heard.startswith("Engineer service timed out; holding as agreed; next option is box lap 17 for hards")
@@ -288,7 +288,7 @@ async def test_the_qualifier_and_the_cut_follow_the_next_option_not_the_refusal(
     heard = await brain.ask("I'm not boxing, stay out")
     assert heard.startswith("Copy, we won't box. Next option is box lap 17 for hards, about 2.1 seconds slower; provisional")
 
-    store, brain, _captured = await _race(
+    _store, brain, _captured = await _race(
         stack, monkeypatch,
         ["Understood, no stop this lap. Next option is box lap 17 for hards, about 2.1 seconds slower."],
         radio_verbosity="terse",
@@ -306,7 +306,7 @@ async def test_a_no_stop_option_takes_the_qualifier_not_the_acknowledgement(stac
         "fit_compound": None, "instruction": "Stay out to the finish.", "risk_adjusted_time_s": 1803.4,
     }]
     reply = "Copy, staying out. Next option is to stay out to the finish on these, about 3.4 seconds slower."
-    store, brain, captured = await _race(stack, monkeypatch, [reply], strategy=plan, lap=33)
+    _store, brain, captured = await _race(stack, monkeypatch, [reply], strategy=plan, lap=33)
     heard = await brain.ask("I'm not boxing")
     assert "NEXT FEASIBLE OPTION: stay out to the finish" in captured[0]["prompt"]
     assert heard.startswith("Copy, staying out. Next option is to stay out to the finish")
@@ -337,7 +337,7 @@ async def test_a_refusal_answered_on_the_standard_radio_after_the_speech_reply_f
 async def test_a_declined_mandatory_stop_with_no_alternative_says_the_change_is_still_owed(stack, monkeypatch):
     plan = _plan()
     plan["plans"] = plan["plans"][:2]
-    store, brain, captured = await _race(stack, monkeypatch, strategy=plan)
+    _store, brain, captured = await _race(stack, monkeypatch, strategy=plan)
     await brain.ask("No, I'm not boxing this lap")
     prompt = captured[0]["prompt"]
     assert "do not invent an alternative" in prompt
@@ -357,7 +357,7 @@ async def test_a_declined_mandatory_stop_with_no_alternative_says_the_change_is_
     "should we box this lap?", "should I pit", "what's the plan", "when do we box", "what's the strategy",
 ])
 async def test_a_qualifying_pit_question_reaches_the_model_with_the_session_header(stack, monkeypatch, question):
-    store, brain, captured = await _race(
+    _store, brain, captured = await _race(
         stack, monkeypatch, ["One more lap; you are 0.2 inside the cut."],
         strategy={}, mode_profile="qualifying", session_type="Qualifying 1", total_laps=0,
     )
@@ -373,7 +373,7 @@ async def test_a_qualifying_pit_question_reaches_the_model_with_the_session_head
 @pytest.mark.parametrize("challenge", ["why box", "Are you sure about boxing?"])
 async def test_a_terse_challenge_keeps_the_reason_with_the_call(stack, monkeypatch, challenge):
     reason = "Your current wear model projects 100% by the finish; the hard stint projects 33%."
-    store, brain, captured = await _race(
+    _store, brain, captured = await _race(
         stack, monkeypatch, strategy=_plan(tyre_reason=reason), radio_verbosity="terse",
     )
     heard = await brain.ask(challenge)
@@ -429,7 +429,7 @@ async def test_a_question_about_the_unit_does_not_change_it(stack, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_a_position_report_with_a_contraction_is_checked_against_timing(stack, monkeypatch):
-    store, brain, captured = await _race(stack, monkeypatch, ["Copy, P4."])
+    _store, brain, captured = await _race(stack, monkeypatch, ["Copy, P4."])
     heard = await brain.ask("I'm in P4")
     assert captured == []
     assert heard.startswith("Your report is P4, while timing shows P5.")
@@ -497,7 +497,7 @@ async def test_the_tyre_check_answer_reaches_the_strategy_model(stack, monkeypat
 @pytest.mark.asyncio
 async def test_a_spoken_line_with_hold_on_is_replayed_and_kept_in_the_history(stack, monkeypatch):
     line = "Stay out. Hold on, Safety Car is being deployed, box box box."
-    store, brain, captured = await _race(stack, monkeypatch, [line, "Why next lap is the safety car."])
+    _store, brain, captured = await _race(stack, monkeypatch, [line, "Why next lap is the safety car."])
     heard = await brain.ask("what's the plan with Leclerc")
     assert "Hold on, Safety Car is being deployed, box box box." in heard
     assert await brain.ask("say again") == heard
@@ -539,7 +539,7 @@ async def test_the_speech_session_calls_a_legal_stop_no_plan_can_avoid(stack, mo
     plan = _plan(feasible=False, box_lap=35, box_laps=[35], stop_required_reason="mandatory compound change",
                  instruction="No feasible finish is supported by the current tyre data. A second compound is "
                              "mandatory — box lap 35 for HARD.")
-    store, brain, _captured = await _race(stack, monkeypatch, strategy=plan, lap=34, total_laps=52)
+    store, _brain, _captured = await _race(stack, monkeypatch, strategy=plan, lap=34, total_laps=52)
     state = await store.snapshot_analysis()
     spoken = EngineerBrain.spoken_pit_call(state["strategy"], state)
     assert spoken.startswith("Box lap 35 for hards; no plan reaches the flag inside the wear limit")

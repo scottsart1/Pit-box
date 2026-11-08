@@ -89,10 +89,10 @@ MATRIX_SEED: dict[str, Any] = {
              "inner_temps_c": [92, 94, 96, 98]},
 }
 
-_YES = re.compile(r"\b(?:yes|yeah|yep|affirmative|go for it)\b|\byou can\b(?!['’]t|not)", re.I)
+_YES = re.compile(r"\b(?:yes|yeah|yep|affirmative|go for it)\b|\byou can\b(?!['’]t|not)", re.IGNORECASE)
 _NO = re.compile(
     r"\b(?:no|nope|negative|don't|do not|can't|cannot|won't|not yet|not now|hold off|not without)\b",
-    re.I,
+    re.IGNORECASE,
 )
 # From the stay-out check: an answer may not endorse running the current set
 # to the flag, or affirm a question about doing so, while a stop is still owed.
@@ -102,13 +102,13 @@ _NO = re.compile(
 _ENDORSES_FINISH = re.compile(
     r"\b(?:serviceable|last|make it|fine|good)\b[^.]{0,20}\bto the (?:flag|end|finish)\b"
     r"|\bstay(?:ing)? out (?:to|until) the (?:end|flag|finish)\b",
-    re.I,
+    re.IGNORECASE,
 )
-_NO_STOP_NEEDED = re.compile(r"\bno (?:need|reason) to (?:stop|pit|box)\b", re.I)
-_NEGATION = re.compile(r"\b(?:not|no|never|can't|cannot|won't|don't|shouldn't|isn't|aren't)\b|n['’]t\b", re.I)
+_NO_STOP_NEEDED = re.compile(r"\bno (?:need|reason) to (?:stop|pit|box)\b", re.IGNORECASE)
+_NEGATION = re.compile(r"\b(?:not|no|never|can't|cannot|won't|don't|shouldn't|isn't|aren't)\b|n['’]t\b", re.IGNORECASE)
 _CLAUSE_BREAK = re.compile(r"[,;:—–]|\s-\s")
-_ASKS_FINISH = re.compile(r"stay out (?:to|until) the (?:end|flag|finish)|to the end|to the flag", re.I)
-_AFFIRMS = re.compile(r"^\s*(?:yes|yeah|affirm)\b|^\s*you can\b(?!['’]t|not)", re.I)
+_ASKS_FINISH = re.compile(r"stay out (?:to|until) the (?:end|flag|finish)|to the end|to the flag", re.IGNORECASE)
+_AFFIRMS = re.compile(r"^\s*(?:yes|yeah|affirm)\b|^\s*you can\b(?!['’]t|not)", re.IGNORECASE)
 _SENTENCE_BREAK = re.compile(r"(?<=[.!?])\s+(?=[A-Z0-9\"'])")
 _FORMAT_RULES = (
     ("brace or bracket", re.compile(r"[{}\[\]]")),

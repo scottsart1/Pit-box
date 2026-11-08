@@ -673,7 +673,7 @@ async def test_phrase_patterns_are_compiled_once(stack, monkeypatch):
     from pitwall.intent import _phrase_pattern
     from pitwall.providers import ProviderResult
 
-    store, _database, brain = await _brain_mid_race(stack)
+    _store, _database, brain = await _brain_mid_race(stack)
 
     async def generate(**_kwargs):
         return ProviderResult("Gap is 1.2.", "test", "test", 1)

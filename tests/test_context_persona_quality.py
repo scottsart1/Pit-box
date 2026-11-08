@@ -439,7 +439,7 @@ async def test_a_brief_names_only_tools_its_request_offers(stack, monkeypatch, u
     """The setup brief told a normal-route reply to "Use generate_setup", which
     only the deep route offers; the practice-notes brief did the same with
     record_lap_observation on the comparison, which withholds it."""
-    store, brain, captured = await _scripted(stack, monkeypatch, mode_profile="practice", session_type="Practice 2")
+    _store, brain, captured = await _scripted(stack, monkeypatch, mode_profile="practice", session_type="Practice 2")
     await brain.ask(utterance)
     offered = {tool["name"] for tool in captured[-1]["tools"]}
     assert _ordered_tools(captured[-1]["instructions"], stack) <= offered

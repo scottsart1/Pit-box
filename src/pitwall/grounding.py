@@ -68,40 +68,40 @@ _DIGIT_WORD = _alternation(_DIGIT_WORDS)
 _LAP_TIME = re.compile(r"(?<![\w.:])(\d{1,2}):([0-5]\d(?:\.\d{1,3})?)(?![\d:])")
 _POSITION = re.compile(r"\b([PT])(\d{1,2})\b")
 _SPOKEN_DECIMAL = re.compile(
-    rf"\b({_WORD})\s+point((?:\s+(?:{_DIGIT_WORD})\b)+)", re.I
+    rf"\b({_WORD})\s+point((?:\s+(?:{_DIGIT_WORD})\b)+)", re.IGNORECASE
 )
 # "point four laps", with no whole number said. Not "at this point two cars".
 _BARE_DECIMAL = re.compile(
     rf"(?<!\bthis )(?<!\bthat )(?<!\bthe )(?<!\ba )(?<!\bany )(?<!\bno )(?<!\bone )"
     rf"\bpoint((?:\s+(?:{_DIGIT_WORD})\b)+)",
-    re.I,
+    re.IGNORECASE,
 )
 # "the high 60s", "mid-50s": every value in that ten.
 _DECADE = re.compile(
-    r"\b(?:the|low|lower|mid|middle|high|upper|early|late)[\s-]+(?:\w+[\s-]+)?([1-9]0)s\b", re.I
+    r"\b(?:the|low|lower|mid|middle|high|upper|early|late)[\s-]+(?:\w+[\s-]+)?([1-9]0)s\b", re.IGNORECASE
 )
-_AND_A_HALF = re.compile(rf"\b(\d+|{_WORD})\s+and\s+a\s+half\b", re.I)
-_FRACTION = re.compile(rf"\b(a|\d|{_ONES})\s+(tenth|hundredth)s?\b", re.I)
-_HALF = re.compile(r"\bhalf\s+an?\s+(second|tenth|lap)\b", re.I)
+_AND_A_HALF = re.compile(rf"\b(\d+|{_WORD})\s+and\s+a\s+half\b", re.IGNORECASE)
+_FRACTION = re.compile(rf"\b(a|\d|{_ONES})\s+(tenth|hundredth)s?\b", re.IGNORECASE)
+_HALF = re.compile(r"\bhalf\s+an?\s+(second|tenth|lap)\b", re.IGNORECASE)
 _DIGITS = re.compile(r"(?<![\w.:])(\d{1,3}(?:,\d{3})+|\d+)(\.\d+)?")
-_WORDS = re.compile(rf"\b{_WORD}\b", re.I)
+_WORDS = re.compile(rf"\b{_WORD}\b", re.IGNORECASE)
 # What joins two numbers said in one unit: "48 to 51 percent", "92/94 C",
 # "1, 4 and 12 laps".
-_RANGE_JOIN = re.compile(r"\s*(?:-|–|—|/|,|to|and|or)\s*", re.I)
+_RANGE_JOIN = re.compile(r"\s*(?:-|–|—|/|,|to|and|or)\s*", re.IGNORECASE)
 
 # The unit a number is said in, read from the words right after it. Order
 # matters: "degrees F" before "degrees", "ms" before "s".
 _UNIT_AFTER = (
-    ("pct", re.compile(r"\s?(?:%|per\s?cent\b)", re.I)),
-    ("temp_f", re.compile(r"\s?(?:°\s?f\b|degrees?\s+f(?:ahrenheit)?\b|f\b|fahrenheit\b)", re.I)),
-    ("temp_c", re.compile(r"\s?(?:°\s?c\b|degrees?\s+c(?:elsius)?\b|c\b|celsius\b)", re.I)),
-    ("temp", re.compile(r"\s?(?:°|degrees?\b)", re.I)),
-    ("ms", re.compile(r"\s?(?:ms\b|milliseconds?\b)", re.I)),
-    ("s", re.compile(r"\s?(?:s\b|secs?\b|seconds?\b)", re.I)),
-    ("min", re.compile(r"\s?(?:mins?\b|minutes?\b)", re.I)),
-    ("kg", re.compile(r"\s?(?:kg\b|kilos?\b|kilograms?\b)", re.I)),
-    ("laps", re.compile(r"(?:[\s-]?laps?\b|\s+to\s+go\b|\s+remaining\b)", re.I)),
-    ("places", re.compile(r"\s+(?:places?|positions?|cars?|spots?)\b", re.I)),
+    ("pct", re.compile(r"\s?(?:%|per\s?cent\b)", re.IGNORECASE)),
+    ("temp_f", re.compile(r"\s?(?:°\s?f\b|degrees?\s+f(?:ahrenheit)?\b|f\b|fahrenheit\b)", re.IGNORECASE)),
+    ("temp_c", re.compile(r"\s?(?:°\s?c\b|degrees?\s+c(?:elsius)?\b|c\b|celsius\b)", re.IGNORECASE)),
+    ("temp", re.compile(r"\s?(?:°|degrees?\b)", re.IGNORECASE)),
+    ("ms", re.compile(r"\s?(?:ms\b|milliseconds?\b)", re.IGNORECASE)),
+    ("s", re.compile(r"\s?(?:s\b|secs?\b|seconds?\b)", re.IGNORECASE)),
+    ("min", re.compile(r"\s?(?:mins?\b|minutes?\b)", re.IGNORECASE)),
+    ("kg", re.compile(r"\s?(?:kg\b|kilos?\b|kilograms?\b)", re.IGNORECASE)),
+    ("laps", re.compile(r"(?:[\s-]?laps?\b|\s+to\s+go\b|\s+remaining\b)", re.IGNORECASE)),
+    ("places", re.compile(r"\s+(?:places?|positions?|cars?|spots?)\b", re.IGNORECASE)),
 )
 
 # Keys whose values are lap numbers or running-order places. A count of laps
