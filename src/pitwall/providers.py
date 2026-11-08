@@ -98,6 +98,24 @@ class ProviderRequestError(ProviderError):
         return any(failure.kind == "deadline" for failure in self.failures)
 
 
+# A raw tool name (get_gaps, compare_practice_groups). Only the verb prefixes
+# the engineer's tools use are matched, so a snake_case value echoed from a
+# briefing payload (medium_hard, overtake_ready) is left alone.
+_TOOL_NAME = r"(?:get|record|compare|predict|evaluate|generate|list|what)_[a-z0-9_]*[a-z0-9]"
+_TOOL_IDENTIFIER = re.compile(rf"\b{_TOOL_NAME}\b")
+
+# What a model checks when it narrates its own working, as opposed to the data
+# or the car an engineer checks for the driver ("I need to check the data,
+# stay out for now" is radio).
+_SCRATCHPAD_OBJECT = (
+    r"(?:the |this |that |my )?(?:(?:driver|user)(?:'s|’s)? )?"
+    r"(?:context|question|request|prompt|instructions?|tools?|functions?|"
+    r"tool (?:outputs?|results?|calls?|data)|data provided|provided data|evidence|"
+    r"(?:situation )?header|radio log|(?:strategy|tool|engine) (?:results?|outputs?)|"
+    r"earlier calls?|previous calls?|payload)\b"
+    rf"|{_TOOL_NAME}\b"
+)
+
 # Phrases that appear when a model narrates its own working instead of talking
 # to the driver: the request described in the third person, plans to look
 # something up, tool-selection notes, and the labelled scratchpad sections
@@ -111,12 +129,17 @@ _DELIBERATION_MARKERS = re.compile(
     r"is requesting|requested)\b|the (?:driver|user)(?:'s|’s) (?:question|request)\b|"
     r"the question (?:is asking|asks)\b|"
     r"let me (?:check|think|reconcile|inspect|review|reconsider|re-?check|verify)\b|"
-    r"i (?:need|have) to (?:check|reconcile|inspect|review|reconsider|verify|look at|"
-    r"figure out|work out|answer|respond)\b|"
+    r"i (?:need|have) to (?:reconcile|reconsider|figure out|work out)\b|"
+    r"i (?:need|have) to (?:check|inspect|review|verify|look at|re-?read|consult) "
+    rf"(?:{_SCRATCHPAD_OBJECT})|"
+    r"i (?:need|have) to (?:answer|respond|reply)(?: to)? (?:the (?:driver|user|question|request)\b|"
+    r"briefly|concisely|directly|in (?:one|two|a few|a single) (?:sentence|line)s?\b)|"
     r"i (?:need|have) to give (?:a |the )?(?:brief|short|concise) (?:answer|reply|response)\b|"
     r"i should (?:give|answer|respond|reply|check|reconcile|inspect|use|call|lead with)\b|"
-    r"i(?: will|'ll|’ll| need to| should) (?:call|use|query|run|invoke|check) "
-    r"(?:the |a |an )?(?:[\w-]+ ){0,3}(?:tool|function)s?\b|"
+    r"(?:i(?: will|'ll|’ll| need to| have to| should)|let me) (?:call|use|query|run|invoke|check) "
+    rf"(?:the |a |an )?(?:(?:[\w-]+ ){{0,3}}(?:tool|function)s?\b|{_TOOL_NAME}\b)|"
+    rf"(?:calling|querying|invoking) (?:the )?{_TOOL_NAME}\b|{_TOOL_NAME}\s*\(|"
+    rf"{_TOOL_NAME} (?:returned|returns|gave|gives|outputs?|results?|response)\b|"
     r"(?:looking at|based on|according to) (?:the )?(?:tool|function) "
     r"(?:output|result|call|data)s?\b|"
     r"key facts\s*:|critical concern\s*:|the current call\s*:|"
@@ -127,13 +150,6 @@ _DELIBERATION_MARKERS = re.compile(
     re.IGNORECASE,
 )
 
-# A raw tool name (get_gaps, compare_practice_groups) never belongs in radio
-# copy; it only appears when a model narrates which tool it used. Only the
-# verb prefixes the engineer's tools use are matched, so a snake_case value
-# echoed from a briefing payload is not treated as deliberation.
-_TOOL_NAME = r"(?:get|record|compare|predict|evaluate|generate|list|what)_[a-z0-9_]*[a-z0-9]"
-_TOOL_IDENTIFIER = re.compile(rf"\b{_TOOL_NAME}\b")
-
 # "Looking at get_gaps, Norris is 1.4 ahead." keeps its answer once the
 # tool-attribution lead-in is removed.
 _TOOL_LEAD_IN = re.compile(
@@ -143,9 +159,11 @@ _TOOL_LEAD_IN = re.compile(
     re.IGNORECASE | re.MULTILINE,
 )
 # "Norris is 1.4 ahead per get_gaps." and "... (from get_gaps)." likewise.
+# Lead-ins are removed first, so a sentence-opening "Using get_gaps," is never
+# mistaken for a trailing attribution.
 _TOOL_TAIL = re.compile(
     rf",?\s+(?:per|from|according to|via|using) (?:the )?{_TOOL_NAME}"
-    r"(?: (?:tool|output|result|data)s?)?(?=[.!?;]|$)"
+    r"(?: (?:tool|output|result|data)s?)?(?=[.!?;,]|$)"
     rf"|\s*\((?:(?:per|from|via|using) )?(?:the )?{_TOOL_NAME}(?: tool)?\)",
     re.IGNORECASE | re.MULTILINE,
 )
@@ -158,11 +176,75 @@ _THINK_CLOSE = re.compile(r"</(?:think|thinking)\s*>", re.IGNORECASE)
 _THINK_OPEN = re.compile(r"<(?:think|thinking)>", re.IGNORECASE)
 
 
+# A labelled scratchpad section: what follows the label is scratchpad as well.
+_LABEL_MARKER = re.compile(
+    r"key facts\s*:|critical concern\s*:|the current call\s*:", re.IGNORECASE
+)
+_CLAUSE_BREAK = re.compile(r"\s*[,;:]\s+|\s+[—–-]\s+")
+# A clause that continues the scratchpad thought rather than starting the answer.
+_CONTINUATION = re.compile(
+    r"(?:which|that|so|and|but|or|because|since|as|then|while|if|whether|to|before|"
+    r"after|unless|until|when|where|who|i|me|my|let)\b",
+    re.IGNORECASE,
+)
+
+
 def _contains_deliberation(text: str) -> bool:
-    stripped = text.strip()
-    return bool(
-        _DELIBERATION_MARKERS.search(stripped) or _TOOL_IDENTIFIER.search(stripped)
-    )
+    return bool(_DELIBERATION_MARKERS.search(text.strip()))
+
+
+def _speakable_part(sentence: str) -> str:
+    """Return what may be spoken of one sentence: all of it, its answer clause, or nothing.
+
+    A leaked preamble often runs into the answer inside one sentence ("The driver
+    wants the gap, Norris is 1.4 ahead."). The clause after the last marker is
+    kept when it is a statement of its own, so an instruction is not lost with
+    the narration in front of it. A labelled section, a question, or a clause
+    that continues the narration ("..., which ...", "..., so I ...") is dropped.
+    """
+    if not _contains_deliberation(sentence):
+        return sentence
+    if _LABEL_MARKER.search(sentence):
+        return ""
+    last = None
+    for last in _DELIBERATION_MARKERS.finditer(sentence):
+        pass
+    clause = _CLAUSE_BREAK.search(sentence, last.end()) if last else None
+    if clause is None:
+        return ""
+    rest = sentence[clause.end():].strip()
+    if (
+        not rest
+        or rest.endswith("?")
+        or _CONTINUATION.match(rest)
+        or _contains_deliberation(rest)
+    ):
+        return ""
+    return rest[0].upper() + rest[1:]
+
+
+def _speakable_sentences(text: str) -> str:
+    sentences = re.split(r"(?<=[.!?])\s+(?=[A-Z0-9])", text)
+    return " ".join(part for part in map(_speakable_part, sentences) if part)
+
+
+def _spoken_tool_names(text: str) -> str:
+    """Say a tool name left in an answer as words, never as an identifier.
+
+    "get_flag_status shows a red flag; slow down" is an instruction with an
+    attribution in it, not narration: it is spoken as "Flag status shows a red
+    flag; slow down" rather than dropped with the instruction.
+    """
+
+    def words(match: re.Match[str]) -> str:
+        name = match.group(0)
+        spoken = name.removeprefix("get_").replace("_", " ")
+        before = text[: match.start()].rstrip()
+        if not before or before[-1] in ".!?":
+            spoken = spoken[:1].upper() + spoken[1:]
+        return spoken
+
+    return _TOOL_IDENTIFIER.sub(words, text)
 
 
 def _strip_inline_reasoning(text: str) -> str:
@@ -181,10 +263,10 @@ def _strip_inline_reasoning(text: str) -> str:
 
 def _strip_tool_attribution(text: str) -> str:
     """Remove "according to <tool>" wording and keep the rest of the sentence."""
-    text = _TOOL_TAIL.sub("", text)
-    return _TOOL_LEAD_IN.sub(
+    text = _TOOL_LEAD_IN.sub(
         lambda match: f"{match.group(1)}{match.group(2).upper()}", text
     )
+    return _TOOL_TAIL.sub("", text)
 
 
 def _final_answer_only(text: str) -> str:
@@ -193,8 +275,10 @@ def _final_answer_only(text: str) -> str:
     A provider can occasionally imitate deliberation inside its final text. This guard
     removes inline <think> blocks and tool attributions, then keeps the radio answer:
     the paragraphs after the last scratchpad paragraph, or else every sentence that
-    carries no deliberation marker. It never exposes scratchpad-like prose to history
-    or TTS, and it returns an empty string only when nothing but deliberation was said.
+    carries no deliberation marker, plus the answer clause of a sentence a marker
+    opens. A tool name left in the answer is spoken as words. It never exposes
+    scratchpad-like prose to history or TTS, and it returns an empty string only
+    when nothing but deliberation was said.
     """
     cleaned = text.replace("\r\n", "\n").replace("\r", "\n").strip()
     cleaned = _strip_inline_reasoning(cleaned).strip()
@@ -222,24 +306,15 @@ def _final_answer_only(text: str) -> str:
         if trailing:
             cleaned = " ".join(trailing)
         else:
-            sentences = re.split(
-                r"(?<=[.!?])\s+(?=[A-Z0-9])", " ".join(paragraphs)
-            )
-            cleaned = " ".join(
-                sentence
-                for sentence in sentences
-                if not _contains_deliberation(sentence)
-            )
+            cleaned = _speakable_sentences(" ".join(paragraphs))
     else:
         cleaned = " ".join(paragraphs)
 
     cleaned = re.sub(r"^(?:final answer|engineer|radio)\s*:\s*", "", cleaned, flags=re.I)
     cleaned = " ".join(cleaned.split()).strip()
     if _contains_deliberation(cleaned):
-        sentences = re.split(r"(?<=[.!?])\s+(?=[A-Z0-9])", cleaned)
-        safe = [sentence for sentence in sentences if not _contains_deliberation(sentence)]
-        cleaned = " ".join(safe).strip()
-    return cleaned
+        cleaned = _speakable_sentences(cleaned).strip()
+    return _spoken_tool_names(cleaned)
 
 
 @dataclass(slots=True)
