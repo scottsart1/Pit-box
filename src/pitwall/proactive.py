@@ -43,6 +43,11 @@ YELLOW_LOOKAHEAD_M = 600.0
 # out as "short by 0.2 laps, lift and coast" every few minutes while every
 # other path, the fuel model included, said the fuel was on target.
 FUEL_SAVE_DELTA_LAPS = -0.1
+# The margin the game reports wanders by tenths within a lap. A shortfall that
+# has been called stays called until the margin is back to non-negative, a
+# tenth clear of the line above, so a margin hovering around -0.1 is not
+# re-announced every time it touches the line.
+FUEL_RECOVERED_DELTA_LAPS = 0.0
 
 # Race-control phases as the radio says them. The template used to read the
 # internal value aloud: "Race control: vsc ending."
@@ -1639,10 +1644,10 @@ class ProactiveEngineer:
         # fuel warnings were spoken to a car sitting still at the grid.
         car_running = not in_garage and self._car_moving(state)
         fuel_delta = float(state.get("fuel_laps_delta", 1.0))
-        if fuel_delta >= FUEL_SAVE_DELTA_LAPS:
-            # Back on target: the next shortfall is news again.
+        if fuel_delta >= FUEL_RECOVERED_DELTA_LAPS:
+            # Back to a non-negative margin: the next shortfall is news again.
             self._delivered_signatures.pop("fuel_warning", None)
-        elif car_running:
+        if car_running and fuel_delta < FUEL_SAVE_DELTA_LAPS:
             self._enqueue(
                 "fuel_warning",
                 {
@@ -1693,6 +1698,10 @@ class ProactiveEngineer:
         # Damage going down (a front-wing change, a flashback, a fresh car
         # after the garage) re-arms the tracker, so the next real hit is
         # reported rather than compared against a level that no longer exists.
+        # The delivered-call memory is re-armed with it: a new 25% hit after a
+        # wing change is a new call, not a repeat of the one before it.
+        if band < self._reported_damage_band or not self._reported_damage_faults <= set(faults):
+            self._delivered_signatures.pop("damage", None)
         self._reported_damage_band = min(self._reported_damage_band, band)
         # A fault that cleared is news again if it comes back.
         self._reported_damage_faults &= set(faults)
@@ -2654,6 +2663,16 @@ class ProactiveEngineer:
             # Pit advice withdrawn (the driver declined the stop) is not news
             # about the tyres; only a new level or new advice is.
             same = old[:-1] == signature[:-1] and not signature[-1]
+        if not same and kind == "fuel_warning":
+            # Only a deeper shortfall is news. The reported margin wanders by
+            # tenths within a lap, and treating every band crossing as news in
+            # either direction said "short by 0.5" and "short by 0.6" in turn,
+            # every ninety seconds, while the fuel had not really moved.
+            same = (
+                old[0] is not None
+                and signature[0] is not None
+                and signature[0] >= old[0]
+            )
         return "unchanged since the last call" if same else None
 
     @staticmethod
