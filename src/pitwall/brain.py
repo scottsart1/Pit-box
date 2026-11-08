@@ -1342,6 +1342,83 @@ class DriverCommands:
     confirmation: str | None = None
 
 
+_HOLD_DAMAGE_KEYS = (
+    "front_left_wing", "front_right_wing", "rear_wing", "floor", "diffuser",
+    "sidepod", "gearbox", "engine", "drs_fault", "ers_fault",
+)
+
+
+def _hold_phase(state: dict[str, Any]) -> str:
+    if state.get("red_flag_active"):
+        return "red_flag"
+    return str(state.get("race_control_phase", "green") or "green")
+
+
+def hold_baseline(state: dict[str, Any]) -> dict[str, Any]:
+    """The race as it stood when the driver held the pit call.
+
+    A hold ends early when the race moves on from this: see
+    hold_material_change.
+    """
+    damage = state.get("damage", {}) or {}
+    return {
+        "race_control_phase": _hold_phase(state),
+        "wet": rain.surface_is_wet(state),
+        "damage": {key: damage.get(key, 0) for key in _HOLD_DAMAGE_KEYS},
+        "max_wear_pct": max(
+            [float(value) for value in (state.get("tyre", {}) or {}).get("wear", [0]) or [0]] or [0.0]
+        ),
+        "compound": (state.get("tyre", {}) or {}).get("compound"),
+    }
+
+
+def hold_material_change(state: dict[str, Any], hold: dict[str, Any]) -> str | None:
+    """What has changed since a hold began that ends it early, if anything.
+
+    A flag change, the track crossing the wet threshold either way, a tyre
+    change (the stop has been made), new damage, or the limiting tyre past
+    the hard wear limit. Read wherever the hold is read, so the radio, the
+    header and the unsolicited calls agree on it whether or not the
+    unsolicited calls are switched on.
+    """
+    baseline = hold.get("baseline", {}) or {}
+    phase = _hold_phase(state)
+    if phase != str(baseline.get("race_control_phase", "green")):
+        return f"race control changed to {phase.replace('_', ' ')}"
+    wet_now = rain.surface_is_wet(state)
+    if wet_now != bool(baseline.get("wet")):
+        # Both directions are material. A track drying out under a hold is
+        # exactly as much a reason to speak as one getting wet, and only the
+        # wetting half used to count.
+        return (
+            "the track crossed the wet-strategy threshold"
+            if wet_now
+            else "the track dried back below the wet-strategy threshold"
+        )
+    # Compared only with a tyre the hold recorded: a hold set before the
+    # fitted compound was known has nothing to compare against.
+    if baseline.get("compound") is not None and str(
+        (state.get("tyre", {}) or {}).get("compound")
+    ) != str(baseline.get("compound")):
+        return "the fitted tyre changed"
+    current_damage = state.get("damage", {}) or {}
+    for key, old_value in (baseline.get("damage", {}) or {}).items():
+        new_value = current_damage.get(key, 0)
+        if isinstance(old_value, bool) or isinstance(new_value, bool):
+            increased = bool(new_value) and not bool(old_value)
+        else:
+            increased = float(new_value or 0) > float(old_value or 0) + 1.0
+        if increased:
+            return f"new {str(key).replace('_', ' ')} damage arrived"
+    max_wear = max(
+        [float(value) for value in (state.get("tyre", {}) or {}).get("wear", [0]) or [0]]
+        or [0.0]
+    )
+    if max_wear >= 82.0 and float(baseline.get("max_wear_pct", 0.0) or 0.0) < 82.0:
+        return f"limiting tyre wear crossed the hard safety limit at {max_wear:.0f}%"
+    return None
+
+
 class EngineerBrain:
     @staticmethod
     def _strategy_qualifier(plan: dict[str, Any] | None) -> str | None:
@@ -1502,13 +1579,16 @@ class EngineerBrain:
     def _hold_running(state: dict[str, Any]) -> bool:
         """Whether a declined-stop hold still binds the pit call.
 
-        The hold is released by the unsolicited-call loop, which does not run
-        while those calls are switched off, so past its last lap it is over
-        whatever its flag still says.
+        Judged here, where the hold is read, and not only by the flag the
+        unsolicited-call loop clears: past its last lap, or once the race
+        has moved on from it (a red flag, the stop made, new damage), it is
+        over whatever its flag still says.
         """
         hold = state.get("strategy_hold", {}) or {}
-        return bool(hold.get("active")) and int(state.get("current_lap", 0) or 0) < int(
-            hold.get("until_lap") or 0
+        return (
+            bool(hold.get("active"))
+            and int(state.get("current_lap", 0) or 0) < int(hold.get("until_lap") or 0)
+            and hold_material_change(state, hold) is None
         )
 
     @staticmethod
@@ -1846,12 +1926,11 @@ class EngineerBrain:
             )
         # A declined stop travels the same way. The unsolicited calls already
         # honour the hold; a reply that did not know about it could restate
-        # the very call the driver had just turned down. The hold is released
-        # by the unsolicited-call loop, which does not run while those calls
-        # are switched off, so past its last lap it is over whatever its flag
+        # the very call the driver had just turned down. Past its last lap,
+        # or once the race has moved on from it, it is over whatever its flag
         # still says.
         hold = state.get("strategy_hold", {}) or {}
-        if hold.get("active") and int(state.get("current_lap", 0) or 0) < int(hold.get("until_lap") or 0):
+        if self._hold_running(state):
             declined_on = hold.get("set_at_lap")
             strategy_clause += (
                 f" | STRATEGY HOLD until lap {hold.get('until_lap')}: the driver declined the pit call"
@@ -4294,11 +4373,14 @@ class EngineerBrain:
                         "reason": f"agreed {intent['intent'].replace('_', ' ')}: {utterance.strip()}",
                         "set_at": time.time(),
                         "set_at_lap": current_lap,
+                        # The race as it is now. An empty or earlier baseline
+                        # read as "the fitted tyre changed" and ended the
+                        # agreement on the next tick.
+                        "baseline": hold_baseline(state),
+                        "change_reason": "",
+                        "raised_after_release": False,
                     }
                 )
-                hold.setdefault("baseline", {})
-                hold.setdefault("change_reason", "")
-                hold.setdefault("raised_after_release", False)
                 await self.store.update(strategy_hold=hold)
             agreed = f"Agreed with the driver: {intent['intent'].replace('_', ' ')}"
             if intent["direction"] == "stay_out":
@@ -4309,33 +4391,13 @@ class EngineerBrain:
 
         if self._strategy_refusal(utterance):
             current_lap = int(state.get("current_lap", 0) or 0)
-            damage = state.get("damage", {}) or {}
             hold = {
                 "active": True,
                 "until_lap": current_lap + 5,
                 "reason": utterance,
                 "set_at": time.time(),
                 "set_at_lap": current_lap,
-                "baseline": {
-                    "race_control_phase": state.get("race_control_phase", "green"),
-                    "wet": rain.surface_is_wet(state),
-                    "damage": {
-                        key: damage.get(key, 0)
-                        for key in (
-                            "front_left_wing", "front_right_wing", "rear_wing",
-                            "floor", "diffuser", "sidepod", "gearbox", "engine",
-                            "drs_fault", "ers_fault",
-                        )
-                    },
-                    "max_wear_pct": max(
-                        [
-                            float(value)
-                            for value in state.get("tyre", {}).get("wear", [0])
-                        ]
-                        or [0.0]
-                    ),
-                    "compound": state.get("tyre", {}).get("compound"),
-                },
+                "baseline": hold_baseline(state),
                 "change_reason": "",
                 "raised_after_release": False,
             }
@@ -5129,11 +5191,12 @@ class EngineerBrain:
             "compound_requirement", "undercut_threat",
         }
         hold = state.get("strategy_hold", {}) or {}
+        hold_running = self._hold_running(state)
         hold_line = (
             "DRIVER DECLINED THE PIT CALL: the strategy hold runs until lap "
             f"{hold.get('until_lap')}. Do not tell the driver to box and do not "
             "restate the pit plan in this call.\n"
-            if hold.get("active")
+            if hold_running
             else ""
         )
         # A call that carries the plan (a rival stopping, a penalty to serve)
@@ -5158,11 +5221,11 @@ class EngineerBrain:
         )
         # While the driver's hold runs the call must not restate the plan, so
         # there is no pit call to qualify.
-        is_strategy_call = kind in strategy_events and not hold.get("active")
+        is_strategy_call = kind in strategy_events and not hold_running
         # Where the plan only rides along, the first "stop" or "box" in the
         # call is usually its own news (the penalty, the rival's stop), so
         # only a sentence that restates the plan's call is qualified.
-        plan_rides_along = strategy_call and not is_strategy_call and not hold.get("active")
+        plan_rides_along = strategy_call and not is_strategy_call and not hold_running
         text = await self._run(
             prompt,
             settings.reasoning_effort,
