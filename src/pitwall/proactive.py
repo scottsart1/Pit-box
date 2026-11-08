@@ -2450,7 +2450,14 @@ class ProactiveEngineer:
             # hear it anyway: "Box this lap for hards" was spoken straight
             # after "Copy, we stay out".
             fresh = await self.store.snapshot_radio()
-            stale = self._relevance_reason(event, fresh)
+            # The race moving on is checked, not the clock: the call was within
+            # its life when it was chosen, and dropping it for the seconds spent
+            # wording it would lose a penalty or damage call that is never
+            # detected again.
+            stale = self._relevance_reason(
+                {**event, "expires_at": max(float(event.get("expires_at", 0) or 0), time.time() + 1.0)},
+                fresh,
+            )
             if stale is None and self.is_suppressed(
                 str(event.get("type", "")), fresh.get("standing_instructions", [])
             ):
@@ -2464,8 +2471,16 @@ class ProactiveEngineer:
                 self._requeue(event, "the plan changed while it was being worded")
                 return
             blocked = self._engine_block_reason(fresh)
+            if blocked is None and bool(
+                getattr(self.voice, "realtime_active", False)
+            ) and self._priority_of(event) > CRITICAL:
+                # As in _safe_to_speak: a conversation the driver opened while
+                # this was being worded is not talked over by routine news.
+                blocked = "conversation open"
             if blocked is not None:
-                self._requeue(event, blocked)
+                # Waiting for the driver is not a retry: the call goes back
+                # however often they key the radio, until it expires.
+                self._requeue(event, blocked, counted=False)
                 return
             state = fresh
         repeat = self._repeat_reason(event, text)
@@ -2504,10 +2519,17 @@ class ProactiveEngineer:
         self._mark_blocked(event, reason)
         await self.database.save_proactive_call(state, event, text or reason, False)
 
-    def _requeue(self, event: dict[str, Any], reason: str) -> None:
-        """Put a still-relevant call back at the front, a limited number of times."""
-        count = int(event.get("requeued", 0) or 0) + 1
+    def _requeue(
+        self, event: dict[str, Any], reason: str, *, counted: bool = True
+    ) -> None:
+        """Put a still-relevant call back at the front.
+
+        A call reworded because the plan moved goes back a limited number of
+        times. A call held for the driver goes back until it expires, like any
+        other blocked call.
+        """
         self._mark_blocked(event, reason)
+        count = int(event.get("requeued", 0) or 0) + (1 if counted else 0)
         if count > MAX_REQUEUES:
             event["delivery_outcome"] = f"{reason}; dropped after {MAX_REQUEUES} retries"
             self._discarded.append(event)

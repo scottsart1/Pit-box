@@ -629,3 +629,63 @@ async def test_a_call_worded_while_the_driver_keyed_the_radio_waits_for_them(sta
     await store.update(ptt_pressed=False)
     await engineer._deliver(await store.snapshot_radio())
     assert voice.spoken == ["Rear left at seventy percent."]
+
+
+@pytest.mark.asyncio
+async def test_a_penalty_whose_life_ran_out_while_it_was_worded_is_still_said(stack, clock):
+    """The clock running out during the wording is not the race moving on."""
+    store, database, *_ = stack
+
+    async def slow_wording(event):
+        clock.offset += 60  # past the 45 s life of a critical call
+
+    brain = _Brain(database, during=slow_wording, reply="Five-second penalty. Keep it clean.")
+    store, engineer, voice = await _race(stack, brain=brain)
+    await store.update(penalties_s=5)
+    await _tick(store, engineer, passes=1)
+    assert voice.spoken == ["Five-second penalty. Keep it clean."]
+
+
+@pytest.mark.asyncio
+async def test_a_call_held_for_the_driver_is_not_given_up_on(stack, clock):
+    """Keying the radio during the wording three times does not lose the call."""
+    store, database, *_ = stack
+
+    async def driver_keys_radio(event):
+        await store.update(ptt_pressed=True)
+
+    brain = _Brain(database, during=driver_keys_radio, reply="Front wing at forty-five percent.")
+    store, engineer, voice = await _race(stack, brain=brain)
+    await store.mutate(lambda s: s.damage.update({"front_left_wing": 45}))
+    await engineer._detect(await store.snapshot_radio())
+    for _ in range(3):
+        await engineer._deliver(await store.snapshot_radio())
+        assert voice.spoken == []
+        assert [event["type"] for event in engineer.pending] == ["damage"]
+        await store.update(ptt_pressed=False)
+    brain.during = None
+    await engineer._deliver(await store.snapshot_radio())
+    assert voice.spoken == ["Front wing at forty-five percent."]
+
+
+@pytest.mark.asyncio
+async def test_routine_news_waits_for_a_conversation_opened_while_it_was_worded(stack, clock):
+    store, database, *_ = stack
+    holder: dict = {}
+
+    async def driver_opens_conversation(event):
+        holder["voice"].realtime_active = True
+
+    brain = _Brain(database, during=driver_opens_conversation, reply="Rear left at seventy percent.")
+    store, engineer, voice = await _race(stack, brain=brain)
+    holder["voice"] = voice
+    await store.mutate(_set_tyre(wear=[50.0, 52.0, 71.0, 60.0]))
+    await engineer._detect(await store.snapshot_radio())
+    await engineer._deliver(await store.snapshot_radio())
+    assert voice.spoken == []
+    assert [event["type"] for event in engineer.pending] == ["tyre_wear"]
+
+    brain.during = None
+    voice.realtime_active = False
+    await engineer._deliver(await store.snapshot_radio())
+    assert voice.spoken == ["Rear left at seventy percent."]
