@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import time
@@ -1028,6 +1029,148 @@ def _states_change_condition(text: str, condition: str) -> bool:
 
 def _spoken_compound(compound: Any) -> str:
     return f"{str(compound).lower()}s"
+
+
+# How a driver turn reacts to the engineer's previous message. Routing already
+# reads these phrases; the same lists label the driver's saved radio row, so a
+# session's repeat requests, corrections and disputes can be counted against
+# the answers they react to instead of being found by reading transcripts.
+_CALL_CHALLENGES = (
+    "are you sure", "does not make sense", "doesn t make sense",
+    "makes no sense", "why box", "why stay out", "why this strategy",
+)
+_PLAN_VERDICT_FOR = (
+    "that works", "works for me", "sounds good", "sounds great",
+    "i agree", "agreed", "good plan", "great plan", "good call",
+    "happy with that", "let s do that", "let s do it",
+    "go with that", "strategy works", "plan works", "love it",
+)
+_PLAN_VERDICT_AGAINST = (
+    "stupid", "ridiculous", "terrible", "awful", "rubbish",
+    "nonsense", "absurd", "insane", "crazy", "dumb", "idiotic",
+    "bad idea", "bad call", "worst", "hate", "not happy",
+    "unhappy", "disagree",
+)
+_REPEAT_REQUEST_PHRASES = (
+    "say again", "say that again", "repeat that", "repeat it", "repeat the last",
+    "repeat your last", "come again", "didn t catch", "did not catch", "didn t hear",
+    "did not hear", "missed that", "you broke up", "you re breaking up",
+)
+_OFF_TARGET_PHRASES = (
+    "answer my question", "answer the question", "not what i asked", "i asked",
+    "didn t ask", "did not ask", "not my question",
+)
+_REDUNDANT_PHRASES = (
+    "already told me", "already said", "said that already", "told me that already",
+    "you keep saying", "stop repeating",
+)
+_CORRECTION_PHRASES = (
+    "that s wrong", "that is wrong", "that s not right", "that is not right",
+    "that s incorrect", "that is incorrect", "that s not true", "that is not true",
+    "you re wrong", "you are wrong", "wrong tyre", "wrong tyres", "wrong tire",
+    "wrong tires", "wrong compound", "wrong lap", "wrong car", "i told you",
+)
+# A turn that asks only for the last message again. Whole-utterance only: "say
+# again the gap" wants a fresh number, not the old line.
+_REPEAT_REQUEST = re.compile(
+    r"(?:sorry |pardon |pardon me )?(?:(?:can|could) you |please )?"
+    r"(?:say (?:that |it )?again|repeat(?: that| it| the last (?:message|call|one)"
+    r"| your last (?:message|call))?|come again"
+    r"|(?:i )?(?:didn t|did not) (?:catch|get|hear) (?:that|it|you)|(?:i )?missed (?:that|it))"
+    r"(?: please)?(?: mate)?"
+)
+# A replay is skipped this soon after a race-control change: the line the
+# driver missed may describe the track before the flag. Only a line from the
+# current lap is replayed, so this covers more than a lap.
+_REPEAT_RACE_CONTROL_WINDOW_S = 120.0
+
+
+def _driver_reaction(utterance: str) -> str:
+    """The label a driver turn carries on its saved radio row, or "".
+
+    One label per turn, the most specific first: the driver did not hear the
+    last message, it did not answer what was asked, it repeated something
+    already said, it was wrong, or the driver rejects the call.
+    """
+    text = normalize_text(utterance)
+    for label, phrases in (
+        ("repeat_request", _REPEAT_REQUEST_PHRASES),
+        ("off_target", _OFF_TARGET_PHRASES),
+        ("redundant", _REDUNDANT_PHRASES),
+        ("correction", _CORRECTION_PHRASES),
+        ("dispute", _CALL_CHALLENGES + _PLAN_VERDICT_AGAINST),
+    ):
+        if has_any_phrase(text, phrases):
+            return label
+    return ""
+
+
+# An answer's trace is stored on its radio row, so it is bounded. One tool
+# result can run to tens of thousands of characters (a ranked plan, a practice
+# notebook); the trace keeps a small result whole and a large one as a preview
+# with its full size and digest, which still matches it against a re-run.
+_TRACE_TEXT_CHARS = 2_000
+_TRACE_PROMPT_CHARS = 6_000
+_TRACE_TOOL_CALLS = 12
+_TRACE_TOOL_RESULTS_CHARS = 12_000
+_TRACE_TOOL_RESULT_CHARS = 3_000
+_TRACE_ARGUMENT_CHARS = 500
+
+
+def _trace_text(value: Any, limit: int = _TRACE_TEXT_CHARS) -> str:
+    text = str(value or "")
+    return text if len(text) <= limit else text[:limit] + " [truncated]"
+
+
+def _trace_json(value: Any) -> str:
+    return json.dumps(value, ensure_ascii=False, separators=(",", ":"), default=str)
+
+
+def _trace_tool_calls(calls: list[tuple[str, str, str]]) -> tuple[list[dict[str, Any]], int]:
+    """Recorded tool calls, bounded: (name, arguments JSON, result JSON) each.
+
+    Returns the calls as the trace keeps them and how many were left out.
+    """
+    kept = calls[:_TRACE_TOOL_CALLS]
+    share = min(_TRACE_TOOL_RESULT_CHARS, max(500, _TRACE_TOOL_RESULTS_CHARS // max(1, len(kept))))
+    recorded: list[dict[str, Any]] = []
+    for name, arguments, result in kept:
+        entry: dict[str, Any] = {
+            "name": name,
+            "arguments": (
+                json.loads(arguments)
+                if len(arguments) <= _TRACE_ARGUMENT_CHARS
+                else _trace_text(arguments, _TRACE_ARGUMENT_CHARS)
+            ),
+            "result_chars": len(result),
+        }
+        if len(result) <= share:
+            entry["result"] = json.loads(result)
+        else:
+            entry["result_preview"] = result[:share]
+            entry["result_sha256"] = hashlib.sha256(result.encode("utf-8")).hexdigest()
+        recorded.append(entry)
+    return recorded, len(calls) - len(kept)
+
+
+def _note_step(steps: list[dict[str, str]], step: str, before: str, after: str) -> None:
+    """Record a post-processing step that changed what the driver hears."""
+    if " ".join(after.split()) != " ".join(before.split()):
+        steps.append({"step": step, "text": _trace_text(after)})
+
+
+@dataclass
+class _RadioRequest:
+    """One driver turn's model request: what ask() sends and compare() replays."""
+
+    prompt: str
+    instructions: str
+    route: str
+    effort: str
+    max_rounds: int
+    tools: list[dict[str, Any]]
+    strategy_context: dict[str, Any] | None
+    refresh_current_strategy: bool
 
 
 @dataclass
@@ -2877,13 +3020,7 @@ class EngineerBrain:
         # the projected wear, evidence source and confidence behind it. The
         # negation in "that does not make sense" disputes the engineer's call;
         # it is not the driver refusing to act, so it is checked first.
-        challenges_the_call = has_any_phrase(
-            text,
-            (
-                "are you sure", "does not make sense", "doesn t make sense",
-                "makes no sense", "why box", "why stay out", "why this strategy",
-            ),
-        )
+        challenges_the_call = has_any_phrase(text, _CALL_CHALLENGES)
         if challenges_the_call and cls._is_strategy_request(utterance):
             return False
 
@@ -2905,25 +3042,9 @@ class EngineerBrain:
         # was answered with the same call it was rejecting. Repeating the call
         # at a driver who is reacting to it is what reads as being ignored;
         # the model sees the radio history and can answer the reaction itself.
-        if has_any_phrase(
-            text,
-            (
-                "that works", "works for me", "sounds good", "sounds great",
-                "i agree", "agreed", "good plan", "great plan", "good call",
-                "happy with that", "let s do that", "let s do it",
-                "go with that", "strategy works", "plan works", "love it",
-            ),
-        ):
+        if has_any_phrase(text, _PLAN_VERDICT_FOR):
             return True
-        if has_any_phrase(
-            text,
-            (
-                "stupid", "ridiculous", "terrible", "awful", "rubbish",
-                "nonsense", "absurd", "insane", "crazy", "dumb", "idiotic",
-                "bad idea", "bad call", "worst", "hate", "not happy",
-                "unhappy", "disagree",
-            ),
-        ):
+        if has_any_phrase(text, _PLAN_VERDICT_AGAINST):
             return True
 
         # Anything that asks what to *do* is advice, not a lookup. The fast path
@@ -3948,7 +4069,16 @@ class EngineerBrain:
         enforce_radio_limit: bool = True,
         strategy_context: dict[str, Any] | None = None,
         refresh_current_strategy: bool = False,
+        trace: dict[str, Any] | None = None,
     ) -> str:
+        """Generate one radio line and shape it as the driver hears it.
+
+        ``trace``, when given, is filled with the evidence behind the line:
+        the route, the provider and model that answered, each tool call with
+        its bounded result, the provider's own text and every post-processing
+        step that changed it. It is this generation's own record, so a
+        concurrent narration cannot relabel it.
+        """
         prompt = prompt.strip()
         if not prompt:
             raise RuntimeError("The engineer request contained no user prompt.")
@@ -3957,10 +4087,13 @@ class EngineerBrain:
         # or driver requests. The actual tool result supersedes header facts.
         used_strategy = deepcopy(strategy_context)
         guard_origin = await self.store.snapshot_analysis() if refresh_current_strategy else None
+        calls: list[tuple[str, str, str]] = []
 
         async def execute_tool(name: str, arguments: dict[str, Any]) -> Any:
             nonlocal used_strategy
             result = await self.tools.call(name, arguments)
+            if trace is not None:
+                calls.append((name, _trace_json(arguments), _trace_json(result)))
             if strategy_context is not None and name == "get_pit_strategy" and isinstance(result, dict):
                 used_strategy = deepcopy(result)
             return result
@@ -3981,38 +4114,31 @@ class EngineerBrain:
         except Exception as exc:
             message = f"{type(exc).__name__}: {exc}"
             await self.store.update(llm_last_error=message)
+            if trace is not None:
+                recorded, omitted = _trace_tool_calls(calls)
+                trace.update(
+                    route=route,
+                    prompt=_trace_text(prompt, _TRACE_PROMPT_CHARS),
+                    provider_error=type(exc).__name__,
+                    tool_calls=recorded,
+                    tool_calls_omitted=omitted,
+                )
             raise
-        if enforce_radio_limit:
-            live_state = await self.store.snapshot_analysis()
-            # On a strategy reply the cut keeps the pit call, so the qualifier
-            # and change condition below are attached to the call, not to
-            # whatever happened to come first.
-            result.text = _limit_radio_sentences(
-                result.text,
-                route,
-                str(live_state.get("radio_verbosity", settings.radio_verbosity)),
-                protect=_pit_call_index if strategy_context is not None else None,
-            )
-        if guard_origin is not None:
-            latest_state = await self.store.snapshot_analysis()
-            if not await self.store.matches_session(guard_origin):
-                raise SessionChangedError("Session changed; the previous strategy response was discarded.")
-            latest_plan = latest_state.get("strategy", {})
-            finished = self._finished_strategy_answer(latest_state)
-            if finished:
-                result.text = finished
-                used_strategy = {}
-                result.provider = "local"
-                result.model = "strategy-refresh-guard"
-            elif self._material_plan_identity(used_strategy) != self._material_plan_identity(latest_plan):
-                result.text = self._complete_strategy_answer(latest_plan, latest_state, "Telemetry updated while checking; ")
-                used_strategy = latest_plan
-                result.provider = "local"
-                result.model = "strategy-refresh-guard"
-        if strategy_context is not None:
-            result.text = self.qualify_strategy_text(result.text, used_strategy)
-        if refresh_current_strategy:
-            result.text = self._with_strategy_change_condition(result.text, used_strategy)
+        raw_text = result.text
+        steps: list[dict[str, str]] = []
+        result.text, guarded = await self._shape_reply(
+            result.text,
+            route=route,
+            enforce_radio_limit=enforce_radio_limit,
+            strategy_context=strategy_context,
+            used_strategy=used_strategy,
+            guard_origin=guard_origin,
+            refresh_current_strategy=refresh_current_strategy,
+            steps=steps,
+        )
+        if guarded:
+            result.provider = "local"
+            result.model = "strategy-refresh-guard"
         self.last_provider_result = result
         await self.store.update(
             llm_provider=result.provider,
@@ -4021,7 +4147,83 @@ class EngineerBrain:
             llm_last_tool_rounds=result.tool_rounds,
             llm_last_error="",
         )
+        if trace is not None:
+            recorded, omitted = _trace_tool_calls(calls)
+            trace.update(
+                route=route,
+                provider=result.provider,
+                model=result.model,
+                latency_ms=round(result.latency_ms, 1),
+                tool_rounds=result.tool_rounds,
+                prompt=_trace_text(prompt, _TRACE_PROMPT_CHARS),
+                tool_calls=recorded,
+                tool_calls_omitted=omitted,
+                raw_text=_trace_text(raw_text),
+                postprocess=steps,
+                final_text=_trace_text(result.text),
+            )
         return result.text
+
+    async def _shape_reply(
+        self,
+        text: str,
+        *,
+        route: str,
+        enforce_radio_limit: bool,
+        strategy_context: dict[str, Any] | None,
+        used_strategy: dict[str, Any] | None,
+        guard_origin: dict[str, Any] | None,
+        refresh_current_strategy: bool,
+        steps: list[dict[str, str]],
+    ) -> tuple[str, bool]:
+        """A provider's reply as the radio speaks it, and whether the refresh
+        guard replaced it with the computed plan.
+
+        The one post-processing sequence for a model reply: the sentence cap,
+        the strategy refresh guard, the plan's qualifier and its change
+        condition. Each step that changes the text is noted in ``steps``.
+        ``used_strategy`` is the plan the reply was given (the header's, or a
+        get_pit_strategy result).
+        """
+        if enforce_radio_limit:
+            live_state = await self.store.snapshot_analysis()
+            # On a strategy reply the cut keeps the pit call, so the qualifier
+            # and change condition below are attached to the call, not to
+            # whatever happened to come first.
+            shaped = _limit_radio_sentences(
+                text,
+                route,
+                str(live_state.get("radio_verbosity", settings.radio_verbosity)),
+                protect=_pit_call_index if strategy_context is not None else None,
+            )
+            _note_step(steps, "sentence_cap", text, shaped)
+            text = shaped
+        guarded = False
+        if guard_origin is not None:
+            latest_state = await self.store.snapshot_analysis()
+            if not await self.store.matches_session(guard_origin):
+                raise SessionChangedError("Session changed; the previous strategy response was discarded.")
+            latest_plan = latest_state.get("strategy", {})
+            finished = self._finished_strategy_answer(latest_state)
+            if finished:
+                text = finished
+                used_strategy = {}
+                guarded = True
+            elif self._material_plan_identity(used_strategy) != self._material_plan_identity(latest_plan):
+                text = self._complete_strategy_answer(latest_plan, latest_state, "Telemetry updated while checking; ")
+                used_strategy = latest_plan
+                guarded = True
+            if guarded:
+                steps.append({"step": "strategy_refresh_guard", "text": _trace_text(text)})
+        if strategy_context is not None:
+            qualified = self.qualify_strategy_text(text, used_strategy)
+            _note_step(steps, "strategy_qualifier", text, qualified)
+            text = qualified
+        if refresh_current_strategy:
+            conditioned = self._with_strategy_change_condition(text, used_strategy)
+            _note_step(steps, "change_condition", text, conditioned)
+            text = conditioned
+        return text, guarded
 
     async def narrate_briefing(self, kind: str, payload: dict[str, Any]) -> str:
         """Narrate frozen deterministic facts without giving the model tools.
@@ -4061,96 +4263,21 @@ class EngineerBrain:
         )
         return _limit_radio_sentences(text, "deep", "standard", limit=limit, keep_last=not is_pre)
 
-    @session_scoped()
-    async def compare(self, utterance: str) -> dict[str, Any]:
-        """Run an opt-in, non-spoken A/B comparison on one frozen context."""
-        state = await self.store.snapshot_analysis()
-        include_strategy = self._is_strategy_request(utterance)
-        recent = [
-            entry for entry in state["radio_log"][-4:]
-            if include_strategy or not self._is_strategy_request(str(entry.get("text", "")))
-        ]
-        history = "\n".join(_radio_history(recent, int(state.get("current_lap", 0) or 0)))
-        prompt = (
-            f"{await self._header(include_strategy=include_strategy)}\n"
-            "REQUEST FOCUS: answer only the latest driver request. Strategy is omitted unless requested. "
-            f"{_RADIO_LABELS_NOTE}\n"
-            f"RECENT RADIO:\n{history}\n"
-            f"DRIVER: {utterance}"
-        )
-        route = self.classify_request(utterance)
-        effort = (
-            settings.deep_reasoning_effort
-            if route == "deep"
-            else settings.reasoning_effort
-        )
-        tools = [schema for schema in self.tools.schemas() if schema["name"] != "record_lap_observation"]
-        return await self.router.compare(
-            prompt=prompt,
-            instructions=compose_persona(
-                PERSONA,
-                route=route,
-                addenda=persona_addenda(
-                    state, utterance, {schema["name"] for schema in tools}, strategy=include_strategy
-                ),
-            ),
-            route=route,
-            effort=effort,
-            tools=tools,
-            execute_tool=self.tools.call,
-            max_rounds=4 if route == "deep" else 3,
-        )
+    async def _radio_request(
+        self,
+        utterance: str,
+        state: dict[str, Any],
+        history: list[dict[str, Any]],
+        *,
+        declined: bool,
+    ) -> _RadioRequest:
+        """The model request for one driver turn.
 
-    @session_scoped()
-    @lap_note_context
-    async def ask(self, utterance: str, *, recorded: DriverCommands | None = None) -> str:
-        """Answer one driver turn on the text path.
-
-        ``recorded`` is for a turn the speech session already logged and
-        applied, answered here because its own reply failed: the driver line
-        is not logged again and its commands are not stored twice.
+        ``history`` is the radio before this turn. ask() sends exactly this
+        request and compare() replays it, so a provider comparison measures
+        the prompt, brief, history and tool set the driver's question gets.
         """
-        origin = await self.store.snapshot_analysis()
-        if recorded is None:
-            commands = await self.apply_driver_commands(utterance, plan_discussion=True)
-            await self.store.append_radio("driver", utterance)
-            state = await self.store.snapshot_analysis()
-            await self.database.save_radio_message(state, "driver", utterance, "user")
-        else:
-            commands = recorded
-
         route = self.classify_request(utterance)
-        # A command answers with its stored outcome, or leaves the wording to
-        # the model; any other turn takes the fast path.
-        direct = commands.reply if commands.handled else await self._fast_answer(utterance)
-        if direct:
-            direct = _limit_radio_sentences(
-                direct,
-                route,
-                str((await self.store.snapshot_analysis()).get("radio_verbosity", "standard")),
-                # A computed plan's warning must not cost the driver its box call.
-                protect=_pit_call_index if self._is_strategy_request(utterance) else None,
-            )
-            await self.store.update(
-                llm_provider="local",
-                llm_model="deterministic-radio",
-                llm_last_latency_ms=0.0,
-                llm_last_tool_rounds=0,
-                llm_last_error="",
-            )
-            if not await self.store.append_radio("engineer", direct, expected=origin, source="reply"):
-                raise SessionChangedError("Session changed; the previous radio request was discarded.")
-            await self.database.save_radio_message(
-                origin, "engineer", direct, "deterministic_response"
-            )
-            return direct
-
-        state = await self.store.snapshot_analysis()
-        # A refusal of the pit call sets the hold and is then worded by the
-        # model. The reply needs the plan it is declining and the next
-        # feasible option, computed here, or "Copy, staying out" is all it can
-        # say; and the brief has to say what to do with them.
-        declined = self._declined_this_turn(origin, state, utterance)
         include_strategy = self._is_strategy_request(utterance) or declined
         # The conversation is kept intact. Previously any earlier turn that
         # looked like a strategy request was deleted from the history whenever
@@ -4159,8 +4286,7 @@ class EngineerBrain:
         # that it had not come through. Only leaked model deliberation is
         # filtered, and only from engineer lines, because that is not something
         # the driver said or heard.
-        recent = state["radio_log"][-9:]
-        history = "\n".join(_radio_history(recent[:-1], int(state.get("current_lap", 0) or 0)))
+        lines = "\n".join(_radio_history(history, int(state.get("current_lap", 0) or 0)))
         refusal_focus = (
             "The driver has just declined the pit call: answer as the DECLINED PIT CALL line says. "
             if declined
@@ -4176,28 +4302,239 @@ class EngineerBrain:
             "telemetry update can change the situation; describe the new state without claiming an "
             "earlier answer was wrong unless evidence from that earlier moment demonstrates an error. "
             f"{_RADIO_LABELS_NOTE}\n"
-            f"RECENT RADIO:\n{history}\n"
+            f"RECENT RADIO:\n{lines}\n"
             f"DRIVER: {utterance}"
         )
-        effort = settings.deep_reasoning_effort if route == "deep" else settings.reasoning_effort
+        tools = self.tools.schemas_for_route(route)
+        offered = {schema["name"] for schema in tools}
+        return _RadioRequest(
+            prompt=prompt,
+            instructions=compose_persona(
+                PERSONA,
+                str(state.get("radio_verbosity", "standard")),
+                state.get("standing_instructions", []),
+                route=route,
+                addenda=persona_addenda(state, utterance, offered, strategy=include_strategy),
+            ),
+            route=route,
+            effort=settings.deep_reasoning_effort if route == "deep" else settings.reasoning_effort,
+            max_rounds=4 if route == "deep" else 3,
+            tools=tools,
+            strategy_context=state.get("strategy", {}) if include_strategy else None,
+            refresh_current_strategy=self._requests_current_strategy_plan(state, utterance),
+        )
+
+    @classmethod
+    def _answers_without_model(cls, state: dict[str, Any], utterance: str) -> bool:
+        """Whether the radio would answer this turn from telemetry, not a model.
+
+        Read without side effects, for the comparison; the fast path itself
+        stores commands as it goes.
+        """
+        if cls._requests_current_pit_instruction(state, utterance) and cls._finished_strategy_answer(state):
+            return True
+        if cls._requests_current_final_result(state, utterance):
+            return True
+        return cls._is_simple_lookup(utterance) and not cls._defers_to_model(state, utterance)
+
+    @session_scoped()
+    async def compare(self, utterance: str) -> dict[str, Any]:
+        """Run an opt-in, non-spoken A/B comparison on one frozen context.
+
+        Every provider is sent the request ask() would send for this turn:
+        the same prompt, radio history, brief and route tool set. Because a
+        comparison must change nothing, the driver's commands are not
+        applied (a refusal is compared as the words alone), and
+        record_lap_observation and the setup-persisting tools are withheld.
+        Each result keeps the provider's own text as ``reply`` and adds
+        ``as_spoken``, the line after the post-processing ask() applies.
+        ``fast_path`` says the radio would normally answer this turn from
+        telemetry without any provider.
+        """
+        state = await self.store.snapshot_analysis()
+        request = await self._radio_request(
+            utterance, state, list(state.get("radio_log", []))[-8:], declined=False
+        )
+        used_strategy = deepcopy(request.strategy_context)
+        calls: list[tuple[str, str, str]] = []
+
+        async def execute_tool(name: str, arguments: dict[str, Any]) -> Any:
+            nonlocal used_strategy
+            result = await self.tools.call(name, arguments)
+            calls.append((name, _trace_json(arguments), _trace_json(result)))
+            if request.strategy_context is not None and name == "get_pit_strategy" and isinstance(result, dict):
+                used_strategy = deepcopy(result)
+            return result
+
+        comparison = await self.router.compare(
+            prompt=request.prompt,
+            instructions=request.instructions,
+            route=request.route,
+            effort=request.effort,
+            tools=[schema for schema in request.tools if schema["name"] != "record_lap_observation"],
+            execute_tool=execute_tool,
+            max_rounds=request.max_rounds,
+        )
+        for entry in (comparison.get("results") or {}).values():
+            if not isinstance(entry, dict) or not isinstance(entry.get("reply"), str):
+                continue
+            steps: list[dict[str, str]] = []
+            spoken, guarded = await self._shape_reply(
+                entry["reply"],
+                route=request.route,
+                enforce_radio_limit=True,
+                strategy_context=request.strategy_context,
+                used_strategy=used_strategy,
+                guard_origin=state if request.refresh_current_strategy else None,
+                refresh_current_strategy=request.refresh_current_strategy,
+                steps=steps,
+            )
+            entry["as_spoken"] = spoken
+            entry["postprocess"] = [step["step"] for step in steps]
+            if guarded:
+                entry["as_spoken_by"] = "strategy-refresh-guard"
+        recorded, omitted = _trace_tool_calls(calls)
+        comparison.update(
+            route=request.route,
+            fast_path=self._answers_without_model(state, utterance),
+            tool_calls=recorded,
+            tool_calls_omitted=omitted,
+        )
+        return comparison
+
+    @staticmethod
+    def _repeat_of_last_call(state: dict[str, Any], utterance: str) -> str | None:
+        """The engineer's last line, when this turn only asks to hear it again.
+
+        Given verbatim, with no model call, so the driver hears the message
+        they missed rather than a new paraphrase of it. Only a line said on
+        this lap, with no race-control change since shortly before it: a "box
+        this lap" from the previous lap, or a call made before a flag, no
+        longer means what it said, and the model, which sees the current
+        state, answers instead. A line the driver only partly heard is not
+        replayed either.
+        """
+        if not any(_REPEAT_REQUEST.fullmatch(form) for form in _request_forms(utterance)):
+            return None
+        log = list(state.get("radio_log", []) or [])
+        if not log or log[-1].get("role") != "driver":
+            return None
+        while log and log[-1].get("role") == "driver":
+            log.pop()
+        if not log or log[-1].get("role") != "engineer":
+            return None
+        line = " ".join(str(log[-1].get("text", "") or "").split())
+        lap = log[-1].get("lap")
+        if not line or line.endswith("—") or _contains_deliberation_for_history(line):
+            return None
+        if not isinstance(lap, int) or isinstance(lap, bool) or lap != int(state.get("current_lap", 0) or 0):
+            return None
+        if state.get("red_flag_active"):
+            return None
+        changed_at = float(state.get("race_control_changed_at", 0.0) or 0.0)
+        if changed_at and time.time() - changed_at < _REPEAT_RACE_CONTROL_WINDOW_S:
+            return None
+        return line
+
+    async def _say_locally(
+        self, origin: dict[str, Any], text: str, source: str, model: str, trace: dict[str, Any]
+    ) -> str:
+        """Deliver and record a reply the radio composed without a model."""
+        await self.store.update(
+            llm_provider="local",
+            llm_model=model,
+            llm_last_latency_ms=0.0,
+            llm_last_tool_rounds=0,
+            llm_last_error="",
+        )
+        if not await self.store.append_radio("engineer", text, expected=origin, source="reply"):
+            raise SessionChangedError("Session changed; the previous radio request was discarded.")
+        trace.update(provider="local", model=model, final_text=_trace_text(text))
+        await self.database.save_radio_message(origin, "engineer", text, source, trace=trace)
+        return text
+
+    @session_scoped()
+    @lap_note_context
+    async def ask(self, utterance: str, *, recorded: DriverCommands | None = None) -> str:
+        """Answer one driver turn on the text path.
+
+        ``recorded`` is for a turn the speech session already logged and
+        applied, answered here because its own reply failed: the driver line
+        is not logged again and its commands are not stored twice.
+
+        Every engineer answer is saved with its trace (see _run), labelled
+        with the provider that actually produced it; the driver's own line is
+        saved with how it reacts to the previous answer (_driver_reaction).
+        """
+        origin = await self.store.snapshot_analysis()
+        if recorded is None:
+            commands = await self.apply_driver_commands(utterance, plan_discussion=True)
+            await self.store.append_radio("driver", utterance)
+            state = await self.store.snapshot_analysis()
+            await self.database.save_radio_message(
+                state, "driver", utterance, "user", label=_driver_reaction(utterance)
+            )
+        else:
+            commands = recorded
+
+        # "Say again" wants the message the driver missed, word for word.
+        if not commands.handled:
+            repeat = self._repeat_of_last_call(await self.store.snapshot_analysis(), utterance)
+            if repeat is not None:
+                return await self._say_locally(
+                    origin, repeat, "deterministic_repeat", "radio-repeat",
+                    {"path": "repeat", "route": "repeat"},
+                )
+
+        route = self.classify_request(utterance)
+        # A command answers with its stored outcome, or leaves the wording to
+        # the model; any other turn takes the fast path.
+        direct = commands.reply if commands.handled else await self._fast_answer(utterance)
+        if direct:
+            unshaped = direct
+            direct = _limit_radio_sentences(
+                direct,
+                route,
+                str((await self.store.snapshot_analysis()).get("radio_verbosity", "standard")),
+                # A computed plan's warning must not cost the driver its box call.
+                protect=_pit_call_index if self._is_strategy_request(utterance) else None,
+            )
+            steps: list[dict[str, str]] = []
+            _note_step(steps, "sentence_cap", unshaped, direct)
+            return await self._say_locally(
+                origin, direct, "deterministic_response", "deterministic-radio",
+                {
+                    "path": "command" if commands.handled else "deterministic",
+                    "route": route,
+                    "raw_text": _trace_text(unshaped),
+                    "postprocess": steps,
+                },
+            )
+
+        state = await self.store.snapshot_analysis()
+        # A refusal of the pit call sets the hold and is then worded by the
+        # model. The reply needs the plan it is declining and the next
+        # feasible option, computed here, or "Copy, staying out" is all it can
+        # say; and the brief has to say what to do with them.
+        declined = self._declined_this_turn(origin, state, utterance)
+        request = await self._radio_request(
+            utterance, state, state["radio_log"][-9:][:-1], declined=declined
+        )
         narration_started = time.monotonic()
-        offered = {schema["name"] for schema in self.tools.schemas_for_route(route)}
+        trace: dict[str, Any] = {}
         try:
             text = await self._run(
-                prompt,
-                effort,
-                compose_persona(
-                    PERSONA,
-                    str(state.get("radio_verbosity", "standard")),
-                    state.get("standing_instructions", []),
-                    route=route,
-                    addenda=persona_addenda(state, utterance, offered, strategy=include_strategy),
-                ),
-                max_rounds=4 if route == "deep" else 3,
-                route=route,
-                strategy_context=state.get("strategy", {}) if include_strategy else None,
-                refresh_current_strategy=self._requests_current_strategy_plan(state, utterance),
+                request.prompt,
+                request.effort,
+                request.instructions,
+                max_rounds=request.max_rounds,
+                route=request.route,
+                tools=request.tools,
+                strategy_context=request.strategy_context,
+                refresh_current_strategy=request.refresh_current_strategy,
+                trace=trace,
             )
+            trace["path"] = "model"
         except (ProviderDeadlineError, ProviderRequestError) as exc:
             # Neither the plan nor a stored value depends on the model, so any
             # transient provider failure gets them, not only a deadline: a
@@ -4237,15 +4574,26 @@ class EngineerBrain:
             self.last_provider_result = ProviderResult(
                 text=text, provider="local", model=fallback_model, latency_ms=elapsed_ms,
             )
+            trace.update(
+                path="provider_fallback",
+                provider="local",
+                model=fallback_model,
+                failure=failure,
+                latency_ms=round(elapsed_ms, 1),
+                final_text=_trace_text(text),
+            )
             # _run and the router retain the failed provider diagnostic. The
             # response is explicitly identified as local, degraded guidance.
             await self.store.update(llm_provider="local", llm_model=fallback_model,
                                     llm_last_latency_ms=round(elapsed_ms, 1), llm_last_tool_rounds=0)
         if not await self.store.append_radio("engineer", text, expected=origin, source="reply"):
             raise SessionChangedError("Session changed; the previous radio request was discarded.")
-        provider_name = self.last_provider_result.provider if self.last_provider_result is not None else "unknown"
+        # The provider is read from this answer's own trace, never from the
+        # shared last_provider_result, which a concurrent narration can
+        # overwrite while this reply is being recorded.
+        provider_name = str(trace.get("provider") or "unknown")
         await self.database.save_radio_message(
-            origin, "engineer", text, f"response:{provider_name}"
+            origin, "engineer", text, f"response:{provider_name}", trace=trace
         )
         return text
 

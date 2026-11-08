@@ -1065,6 +1065,19 @@ async def history(
     )
 
 
+@app.get("/api/radio/{message_id}/trace")
+async def radio_trace(message_id: int) -> dict[str, object]:
+    """One saved radio line with the evidence stored for it.
+
+    Ids come from the radio rows /api/history lists; ``has_trace`` there says
+    which lines carry one. Read-only.
+    """
+    record = await database.radio_trace(message_id) if message_id > 0 else None
+    if record is None:
+        raise HTTPException(404, "No radio message with that id")
+    return record
+
+
 @app.post("/api/maintenance")
 async def run_maintenance(
     keep_trace_sessions: int = Query(default=-1, ge=-1, le=200),
@@ -1340,6 +1353,8 @@ async def compare_llms(request: CompareRequest) -> dict[str, object]:
         raise HTTPException(400, "Text is required")
     try:
         return await brain.compare(request.text.strip())
+    except SessionChangedError as exc:
+        raise HTTPException(409, str(exc)) from exc
     except Exception as exc:
         raise HTTPException(503, str(exc)) from exc
 
