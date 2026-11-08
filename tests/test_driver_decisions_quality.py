@@ -123,6 +123,29 @@ async def test_an_agreed_tactic_keeps_the_pit_question_off_the_standing_plan(sta
 
 
 @pytest.mark.asyncio
+async def test_an_agreed_tactic_is_spent_once_the_stop_it_was_about_is_made(stack, monkeypatch):
+    store, brain, captured = await _race(stack, monkeypatch, ["Copy, we go long."])
+    await store.mutate(lambda state: setattr(state.tyre, "age_laps", 13))
+    await brain.ask("We'll go long, I'm staying out")
+    # The stop is made on lap 22; on lap 35 the two-stop plan calls lap 38.
+    second = _plan(box_lap=38, box_laps=[38], compounds=["HARD", "MEDIUM"], fit_compound="MEDIUM",
+                   instruction="Box lap 38 for MEDIUM.")
+
+    def after_the_stop(state):
+        state.current_lap = 35
+        state.tyre.compound = "HARD"
+        state.tyre.age_laps = 13
+        state.strategy = second
+        state.strategy_hold = {**state.strategy_hold, "active": False}
+
+    await store.mutate(after_the_stop)
+    heard = await brain.ask("should I box")
+    assert len(captured) == 1, "the plan answers; the go-long agreement was about the stop already made"
+    assert heard.startswith("Box lap 38 for mediums")
+    assert "AGREED WITH THE DRIVER" not in await brain.situation_header()
+
+
+@pytest.mark.asyncio
 async def test_a_pit_question_during_the_hold_with_no_provider_gets_the_next_option(stack, monkeypatch):
     store, brain, _captured = await _race(stack, monkeypatch, ["Copy, staying out.", _timeout()])
     await brain.ask("I'm not boxing")
@@ -159,6 +182,22 @@ async def test_the_qualifier_and_the_cut_follow_the_next_option_not_the_refusal(
     )
     heard = await brain.ask("I'm not boxing, stay out")
     assert heard.startswith("Next option is box lap 17 for hards")
+
+
+@pytest.mark.asyncio
+async def test_a_no_stop_option_takes_the_qualifier_not_the_acknowledgement(stack, monkeypatch):
+    plan = _plan(box_lap=34, box_laps=[34], compounds=["HARD", "MEDIUM"], fit_compound="MEDIUM",
+                 instruction="Box lap 34 for MEDIUM.")
+    plan["plans"] = [plan["recommended"], {
+        **plan["recommended"], "box_lap": None, "box_laps": [], "compounds": ["HARD"],
+        "fit_compound": None, "instruction": "Stay out to the finish.", "risk_adjusted_time_s": 1803.4,
+    }]
+    reply = "Copy, staying out. Next option is to stay out to the finish on these, about 3.4 seconds slower."
+    store, brain, captured = await _race(stack, monkeypatch, [reply], strategy=plan, lap=33)
+    heard = await brain.ask("I'm not boxing")
+    assert "NEXT FEASIBLE OPTION: stay out to the finish" in captured[0]["prompt"]
+    assert heard.startswith("Copy, staying out. Next option is to stay out to the finish")
+    assert heard.endswith("3.4 seconds slower; provisional, confidence low, tyre estimates include track defaults.")
 
 
 def test_a_negated_call_verb_is_not_the_pit_call():
@@ -246,6 +285,23 @@ async def test_a_terse_challenge_keeps_the_reason_with_the_call(stack, monkeypat
 ])
 def test_the_temperature_unit_is_the_one_asked_for(utterance, unit):
     assert EngineerBrain._requested_temperature_unit(utterance) == unit
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("start,utterance,unit", [
+    ("c", "Can I have the temperatures in Fahrenheit", "f"),
+    ("c", "Could we switch to Fahrenheit?", "f"),
+    ("f", "Can we go back to celsius please", "c"),
+    ("c", "Stop the tyre updates and give me temps in Fahrenheit", "f"),
+    ("f", "Stop using Fahrenheit and switch back to Celsius", "c"),
+    ("c", "Can you give me Fahrenheit, or is that Celsius already?", "f"),
+    ("c", "Can you tell me if that's in fahrenheit?", "c"),
+    ("c", "Did you give me those in Fahrenheit?", "c"),
+])
+async def test_a_unit_request_worded_as_a_question_still_sets_the_unit(stack, monkeypatch, start, utterance, unit):
+    store, brain, _captured = await _race(stack, monkeypatch, ["Copy."], temperature_unit=start)
+    await brain.apply_driver_commands(utterance)
+    assert (await store.snapshot_analysis())["temperature_unit"] == unit
 
 
 @pytest.mark.asyncio
