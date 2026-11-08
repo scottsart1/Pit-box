@@ -697,6 +697,19 @@ async def test_normal_route_reasoning_model_gets_a_reasoning_sized_output_cap() 
     assert result.usage["reasoning_tokens"] == 3
 
 
+def test_normal_route_budget_settings_are_bounded_like_the_deep_ones() -> None:
+    config = _settings(
+        openai_normal_max_output_tokens=0,
+        openai_normal_retry_max_output_tokens=-5,
+        custom_llm_normal_max_tokens=10,
+        custom_llm_normal_retry_max_tokens=10**9,
+    )
+    assert config.openai_normal_max_output_tokens == 256
+    assert config.openai_normal_retry_max_output_tokens == 256
+    assert config.custom_llm_normal_max_tokens == 256
+    assert config.custom_llm_normal_retry_max_tokens == 128_000
+
+
 @pytest.mark.asyncio
 async def test_custom_endpoint_normal_route_budget_fits_inline_reasoning() -> None:
     requests: list[dict[str, Any]] = []
