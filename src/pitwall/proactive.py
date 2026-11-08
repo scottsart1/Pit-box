@@ -1202,6 +1202,13 @@ class ProactiveEngineer:
                 and float(state.get("safety_car_delta_s", 0.0) or 0.0)
                 < settings.proactive_sc_delta_min_s
             )
+        if kind == "sc_restart":
+            # Advice for a restart still to come. Said once the race is green,
+            # "stay positive on the delta until green" holds the driver back
+            # while the field races away.
+            return str(state.get("race_control_phase", "green")) == str(
+                (event.get("payload", {}) or {}).get("phase")
+            )
         if kind == "compound_requirement":
             return bool(state.get("strategy", {}).get("compound_rule", {}).get("change_outstanding"))
         if kind == "blue_flag":
