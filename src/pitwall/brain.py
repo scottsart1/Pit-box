@@ -625,9 +625,17 @@ _ABBREVIATION_END = re.compile(r"(?:\b(?:vs|approx|St|Ste|Mr)|\be\.g|\bi\.e)\.$"
 _ACKNOWLEDGEMENTS = frozenset({
     "copy", "copy that", "copy copy", "copy understood", "understood", "roger",
     "roger that", "ok", "okay", "ok copy", "okay copy", "got it", "noted",
-    "affirm", "affirmative", "received", "will do",
+    "received", "will do",
 })
 _ACKNOWLEDGEMENT_OPENERS = frozenset({"copy", "understood", "roger", "ok", "okay", "noted", "got"})
+# A one- or two-word opener that does carry meaning (an answer, an alert, a
+# position) but leaves the substance to the next sentence: "No. Stay out two
+# more laps." It is spoken, without using up the sentence budget.
+_SHORT_LEADS = frozenset({
+    "yes", "no", "negative", "affirm", "affirmative", "correct",
+    "box box", "box box box", "safety car", "safety car safety car",
+    "virtual safety car", "vsc", "red flag", "red flag red flag",
+})
 # Briefings have their own length, independent of the radio verbosity: the
 # pre-session brief is read on screen, the debriefs are spoken off the throttle.
 _BRIEFING_SENTENCE_LIMITS = {"pre_session": 8, "post_race": 2, "post_qualifying_lap": 3}
@@ -658,8 +666,8 @@ def _radio_length_rule(route: str, verbosity: str) -> str:
     limit = _radio_sentence_limit(route, verbosity)
     return (
         f"Length: the radio cuts this reply after {limit} sentence{'' if limit == 1 else 's'}. "
-        "Put the answer or the instruction in the first sentence. Do not spend a sentence on a "
-        'bare acknowledgement such as "copy" or "understood": it is never the whole answer.'
+        "Put the answer or the instruction in the first sentence. When there is an answer to "
+        'give, do not spend a sentence on a bare acknowledgement such as "copy" or "understood".'
     )
 
 
@@ -667,9 +675,15 @@ def _is_acknowledgement(sentence: str) -> bool:
     return " ".join(re.findall(r"[a-z]+", sentence.lower())) in _ACKNOWLEDGEMENTS
 
 
-def _is_acknowledging_lead_in(sentence: str) -> bool:
-    """A few words that open on an acknowledgement: "Copy, staying out." """
-    words = re.findall(r"[a-z]+", sentence.lower())
+def _is_free_lead_in(sentence: str) -> bool:
+    """A short opener that is spoken without using up the sentence budget:
+    an acknowledging lead-in ("Copy, staying out."), a bare answer or alert
+    ("No.", "Box, box.", "Safety car!") or a position ("P4.")."""
+    words = re.findall(r"[a-z0-9]+", sentence.lower())
+    if " ".join(words) in _SHORT_LEADS:
+        return True
+    if len(words) == 1 and re.fullmatch(r"p\d{1,2}", words[0]):
+        return True
     return 1 < len(words) <= 4 and words[0] in _ACKNOWLEDGEMENT_OPENERS
 
 
@@ -680,18 +694,20 @@ def _limit_radio_sentences(
     *,
     limit: int | None = None,
     keep_last: bool = False,
-    protect: Callable[[str], bool] | None = None,
+    protect: Callable[[list[str]], int | None] | None = None,
 ) -> str:
     """Keep TTS output radio-length even when a provider ignores the style brief.
 
     Counting from the front alone kept whatever came first. In terse mode
-    "Copy. Box this lap for hards." became "Copy.", and a driver check lost
-    the question that opens the reply window. When the text is over the
-    limit, therefore: a leading bare acknowledgement is dropped, a short
-    acknowledging lead-in ("Copy, staying out.") does not use up the budget,
-    the first sentence matching ``protect`` (a pit call) is kept, and a
-    closing question (or, with ``keep_last``, a debrief's final instruction)
-    is kept, even when that takes a terse reply to two sentences.
+    "Copy. Box this lap for hards." became "Copy.", "No. Stay out two more
+    laps." became "No.", and a driver check lost the question that opens the
+    reply window. When the text is over the limit, therefore: a leading bare
+    acknowledgement is dropped; a short opener ("Copy, staying out.", "No.",
+    "Box, box.") is spoken without using up the budget; the sentence
+    ``protect`` picks (a pit call) is kept; and a closing question (or, with
+    ``keep_last``, a debrief's final instruction) is kept. The pit call and
+    the closing sentence both survive, even when that takes a reply one
+    sentence past its budget; the opening sentence then gives way first.
     """
     sentences = _radio_sentences(text)
     budget = limit if limit is not None else _radio_sentence_limit(route, verbosity)
@@ -700,48 +716,82 @@ def _limit_radio_sentences(
     while len(sentences) > 1 and _is_acknowledgement(sentences[0]):
         sentences = sentences[1:]
     lead: list[str] = []
-    if len(sentences) > budget and _is_acknowledging_lead_in(sentences[0]):
+    if len(sentences) > budget and _is_free_lead_in(sentences[0]):
         lead, sentences = sentences[:1], sentences[1:]
-    chosen = list(range(min(budget, len(sentences))))
-    if protect is not None and not any(protect(sentence) for sentence in lead):
-        target = next((index for index, sentence in enumerate(sentences) if protect(sentence)), None)
-        if target is not None and target not in chosen:
-            chosen[-1] = target
+    target = None
+    if protect is not None and protect(lead) is None:
+        target = protect(sentences)
     last = len(sentences) - 1
-    if last not in chosen and (keep_last or sentences[last].endswith("?")):
-        chosen = chosen[: max(1, budget - 1)] + [last]
-    return " ".join(lead + [sentences[index] for index in sorted(set(chosen))])
+    required = {target} if target is not None else set()
+    if keep_last or sentences[last].endswith("?"):
+        required.add(last)
+    room = budget - len(required)
+    if target is None and required:
+        # A closing question alone never displaces the opening sentence.
+        room = max(1, room)
+    fill = [index for index in range(len(sentences)) if index not in required][: max(0, room)]
+    return " ".join(lead + [sentences[index] for index in sorted(required.union(fill))])
 
 
 # What a strategy reply says when it makes a call: the sentence the plan's
 # uncertainty is attached to, and the one the radio cut must keep. A "pit"
-# that only qualifies a noun (pit lane, pit loss) is not a call, and nor is a
-# lap time ("last lap 1:31.2").
+# that only qualifies a noun (pit lane, pit loss) is not a call. A sentence
+# that only names a lap ("Norris pitted on lap 12") may be about another car,
+# so it counts only when no sentence has a call verb; a lap time ("last lap
+# 1:31.2") never counts.
 _PIT_CALL = re.compile(
     r"\b(?:box|pit(?![- ]?(?:lane|loss|wall|window|exit|entry|limiter|crew)\b)|stay out|stop|"
-    r"lap \d+(?![\d:])|fit|keep the current|to the (?:finish|flag|end)|change (?:tyres|tires|to))\b",
+    r"extend (?:the |this |your )?stint|fit|keep the current|to the (?:finish|flag|end)|"
+    r"change (?:tyres|tires|to))\b",
     re.IGNORECASE,
 )
+_PIT_CALL_LAP = re.compile(r"\blap \d+(?![\d:])", re.IGNORECASE)
 _STATED_UNCERTAINTY = re.compile(
     r"\bprovisional\b|\blow confidence\b|\bconfidence (?:is )?(?:low|unreported)\b|\btrack[- ]defaults?\b",
     re.IGNORECASE,
 )
-_CHANGE_CUE = re.compile(r"\b(?:if|unless|changes?|would change)\b", re.IGNORECASE)
-_CHANGE_TRIGGERS = ("safety car", "vsc", "red flag", "rain", "wet", "damage", "wear")
+# A model's own condition is a conditional clause that names a trigger: "if a
+# safety car comes", "a safety car before lap 12 would bring it forward", "a
+# wear spike changes it". "No change" and "wear changes little" are not.
+_CONDITION_CUE = re.compile(
+    r"\b(?:if|unless|in case)\b"
+    r"|\b(?:changes?|would change)\s+(?:it|that|this|the (?:call|plan|strategy|stop))\b"
+    r"|\b(?:would|will|could)\s+(?:bring|pull|move)\b"
+    r"|\b(?:brings?|pulls?|moves?)\s+(?:it|that|the stop)\s+(?:forward|earlier)\b",
+    re.IGNORECASE,
+)
+# Triggers that name the same thing: a model's "if it rains" covers the plan's
+# "wet crossover".
+_CHANGE_TRIGGER_GROUPS = (
+    ("safety car", "vsc"), ("red flag",), ("rain", "wet", "crossover"), ("damage",), ("wear",),
+)
 
 
-def _states_pit_call(sentence: str) -> bool:
-    return _PIT_CALL.search(sentence) is not None
+def _pit_call_index(sentences: list[str]) -> int | None:
+    """Which sentence makes the pit call: the first with a call verb, else the
+    first that names a lap. A question is never the call."""
+    for pattern in (_PIT_CALL, _PIT_CALL_LAP):
+        index = next(
+            (index for index, sentence in enumerate(sentences)
+             if pattern.search(sentence) and not sentence.endswith("?")),
+            None,
+        )
+        if index is not None:
+            return index
+    return None
 
 
 def _states_change_condition(text: str, condition: str) -> bool:
-    """Whether the reply already gives a condition naming one of the plan's triggers."""
-    if _CHANGE_CUE.search(text) is None:
-        return False
+    """Whether the reply already gives its own condition, in one clause, naming
+    one of the triggers in the plan's condition."""
+
+    def names(clause: str, group: tuple[str, ...]) -> bool:
+        return any(re.search(rf"\b{re.escape(trigger)}", clause, re.IGNORECASE) for trigger in group)
+
+    groups = [group for group in _CHANGE_TRIGGER_GROUPS if names(condition, group)]
     return any(
-        re.search(rf"\b{re.escape(trigger)}\b", text, re.IGNORECASE)
-        and re.search(rf"\b{re.escape(trigger)}\b", condition, re.IGNORECASE)
-        for trigger in _CHANGE_TRIGGERS
+        _CONDITION_CUE.search(clause) and any(names(clause, group) for group in groups)
+        for clause in re.split(r"\.(?!\d)|[;!?]|\s[—–]\s", text)
     )
 
 
@@ -782,11 +832,7 @@ class EngineerBrain:
         if qualifier is None or _STATED_UNCERTAINTY.search(text):
             return text
         sentences = _radio_sentences(text)
-        target = next(
-            (index for index, sentence in enumerate(sentences)
-             if _states_pit_call(sentence) and not sentence.endswith("?")),
-            None,
-        )
+        target = _pit_call_index(sentences)
         if target is None:
             return text
         sentences[target] = sentences[target].rstrip(".!") + f"; {qualifier}."
@@ -2108,6 +2154,9 @@ class EngineerBrain:
             return spoken + (f", {infringement}" if known(infringement) else "")
         if kind == "retirement":
             reason = record.get("reason")
+            if reason == "finished":
+                # The game also reports a car that took the flag this way.
+                return f"{driver or 'a car'} finished"
             return f"{driver or 'a car'} retired" + (
                 f", {reason}" if known(reason) and reason not in {"retired", "invalid"} else ""
             )
@@ -3252,7 +3301,7 @@ class EngineerBrain:
                 result.text,
                 route,
                 str(live_state.get("radio_verbosity", settings.radio_verbosity)),
-                protect=_states_pit_call if strategy_context is not None else None,
+                protect=_pit_call_index if strategy_context is not None else None,
             )
         if guard_origin is not None:
             latest_state = await self.store.snapshot_analysis()
@@ -3384,7 +3433,7 @@ class EngineerBrain:
                 route,
                 str((await self.store.snapshot_analysis()).get("radio_verbosity", "standard")),
                 # A computed plan's warning must not cost the driver its box call.
-                protect=_states_pit_call if self._is_strategy_request(utterance) else None,
+                protect=_pit_call_index if self._is_strategy_request(utterance) else None,
             )
             await self.store.update(
                 llm_provider="local",
