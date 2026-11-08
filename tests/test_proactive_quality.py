@@ -1232,7 +1232,7 @@ async def test_a_narration_that_restates_a_declined_stop_is_replaced(stack, cloc
 async def test_a_narrated_crossover_call_keeps_the_question_it_exists_to_ask(stack, clock):
     store, database, *_ = stack
     brain = _Brain(database, reply="Track is right at the crossover. Stay out on slicks for now.")
-    store, engineer, voice = await _race(stack, brain=brain)
+    store, engineer, _voice = await _race(stack, brain=brain)
     event = {
         "type": "weather_crossover",
         "payload": {

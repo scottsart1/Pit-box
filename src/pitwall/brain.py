@@ -4984,7 +4984,7 @@ class EngineerBrain:
         # a sentence reporting a rival's stop ahead of it.
         rivals = _rival_drivers(state)
         own_call = (state.get("strategy", {}) or {}).get("recommended") or {}
-        call_index = lambda sentences: _own_pit_call_index(sentences, rivals, own_call)  # noqa: E731
+        call_index = lambda sentences: _own_pit_call_index(sentences, rivals, own_call)
         if declined:
             # The reply's pit call is the next option, not the acknowledgement
             # of the stop the driver refused: the qualifier and the radio cut
@@ -4995,7 +4995,7 @@ class EngineerBrain:
                 laps = list(computed["alternative"].get("box_laps") or [])
                 if laps:
                     target = {"box_lap": laps[0], "instruction": ""}
-                    call_index = lambda sentences: _plan_call_index(sentences, target, current_lap)  # noqa: E731
+                    call_index = lambda sentences: _plan_call_index(sentences, target, current_lap)
                 else:
                     # A no-stop option is found by the finish it names. Matched
                     # as "stay out", it was the acknowledgement "Copy, staying
@@ -5003,7 +5003,7 @@ class EngineerBrain:
                     # own decision back as provisional.
                     call_index = _finish_option_index
             else:
-                call_index = lambda sentences: None  # noqa: E731
+                call_index = lambda sentences: None
         return _RadioRequest(
             prompt=prompt,
             instructions=compose_persona(

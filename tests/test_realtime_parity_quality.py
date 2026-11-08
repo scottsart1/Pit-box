@@ -966,7 +966,7 @@ async def test_a_call_whose_response_only_called_a_tool_is_spoken_on_the_other_p
 @pytest.mark.asyncio
 async def test_a_turn_that_could_not_be_transcribed_is_flagged_to_the_model_and_the_dashboard(stack, realtime_on):
     store, brain = await _brain(stack)
-    _controller_, radio, connection = await _controller(store, brain)
+    __controller_, radio, connection = await _controller(store, brain)
     radio._ensure_output_stream = lambda: None
     try:
         await radio._handle_event(Event(type="input_audio_buffer.speech_started"))
@@ -991,7 +991,7 @@ async def test_a_turn_that_could_not_be_transcribed_is_flagged_to_the_model_and_
 @pytest.mark.asyncio
 async def test_a_transcript_lost_while_the_reply_plays_is_corrected_after_it(stack, realtime_on):
     store, brain = await _brain(stack)
-    _controller_, radio, connection = await _controller(store, brain)
+    __controller_, radio, connection = await _controller(store, brain)
     radio._ensure_output_stream = lambda: None
     try:
         await radio._handle_event(Event(type="input_audio_buffer.speech_started"))
