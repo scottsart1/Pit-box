@@ -949,6 +949,43 @@ async def test_a_cut_call_no_longer_true_does_not_come_back(stack, monkeypatch, 
 
 
 @pytest.mark.asyncio
+async def test_a_cut_restart_call_is_not_said_after_the_green(stack, monkeypatch, tmp_path):
+    """"VSC ending. Stay positive on the delta until green" said once the race
+    is green tells the driver to sit on the delta while the field goes."""
+    import asyncio
+
+    monkeypatch.setattr(settings, "data_dir", tmp_path)
+    monkeypatch.setattr(settings, "voice_realtime_enabled", False)
+    monkeypatch.setattr(settings, "native_voice", False)
+    monkeypatch.setattr(settings, "voice_stream_tts", True)
+    monkeypatch.setattr(settings, "proactive_safe_hold_s", 0.0)
+    store, database, *_ = stack
+    played: list[str] = []
+    controller = _voice_controller(store, _Brain(database), played, playback_s=0.3)
+    store, engineer, _voice = await _race(stack, race_control_phase="vsc_ending")
+    engineer.voice = controller
+    engineer._enqueue("sc_restart", {"phase": "vsc_ending"}, critical=True, cooldown_s=0.0, expires_s=20.0)
+    speaking = asyncio.create_task(engineer._deliver(await store.snapshot_radio()))
+    await _wait_for(lambda: bool(played))
+    assert played[0].startswith("VSC ending")
+    await controller._transition(True, real_time.monotonic(), "mask_press")
+    await speaking
+    assert [event["type"] for event in engineer.pending] == ["sc_restart"]
+    # Green comes while the driver is talking.
+    await store.update(race_control_phase="green")
+    controller._signal_pressed = False
+    await store.update(ptt_pressed=False)
+    for _ in range(3):
+        await engineer._deliver(await store.snapshot_radio())
+    assert played == [played[0]]
+    assert not engineer.pending
+    assert _call_rows(database, "sc_restart") == [
+        ("cut short by the driver; requeued", 0),
+        ("superseded", 0),
+    ]
+
+
+@pytest.mark.asyncio
 async def test_routine_news_cut_short_and_a_second_cut_are_not_repeated(stack, monkeypatch, tmp_path):
     import asyncio
 
