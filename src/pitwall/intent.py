@@ -101,7 +101,7 @@ def extract_compounds(text: str) -> list[str]:
 
 
 def extract_lap(text: str, current_lap: int = 0) -> int | None:
-    normalized = normalize_text(text)
+    normalized = spoken_numbers_to_digits(text)
     if has_phrase(normalized, "this lap") or has_phrase(normalized, "now"):
         return max(1, int(current_lap))
     if has_phrase(normalized, "next lap"):
@@ -110,6 +110,77 @@ def extract_lap(text: str, current_lap: int = 0) -> int | None:
     if match:
         return int(match.group(1))
     return None
+
+
+# ---------------------------------------------------------------------------
+# Spoken numbers
+# ---------------------------------------------------------------------------
+
+_UNIT_WORDS = {
+    "zero": 0, "one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6,
+    "seven": 7, "eight": 8, "nine": 9,
+}
+_TEEN_WORDS = {
+    "ten": 10, "eleven": 11, "twelve": 12, "thirteen": 13, "fourteen": 14,
+    "fifteen": 15, "sixteen": 16, "seventeen": 17, "eighteen": 18, "nineteen": 19,
+}
+_TENS_WORDS = {
+    "twenty": 20, "thirty": 30, "forty": 40, "fourty": 40, "fifty": 50,
+    "sixty": 60, "seventy": 70, "eighty": 80, "ninety": 90,
+}
+_NUMBER_WORD = (
+    r"(?:(?:" + "|".join(_TENS_WORDS) + r")(?:[\s-]+(?:" + "|".join(_UNIT_WORDS) + r"))?"
+    r"|" + "|".join(_TEEN_WORDS) + r"|" + "|".join(_UNIT_WORDS) + r")"
+)
+# A number is only read from words where a lap or a position is being named:
+# directly after "lap", "P" or "position", or between "in" and "laps". Anywhere
+# else "one stop", "two-stop" and "no one" are words, not numbers.
+_SPOKEN_NUMBER = re.compile(
+    r"(?P<lead>\b(?:lap|p|position|in)[\s-]+(?:number\s+)?)"
+    r"(?P<number>" + _NUMBER_WORD + r")\b",
+)
+# "last lap two tenths quicker" measures time; the number is not the lap.
+_NOT_A_LAP_NUMBER = re.compile(
+    r"\s+(?:tenths?|seconds?|secs?|hundredths?|thousandths?|percent|per\s+cent|"
+    r"degrees?|minutes?|mins?|metres?|meters?|kph|mph|places?|positions?|cars?|"
+    r"points?|stops?|stopper|laps?)\b"
+)
+
+
+def _number_value(words: str) -> int:
+    total = 0
+    for word in re.findall(r"[a-z]+", words):
+        total += _UNIT_WORDS.get(word, 0) + _TEEN_WORDS.get(word, 0) + _TENS_WORDS.get(word, 0)
+    return total
+
+
+def spoken_numbers_to_digits(text: str) -> str:
+    """Write a spoken lap or position number as digits.
+
+    A transcriber may spell the number out: "box lap twenty two for hards"
+    read as a lap-less "take hards next" lock, so the engine picked its own lap
+    while the driver believed lap 22 was set. Only numbers that name a lap or a
+    position are converted ("lap twenty two", "P five", "in three laps"), so
+    stop counts and ordinary words keep their meaning.
+    """
+    normalized = normalize_text(text)
+
+    def replace(match: re.Match[str]) -> str:
+        lead = match.group("lead")
+        following = normalized[match.end():]
+        if lead.startswith("in"):
+            # "in two" only counts when "laps" follows; "in one stop" is a plan.
+            if not re.match(r"\s+laps?\b", following):
+                return match.group(0)
+        elif _NOT_A_LAP_NUMBER.match(following):
+            return match.group(0)
+        value = _number_value(match.group("number"))
+        lead = re.sub(r"number\s+$", "", lead)
+        if lead.startswith("p") and not lead.startswith("position"):
+            return f"p{value}"
+        return f"{lead}{value}"
+
+    return _SPOKEN_NUMBER.sub(replace, normalized)
 
 
 # ---------------------------------------------------------------------------

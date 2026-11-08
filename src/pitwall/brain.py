@@ -19,6 +19,7 @@ from .intent import (
     has_phrase,
     is_question,
     normalize_text,
+    spoken_numbers_to_digits,
     strip_leading_fillers,
     utterance_mood,
 )
@@ -1150,6 +1151,20 @@ class EngineerBrain:
             return None
         if not (is_start_plan or is_commitment or stop_preference is not None):
             return None
+        # The driver named a lap that could not be read ("box lap for hards",
+        # a garbled number). Locking the compound alone would let the engine
+        # pick its own lap while the driver believes theirs is set, so ask.
+        if lap is None and re.search(
+            r"\b(?:box|boxing|pit|pitting|stop|stopping|in|on)\s+(?:on\s+)?lap\b"
+            r"(?!\s+(?:\d|times?|record|delta|charts?|count|counter)\b)",
+            " ".join(re.findall(r"[a-z0-9]+", spoken_numbers_to_digits(text))),
+        ):
+            return {
+                "clear": False,
+                "needs_lap": True,
+                "next_compound": compounds[-1] if compounds else None,
+            }
+
         action: dict[str, Any] = {
             "clear": False,
             "enabled": True,
@@ -1389,9 +1404,11 @@ class EngineerBrain:
     @classmethod
     def _driver_position_claim(cls, utterance: str) -> int | None:
         """Extract an explicit position report without trusting it blindly."""
-        text = cls._normalize_text(utterance)
+        # "I'm in P five" is the same report as "I'm in P5".
+        text = spoken_numbers_to_digits(utterance)
         numeric = re.search(
-            r"\b(?:i am|i m|im|we are|we re)\s+(?:currently\s+)?(?:in\s+|running\s+)?p?([1-9]|1[0-9]|2[0-4])\b",
+            r"\b(?:i am|i m|im|we are|we re)\s+(?:currently\s+)?(?:in\s+|running\s+)?"
+            r"(?:p|position\s+)?([1-9]|1[0-9]|2[0-4])\b",
             text,
         )
         if numeric:
@@ -2012,6 +2029,10 @@ class EngineerBrain:
             utterance, int(state.get("current_lap", 0))
         )
         if override_action is not None:
+            if override_action.get("needs_lap"):
+                compound = override_action.get("next_compound")
+                tyre = f" for the {str(compound).lower()}s" if compound else ""
+                return f"Which lap{tyre}? Nothing is locked until I have the lap."
             current = dict(state.get("strategy_override", {}))
             if override_action.get("clear"):
                 current.update(
