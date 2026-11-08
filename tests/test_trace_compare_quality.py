@@ -256,6 +256,7 @@ async def test_the_trace_endpoint_returns_one_answers_evidence(stack, monkeypatc
     assert "trace_json" not in body
     assert client.get("/api/radio/999999/trace").status_code == 404
     assert client.get("/api/radio/0/trace").status_code == 404
+    assert client.get(f"/api/radio/{2**70}/trace").status_code == 404
 
 
 @pytest.mark.asyncio
@@ -557,3 +558,162 @@ async def test_compare_keeps_its_cooldown_and_tool_exclusions(stack, monkeypatch
     assert [call["name"] for call in comparison["tool_calls"]] == ["get_ers_report"]
     with pytest.raises(Exception, match="cooling down"):
         await brain.compare("Explain how my energy deployment compares to the car ahead.")
+
+
+# ---------------------------------------------------------------------------
+# What the comparison says the radio does, and the edges of a replay
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "utterance", ["Should I box now?", "what's the strategy", "do we box this lap", "any strategy updates"]
+)
+async def test_compare_flags_a_pit_question_the_radio_answers_from_the_plan(stack, monkeypatch, utterance):
+    """The bare pit and plan questions, the ones most worth comparing, are
+    answered in the car from the ranked plan; the comparison has to say so."""
+    store, _, _, brain = await _race(stack)
+    plan = {
+        "feasible": True, "legal": True, "box_laps": [12], "compounds": ["MEDIUM", "HARD"],
+        "box_lap": 12, "fit_compound": "HARD", "instruction": "Box lap 12 for HARD.",
+    }
+    await store.update(strategy={"recommended": plan, "plans": [plan], "confidence": "high"})
+    await _capture_both(brain, monkeypatch, "Box lap 12 for hards.")
+
+    assert (await brain.compare(utterance))["fast_path"] is True
+
+    async def no_provider(**kwargs):
+        pytest.fail("The radio answers this from the plan")
+
+    monkeypatch.setattr(brain.router, "generate", no_provider)
+    assert await brain.ask(utterance)
+
+
+@pytest.mark.asyncio
+async def test_compare_flags_the_red_flag_restart_summary(stack, monkeypatch):
+    """Under a red flag a request for the whole plan, which otherwise goes to
+    the model, is answered with the restart summary."""
+    from f1.packets import PacketEventData
+
+    from pitwall.udp import F1DatagramProtocol
+
+    store, database, strategy, _, _, tools = stack
+    await store.update(connected=True, session_uid=123, mode_profile="race", session_type="Race",
+                       current_lap=10, total_laps=18, track_id=0, player_position=1, active_cars=1)
+
+    def arrange(state):
+        state.tyre.compound = "MEDIUM"
+        state.tyre.age_laps = 10
+        state.tyre.wear = [65] * 4
+        state.completed_laps = [{"lap_num": 1, "compound": "HARD", "valid": True, "lap_time_ms": 90000}]
+        state.tyre_sets = [
+            {"index": index, "compound": compound, "available": True,
+             "wear_pct": 0, "usable_life_laps": 40, "life_span_laps": 40}
+            for index, compound in enumerate(("SOFT", "MEDIUM", "HARD"))
+        ]
+
+    await store.mutate(arrange)
+    red_flag = PacketEventData()
+    red_flag.event_string_code[:] = [ord(char) for char in "RDFL"]
+    await F1DatagramProtocol(store).handle_PacketEventData(red_flag)
+    await store.update(game_paused=True)
+    await strategy.recompute()
+    brain = EngineerBrain(store, tools, database)
+    await _capture_both(brain, monkeypatch, "Fresh mediums for the restart.")
+
+    assert (await brain.compare("give me the full strategy"))["fast_path"] is True
+    assert (await brain.compare("why would the hard be slower at the restart"))["fast_path"] is False
+
+
+@pytest.mark.asyncio
+async def test_say_again_after_an_unanswered_question_goes_to_the_model(stack, monkeypatch):
+    """The driver asked something that got no answer: "say again" wants that
+    answer, not the line said before the question."""
+    store, _, _, brain = await _race(stack)
+    await store.append_radio("engineer", "Rear-right is the limiting tyre at 28 percent.", source="reply")
+    await store.append_radio("driver", "What's the gap to Norris?")
+    called = []
+
+    async def model(*args, **kwargs):
+        called.append(args[0])
+        return "Norris is 2.1 seconds ahead."
+
+    monkeypatch.setattr(brain, "_run", model)
+
+    assert await brain.ask("Say again?") == "Norris is 2.1 seconds ahead."
+    assert called
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("lap_elapsed_ms", "replayed"), [(150_000, False), (60_000, True)])
+async def test_say_again_after_a_flag_earlier_in_a_slow_lap_goes_to_the_model(
+    stack, monkeypatch, lap_elapsed_ms, replayed
+):
+    """A lap behind the safety car outlasts the two-minute window: a line from
+    earlier in that lap may predate the flag. Once the flag is older than the
+    lap, the line was said after it and is replayed."""
+    store, _, _, brain = await _race(stack)
+    line = "Gap ahead is 1.2 seconds, push now."
+    await store.append_radio("engineer", line, source="reply")
+    await store.update(
+        race_control_phase="safety_car",
+        race_control_changed_at=time.time() - 130,
+        current_lap_time_ms=lap_elapsed_ms,
+    )
+
+    async def model(*args, **kwargs):
+        return "Safety car, hold position."
+
+    monkeypatch.setattr(brain, "_run", model)
+
+    assert await brain.ask("Say again?") == (line if replayed else "Safety car, hold position.")
+
+
+@pytest.mark.asyncio
+async def test_car_feedback_is_not_labelled_as_a_reaction_to_the_last_answer(stack, monkeypatch):
+    """Verdict words count as a dispute only when aimed at what the engineer
+    said; a complaint about the car is feedback, not a verdict on the answer."""
+    _, database, _, brain = await _race(stack)
+
+    async def model(*args, **kwargs):
+        return "Copy."
+
+    monkeypatch.setattr(brain, "_run", model)
+    turns = {
+        "The rear is terrible in the slow corners.": "",
+        "I hate this car.": "",
+        "I'm not happy with the balance.": "",
+        "I missed that apex.": "",
+        "That's ridiculous.": "dispute",
+        "I disagree.": "dispute",
+        "Not happy with that plan.": "dispute",
+        "Can you repeat that please": "repeat_request",
+    }
+    for utterance in turns:
+        await brain.ask(utterance)
+
+    labels = {row["text"]: row["label"] for row in _rows(database) if row["role"] == "driver"}
+    assert labels == turns
+
+
+@pytest.mark.asyncio
+async def test_a_long_prompt_keeps_the_drivers_line_in_the_trace(stack, monkeypatch):
+    """A long header gives way in the stored prompt; the request focus, the
+    recent radio and the driver's line, what the answer is judged against,
+    are kept."""
+    store, database, _, brain = await _race(stack)
+    await store.append_radio("engineer", "Box lap 14 for hards.", source="reply")
+
+    async def header(*, include_strategy: bool) -> str:
+        return "SITUATION " + "x" * 9_000
+
+    monkeypatch.setattr(brain, "_header", header)
+    monkeypatch.setattr(brain.router, "generate", _provider("Gap behind is 1.4 seconds and stable."))
+
+    await brain.ask("How is the car behind doing on his tyres compared to me?")
+
+    prompt = json.loads(_rows(database)[-1]["trace_json"])["prompt"]
+    assert prompt.startswith("SITUATION xxx")
+    assert "ENGINEER: Box lap 14 for hards." in prompt
+    assert prompt.endswith("DRIVER: How is the car behind doing on his tyres compared to me?")
+    assert len(prompt) < 6_100
