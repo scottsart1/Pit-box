@@ -2034,25 +2034,21 @@ class StrategyEngine:
             for item in (pursuer.get("gap_history") or [])
             if item.get("gap_s") is not None
         ]
-        closing_rate = None
-        if len(history) >= 2:
-            first, last = history[0], history[-1]
-            laps = float(last.get("lap", 0)) - float(first.get("lap", 0))
-            if laps < 1:
-                seconds = float(last.get("session_time_s", 0)) - float(
-                    first.get("session_time_s", 0)
-                )
-                laps = seconds / 90.0 if seconds >= 20 else 0.0
-            if laps > 0:
-                closing_rate = (
-                    abs(float(last["gap_s"])) - abs(float(first["gap_s"]))
-                ) / laps
+        # The same lap-window measure as the pace verdict, the race picture
+        # and the cars-ahead answer. A rate over the whole ~2-lap history with
+        # its own threshold called a pursuer "being caught" while the pace
+        # verdict for the same car said "pulling away", and the engineer could
+        # say either depending on which tool answered.
+        from .tools import TelemetryTools  # tools imports this module
+
+        measured = TelemetryTools._gap_trend(pursuer)
+        closing_rate = measured["gap_change_s_per_lap"]
         gap = abs(observed_gap)
-        gap_trend = (
-            "unknown" if closing_rate is None else
-            "being_caught" if closing_rate <= -0.05 else
-            "pulling_away" if closing_rate >= 0.05 else "holding_station"
-        )
+        gap_trend = {
+            "closing": "being_caught",
+            "falling_back": "pulling_away",
+            "steady": "holding_station",
+        }.get(measured["trend"], "unknown")
         trend_description = {
             "unknown": "There is not enough recorded gap history to establish a trend.",
             "being_caught": "The gap to the following car is shrinking; the player is being caught.",
@@ -2061,7 +2057,7 @@ class StrategyEngine:
         }[gap_trend]
         sustainable = (
             round(gap / abs(closing_rate), 1)
-            if closing_rate is not None and closing_rate < -0.05 and gap > 0
+            if gap_trend == "being_caught" and closing_rate is not None and closing_rate < 0 and gap > 0
             else float(remaining)
             if closing_rate is not None and remaining > 0
             else None
