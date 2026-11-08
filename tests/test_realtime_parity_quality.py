@@ -868,6 +868,53 @@ async def test_a_reply_the_driver_heard_is_not_answered_again_on_the_standard_ra
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("fragment", ["Copy, Norris is", "Copy. Let me check.", "Okay, so the gap"])
+async def test_a_reply_that_stopped_before_its_answer_is_answered_on_the_standard_radio(
+    stack, realtime_on, monkeypatch, fragment
+):
+    """A second of preamble, then the reply failed: the driver was left with
+    "Copy, Norris is" and no answer, because only a reply nobody heard at all
+    was answered again."""
+    store, brain = await _brain(stack)
+
+    async def generate(**_kwargs):
+        return ProviderResult(text="Norris is 1.4 behind and closing two tenths a lap.",
+                              provider="test", model="test", latency_ms=1.0, tool_rounds=0)
+
+    brain.router.generate = generate
+    controller, radio, _connection = await _controller(store, brain)
+    stream = FakeStream()
+    radio._output_stream = stream
+    radio._ensure_output_stream = lambda: stream
+    clock = {"now": 100.0}
+    monkeypatch.setattr(realtime_module, "time", SimpleNamespace(monotonic=lambda: clock["now"]))
+    one_second = base64.b64encode(bytes(48_000)).decode("ascii")
+    try:
+        await _driver_says(radio, "what's the gap behind and is he catching?")
+        await radio._handle_event(Event(type="response.created", response=Event(id="r1")))
+        await radio._handle_event(Event(type="response.output_audio_transcript.delta", delta=fragment))
+        await radio._handle_event(Event(type="response.output_audio.delta", delta=one_second,
+                                        response_id="r1", item_id="item_1"))
+        clock["now"] += 1.0
+        await radio._handle_event(Event(type="response.done", response=Event(
+            id="r1", status="incomplete", status_details=Event(type="incomplete", reason="max_output_tokens"),
+        )))
+        assert controller._realtime_recovery_task is not None
+        await controller._realtime_recovery_task
+        spoken = [call.args[0] for call in controller.audio.stream_speech.await_args_list]
+        assert spoken == ["Norris is 1.4 behind and closing two tenths a lap."]
+        log = [(entry["role"], entry["text"]) for entry in (await store.snapshot_analysis())["radio_log"]]
+        # The driver's question once, what they heard of the cut reply, then the answer.
+        assert log == [
+            ("driver", "what's the gap behind and is he catching?"),
+            ("engineer", fragment),
+            ("engineer", "Norris is 1.4 behind and closing two tenths a lap."),
+        ]
+    finally:
+        await radio.client.close()
+
+
+@pytest.mark.asyncio
 async def test_a_failed_call_still_lets_the_drivers_tool_answer_out(stack, realtime_on):
     store, brain = await _brain(stack)
     controller, radio, connection = await _controller(store, brain)

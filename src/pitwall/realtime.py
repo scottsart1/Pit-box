@@ -28,6 +28,7 @@ import base64
 import contextlib
 import json
 import logging
+import re
 import time
 import uuid
 from collections.abc import Awaitable, Callable
@@ -59,6 +60,34 @@ CALL_DELIVERY_S = 20.0
 _CALL_START_S = 2.0
 # Metadata key that marks a response as a pit-wall line rather than a reply.
 _CALL_TAG = "pitwall_call"
+
+# A reply that stops before finishing a sentence has still answered once it
+# has run this many words: "Norris is 1.4 behind and closing two tenths a
+# lap, so expect him in" carries the answer, "Copy, Norris is" does not.
+_FRAGMENT_ANSWER_WORDS = 6
+_SENTENCE_END = re.compile(r"[.!?](?:\s+|$)")
+_NO_ANSWER_SENTENCES = frozenset({
+    "copy", "copy that", "understood", "roger", "roger that", "ok", "okay",
+    "got it", "noted", "received", "right", "so", "alright", "one moment",
+    "let me check", "let me look", "checking", "looking at the data",
+})
+
+
+def _left_without_an_answer(heard: str) -> bool:
+    """Whether a reply that stopped after ``heard`` left the driver nothing.
+
+    Nothing heard, or a fragment that finished no sentence of substance and
+    stopped too early to carry the answer. A finished sentence, or an
+    unfinished one long enough to carry the facts, was an answer: saying it
+    again on the standard radio gave the driver two answers in two voices.
+    """
+    pieces = [piece.strip() for piece in _SENTENCE_END.split(heard.strip())]
+    finished, unfinished = pieces[:-1], pieces[-1] if pieces else ""
+    for sentence in finished:
+        words = " ".join(re.findall(r"[a-z]+", sentence.lower()))
+        if words and words not in _NO_ANSWER_SENTENCES:
+            return False
+    return len(re.findall(r"[\w.]+", unfinished)) < _FRAGMENT_ANSWER_WORDS
 
 # Tools that answer a live radio question. The full 48-tool catalogue is offered
 # to the text path, but a speech session pays for its instruction prefix on every
@@ -798,10 +827,16 @@ class RealtimeRadio:
             await self._record("engineer", heard)
 
         if status in {"failed", "incomplete"}:
+            # The driver's turn is answered again on the standard radio when
+            # they heard nothing, or only a fragment with no answer in it.
+            # Audio with no transcript cannot be judged, so it counts as heard.
+            unanswered = (not heard and not spoke) or (
+                bool(heard) and _left_without_an_answer(heard)
+            )
             await self._response_failed(
                 response,
                 status,
-                answered_turn=tag is None and not heard and not spoke,
+                answered_turn=tag is None and unanswered,
                 call_failed=tag is not None,
             )
             return
@@ -846,9 +881,11 @@ class RealtimeRadio:
         self, response: Any, status: str, *, answered_turn: bool, call_failed: bool = False
     ) -> None:
         """Report a failed or incomplete response, and answer the driver's turn
-        on the standard radio when ``answered_turn`` says they heard nothing.
+        on the standard radio when ``answered_turn`` says they were left
+        without an answer.
 
-        A reply the driver heard (some or all of its audio played) is not
+        A reply the driver heard enough of to be answered (a finished
+        sentence, or a fragment long enough to carry the facts) is not
         answered again: the radio then carried two answers to one question,
         in two voices, and the session was closed under them.
         """
