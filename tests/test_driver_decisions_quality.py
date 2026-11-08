@@ -146,6 +146,25 @@ async def test_an_agreed_tactic_is_spent_once_the_stop_it_was_about_is_made(stac
 
 
 @pytest.mark.asyncio
+async def test_the_dashboard_is_told_when_an_agreed_tactic_is_spent(stack, monkeypatch):
+    """The strategy page kept headlining "Running the go long" after the stop."""
+    store, brain, _captured = await _race(stack, monkeypatch, ["Copy, we go long."])
+    await store.mutate(lambda state: setattr(state.tyre, "age_laps", 13))
+    await brain.ask("We'll go long, I'm staying out")
+    assert (await store.snapshot_live())["strategy_intent_stands"] is True
+
+    def after_the_stop(state):
+        state.current_lap = 35
+        state.tyre.age_laps = 13
+
+    await store.mutate(after_the_stop)
+    live = await store.snapshot_live()
+    assert live["strategy_intent"]["active"]
+    assert live["strategy_intent_stands"] is False
+    assert EngineerBrain._agreed_tactic_stands(live) is False
+
+
+@pytest.mark.asyncio
 async def test_a_hold_ends_at_the_stop_with_unsolicited_calls_switched_off(stack, monkeypatch):
     """Only the unsolicited loop released a hold; switched off, it bound the
     radio after the stop it was about had been made."""

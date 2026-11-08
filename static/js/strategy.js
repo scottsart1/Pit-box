@@ -183,7 +183,10 @@ function renderCall(s) {
     chip.dataset.state = "neutral";
   }
   const intent = s.strategy_intent || {};
-  byId("stratInstruction").textContent = intent.active && intent.direction === "stay_out"
+  // The server says whether the agreement still stands: once the stop it
+  // was about has been made, the plan owns the headline again.
+  const agreed = intent.active && s.strategy_intent_stands !== false && intent.direction === "stay_out";
+  byId("stratInstruction").textContent = agreed
     ? intent.intent
       ? i18n.t("Running the {intent} — staying out", { intent: String(intent.intent).replaceAll("_", " ") })
       : i18n.t("Running the plan — staying out")

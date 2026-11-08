@@ -36,7 +36,7 @@ from .providers import (
     _contains_deliberation,
 )
 from .session_guard import SessionChangedError, session_scoped
-from .state import StateStore
+from .state import StateStore, agreed_tactic_stands
 from .tools import TelemetryTools
 
 # The radio brief is a core that every path shares, plus addenda attached only
@@ -1595,22 +1595,11 @@ class EngineerBrain:
     def _agreed_tactic_stands(state: dict[str, Any]) -> bool:
         """Whether a tactic agreed with the driver still governs the next stop.
 
-        Going long, the overcut and the undercut are all about the next stop,
-        and nothing clears the agreement once it is made. A set fitted after
-        the lap it was agreed (tyre age shorter than the laps since) means
-        that stop has been made: twenty laps on, "AGREED: go long" is history,
-        and treating it as binding sent every later pit question to the model
-        with an order to honour it.
+        Treating a spent one as binding sent every later pit question to the
+        model with an order to honour it. The rule is shared with the
+        dashboard: see state.agreed_tactic_stands.
         """
-        intent = state.get("strategy_intent", {}) or {}
-        if not intent.get("active"):
-            return False
-        try:
-            laps_since = int(state.get("current_lap", 0) or 0) - int(intent.get("set_at_lap"))
-        except (TypeError, ValueError):
-            return True
-        age = (state.get("tyre") or {}).get("age_laps")
-        return not (isinstance(age, (int, float)) and age < laps_since)
+        return agreed_tactic_stands(state)
 
     @staticmethod
     def _compound_change_owed(strategy: dict[str, Any]) -> bool:
