@@ -2427,8 +2427,92 @@ class TelemetryTools:
             "sets": state.get("tyre_sets", []),
         }
 
+    @staticmethod
+    def _stint_time_s(plan: dict[str, Any]) -> float | None:
+        """A plan's conservative stint time plus pit and penalty time.
+
+        This is the quantity the strategy engine's what_if prices for a
+        hypothetical stop, so the two can be compared like for like.
+        """
+        stints = plan.get("stint_models") or []
+        try:
+            if not stints:
+                return None
+            return (
+                sum(float(stint["conservative_time_s"]) for stint in stints)
+                + float(plan.get("total_pit_cost_s") or 0.0)
+                + float(plan.get("pending_finish_penalty_s") or 0.0)
+            )
+        except (KeyError, TypeError, ValueError):
+            return None
+
     async def what_if(self, scenario: str) -> dict[str, Any]:
-        return await self.strategy.what_if(scenario)
+        """Price one hypothetical stop, framed against the ranked plan.
+
+        The engine's what_if sums tyre-model stint time, pit loss and pending
+        penalties for a single stop. The ranked plans also price rejoin traffic
+        and rank on finishing position, so the engine's delta against the
+        recommended plan's risk-adjusted time compares two different
+        quantities; on the Hungaroring demo race it called boxing six laps early
+        4.6 s quicker while the ranking kept the later stop. The engineer gets
+        the same simulation with a like-for-like time comparison, the ranked
+        plan it matches when there is one, and the recommended plan it does not
+        replace.
+        """
+        result = await self.strategy.what_if(scenario)
+        if not isinstance(result, dict) or not result.get("available"):
+            return result
+        plan = await self.get_pit_strategy()
+        recommended = plan.get("recommended") or {}
+        rule = result.get("compound_rule") or {}
+        view: dict[str, Any] = {
+            key: result[key]
+            for key in ("available", "scenario", "box_lap", "compound", "feasible",
+                        "projected_finish_wear_pct", "pending_finish_penalty_s")
+            if key in result
+        }
+        view["legal"] = rule.get("compliant") if rule else None
+        if rule:
+            view["compound_rule"] = self._pick(
+                rule, ("compliant", "change_outstanding", "eligible_next_compounds")
+            )
+        baseline = self._stint_time_s(recommended)
+        if baseline is not None and result.get("risk_adjusted_time_s") is not None:
+            view["time_delta_vs_recommended_s"] = round(
+                float(result["risk_adjusted_time_s"]) - baseline, 2
+            )
+        target = (result.get("box_lap"), str(result.get("compound") or "").upper())
+        ranked = [item for item in plan.get("plans") or [] if isinstance(item, dict)]
+        match = None
+        for rank, candidate in enumerate(ranked, start=1):
+            laps = list(candidate.get("box_laps") or [])
+            compounds = list(candidate.get("compounds") or [])
+            if len(laps) == 1 and len(compounds) == 2 and (laps[0], str(compounds[1]).upper()) == target:
+                match = {
+                    "rank": rank,
+                    "is_recommended": self._same_plan(candidate, recommended),
+                    **self._pick(candidate, (
+                        "feasible", "legal", "projected_finish_position",
+                        "projected_rejoin_position", "traffic_cost_s",
+                    )),
+                }
+                break
+        view["ranked_equivalent"] = match
+        if recommended:
+            view["recommended_plan"] = self._pick(recommended, (
+                "instruction", "box_laps", "compounds", "feasible", "legal",
+                "projected_finish_position", "projected_rejoin_position",
+            ))
+        view["basis"] = (
+            "Simplified single-stop simulation: tyre-model stint time, pit loss and "
+            "pending penalties only. It leaves out rejoin traffic and the finishing-"
+            "position ranking that choose the recommended plan, so it answers the "
+            "hypothetical but does not replace the recommended call. "
+            "time_delta_vs_recommended_s compares the same tyre-time terms of both; "
+            "positive is slower. ranked_equivalent is this stop's entry in the ranked "
+            "plans, with its traffic and finishing position, when it is one of them."
+        )
+        return self._round_floats(view)
 
     async def get_personal_history(self, track: str = "current") -> dict[str, Any]:
         state = await self.store.snapshot_analysis()
@@ -3238,19 +3322,18 @@ class TelemetryTools:
     # Tools that only a planning question needs. Sending the full catalogue on
     # every request bloats the cacheable prefix and widens the model's choice
     # for questions that could never need these, so they are offered only on the
-    # deep route.
+    # deep route. Routing is decided by keywords, so a tool a live race question
+    # can need without saying "strategy" or "what if" stays on every route:
+    # what_if ("can I box this lap for softs?"), the front-wing change at a
+    # stop, championship points per plan and the racing-line check.
     DEEP_ONLY_TOOLS = frozenset(
         {
-            "what_if",
-            "get_championship_scenario",
             "get_setup_learning",
             "get_setup_correlation",
             "generate_setup",
-            "get_front_wing_adjustment",
             "get_progress_trend",
             "get_stored_history",
             "get_practice_focus",
-            "get_racing_line_analysis",
             "list_saved_sessions",
             "get_session_summary",
             "list_reference_laps",
@@ -3266,8 +3349,8 @@ class TelemetryTools:
         """Tool schemas appropriate to a request route.
 
         The deep route sees everything. Fast and normal routes drop the
-        planning, setup-generation and long-history tools, which no live
-        "what's my fuel" or "where is the car ahead" question can need.
+        setup-generation, saved-session and long-history tools, which no live
+        "what's my fuel" or "can I box this lap" question can need.
         """
         if route == "deep":
             return self.schemas()
@@ -3704,8 +3787,20 @@ class TelemetryTools:
             ),
             (
                 "what_if",
-                "Simulate a tyre/lap-stop scenario such as box lap 18 for hards.",
-                {"scenario": {"type": "string"}},
+                (
+                    "Simulate one hypothetical stop: tyre wear, legality and tyre-model time "
+                    "against the recommended plan. A simplified check that leaves out rejoin "
+                    "traffic and finishing position; it never replaces the ranked plan."
+                ),
+                {
+                    "scenario": {
+                        "type": "string",
+                        "description": (
+                            "The stop lap number and compound, such as 'box lap 18 for hards'. "
+                            "Use the lap number from the situation header for 'this lap'."
+                        ),
+                    }
+                },
             ),
             (
                 "get_personal_history",
