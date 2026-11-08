@@ -158,6 +158,26 @@ async def test_an_unchanged_fuel_shortfall_is_called_once_until_it_moves(stack, 
     assert len(fuel) == 2 and "1.2" in fuel[-1]
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("wander", [(-0.55, -0.45), (-0.15, -0.08)])
+async def test_a_fuel_margin_wandering_by_tenths_is_called_once(stack, clock, wander):
+    """The margin moves by tenths within a lap; that is not news every 90 s."""
+    store, engineer, voice = await _race(stack, fuel_laps_delta=wander[0])
+    for index in range(10):
+        await store.update(fuel_laps_delta=wander[index % 2])
+        await _tick(store, engineer)
+        clock.offset += 95
+    assert len([text for text in voice.spoken if text.startswith("Fuel")]) == 1, voice.spoken
+
+    # Back to a real margin, then short again: that is a new shortfall.
+    await store.update(fuel_laps_delta=0.2)
+    await _tick(store, engineer)
+    clock.offset += 95
+    await store.update(fuel_laps_delta=-0.3)
+    await _tick(store, engineer)
+    assert len([text for text in voice.spoken if text.startswith("Fuel")]) == 2, voice.spoken
+
+
 # --- repeat control -----------------------------------------------------------
 
 
@@ -291,6 +311,21 @@ async def test_every_worn_power_unit_component_is_named(stack, clock):
     text = next(text for text in voice.spoken if "wear" in text and "percent" in text)
     for name in ("ICE 74", "MGU-H 78", "MGU-K 72", "Turbo 81"):
         assert name in text, text
+
+
+@pytest.mark.asyncio
+async def test_a_new_hit_after_a_wing_change_is_called_however_soon(stack, clock):
+    store, engineer, voice = await _race(stack)
+    await store.mutate(lambda s: s.damage.update({"front_left_wing": 25}))
+    await _tick(store, engineer)
+    clock.offset += 40
+    await store.mutate(lambda s: s.damage.update({"front_left_wing": 0}))
+    await _tick(store, engineer)
+    clock.offset += 40
+    await store.mutate(lambda s: s.damage.update({"front_left_wing": 30}))
+    await _tick(store, engineer)
+    damage = [text for text in voice.spoken if "wing" in text.lower()]
+    assert len(damage) == 2 and "30 percent" in damage[-1], voice.spoken
 
 
 @pytest.mark.asyncio
