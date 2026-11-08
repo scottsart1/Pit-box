@@ -106,6 +106,11 @@ def _provider_fails(brain, monkeypatch, *failures: ProviderFailure):
     "pit this lap?",
     "Okay, should we stay out?",
     "Should we pit now under the safety car?",
+    "which lap do I box",
+    "Is it time to box yet?",
+    "should I pit now or later",
+    "should I box now or next lap",
+    "should we stop this lap",
 ])
 async def test_every_way_of_asking_for_the_pit_call_gets_the_qualified_plan(stack, monkeypatch, utterance):
     store, brain = await _race(stack)
@@ -122,6 +127,8 @@ async def test_every_way_of_asking_for_the_pit_call_gets_the_qualified_plan(stac
     "should we box if the safety car comes out",
     "can I make it to the end on these tyres",
     "when do we box, and how is the rear left looking",
+    "I have a puncture, should I come in?",
+    "the safety car is out, what's the plan",
 ])
 async def test_a_pit_question_left_to_the_model_carries_the_plan_and_its_qualifier(stack, monkeypatch, utterance):
     _store, brain = await _race(stack)
@@ -138,6 +145,7 @@ async def test_a_pit_question_left_to_the_model_carries_the_plan_and_its_qualifi
     "What's my fuel and should I pit?",
     "when do we box, and how is the rear left looking",
     "can I make it to the end on these tyres",
+    "the safety car is out, what's the plan",
 ])
 async def test_a_pit_question_still_gets_the_computed_plan_when_the_model_times_out(stack, monkeypatch, utterance):
     store, brain = await _race(stack)
@@ -152,6 +160,8 @@ async def test_a_pit_question_still_gets_the_computed_plan_when_the_model_times_
     "What is my gap ahead?",
     "stay out of the way of the leader",
     "can I make it to the end on this fuel",
+    "when should I stop pushing",
+    "what's the plan for the setup",
 ])
 def test_words_that_only_look_like_a_pit_call_are_not_strategy_requests(utterance):
     assert not EngineerBrain._is_strategy_request(utterance)
@@ -210,6 +220,48 @@ async def test_a_correction_in_front_of_the_pit_call_goes_to_the_model(stack):
     assert brain._defers_to_model(state, "No, box now") is True
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("utterance", ["should I stop?", "should we stop"])
+async def test_should_i_stop_on_its_own_is_not_taken_for_the_pit_call(stack, utterance):
+    # It may mean stopping the car, which the radio history has to settle.
+    store, brain = await _race(stack)
+    state = await store.snapshot_analysis()
+    assert brain._defers_to_model(state, utterance) is True
+    assert await brain._fast_answer(utterance) is None
+
+
+async def _red_flag(store):
+    await store.update(red_flag_active=True, race_control_phase="red_flag")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("utterance", [
+    "should we box if the safety car comes out",
+    "when do we box, and how is the rear left looking",
+    "can I make it to the end on these tyres",
+])
+async def test_a_compound_pit_question_under_a_red_flag_is_not_answered_with_the_restart_summary(
+    stack, monkeypatch, utterance,
+):
+    store, brain = await _race(stack)
+    await _red_flag(store)
+    calls: list[dict] = []
+    _model_reads_the_plan(brain, monkeypatch, calls)
+    await brain.ask(utterance)
+    assert calls, utterance
+    assert "| strategy" in calls[0]["prompt"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("utterance", ["should we box", "what's the plan", "what's the plan for the restart"])
+async def test_the_bare_pit_call_under_a_red_flag_gets_the_restart_summary(stack, monkeypatch, utterance):
+    store, brain = await _race(stack)
+    await _red_flag(store)
+    _forbid_provider(brain, monkeypatch)
+    answer = await brain.ask(utterance)
+    assert "Tyres can be changed while the race is suspended" in answer, answer
+
+
 # ---------------------------------------------------------------------------
 # Everyday wordings of a stored value are answered from telemetry
 # ---------------------------------------------------------------------------
@@ -241,6 +293,7 @@ async def test_everyday_lookups_are_answered_without_a_provider(stack, monkeypat
 @pytest.mark.parametrize("utterance,group", [
     ("what's the gap ahead", 2),
     ("are we ok on fuel", 7),
+    ("what place are we in", 2),
 ])
 async def test_widened_lookups_keep_the_packet_freshness_guard(stack, monkeypatch, utterance, group):
     store, brain = await _race(stack)
@@ -249,7 +302,7 @@ async def test_widened_lookups_keep_the_packet_freshness_guard(stack, monkeypatc
     await store.mark_packet(2026, 26, 54321, packet_id=0)
     answer = await brain.ask(utterance)
     assert "stale" in answer and "cannot confirm the current value" in answer
-    assert "1.8" not in answer and "0.8" not in answer
+    assert "1.8" not in answer and "0.8" not in answer and "P5" not in answer
 
 
 RAMBLE = (
@@ -271,6 +324,15 @@ async def test_a_quick_question_after_chat_still_gets_its_value_when_the_model_f
 
 
 @pytest.mark.asyncio
+async def test_the_failure_readout_is_as_short_as_the_value_asked_on_its_own(stack, monkeypatch):
+    store, brain = await _race(stack)
+    await store.update(radio_verbosity="terse")
+    _provider_fails(brain, monkeypatch, ProviderFailure("openai", "deadline", "test deadline"))
+    answer = await brain.ask(RAMBLE)
+    assert answer == "Engineer analysis timed out. NORRIS behind, 1.2 seconds.", answer
+
+
+@pytest.mark.asyncio
 async def test_the_failure_readout_goes_through_the_freshness_guard(stack, monkeypatch):
     store, brain = await _race(stack)
     _provider_fails(brain, monkeypatch, ProviderFailure("openai", "connection", "test failure"))
@@ -285,6 +347,10 @@ async def test_the_failure_readout_goes_through_the_freshness_guard(stack, monke
     ("why am I so slow in sector two and what's the gap behind", "deadline"),
     ("I want to move the brake bias forward, what's the gap behind", "deadline"),
     (RAMBLE, "configuration"),
+    # The question is about the other car; the player's own damage is not the answer.
+    ("I think Verstappen has damage, what's the damage like", "connection"),
+    ("the car ahead has damage, what's the damage like", "connection"),
+    ("I think he's got damage, any damage", "connection"),
 ])
 async def test_no_readout_stands_in_for_reasoning_or_for_a_failure_to_fix(stack, monkeypatch, utterance, kind):
     _store, brain = await _race(stack)
@@ -398,6 +464,15 @@ def test_a_quick_question_is_not_escalated_by_incidental_words_or_length(utteran
     "what setup should I run in the rain",
     "the strategy and the gap behind",
     "I think we should stay out, what's the gap behind",
+    # A long request for a diagnosis keeps the planning tier although it
+    # ends in a quick question.
+    (
+        "why are the rears overheating so badly in the second sector, I have tried a later "
+        "apex and a gentler throttle and lifting earlier into the fast corners but nothing "
+        "seems to work, and what's the gap behind"
+    ),
+    "are they undercutting us",
+    "compare stints",
 ])
 def test_a_real_planning_request_before_a_lookup_still_gets_the_planning_tier(utterance):
     assert EngineerBrain.classify_request(utterance) == "deep"

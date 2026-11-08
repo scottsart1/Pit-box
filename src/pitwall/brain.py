@@ -333,16 +333,23 @@ def compose_persona(
 
 # High reasoning is reserved for actual planning. Routine pace/corner/target questions
 # stay on the low-latency path instead of being escalated merely because they contain
-# words such as "why", "corner", or "best lap". Terms are matched as whole words;
-# the pit-now decision is matched by _PIT_DECISION_NOW, which knows that "stay
-# out of trouble" is not a pit call.
+# words such as "why", "corner", or "best lap". Terms are matched as whole words,
+# so each inflection a driver uses is listed; the pit-now decision is matched by
+# _PIT_DECISION_NOW, which knows that "stay out of trouble" is not a pit call.
 _DEEP_TERMS = (
     "strategy",
+    "strategies",
     "undercut",
+    "undercuts",
+    "undercutting",
     "overcut",
+    "overcuts",
+    "overcutting",
     "what if",
     "compare stint",
+    "compare stints",
     "compare strategy",
+    "compare strategies",
     "make it to the end",
     "make these tyres last",
     "safety car pit",
@@ -395,32 +402,41 @@ _STRATEGY_SUBJECTS = (
 # ranked plan answer it.
 _BARE_PIT_CALL = re.compile(
     r"(?:"
-    r"(?:should|shall|do|must) (?:i|we) (?:pit|box|stop|come in|stay out)"
-    r"|(?:when|what lap) (?:should|shall|do|will|must) (?:i|we) (?:pit|box|stop|come in)"
+    # "Should I stop?" on its own may mean stopping the car, so "stop" is the
+    # pit call only with the lap it is for.
+    r"(?:should|shall|do|must) (?:i|we) (?:pit|box|come in|stay out|stop(?= (?:this|next) lap))"
+    r"|(?:when|what lap|which lap) (?:should|shall|do|will|must) (?:i|we) (?:pit|box|stop|come in)"
     r"|(?:when )?(?:are|am) (?:we|i) (?:pitting|boxing|stopping|coming in|staying out)"
     r"|(?:is it |it s |its )?time to (?:pit|box|stop|come in)"
     r"|(?:pit|box) now"
     r"|stay out"
     r"|what(?: is| s|s) (?:the|our) (?:current |pit |race )?plan"
     r"|(?:(?:tell me|let me know|i wonder|i m wondering|i was wondering) )?"
-    r"(?:if|whether) (?:i|we) should (?:pit|box|stop|come in|stay out)"
+    r"(?:if|whether) (?:i|we) should (?:pit|box|come in|stay out)"
     r")"
-    r"(?: (?:now|then|this lap|next lap|"
+    r"(?: (?:now|then|yet|this lap|next lap|from here|for (?:the )?restart|"
     r"under (?:the )?(?:safety car|sc|virtual safety car|vsc|yellows?|yellow flags?)))*"
-    r"(?: or (?:not|box|pit|stay out|stop|keep going|go long)(?: now| this lap| next lap)?)?"
+    r"(?: or (?:not|box|pit|stay out|stop|keep going|go long|wait|later|this lap|next lap|"
+    r"next time(?: round| by)?)(?: now| this lap| next lap)?)?"
     r"(?: please| mate)?"
 )
-# "Box this lap?" asks for the call; said flat it may be the driver's decision,
-# which the model acknowledges with the plan in its context.
+# "Box this lap?" asks for the call. Said flat it may be the driver's own
+# decision, which the model acknowledges; the plan's confidence qualifier is
+# not put in front of that acknowledgement.
 _PIT_THIS_LAP = re.compile(r"(?:pit|box) (?:this|next) lap(?: please| mate)?")
-# The pit call as one part of a longer request.
+# The pit call as one part of a longer request. Every bare form above is
+# covered, so a pit call with a second subject or a report in front ("I have
+# a puncture, should I come in?") still carries the plan to the model.
 _PIT_CALL_MENTION = re.compile(
     r"\b(?:"
-    r"(?:should|shall|do|must|can|could) (?:i|we) (?:pit|box)"
-    r"|(?:when|what lap) (?:should|shall|do|will|can|must|are|am) (?:i|we) (?:pit|box|pitting|boxing)"
-    r"|(?:are|am) (?:we|i) (?:pitting|boxing)"
+    r"(?:should|shall|do|must|can|could)(?:n t)? (?:i|we) (?:pit|box|come in)"
+    r"|(?:when|what lap|which lap) (?:should|shall|do|will|can|must|are|am) (?:i|we) "
+    r"(?:pit|box|stop(?! \w+ing\b)|come in|pitting|boxing|stopping|coming in)"
+    r"|(?:are|am) (?:we|i) (?:pitting|boxing|coming in)"
     r"|(?:pit|box) now"
     r"|stay out(?! of\b)"
+    r"|what(?: is| s|s) (?:the|our) (?:current |pit |race )?plan"
+    r"(?! (?:for|with|on) (?:the |my |our )?(?:setup|set up|car setup|qualifying|quali|practice))"
     r")\b"
 )
 # Said flat, these are usually the driver's own decision ("we're staying out",
@@ -897,7 +913,7 @@ class EngineerBrain:
             has_any_phrase(text, _DEEP_TERMS)
             or _PIT_DECISION_NOW.search(words)
             or cls._asks_strategy_hypothetical(text)
-            or (len(text.split()) >= 32 and trailing is None)
+            or len(text.split()) >= 32
         ):
             return "deep"
 
@@ -962,6 +978,16 @@ class EngineerBrain:
         r"(?:i|i m|im|i ve|i d|i was|we|we re|we ve|it|it s|its|the car|my car|"
         r"the rear|the rears|the front|the fronts|this|that)\b"
     )
+    # Talk about another car makes the question that follows about that car:
+    # in "the car ahead has damage, what's the damage like" a readout of the
+    # player's own damage would answer something that was not asked.
+    _OTHER_CAR_WORDS = (
+        "he", "he s", "him", "his", "she", "she s", "her", "they", "they re",
+        "them", "their", "car ahead", "car behind", "car in front", "cars ahead",
+        "cars behind", "cars in front", "the leader", "leader s", "teammate",
+        "rival", "guy ahead", "guy behind", "driver ahead", "driver behind",
+        "other car", "other cars", "everyone", "the field", "anyone",
+    )
     _REQUEST_CUES = (
         "want", "wanted", "need", "needs", "like to", "would", "could", "can",
         "should", "shall", "will you", "please", "give", "tell", "make", "change",
@@ -993,7 +1019,7 @@ class EngineerBrain:
         if utterance_mood(core) != "statement":
             return False
         return not (
-            has_any_phrase(core, cls._REQUEST_CUES + _HYPOTHETICAL_MARKERS)
+            has_any_phrase(core, cls._REQUEST_CUES + _HYPOTHETICAL_MARKERS + cls._OTHER_CAR_WORDS)
             or _asks_for_pit_call(core)
         )
 
@@ -2166,7 +2192,7 @@ class EngineerBrain:
             (("what tyres", "what tires", "tyre condition", "tire condition"), (7, 10, 6), "Tyre condition telemetry"),
             (("weather", "rain"), (1,), "Weather telemetry"),
             (("damage",), (10,), "Damage telemetry"),
-            (("position", "gap", "cars ahead", "car ahead", "car behind", "warnings", "penalties", "time check"), (2,), "Timing telemetry"),
+            (("position", "place", "where am i running", "gap", "cars ahead", "car ahead", "car behind", "warnings", "penalties", "time check"), (2,), "Timing telemetry"),
         ):
             if has_any_phrase(text, terms):
                 groups, subject = required, label
@@ -2487,14 +2513,17 @@ class EngineerBrain:
         # Give its primary, alternative and stock limits together even when a
         # request for the full plan would otherwise defer to model narration.
         # Hypotheticals, disputes and rival-specific questions still need tools.
+        # A pit question with a second subject or a condition is not answered
+        # by the summary either, for the same reason as on a green track.
         if (
             (state.get("red_flag_active") or state.get("race_control_phase") == "red_flag")
             and self._is_strategy_request(utterance)
+            and (_is_bare_pit_call(utterance) or not _asks_for_pit_call(utterance))
             and not has_negation(text)
             and not match_drivers(state.get("drivers", []), utterance)
-            and not has_any_phrase(text, (
-                "what if", "suppose", "instead", "compare", "why", "how much",
-                "if we", "could we", "can we", "what about", "car ahead", "car behind",
+            and not has_any_phrase(text, _HYPOTHETICAL_MARKERS + (
+                "instead", "compare", "why", "how much", "car ahead", "car behind",
+                "if the", "if there", "if it", "in case", "unless",
             ))
         ):
             strategy = await self.tools.get_pit_strategy()
@@ -3180,7 +3209,9 @@ class EngineerBrain:
             # _fast_answer, whose freshness guard keeps a stale or paused
             # value from being spoken as current.
             failure = self._provider_fallback_kind(exc)
-            lookup = None if include_strategy else self._quick_question_after_chat(utterance)
+            lookup = None
+            if not include_strategy and not match_drivers(state.get("drivers", []), utterance):
+                lookup = self._quick_question_after_chat(utterance)
             if failure is None or not (include_strategy or lookup):
                 raise
             if not await self.store.matches_session(origin):
@@ -3195,6 +3226,10 @@ class EngineerBrain:
                 readout = await self._fast_answer(str(lookup))
                 if not readout:
                     raise
+                # Trimmed as the same value asked on its own would be.
+                readout = _limit_radio_sentences(
+                    readout, route, str((await self.store.snapshot_analysis()).get("radio_verbosity", "standard"))
+                )
                 text = prefix.rstrip("; ") + ". " + readout
                 fallback_model = "deterministic-radio-fallback"
             elapsed_ms = (time.monotonic() - narration_started) * 1000
