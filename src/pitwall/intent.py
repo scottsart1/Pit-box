@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import functools
 import re
 import unicodedata
 from typing import Iterable
@@ -13,6 +14,23 @@ def normalize_text(value: str) -> str:
     return " ".join(ascii_text.lower().split())
 
 
+@functools.lru_cache(maxsize=4096)
+def _phrase_pattern(phrase: str) -> re.Pattern[str] | None:
+    """One phrase compiled once.
+
+    Every driver turn tests several hundred distinct phrases. Rebuilt per
+    call they overflowed the re module's 512-entry cache, so about 400
+    patterns were recompiled on every turn, holding the event loop (and the
+    telemetry behind it) for 40-50 ms per question.
+    """
+    words = re.findall(r"[a-z0-9]+", normalize_text(phrase))
+    if not words:
+        return None
+    return re.compile(
+        r"(?<![a-z0-9])" + r"[^a-z0-9]+".join(map(re.escape, words)) + r"(?![a-z0-9])"
+    )
+
+
 def has_phrase(text: str, phrase: str) -> bool:
     """Boundary-aware phrase matching.
 
@@ -21,16 +39,17 @@ def has_phrase(text: str, phrase: str) -> bool:
     sequence of complete alphanumeric tokens while tolerating punctuation and
     variable whitespace between words.
     """
-    normalized = normalize_text(text)
-    words = re.findall(r"[a-z0-9]+", normalize_text(phrase))
-    if not words:
-        return False
-    pattern = r"(?<![a-z0-9])" + r"[^a-z0-9]+".join(map(re.escape, words)) + r"(?![a-z0-9])"
-    return re.search(pattern, normalized) is not None
+    pattern = _phrase_pattern(phrase)
+    return pattern is not None and pattern.search(normalize_text(text)) is not None
 
 
 def has_any_phrase(text: str, phrases: Iterable[str]) -> bool:
-    return any(has_phrase(text, phrase) for phrase in phrases)
+    normalized = normalize_text(text)
+    for phrase in phrases:
+        pattern = _phrase_pattern(phrase)
+        if pattern is not None and pattern.search(normalized) is not None:
+            return True
+    return False
 
 
 NEGATIONS = (

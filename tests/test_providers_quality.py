@@ -733,3 +733,18 @@ async def test_custom_endpoint_normal_route_budget_fits_inline_reasoning() -> No
     assert requests[0]["max_tokens"] == 2048
     # Kimi's normal model does not think; its answer-sized budget is unchanged.
     assert requests[1]["max_tokens"] == 650
+
+
+def test_the_anthropic_tool_set_has_a_cache_breakpoint_of_its_own():
+    """The system brief changes with each question's addenda; the tools do not."""
+    from pitwall.config import Settings
+    from pitwall.providers import AnthropicMessagesProvider
+
+    provider = AnthropicMessagesProvider(Settings(_env_file=None))
+    converted = provider._anthropic_tools([
+        {"name": "get_gap", "description": "Gap.", "parameters": {"type": "object"}},
+        {"name": "get_pit_strategy", "description": "Plan.", "parameters": {"type": "object"}},
+    ])
+    assert "cache_control" not in converted[0]
+    assert converted[-1]["cache_control"] == {"type": "ephemeral"}
+    assert provider._anthropic_tools([]) == []

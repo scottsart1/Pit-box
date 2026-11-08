@@ -1046,7 +1046,7 @@ class AnthropicMessagesProvider:
         )
 
     def _anthropic_tools(self, tools: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        return [
+        converted = [
             {
                 "name": tool["name"],
                 "description": tool.get("description", ""),
@@ -1054,6 +1054,14 @@ class AnthropicMessagesProvider:
             }
             for tool in tools
         ]
+        if converted:
+            # A cache breakpoint of their own: the tool set is the same for a
+            # route whatever the question, while the system brief below it
+            # changes with each question's addenda. Behind the brief's
+            # breakpoint alone, every change of question type re-read the
+            # whole tool set uncached before the first spoken word.
+            converted[-1]["cache_control"] = {"type": "ephemeral"}
+        return converted
 
     @staticmethod
     def _usage(payload: dict[str, Any]) -> dict[str, int]:
