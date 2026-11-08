@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import sys
+import time
 from collections import Counter
 from copy import deepcopy
 from pathlib import Path
@@ -404,6 +405,68 @@ def test_free_text_arguments_say_what_they_accept(stack):
     for name in ("get_pace_verdict", "get_rival_car_state", "evaluate_undercut", "get_driver_lap_history"):
         assert "ahead" in schemas[name]["driver"]["description"], name
     assert "ahead" in schemas["get_gap"]["target"]["description"]
+
+
+# ------------------------------------------------------------------ gap trend
+
+
+async def _tow_against_the_trend(store):
+    """The gap grew 1.0 -> 2.2 s over two laps; a tow took 0.25 s back in 8 s."""
+    history = []
+    for k in range(90):
+        gap = 1.0 + 1.2 * (k / 89)
+        if k >= 86:
+            gap -= 0.25 * ((k - 85) / 4)
+        history.append({"session_time_s": 3022.0 + 2.0 * k, "lap": 32 + k // 45, "gap_s": -round(gap, 3)})
+
+    def apply(state):
+        state.connected = True
+        state.player_car_index = 0
+        state.player_position = 5
+        state.drivers[0].name = "PLAYER"
+        state.drivers[0].position = 5
+        state.drivers[0].last_lap_ms = 90_400
+        rival = state.drivers[1]
+        rival.name = "PIASTRI"
+        rival.active = True
+        rival.position = 4
+        rival.last_lap_ms = 89_900
+        rival.gap_history = history
+        rival.gap_to_player_s = history[-1]["gap_s"]
+    await store.mutate(apply)
+
+
+@pytest.mark.asyncio
+async def test_closing_answer_and_pace_verdict_agree_on_the_same_rival(stack):
+    store, database, tools = stack[0], stack[1], stack[5]
+    await _tow_against_the_trend(store)
+
+    car = (await tools.get_cars_ahead_progress(1))["cars"][0]
+    verdict = await tools.get_pace_verdict("ahead")
+    answer = await EngineerBrain(store, tools, database)._fast_answer("am I closing in on the cars in front")
+
+    assert car["trend"] == "falling_back"
+    assert verdict["verdict"] == "dropping back"
+    assert car["gap_change_s_per_lap"] == verdict["gap_change_s_per_lap"] > 0
+    assert "not closing" in answer
+    # The tow is still reported, as a short-term move against the lap trend.
+    assert car["short_term_change_s"] < 0 and "shrank" in car["trend_conflict"]
+    assert verdict["trend_conflict"] == car["trend_conflict"]
+
+
+@pytest.mark.asyncio
+async def test_pace_verdict_and_race_picture_carry_timing_freshness(stack):
+    store, tools = stack[0], stack[5]
+    await _tow_against_the_trend(store)
+    live = await tools.get_pace_verdict("ahead")
+    assert live["available"] is True and live["freshness"]["status"] == "live"
+
+    await store.mutate(lambda state: setattr(state, "packet_group_freshness", {"2": time.time() - 30}))
+    stale = await tools.get_pace_verdict("ahead")
+    assert stale["available"] is False and stale["freshness"]["status"] == "stale"
+    assert "verdict" not in stale
+    picture = await tools.get_race_picture()
+    assert picture["available"] is False and picture["freshness"]["status"] == "stale"
 
 
 # ------------------------------------------------------------- realtime bound

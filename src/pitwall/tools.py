@@ -931,37 +931,87 @@ class TelemetryTools:
         }
 
 
+    # Every gap-trend answer reads one window: about the last lap of samples.
+    # The "am I closing" answer once used the last 8 s while the pace verdict
+    # and race picture used the whole ~2-lap history, so a tow or one slow
+    # corner could make the same rival "closing" in one answer and "dropping
+    # back" in the next. A history shorter than a lap uses all of it, so a
+    # fresh trend is still measured rather than refused.
+    _GAP_TREND_THRESHOLD_S = 0.15
+    _SHORT_TERM_WINDOW_S = 8.0
+
     @staticmethod
-    def _gap_trend(driver: dict[str, Any]) -> dict[str, Any]:
-        history = list(driver.get("gap_history", []) or [])
+    def _lap_seconds(driver: dict[str, Any]) -> float:
+        last = int(driver.get("last_lap_ms", 0) or 0)
+        return last / 1000.0 if 40_000 <= last <= 240_000 else 90.0
+
+    @classmethod
+    def _gap_trend(cls, driver: dict[str, Any]) -> dict[str, Any]:
+        """Measured gap trend over about the last lap, with its window.
+
+        ``trend`` is "closing" when the gap is shrinking, whichever side the
+        car is on. ``gap_change_s_per_lap`` needs at least 20 s of samples,
+        and ``laps_to_contact`` a closing trend. A short-term move against the
+        lap trend (a tow, one corner) is reported as ``trend_conflict``.
+        """
+        unknown = {"trend": "unknown", "gap_change_s": None, "window_s": None,
+                   "gap_change_s_per_lap": None, "laps_to_contact": None}
+        lap_s = cls._lap_seconds(driver)
+
+        def at(sample: dict[str, Any]) -> float:
+            if sample.get("session_time_s") is not None:
+                return float(sample["session_time_s"])
+            return float(sample.get("lap", 0) or 0) * lap_s
+
+        history = [sample for sample in driver.get("gap_history", []) or [] if sample.get("gap_s") is not None]
         if len(history) < 2:
-            return {"trend": "unknown", "gap_change_s": None, "window_s": None}
+            return unknown
         latest = history[-1]
-        latest_time = float(latest.get("session_time_s", 0.0))
-        anchor = None
-        for sample in reversed(history[:-1]):
-            if latest_time - float(sample.get("session_time_s", latest_time)) >= 8.0:
-                anchor = sample
-                break
-        if anchor is None:
-            anchor = history[0]
-        window = latest_time - float(anchor.get("session_time_s", latest_time))
-        if window < 3.0:
-            return {"trend": "unknown", "gap_change_s": None, "window_s": None}
-        current_gap = abs(float(latest.get("gap_s", 0.0)))
-        prior_gap = abs(float(anchor.get("gap_s", 0.0)))
-        change = round(current_gap - prior_gap, 2)
-        if change <= -0.15:
-            trend = "closing"
-        elif change >= 0.15:
-            trend = "falling_back"
-        else:
-            trend = "steady"
-        return {
+        latest_time = at(latest)
+
+        def change_since(minimum_s: float) -> tuple[float, float] | None:
+            anchor = next(
+                (sample for sample in reversed(history[:-1]) if latest_time - at(sample) >= minimum_s),
+                history[0],
+            )
+            window = latest_time - at(anchor)
+            if window < 3.0:
+                return None
+            return abs(float(latest["gap_s"])) - abs(float(anchor["gap_s"])), window
+
+        measured = change_since(lap_s)
+        if measured is None:
+            return unknown
+        change, window = measured
+        threshold = cls._GAP_TREND_THRESHOLD_S
+        trend = "closing" if change <= -threshold else "falling_back" if change >= threshold else "steady"
+        rate = round(change / (window / lap_s), 3) if window >= 20.0 else None
+        gap = abs(float(latest["gap_s"]))
+        result: dict[str, Any] = {
             "trend": trend,
-            "gap_change_s": change,
+            "gap_change_s": round(change, 2),
             "window_s": round(window, 1),
+            "gap_change_s_per_lap": rate,
+            "laps_to_contact": (
+                round(gap / abs(rate), 1) if trend == "closing" and rate and rate < 0 and gap > 0 else None
+            ),
         }
+        if window > 2 * cls._SHORT_TERM_WINDOW_S and trend != "steady":
+            short = change_since(cls._SHORT_TERM_WINDOW_S)
+            if short is not None and short[1] < window:
+                short_change, short_window = short
+                if (short_change >= threshold and trend == "closing") or (
+                    short_change <= -threshold and trend == "falling_back"
+                ):
+                    result["short_term_change_s"] = round(short_change, 2)
+                    result["short_term_window_s"] = round(short_window, 1)
+                    result["trend_conflict"] = (
+                        f"the gap {'grew' if short_change > 0 else 'shrank'} "
+                        f"{abs(short_change):.1f}s over the last {short_window:.0f}s, against "
+                        f"a lap trend of {'closing' if trend == 'closing' else 'falling back'} "
+                        f"{abs(change):.1f}s over {window:.0f}s"
+                    )
+        return result
 
     async def get_cars_ahead_progress(self, top_n: int = 4) -> dict[str, Any]:
         """Return current gaps and measured gap trend for the nearest cars ahead.
@@ -1141,38 +1191,6 @@ class TelemetryTools:
         fit = theil_sen(points)
         return round(fit[0], 3) if fit else None
 
-    @staticmethod
-    def _closing_rate_s_per_lap(driver: dict[str, Any]) -> tuple[float | None, float | None]:
-        """Gap change per lap, and laps until contact at that rate.
-
-        Negative rate means the gap is shrinking. ``None`` when the samples do
-        not span enough time to say anything honest.
-        """
-        history = [
-            sample
-            for sample in (driver.get("gap_history") or [])
-            if sample.get("gap_s") is not None
-        ]
-        if len(history) < 2:
-            return None, None
-        first, last = history[0], history[-1]
-        laps = float(last.get("lap", 0)) - float(first.get("lap", 0))
-        if laps < 1.0:
-            # Fall back to elapsed time when the samples sit inside one lap.
-            seconds = float(last.get("session_time_s", 0)) - float(
-                first.get("session_time_s", 0)
-            )
-            if seconds < 20.0:
-                return None, None
-            laps = seconds / 90.0
-        change = abs(float(last["gap_s"])) - abs(float(first["gap_s"]))
-        rate = round(change / laps, 3)
-        gap = abs(float(last["gap_s"]))
-        laps_to_contact = (
-            round(gap / abs(rate), 1) if rate < -0.05 and gap > 0 else None
-        )
-        return rate, laps_to_contact
-
     async def get_pace_verdict(self, driver: str = "ahead") -> dict[str, Any]:
         """Judge the player's pace against one rival, and say where it is going.
 
@@ -1182,6 +1200,12 @@ class TelemetryTools:
         difference is the car or the rubber.
         """
         state = await self.store.snapshot_analysis()
+        freshness = self.packet_freshness(state, 2)
+        if not freshness["available"]:
+            # Like get_gap: a verdict on a gap that is no longer arriving would
+            # be narrated as the current state of the race.
+            return {"available": False, "freshness": freshness,
+                    "reason": "Current gap telemetry is unavailable; no live pace verdict."}
         rival = self._resolve_driver(state, driver)
         player = self._resolve_driver(state, "me")
         if not rival or not player:
@@ -1217,14 +1241,15 @@ class TelemetryTools:
         )
 
         gap = rival.get("gap_to_player_s")
-        rate, laps_to_contact = self._closing_rate_s_per_lap(rival)
+        trend = self._gap_trend(rival)
+        rate, laps_to_contact = trend["gap_change_s_per_lap"], trend["laps_to_contact"]
         ahead = gap is not None and float(gap) < 0
 
-        if rate is None:
+        if trend["trend"] == "unknown":
             verdict = "not enough gap history to call the trend"
-        elif rate <= -0.05:
+        elif trend["trend"] == "closing":
             verdict = "closing" if ahead else "being caught"
-        elif rate >= 0.05:
+        elif trend["trend"] == "falling_back":
             verdict = "dropping back" if ahead else "pulling away"
         else:
             verdict = "holding station"
@@ -1234,8 +1259,8 @@ class TelemetryTools:
         # Saying so is better than asserting a confident call built on two
         # signals that contradict each other.
         conflict = None
-        if rate is not None and pace_delta_s is not None:
-            closing = rate <= -0.05
+        if trend["trend"] != "unknown" and pace_delta_s is not None:
+            closing = trend["trend"] == "closing"
             quicker = pace_delta_s < -0.05
             if closing and not quicker and abs(pace_delta_s) > 0.15:
                 conflict = (
@@ -1271,9 +1296,17 @@ class TelemetryTools:
             "position": rival.get("position"),
             "relative": None if gap is None else ("ahead" if ahead else "behind"),
             "gap_s": None if gap is None else round(abs(float(gap)), 2),
+            "freshness": freshness,
             "verdict": verdict,
+            "gap_change_s": trend["gap_change_s"],
+            "trend_window_s": trend["window_s"],
             "gap_change_s_per_lap": rate,
             "laps_to_contact": laps_to_contact,
+            **{
+                key: trend[key]
+                for key in ("short_term_change_s", "short_term_window_s", "trend_conflict")
+                if key in trend
+            },
             "pace_delta_s_per_lap": pace_delta_s,
             "pace_interpretation": (
                 None
@@ -1340,7 +1373,8 @@ class TelemetryTools:
             gap = rival.get("gap_to_player_s")
             if gap is None or rival.get("pit_lane_timer_active"):
                 continue
-            rate, laps_to_contact = self._closing_rate_s_per_lap(rival)
+            trend = self._gap_trend(rival)
+            rate, laps_to_contact = trend["gap_change_s_per_lap"], trend["laps_to_contact"]
             entry = {
                 "driver": display_name(rival),
                 "position": rival.get("position"),
@@ -1352,10 +1386,8 @@ class TelemetryTools:
                 "pit_stops": rival.get("pit_stops"),
             }
             behind = int(rival.get("position", 0) or 0) > position > 0
-            if behind and rate is not None and rate <= -0.05:
-                threats.append(entry)
-            elif not behind and rate is not None and rate <= -0.05:
-                opportunities.append(entry)
+            if trend["trend"] == "closing":
+                (threats if behind else opportunities).append(entry)
 
         threats.sort(key=lambda e: (e["laps_to_contact"] or 1e9, e["gap_s"]))
         opportunities.sort(key=lambda e: (e["laps_to_contact"] or 1e9, e["gap_s"]))
@@ -1386,8 +1418,10 @@ class TelemetryTools:
         else:
             headline = "Race is stable; no threat or opportunity inside five laps."
 
+        freshness = self.packet_freshness(state, 2)
         return {
-            "available": bool(state.get("connected")),
+            "available": bool(state.get("connected")) and freshness["available"],
+            "freshness": freshness,
             "lap": state.get("current_lap"),
             "total_laps": state.get("total_laps"),
             "position": position,
