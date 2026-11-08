@@ -7,18 +7,21 @@ line commits to can be looked for in that evidence. A number found nowhere in
 it was made up, however plausible it sounds.
 
 What is read as a number: digits and decimals, P positions, T corner numbers,
-lap and clock times (1:31.2), number words ("fourteen", "one point four"),
-"three tenths", "half a second", "two and a half" and percentages.
+lap and clock times (1:31.2), number words ("fourteen", "one point four",
+"point four"), "three tenths", "half a second", "two and a half", decades
+("the high 60s") and percentages.
 
 A spoken number is backed when some evidence value rounds to it at the
 precision it was said (0.4 for 0.38, 62 for 61.7), sign ignored, or does so
 after a conversion its own unit calls for: Celsius to Fahrenheit for a
 temperature said in Fahrenheit, milliseconds to seconds for a time, a fraction
-to a percentage, seconds to minutes. Three derived numbers are accepted
-because they can be checked reliably: a count of laps from the current lap or
-to the flag to a lap the caller names (laps to go, laps to the stop), a count
-of places from the player's place to one the caller names (cars behind), and
-a gap under ten seconds between two lap times written in the evidence.
+to a percentage, seconds to minutes. A half is said to the nearest half
+("half a second" for 0.4) and a decade covers its ten ("the high 60s" for
+66). Three derived numbers are accepted because they can be checked
+reliably: a count of laps from the current lap or to the flag to a lap the
+caller names (laps to go, laps to the stop), a count of places from the
+player's place to one the caller names (cars behind), and a gap under ten
+seconds between two lap times written in the evidence.
 
 Known limits, by design. The check does not know which evidence value a number
 stands for, so a real number in the wrong place passes, and small integers are
@@ -67,6 +70,16 @@ _POSITION = re.compile(r"\b([PT])(\d{1,2})\b")
 _SPOKEN_DECIMAL = re.compile(
     rf"\b({_WORD})\s+point((?:\s+(?:{_DIGIT_WORD})\b)+)", re.I
 )
+# "point four laps", with no whole number said. Not "at this point two cars".
+_BARE_DECIMAL = re.compile(
+    rf"(?<!\bthis )(?<!\bthat )(?<!\bthe )(?<!\ba )(?<!\bany )(?<!\bno )(?<!\bone )"
+    rf"\bpoint((?:\s+(?:{_DIGIT_WORD})\b)+)",
+    re.I,
+)
+# "the high 60s", "mid-50s": every value in that ten.
+_DECADE = re.compile(
+    r"\b(?:the|low|lower|mid|middle|high|upper|early|late)[\s-]+(?:\w+[\s-]+)?([1-9]0)s\b", re.I
+)
 _AND_A_HALF = re.compile(rf"\b(\d+|{_WORD})\s+and\s+a\s+half\b", re.I)
 _FRACTION = re.compile(rf"\b(a|\d|{_ONES})\s+(tenth|hundredth)s?\b", re.I)
 _HALF = re.compile(r"\bhalf\s+an?\s+(second|tenth|lap)\b", re.I)
@@ -103,12 +116,22 @@ _PLACE_KEYS = frozenset({
 
 @dataclass(frozen=True)
 class SpokenNumber:
-    """One number a line commits to: as written, its magnitude, precision and unit."""
+    """One number a line commits to: as written, its magnitude, precision and unit.
+
+    ``step`` is the resolution it was said to when that is not a power of
+    ten: 0.5 for "two and a half", 10 for "the 60s" (read as 65).
+    """
 
     text: str
     value: float
     decimals: int
     unit: str = ""
+    step: float = 0.0
+
+    @property
+    def tolerance(self) -> float:
+        """How far an evidence value may be from it and still be what was said."""
+        return 0.5 * (self.step or 10.0 ** -self.decimals)
 
 
 def _word_value(phrase: str) -> int:
@@ -142,13 +165,15 @@ def _mentions(text: str, *, evidence: bool = False) -> list[SpokenNumber]:
     found: list[tuple[int, int, SpokenNumber]] = []
     taken: list[tuple[int, int]] = []
 
-    def add(start: int, end: int, value: float, decimals: int, unit: str | None = None) -> None:
+    def add(
+        start: int, end: int, value: float, decimals: int, unit: str | None = None, step: float = 0.0,
+    ) -> None:
         if any(start < stop and end > begin for begin, stop in taken):
             return
         taken.append((start, end))
         found.append((start, end, SpokenNumber(
             text[start:end], abs(value), decimals,
-            _unit_after(text, end) if unit is None else unit,
+            _unit_after(text, end) if unit is None else unit, step,
         )))
 
     for match in _LAP_TIME.finditer(text):
@@ -159,14 +184,19 @@ def _mentions(text: str, *, evidence: bool = False) -> list[SpokenNumber]:
         fraction = "".join(str(_DIGIT_WORDS[word.lower()]) for word in match.group(2).split())
         add(match.start(), match.end(), float(f"{_word_value(match.group(1))}.{fraction}"),
             len(fraction))
+    for match in _BARE_DECIMAL.finditer(text):
+        fraction = "".join(str(_DIGIT_WORDS[word.lower()]) for word in match.group(1).split())
+        add(match.start(), match.end(), float(f"0.{fraction}"), len(fraction))
     for match in _AND_A_HALF.finditer(text):
         whole = match.group(1)
         base = float(whole) if whole.isdigit() else _word_value(whole)
-        add(match.start(), match.end(), base + 0.5, 1)
+        add(match.start(), match.end(), base + 0.5, 1, step=0.5)
     for match in _HALF.finditer(text):
         kind = match.group(1).lower()
         value, unit = {"second": (0.5, "s"), "tenth": (0.05, "s"), "lap": (0.5, "laps")}[kind]
-        add(match.start(), match.end(), value, 2 if kind == "tenth" else 1, unit)
+        add(match.start(), match.end(), value, 2 if kind == "tenth" else 1, unit, step=value)
+    for match in _DECADE.finditer(text):
+        add(match.start(1), match.end(), float(match.group(1)) + 5, 0, step=10.0)
     for match in _FRACTION.finditer(text):
         count = match.group(1).lower()
         count_value = 1 if count == "a" else int(count) if count.isdigit() else _SMALL[count]
@@ -201,7 +231,9 @@ def _mentions(text: str, *, evidence: bool = False) -> list[SpokenNumber]:
         start_next = found[index + 1][0]
         number, following = numbers[index], numbers[index + 1]
         if not number.unit and following.unit and _RANGE_JOIN.fullmatch(text[end:start_next]):
-            numbers[index] = SpokenNumber(number.text, number.value, number.decimals, following.unit)
+            numbers[index] = SpokenNumber(
+                number.text, number.value, number.decimals, following.unit, number.step
+            )
     return numbers
 
 
@@ -289,8 +321,8 @@ def place_counts(position: Any, *sources: Any) -> list[float]:
     return sorted({abs(mark - float(position)) for mark in _marks(sources, _PLACE_KEYS)} - {0.0})
 
 
-def _close(spoken: float, value: float, decimals: int) -> bool:
-    return abs(spoken - value) <= 0.5 * 10.0 ** -decimals + 1e-9
+def _close(spoken: float, value: float, tolerance: float) -> bool:
+    return abs(spoken - value) <= tolerance + 1e-9
 
 
 def _readings(value: float, unit: str) -> Iterable[float]:
@@ -324,16 +356,17 @@ def is_backed(
     whole number said in laps or places may be; ``times`` are lap times whose
     gaps may be said in seconds.
     """
+    tolerance = number.tolerance
     for value in values:
-        if any(_close(number.value, reading, number.decimals) for reading in _readings(value, number.unit)):
+        if any(_close(number.value, reading, tolerance) for reading in _readings(value, number.unit)):
             return True
-    if number.decimals == 0 and number.unit in {"laps", "places"}:
+    if number.decimals == 0 and not number.step and number.unit in {"laps", "places"}:
         counts = laps if number.unit == "laps" else places
-        if any(_close(number.value, count, 0) for count in counts):
+        if any(_close(number.value, count, tolerance) for count in counts):
             return True
     if number.unit in {"s", ""} and number.decimals and number.value < 10:
         for first, second in combinations(sorted(set(times)), 2):
-            if _close(number.value, abs(first - second), number.decimals):
+            if _close(number.value, abs(first - second), tolerance):
                 return True
     return False
 

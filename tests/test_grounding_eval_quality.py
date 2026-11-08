@@ -194,6 +194,24 @@ async def test_a_failed_narration_is_recorded_on_the_saved_call(stack, monkeypat
 
 
 @pytest.mark.asyncio
+async def test_a_narration_check_that_cannot_run_still_delivers_the_call(stack, monkeypatch):
+    """The call has left the queue by then: a failed check speaks the template, never nothing."""
+    store, database, engineer, voice, _ = await _narrating_race(stack, monkeypatch, INVENTED)
+
+    def broken(*args, **kwargs):
+        raise ValueError("unreadable evidence")
+
+    monkeypatch.setattr("pitwall.proactive.unsupported", broken)
+    engineer._enqueue("fuel_warning", {"fuel_laps_delta": -0.4}, critical=True, cooldown_s=0.0)
+    await engineer._deliver(await store.snapshot_radio())
+
+    assert voice.spoken == [FUEL_TEMPLATE]
+    saved = _saved_call(database, "fuel_warning")
+    assert saved["delivered"] == 1
+    assert "template spoken: narration check failed (ValueError)" in saved["refusal_reason"]
+
+
+@pytest.mark.asyncio
 async def test_a_driver_check_that_lost_its_question_says_why_its_template_was_spoken(stack):
     store, database, *_ = stack
 
@@ -259,9 +277,30 @@ def test_ordinals_years_and_the_pronoun_one_are_not_read_as_numbers(line):
     ("Push for two laps.", "Car behind has stopped. Push for up to two clean laps."),
     # A gap between two lap times in the evidence.
     ("Four tenths off pole.", "SESSION BEST 1:28.000 | PLAYER BEST 1:28.400"),
+    # "point four" with no whole number said.
+    ("Fuel is point four laps short.", {"fuel_laps_delta": -0.42}),
+    # A half is said to the nearest half.
+    ("About half a lap short on fuel.", {"fuel_laps_delta": -0.42}),
+    ("Two and a half seconds back.", {"gap_s": 2.34}),
+    # A decade covers its ten.
+    ("Rear left at 71, the rest in the mid-50s to high 60s.", {"wear": [55.2, 56.1, 71.3, 66.0]}),
 ])
 def test_numbers_backed_by_the_evidence_pass(line, evidence):
     assert _texts(unsupported(line, evidence)) == []
+
+
+@pytest.mark.parametrize("line,evidence,invented", [
+    ("About half a lap short on fuel.", {"fuel_laps_delta": -0.9}, ["half a lap"]),
+    ("Two and a half seconds back.", {"gap_s": 2.9}, ["Two and a half"]),
+    ("The fronts are in the high 70s.", {"wear": [55.2, 66.0]}, ["70s"]),
+    ("Fuel is point six laps short.", {"fuel_laps_delta": -0.42}, ["point six"]),
+])
+def test_rounded_wording_still_has_to_round_from_the_evidence(line, evidence, invented):
+    assert _texts(unsupported(line, evidence)) == invented
+
+
+def test_point_as_a_word_is_not_a_decimal():
+    assert _texts(spoken_numbers("At this point two cars have stopped.")) == ["two"]
 
 
 def test_counts_of_laps_and_places_the_line_works_out_pass_but_not_bare_numbers():

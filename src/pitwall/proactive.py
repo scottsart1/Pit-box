@@ -2514,23 +2514,31 @@ class ProactiveEngineer:
             # from the same state, so "two laps" or a count it works out are
             # numbers the call is entitled to say.
             payload = event.get("payload") or {}
-            invented = unsupported(
-                spoken,
-                evidence,
-                fallback,
-                laps=lap_counts(
-                    state.get("current_lap"),
-                    state.get("total_laps"),
-                    (state.get("strategy") or {}).get("recommended") or {},
-                    state.get("strategy_hold") or {},
-                    payload,
-                ),
-                places=place_counts(
-                    state.get("player_position"),
-                    {"active_cars": state.get("active_cars")},
-                    payload,
-                ),
-            )
+            try:
+                invented = unsupported(
+                    spoken,
+                    evidence,
+                    fallback,
+                    laps=lap_counts(
+                        state.get("current_lap"),
+                        state.get("total_laps"),
+                        (state.get("strategy") or {}).get("recommended") or {},
+                        state.get("strategy_hold") or {},
+                        payload,
+                    ),
+                    places=place_counts(
+                        state.get("player_position"),
+                        {"active_cars": state.get("active_cars")},
+                        payload,
+                    ),
+                )
+            except Exception as exc:
+                # An unchecked narration is not spoken, and a check that
+                # cannot run must not cost the driver the call: the call has
+                # already left the queue, so the template is said instead.
+                log.warning("Proactive narration check failed; template spoken: %s", exc)
+                self._template_replaced_narration(event, f"narration check failed ({type(exc).__name__})")
+                return fallback
             if invented:
                 said = ", ".join(dict.fromkeys(number.text for number in invented))
                 reason = f"narration said {said}, which its facts do not contain"
