@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock
 import numpy as np
 import pytest
 
-from pitwall.brain import PERSONA, EngineerBrain
+from pitwall.brain import PERSONA, EngineerBrain, compose_persona, persona_addenda
 from pitwall.catalog import session_id
 from pitwall.engineering import EngineeringService
 from pitwall.engineering_context import lap_note_origin
@@ -199,7 +199,12 @@ async def test_feedback_reaches_model_note_tool_instead_of_gap_lookup(stack):
     assert await brain._fast_answer(utterance) is None
     names = {schema["name"] for schema in tools.schemas_for_route("fast")}
     assert {"record_lap_observation", "get_lap_observations", "compare_practice_groups"} <= names
-    assert "Only say a note was saved when the tool returns saved=true" in PERSONA
+    # The note tool is offered on every route, so the honesty rule travels
+    # with every reply to the driver, along with the practice-notes brief.
+    state = await store.snapshot_analysis()
+    brief = compose_persona(PERSONA, addenda=persona_addenda(state, utterance, names))
+    assert "Only say a note was saved when the tool returns saved=true" in brief
+    assert "record it with record_lap_observation" in brief
 
 
 @pytest.mark.asyncio

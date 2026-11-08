@@ -31,6 +31,13 @@ from .session_guard import SessionChangedError, session_scoped
 from .state import StateStore
 from .tools import TelemetryTools
 
+# The radio brief is a core that every path shares, plus addenda attached only
+# on the paths where they apply. The unsolicited calls and the briefings run
+# with no tools and no driver question, and the monolithic brief used to hand
+# them orders to call tools they were not given, rules about "the driver's
+# latest request" and pages of saved-session and setup contract. The core
+# keeps the tone, grounding, safety and pit-call rules; persona_addenda()
+# picks the rest for a reply to the driver.
 PERSONA = """
 You are Your Pit Box, a senior Formula 1 simulator race engineer.
 
@@ -40,11 +47,10 @@ You are analysing, not reading out. The driver is at speed and cannot do arithme
 lap times, gaps or sector splits. A number on its own is not an answer.
 - A comparison ("how am I doing against X", "am I catching him", "is he quicker") opens with the
   verdict — closing, holding, losing — and what to do about it, in the same sentence, then gives
-  the evidence that supports it. Call get_pace_verdict; never reply with two lap times and let the
-  driver subtract.
-- An open question ("how is the race going", "where do I stand", "any updates") is answered from
-  get_race_picture: the real threat or opportunity, whether their own pace is holding, and the one
-  thing that follows. Not a status dump.
+  the evidence that supports it. Never give two lap times and let the driver subtract.
+- An open question ("how is the race going", "where do I stand", "any updates") is answered with
+  the real threat or opportunity, whether their own pace is holding, and the one thing that
+  follows. Not a status dump.
 - Trends beat snapshots. "Three tenths a lap and about four laps to contact" is useful;
   "1:37.7, 1:37.9, 1:37.8" is not.
 - Say what it means for the outcome: whether a position is coming, whether the tyre reaches the
@@ -55,7 +61,61 @@ Return only the words that should be spoken over team radio; your first word is 
 the driver hears. Think privately: never output analysis,
 deliberation, tool-selection notes, self-talk, or phrases such as "let me check", "I need to",
 "wait", or "hold on". Do not use headings, bullet lists, markdown, or restate the prompt.
-Use telemetry tools for facts not already in the situation header. Never invent a number.
+Never invent a number. If telemetry is unavailable or stale, say so plainly once.
+Older radio calls are context, not authority: the current deterministic state wins.
+Use the temperature unit named in the situation header and retain the driver's latest unit request.
+Never infer that the driver is closing from a single lap-time comparison; use measured gap trend.
+A positive player-minus-rival lap delta means the player was slower.
+F1 25: 2026 Season Pack uses Overtake Mode and separate Active Aero (Cornering Mode or Straight
+Line Mode). A current gap below one second does not prove Overtake Mode eligibility: use the
+observed availability/activation flags. Legacy DRS is independent of battery charge.
+Field freshness in the header and tools takes precedence over CONNECTED: missing fields are
+unknown, stale values are historical, and paused values describe the paused state. Never turn a
+missing boolean into a confirmed negative. Treat blue flags, invalid qualifying laps, unserved
+drive-through/stop-go penalties, and a rival pitting from behind as high-priority operational facts.
+
+Pit calls must specify BOTH the lap and the tyre compound when the strategy supports it:
+"Box lap 18 for hards." Never repeat an expired game pit window as a current recommendation.
+The deterministic Your Pit Box strategy plan is primary; the game's window is only a cross-check.
+Quote stop laps and compounds from the recommended plan exactly as supplied. If you cite a
+different ranked plan, name it as an alternative in the same sentence — never present two plans'
+laps as if they were one plan.
+When strategy confidence is low, call the recommendation provisional and name the wear/deg
+assumption; do not present a track-default model as proven personal degradation.
+Respect the strategy's compound-rule legality. Never recommend finishing a dry Race
+without two different dry compounds unless inters or wets have been used.
+For SC, VSC, and red-flag calls, use the neutralisation state and effective pit loss;
+do not treat a red-flag tyre change like an ordinary green-flag pit stop.
+When race suspension is confirmed, changing tyres during the red flag is an opportunity with no
+normal pit-lane time loss. Do not deny the change merely because the game is paused. Distinguish
+confirmed available sets from an assumed fresh set. Never promise an unavailable compound.
+
+In qualifying, do not volunteer race-style gaps ahead or behind. The useful comparison is the
+field's best lap times, the driver's best lap, theoretical best, target lap, and the delta required.
+Only discuss gaps in qualifying when the driver explicitly asks about traffic or track position.
+
+For driving coaching, separate fuel-saving advice from tyre-temperature advice. Refer to
+auto-learned corners by their displayed name or distance. Do not claim a named real-world corner
+unless the data provides that name.
+
+Damage: the only pit-stop repair this telemetry exposes is the front wing. There is no
+"inspection" stop and no gearbox, engine, floor, diffuser or sidepod repair to call for. Never tell
+the driver to box to inspect or fix those — a stop costs the pit-lane time and fixes none of them.
+Report reliability damage once, as a fact and its consequence (expected pace loss, what to manage,
+whether it threatens finishing), then leave it alone. Repeating an unactionable damage report is
+worse than silence. Only recommend a stop for damage when the front wing is the problem, or when
+the tyre stop it is being combined with is already justified on its own.
+
+Answer in short radio sentences, the answer or instruction first. When a sentence limit is stated
+below, the radio cuts the reply there. Every sentence must contain driver-useful information.
+Do not mention being an AI.
+""".strip()
+
+# A reply to the driver, with telemetry tools offered.
+QUESTION_PERSONA = """
+This is a reply to the driver's radio request, with telemetry tools available.
+Use telemetry tools for facts not already in the situation header. For a comparison, call
+get_pace_verdict; an open question about the race is answered from get_race_picture.
 Interpret the whole request, including who it concerns and whether it asks about the future.
 Choose and combine the tools that answer that request; a mention of the field or cars ahead
 does not make it a gap question. For another-stop questions use predict_rival_strategy,
@@ -66,12 +126,55 @@ Do not include the player's future stops without checking the player's pit strat
 When no single tool answers a question, combine the relevant bounded tool results across rounds.
 If the needed measurement or calculation is unavailable, say exactly what is missing; never
 claim to have created or executed a new function, or substitute an unrelated fact as the answer.
-If telemetry is unavailable or stale, say so plainly once.
 Answer the driver's latest request first and stay on that subject. Do not append strategy, fuel,
 energy, or coaching advice unless it directly answers the request or is an immediate safety action.
-Older radio calls are context, not authority: the current deterministic state wins.
 For "who am I actually racing", call get_strategic_rivals: projected finish gaps and
 estimated stops matter more than physical proximity. State projection uncertainty.
+Only say a note was saved when the tool returns saved=true. Never invent a saved note or lap ID.
+For driving coaching, use learned corner metrics and the lap map when available.
+For attack/defence advice, use gap trend, rival tyres/laps, racing-line/corner evidence, energy
+and the current 2026 overtaking aid. Give a concrete preparation point and overtaking/defending
+phase, or say evidence is absent. Rate defensive performance only when quality_evidence_available
+is true; missing corner or position observations cannot support saying defence has been strong
+or weak. Otherwise report the measured gap trend or its absence.
+The game does not expose the full sensor set for opponents. When a rival lacks brake,
+steering or line data, say that input is unavailable for that car and answer from what is
+supplied — timing, speed, position, stint. Never coach a rival's technique from data the
+game did not send, and never fill the gap with the player's own values.
+There is no DRS- or Overtake-Mode-specific tyre-temperature target; tyre temperature affects grip,
+not activation of the overtaking aid. For rear power-oversteer, lower on-throttle differential; for
+rear instability under braking, move brake bias slightly forward. Do not call adjustable diff settings
+a garage-only item.
+""".strip()
+
+# A reply that concerns the pit stop, the tyres or the plan.
+STRATEGY_PERSONA = """
+For a strategy request, inspect the ranked alternatives, uncertainty, projected per-wheel wear,
+traffic/rejoin, compound legality, and evidence source. Explain why the chosen plan beats the
+next plan and state the condition that would change the call. Never simply echo the first plan.
+After a confirmed red flag, refresh get_pit_strategy and explain its best restart plan and one
+feasible alternative.
+The driver can clear a locked plan by saying "Clear my strategy override" on this radio;
+that explicit command restores automatic planning. A question about whether to clear it does
+not clear it. Explain that radio command when relevant; do not claim clearing requires the UI.
+Driver tyre feedback is evidence, not telemetry. When the driver's report and the bounded model
+disagree, state the model's position once with the wear or degradation number that drives it. If the
+driver repeats the decision, acknowledge it and follow it; do not re-argue the same pit call.
+When the driver declines a pit call, never leave it at "copy": give the revised consequence in one
+clause and offer exactly one concrete alternative — a later box lap, or a different plan shape such
+as going long — with its cost. The driver said no to this stop, not to having a strategy.
+Tyre learning has separate live-session and saved-history evidence. A missing live degradation
+fit does not mean the driver has never tested that compound. Use the strategy model's per-compound
+recorded, eligible and fitted sample counts and source. Acknowledge relevant practice data before
+explaining the specific remaining limit: short runs, excluded laps, missing measurements, or an
+untested compound. Never turn a model inferred from another compound into a measured test result.
+Overall plan confidence follows its least-supported stint and other stated constraints; low
+confidence does not erase good medium or hard evidence. Legacy history is track-matched and must
+not be described as verified for the same car, formula or conditions when those are unknown.
+""".strip()
+
+# Practice runs and the driver's lap notes.
+PRACTICE_NOTES_PERSONA = """
 For practice runs, stint debriefs and what to test next, call get_practice_run_review.
 Use its measured evidence and next test; observed pace trend is not isolated tyre degradation.
 When the driver describes why a lap or stint was unusual, record it with record_lap_observation.
@@ -82,7 +185,6 @@ If "that lap" or "that run" is ambiguous, ask which one instead of attaching it 
 Record a current-lap note even before the lap finishes; the tool preserves the pending reference.
 Exclude a lap from pace only when the driver reports it was compromised or asks to exclude it.
 Traffic, temperature, balance and setup observations alone do not prove an unrepresentative lap.
-Only say a note was saved when the tool returns saved=true. Never invent a saved note or lap ID.
 Before analysing a lap or segment, retrieve get_lap_observations or get_practice_run_review and
 consider relevant driver and engineer notes alongside measured temperatures and traffic evidence.
 For chosen groups use compare_practice_groups: stint mode allows medium-versus-hard comparisons;
@@ -94,56 +196,10 @@ that an obstruction occurred. Only measured_traffic_status=close_following_detec
 a proximity flag was recorded; even that does not confirm blocking or measure its time cost.
 With no_close_following_flag, do not claim telemetry confirmed the driver's traffic report.
 A qualitative note is the driver's evidence, not corroboration from the gap-coverage fields.
-Use the temperature unit named in the situation header and retain the driver's latest unit request.
-Never infer that the driver is closing from a single lap-time comparison; use measured gap trend.
-A positive player-minus-rival lap delta means the player was slower.
-There is no DRS- or Overtake-Mode-specific tyre-temperature target; tyre temperature affects grip,
-not activation of the overtaking aid. For rear power-oversteer, lower on-throttle differential; for
-rear instability under braking, move brake bias slightly forward. Do not call adjustable diff settings
-a garage-only item.
+""".strip()
 
-Pit calls must specify BOTH the lap and the tyre compound when the strategy tool supports it:
-"Box lap 18 for hards." Never repeat an expired game pit window as a current recommendation.
-The deterministic Your Pit Box strategy plan is primary; the game's window is only a cross-check.
-The driver can clear a locked plan by saying "Clear my strategy override" on this radio;
-that explicit command restores automatic planning. A question about whether to clear it does
-not clear it. Explain that radio command when relevant; do not claim clearing requires the UI.
-Quote stop laps and compounds from the recommended plan exactly as supplied. If you cite a
-different ranked plan, name it as an alternative in the same sentence — never present two plans'
-laps as if they were one plan.
-When strategy confidence is low, call the recommendation provisional and name the wear/deg
-assumption; do not present a track-default model as proven personal degradation.
-Respect the strategy tool's compound-rule legality. Never recommend finishing a dry Race
-without two different dry compounds unless inters or wets have been used.
-For SC, VSC, and red-flag calls, use the tool's neutralisation state and effective pit loss;
-do not treat a red-flag tyre change like an ordinary green-flag pit stop.
-When race suspension is confirmed, changing tyres during the red flag is an opportunity with no
-normal pit-lane time loss. Do not deny the change merely because the game is paused. Refresh
-get_pit_strategy, explain its best restart plan and one feasible alternative, and distinguish
-confirmed available sets from an assumed fresh set. Never promise an unavailable compound.
-For a strategy request, inspect the ranked alternatives, uncertainty, projected per-wheel wear,
-traffic/rejoin, compound legality, and evidence source. Explain why the chosen plan beats the
-next plan and state the condition that would change the call. Never simply echo the first plan.
-For attack/defence advice, use gap trend, rival tyres/laps, racing-line/corner evidence, energy
-and the current 2026 overtaking aid. Give a concrete preparation point and overtaking/defending
-phase, or say evidence is absent. Rate defensive performance only when quality_evidence_available
-is true; missing corner or position observations cannot support saying defence has been strong
-or weak. Otherwise report the measured gap trend or its absence. F1 25: 2026 Season Pack uses Overtake Mode and separate
-Active Aero (Cornering Mode or Straight Line Mode). A current gap below one second does not prove
-Overtake Mode eligibility: use the observed availability/activation flags. Legacy DRS is independent
-of battery charge. Field freshness in the header and tools takes precedence over CONNECTED: missing
-fields are unknown, stale values are historical, and paused values describe the paused state.
-Never turn a missing boolean into a confirmed negative. Treat blue flags, invalid qualifying laps, unserved drive-through/stop-go
-penalties, and a rival pitting from behind as high-priority operational facts.
-
-In qualifying, do not volunteer race-style gaps ahead or behind. The useful comparison is the
-field's best lap times, the driver's best lap, theoretical best, target lap, and the delta required.
-Only discuss gaps in qualifying when the driver explicitly asks about traffic or track position.
-
-For driving coaching, separate fuel-saving advice from tyre-temperature advice. Use learned
-corner metrics and the lap map when available. Refer to auto-learned corners by their displayed
-name or distance. Do not claim a named real-world corner unless the tool provides that name.
-
+# Car setup and handling changes.
+SETUP_PERSONA = """
 For setup advice, state that only the front wing is normally adjustable during a pit stop.
 Full Race, Quali, and Hybrid setup recommendations are for the garage or a future session.
 Use generate_setup with basis reference for a fresh circuit baseline, and personalized only
@@ -154,31 +210,11 @@ be filled with invented wet settings or values from another game. These tools do
 the car in the game. Do not promise a lap-time gain or tyre-life multiplier from setup values
 alone, or lower tyre pressure automatically because wear or temperature is high. Suggest one
 or two deliberate changes and use matched Test Engineer runs to evaluate the result.
+""".strip()
 
-Damage: the only pit-stop repair this telemetry exposes is the front wing. There is no
-"inspection" stop and no gearbox, engine, floor, diffuser or sidepod repair to call for. Never tell
-the driver to box to inspect or fix those — a stop costs the pit-lane time and fixes none of them.
-Report reliability damage once, as a fact and its consequence (expected pace loss, what to manage,
-whether it threatens finishing), then leave it alone. Repeating an unactionable damage report is
-worse than silence. Only recommend a stop for damage when the front wing is the problem, or when
-the tyre stop it is being combined with is already justified on its own.
-
-Driver tyre feedback is evidence, not telemetry. When the driver's report and the bounded model
-disagree, state the model's position once with the wear or degradation number that drives it. If the
-driver repeats the decision, acknowledge it and follow it; do not re-argue the same pit call.
-When the driver declines a pit call, never leave it at "copy": give the revised consequence in one
-clause and offer exactly one concrete alternative — a later box lap, or a different plan shape such
-as going long — with its cost. The driver said no to this stop, not to having a strategy.
-
-Tyre learning has separate live-session and saved-history evidence. A missing live degradation
-fit does not mean the driver has never tested that compound. Use the strategy model's per-compound
-recorded, eligible and fitted sample counts and source. Acknowledge relevant practice data before
-explaining the specific remaining limit: short runs, excluded laps, missing measurements, or an
-untested compound. Never turn a model inferred from another compound into a measured test result.
-Overall plan confidence follows its least-supported stint and other stated constraints; low
-confidence does not erase good medium or hard evidence. Legacy history is track-matched and must
-not be described as verified for the same car, formula or conditions when those are unknown.
-
+# Answers built from stored measurements: saved sessions, reference laps and
+# full-field rankings. Attached when the tools that return them are offered.
+SAVED_SESSION_PERSONA = """
 Saved-session review, lap comparison and full-field analysis answers obey a stricter contract,
 because they quote stored measurements rather than the live car.
 Every value carries a provenance label. Respect it in the wording:
@@ -195,21 +231,15 @@ Distinguish the three time-gain levels supplied by the tools. "Measured" is the 
 loss straight from aligned timing. "Attributed" is an interval and must be spoken as a
 range that is at most the measured loss. "Opportunity" is what better execution could be
 worth. Never promote an attributed interval or an opportunity into a measured fact.
-The game does not expose the full sensor set for opponents. When a rival lacks brake,
-steering or line data, say that input is unavailable for that car and answer from what is
-supplied — timing, speed, position, stint. Never coach a rival's technique from data the
-game did not send, and never fill the gap with the player's own values.
 When the driver asks why, retrieve the finding's evidence chain and give the earliest
 well-supported cause, not the last visible symptom. Use "likely contributed" or
 "associated with" unless the evidence supports causation outright.
-
-Answer in short radio sentences, the answer or instruction first. When a sentence limit is stated
-below, the radio cuts the reply there. Every sentence must contain driver-useful information.
-Do not mention being an AI.
 """.strip()
 
 PROACTIVE_PERSONA = """
 You are making an unsolicited race-engineer radio call. Be useful, not chatty.
+No tools are available for this call: every number you may speak is in the event facts or the
+situation header. Never compute or look up another one.
 Lead with the single most important action or target. Include at most three numbers.
 Do not repeat a recent call unless the situation materially changed. Do not ask a question,
 except for a driver_check event: then ask exactly one closed tyre-state question using the supplied
@@ -289,17 +319,23 @@ def compose_persona(
     standing_instructions: list[dict[str, Any]] | None = None,
     *,
     route: str | None = None,
+    addenda: tuple[str, ...] = (),
 ) -> str:
     """Fold the user's engineer name, custom persona and verbosity into a base
     persona. Any user-supplied text is placed between the base brief and a final
     safety anchor, so custom tone can never appear as the last word and override
     the safety-critical instructions.
 
+    ``addenda`` are the constant briefs a path attaches to the core (see
+    persona_addenda). They follow the base in a fixed order and come before
+    anything per-driver, so each path's instructions open with the same text
+    on every request and stay cacheable by the provider.
+
     With ``route``, the brief also states the sentence limit the radio applies
     to that reply, taken from the same function that enforces it, so the
     prompt and the cut cannot disagree.
     """
-    parts = [base]
+    parts = [base, *addenda]
     if route is not None:
         parts.append(_radio_length_rule(route, str(verbosity or settings.radio_verbosity)))
     # Tolerate anything that survived from an older or hand-edited preference
@@ -342,6 +378,73 @@ def compose_persona(
         # phrase an instruction that removes a safety-critical call.
         parts.append(_SAFETY_ANCHOR)
     return "\n\n".join(parts)
+
+
+# What makes each addendum relevant to a reply. Matched as whole words, and
+# deliberately generous: an addendum missing from a reply that needed it costs
+# more than one attached to a reply that did not.
+_TYRE_AND_PLAN_TERMS = (
+    "tyre", "tyres", "tire", "tires", "wear", "deg", "degradation", "plan",
+    "override", "pit window", "window", "compound rule", "two compound", "restart",
+)
+_NOTE_TERMS = (
+    "note", "notes", "log", "record", "observation", "remember", "traffic",
+    "because", "compromised", "ruined", "blocked", "held up", "exclude",
+    "unrepresentative", "practice", "run", "runs", "stint", "stints", "test",
+    "testing", "compare", "group", "groups", "debrief",
+)
+_SETUP_TERMS = (
+    "setup", "setups", "set up", "wing", "front wing", "rear wing", "pressure",
+    "pressures", "camber", "toe", "ride height", "suspension", "anti roll",
+    "differential", "diff", "brake bias", "ballast", "garage",
+)
+_NOTE_TOOLS = frozenset(
+    {"get_practice_run_review", "record_lap_observation", "get_lap_observations", "compare_practice_groups"}
+)
+_SETUP_TOOLS = frozenset({"generate_setup", "get_setup_learning", "get_setup_correlation"})
+_SAVED_SESSION_TOOLS = frozenset(
+    {
+        "list_saved_sessions", "get_session_summary", "list_reference_laps", "compare_laps",
+        "get_lap_findings", "get_driver_strengths", "get_field_corner_rankings", "get_data_quality",
+    }
+)
+
+
+def persona_addenda(
+    state: dict[str, Any],
+    utterance: str,
+    tool_names: set[str] | frozenset[str],
+    *,
+    strategy: bool = False,
+) -> tuple[str, ...]:
+    """The briefs a reply to the driver carries on top of the core persona.
+
+    The question brief (tool directives, answering the latest request) always;
+    the strategy brief for anything about the stop, the tyres or the plan, a
+    declined call (``strategy``) or a red flag; the practice-notes brief where
+    the note tools are offered and the session or the request is about runs
+    and notes; the setup brief where setup tools are offered or the request is
+    about the car's setup; and the saved-session provenance contract wherever
+    the tools that return stored measurements are offered.
+    """
+    text = normalize_text(utterance)
+    addenda = [QUESTION_PERSONA]
+    if (
+        strategy
+        or state.get("red_flag_active")
+        or state.get("race_control_phase") == "red_flag"
+        or has_any_phrase(text, _STRATEGY_SUBJECTS + _TYRE_AND_PLAN_TERMS)
+    ):
+        addenda.append(STRATEGY_PERSONA)
+    if _NOTE_TOOLS & set(tool_names) and (
+        state.get("mode_profile") == "practice" or has_any_phrase(text, _NOTE_TERMS)
+    ):
+        addenda.append(PRACTICE_NOTES_PERSONA)
+    if _SETUP_TOOLS & set(tool_names) or has_any_phrase(text, _SETUP_TERMS):
+        addenda.append(SETUP_PERSONA)
+    if _SAVED_SESSION_TOOLS & set(tool_names):
+        addenda.append(SAVED_SESSION_PERSONA)
+    return tuple(addenda)
 
 # High reasoning is reserved for actual planning. Routine pace/corner/target questions
 # stay on the low-latency path instead of being escalated merely because they contain
@@ -598,6 +701,14 @@ _INCIDENT_PATTERNS = (
 )
 
 
+# Knockout qualifying: the raw session type of each knockout round (Q1 and
+# SQ1 are the first, Q2 and SQ2 the second) and, per field size, the last
+# position that goes through. Only the field sizes whose cut is established
+# are listed; for any other the knockout line is left out rather than guessed.
+_KNOCKOUT_SESSIONS = {5: 0, 10: 0, 6: 1, 11: 1}
+_KNOCKOUT_CUTS = {20: (15, 10), 22: (16, 10)}
+
+
 def _fahrenheit(celsius: float) -> float:
     return celsius * 9.0 / 5.0 + 32.0
 
@@ -609,6 +720,12 @@ def _temperature_values(values: list[float], unit: str) -> tuple[list[float], st
 
 
 def _contains_deliberation_for_history(text: str) -> bool:
+    """Whether an engineer line is leaked model self-talk rather than radio.
+
+    Only engineer lines are tested: "hold on", "wait -" and "the question is"
+    are ordinary radio speech from a driver, and a driver turn dropped here
+    left the follow-up ("well, answer my question") with nothing to refer to.
+    """
     lowered = " ".join(text.lower().split())
     return any(marker in lowered for marker in (
         "let me check", "let me think", "wait —", "wait -", "hold on",
@@ -616,6 +733,51 @@ def _contains_deliberation_for_history(text: str) -> bool:
         "critical concern:", "the current call:", "i should give",
         "the strategy engine ranks", "deterministic primary",
     ))
+
+
+# A radio line said this many laps ago or more is marked old: its gaps,
+# wear and calls describe that moment, not this one.
+_OLD_RADIO_LAPS = 2
+
+
+def _radio_history_line(entry: dict[str, Any], current_lap: int) -> str | None:
+    """One earlier radio line as the model reads it, or None to leave it out.
+
+    Each line says who spoke and on which lap, whether the engineer
+    volunteered it rather than answered, and whether it is old. Without
+    them a gap or a "box this lap" from thirteen laps ago read exactly like
+    one from this lap. Entries saved before lap and source were recorded
+    keep the plain form.
+    """
+    role = str(entry.get("role", "") or "")
+    text = str(entry.get("text", "") or "")
+    if role != "driver" and _contains_deliberation_for_history(text):
+        return None
+    label = role.upper() or "RADIO"
+    if entry.get("source") == "proactive":
+        label += " (unsolicited)"
+    lap = entry.get("lap")
+    if isinstance(lap, int) and not isinstance(lap, bool) and lap > 0:
+        if current_lap - lap >= _OLD_RADIO_LAPS:
+            label += " [old]"
+        label = f"L{lap} {label}"
+    return f"{label}: {text}"
+
+
+def _radio_history(entries: list[dict[str, Any]], current_lap: int) -> list[str]:
+    return [
+        line
+        for line in (_radio_history_line(entry, current_lap) for entry in entries)
+        if line is not None
+    ]
+
+
+# How the prompt explains the radio labels to the model.
+_RADIO_LABELS_NOTE = (
+    "Each earlier radio line starts with the lap it was said on; (unsolicited) marks a call the "
+    "engineer volunteered rather than an answer, and [old] marks a line two or more laps old, "
+    "whose numbers and calls are history, not the current state."
+)
 
 
 _SENTENCE_BREAK = re.compile(r"(?<=[.!?])\s+(?=[A-Z0-9])")
@@ -850,17 +1012,219 @@ class EngineerBrain:
         self.router = ProviderRouter(settings)
         self.last_provider_result: ProviderResult | None = None
 
+    @staticmethod
+    def _confirmed(value: str, freshness: dict[str, Any]) -> str:
+        """A header value as current, as the last confirmed one, or as unknown.
+
+        The same reading the fast path applies to a timing lookup. Fuel, ERS
+        and the compound were already masked this way, while the position, lap,
+        penalties and FIA flag were printed whatever their packet's age, so a
+        stalled lap-data stream still read "P5 ... penalties 0s" and a missing
+        flag read as "FIA flag none": a missing value as a confirmed negative.
+        """
+        if freshness.get("available"):
+            return value
+        if freshness.get("status") == "stale":
+            return f"unknown (last confirmed {value}, stale)"
+        return "unknown"
+
+    @staticmethod
+    def _compound_rule_sentence(strategy: dict[str, Any]) -> str:
+        """The two-compound rule as one sentence about what has actually been raced.
+
+        The plan's rule counts the compounds the plan will fit, so read as a
+        dict it said compliant True and dry compounds HARD and MEDIUM for a
+        driver who had only run mediums; only a buried flag said it depended
+        on the planned stop.
+        """
+        rule = strategy.get("compound_rule") or {}
+        if not rule:
+            return "not computed yet"
+        raced = [str(compound).upper() for compound in rule.get("used_compounds") or []]
+        raced_text = (
+            "raced " + " and ".join(raced) + (" only" if len(raced) == 1 else "")
+            if raced
+            else "no compound raced yet"
+        )
+        wet = {"INTER", "WET"}
+        if rule.get("wet_waiver"):
+            if wet & set(raced):
+                return "waived, inters or wets have been used"
+            return f"{raced_text}; waived only if the planned inters or wets are fitted"
+        if not rule.get("applies"):
+            return "does not apply to this session"
+        raced_dry = [compound for compound in raced if compound not in wet]
+        if len(set(raced_dry)) >= 2:
+            return f"met, {raced_text}"
+        if rule.get("compliant"):
+            planned = [
+                str(compound).upper()
+                for compound in rule.get("dry_compounds_used") or []
+                if str(compound).upper() not in raced_dry
+            ]
+            return f"{raced_text}; met only if the planned {' or '.join(planned) or 'compound change'} stop is made"
+        eligible = [str(compound).upper() for compound in rule.get("eligible_next_compounds") or []]
+        return f"{raced_text}; a different dry compound ({' or '.join(eligible) or 'any other'}) must still be fitted"
+
+    @classmethod
+    def _header_strategy_instruction(cls, recommended: dict[str, Any], state: dict[str, Any]) -> str:
+        """The plan's call as the radio says it, not the engine's raw string.
+
+        The driver-asked answer and the unsolicited calls both apply the stop
+        guards (a stop that gains nothing and loses places is "Stay out", a
+        compound just fitted is never called again). The header carried the
+        raw string, so the model could still read "Box lap 33 for SOFT" from
+        the context of a plan the radio was calling "Stay out".
+        """
+        if not recommended:
+            return "strategy building"
+        current_lap = int(state.get("current_lap", 0) or 0)
+        tyre = state.get("tyre") or {}
+        override = cls._strategy_guard_override(recommended, current_lap, tyre)
+        if override is not None:
+            return override
+        engine = str(recommended.get("instruction") or "").strip()
+        box_lap, fit = recommended.get("box_lap"), recommended.get("fit_compound")
+        if engine and box_lap is not None and fit and engine == f"Box lap {box_lap} for {fit}.":
+            return cls._spoken_strategy_instruction(recommended, current_lap, tyre)
+        return engine or "strategy building"
+
+    @staticmethod
+    def _declined_this_turn(origin: dict[str, Any], state: dict[str, Any], utterance: str) -> bool:
+        """Whether this utterance was a refusal of the pit call that set the hold.
+
+        The refusal branch of the fast path records the driver's own words as
+        the hold's reason; an agreed tactic records its own reason and is
+        acknowledged through the AGREED clause instead.
+        """
+        before = origin.get("strategy_hold", {}) or {}
+        hold = state.get("strategy_hold", {}) or {}
+        return bool(
+            hold.get("active")
+            and hold.get("reason") == utterance
+            and hold.get("set_at") != before.get("set_at")
+        )
+
+    @classmethod
+    def _declined_call_note(cls, state: dict[str, Any]) -> str:
+        """The declined call and the next feasible option, computed for the reply.
+
+        The brief tells the engineer to answer a declined pit call with one
+        concrete alternative and its cost. Left to the model, that took a tool
+        round under a short deadline, beside a nearer instruction to confirm
+        briefly, so the likely reply was a bare "Copy, staying out." The
+        alternative is the best-ranked feasible, legal plan that does not stop
+        on or before the declined lap; its cost is the engine's own
+        risk-adjusted time difference.
+        """
+        strategy = state.get("strategy", {}) or {}
+        recommended = strategy.get("recommended", {}) or {}
+        if not recommended:
+            return (
+                "DECLINED PIT CALL: there is no computed plan yet. Acknowledge in a few words; do not "
+                "invent an alternative."
+            )
+        declined = cls._header_strategy_instruction(recommended, state)
+        box_lap = recommended.get("box_lap")
+        if box_lap is None or not recommended.get("fit_compound") or declined.lower().startswith("stay out"):
+            return (
+                f"DECLINED PIT CALL: the current call already makes no stop now ({declined}). "
+                "Acknowledge in a few words."
+            )
+        declined = declined.rstrip(".")
+        current_lap = int(state.get("current_lap", 0) or 0)
+        signature = (list(recommended.get("box_laps") or []), list(recommended.get("compounds") or []))
+        alternative = None
+        for candidate in strategy.get("plans", []) or []:
+            if not (candidate.get("feasible") and candidate.get("legal")):
+                continue
+            try:
+                laps = [int(lap) for lap in candidate.get("box_laps") or []]
+            except (TypeError, ValueError):
+                continue
+            if (list(candidate.get("box_laps") or []), list(candidate.get("compounds") or [])) == signature:
+                continue
+            if any(lap < current_lap for lap in laps) or (laps and laps[0] <= int(box_lap)):
+                continue
+            alternative = candidate
+            break
+        if alternative is None:
+            return (
+                f"DECLINED PIT CALL: the driver declined \"{declined}\". No other feasible, legal plan "
+                "is computed. Acknowledge in a few words and say the plan will be re-checked; do not "
+                "invent an alternative."
+            )
+        stops = list(zip(alternative.get("box_laps") or [], (alternative.get("compounds") or [])[1:]))
+        option = (
+            ", then ".join(f"box lap {int(lap)} for {_spoken_compound(compound)}" for lap, compound in stops)
+            if stops
+            else "stay out to the finish on these tyres"
+        )
+        mine, theirs = recommended.get("risk_adjusted_time_s"), alternative.get("risk_adjusted_time_s")
+        if isinstance(mine, (int, float)) and isinstance(theirs, (int, float)):
+            delta = float(theirs) - float(mine)
+            cost = (
+                "about the same race time"
+                if abs(delta) < 0.5
+                else f"about {abs(delta):.1f} seconds {'slower' if delta > 0 else 'quicker'}"
+            )
+            return (
+                f"DECLINED PIT CALL: the driver declined \"{declined}\". NEXT FEASIBLE OPTION: {option}, "
+                f"{cost} over the race by the strategy model's risk-adjusted projection. Acknowledge in "
+                "two or three words, then give that option and its cost in one clause, e.g. \"Copy, "
+                f"staying out. Next option is {option}, {cost}.\" Do not repeat the declined call."
+            )
+        return (
+            f"DECLINED PIT CALL: the driver declined \"{declined}\". NEXT FEASIBLE OPTION: {option}; its "
+            "time cost is not computed, so do not give one. Acknowledge in two or three words, then give "
+            f"that option in one clause, e.g. \"Copy, staying out. Next option is {option}.\" Do not "
+            "repeat the declined call."
+        )
+
+    def _knockout_line(self, state: dict[str, Any]) -> str | None:
+        """Where the elimination line is in a knockout session, and the driver's margin.
+
+        Only for the field sizes whose cut is known (20 cars: 15 then 10; 22
+        cars: 16 then 10). Any other count is left out rather than guessed.
+        """
+        session = _KNOCKOUT_SESSIONS.get(int(state.get("raw_session_type_id", 0) or 0))
+        cuts = _KNOCKOUT_CUTS.get(int(state.get("active_cars", 0) or 0))
+        if session is None or cuts is None:
+            return None
+        cut = cuts[session]
+        ranked = sorted(
+            (driver for driver in state.get("drivers", []) if int(driver.get("best_lap_ms", 0) or 0) > 0),
+            key=lambda driver: int(driver.get("best_lap_ms", 0) or 0),
+        )
+        if len(ranked) < cut:
+            return f"P{cut}, only {len(ranked)} cars have set a time" if ranked else f"P{cut}, no times set yet"
+        line_ms = int(ranked[cut - 1].get("best_lap_ms", 0) or 0)
+        player_index = int(state.get("player_car_index", -1))
+        player = next(
+            (driver for driver in state.get("drivers", []) if int(driver.get("car_idx", -1)) == player_index),
+            None,
+        )
+        player_ms = int((player or {}).get("best_lap_ms", 0) or 0)
+        if not player_ms:
+            margin = "no time set by you yet"
+        elif player_ms == line_ms:
+            margin = "you hold the line"
+        else:
+            margin = f"you are {abs(player_ms - line_ms) / 1000:.3f}s {'slower' if player_ms > line_ms else 'quicker'}"
+        return f"P{cut} {self._format_ms(line_ms)} ({margin})"
+
     async def _header(self, *, include_strategy: bool = False) -> str:
         state = await self.store.snapshot_analysis()
         freshness = self.tools.field_freshness(state)
         freshness_clause = "FIELD FRESHNESS " + json.dumps(freshness, separators=(",", ":")) + " | "
+        timing = freshness["timing"]
         status_known = freshness["fuel_battery_compound"]["available"]
         tyre_compound = state["tyre"]["compound"] if status_known else "unknown"
         tyre_age = state["tyre"]["age_laps"] if status_known else "unknown"
         weather_known = freshness["weather"]["available"]
         weather = state["weather"] if weather_known else "unknown"
         rain15 = self.tools.forecast_probability(state, 15) if weather_known else None
-        rain15 = "unknown" if rain15 is None else rain15
+        rain15_text = "unknown" if rain15 is None else f"{rain15}%"
         target = state.get("analysis", {}).get("target", {})
         top = state.get("analysis", {}).get("flagged_corners", [])
         corner_text = (
@@ -874,32 +1238,58 @@ class EngineerBrain:
                 for item in qualifying.get("field", [])
                 if item.get("best_lap")
             ) or "no representative field laps yet"
+
+            def known(value: Any) -> str:
+                return "not set yet" if value in (None, "") else str(value)
+
+            # The three things a qualifying driver asks most are whether
+            # they are through, how long is left and whether there is time
+            # for another lap. None of them was in the header, so each cost
+            # a tool round, and the knockout line was nowhere at all.
+            position = int(state.get("player_position", 0) or 0)
+            cars = int(state.get("active_cars", 0) or 0)
+            position_text = (
+                self._confirmed(f"P{position}" + (f"/{cars}" if cars else ""), timing)
+                if position > 0
+                else "not set yet"
+            )
+            seconds = max(0, int(state.get("session_time_left_s", 0) or 0))
+            clock_text = self._confirmed(f"{seconds // 60}:{seconds % 60:02d}", freshness["weather"])
+            delta = qualifying.get("delta_player_to_target_s")
+            delta_text = f"{float(delta):+.3f}s" if isinstance(delta, (int, float)) else "not set yet"
+            knockout = self._knockout_line(state)
+            knockout_text = (
+                f"KNOCKOUT LINE {self._confirmed(knockout, timing)} | " if knockout is not None else ""
+            )
             return (
                 freshness_clause + f"SESSION {state['session_type']} | {state['track_name']} | "
-                f"LAP {state['current_lap']} | CONNECTED {state['connected']} "
-                f"PAUSED {state['game_paused']} | "
+                f"LAP {self._confirmed(str(state['current_lap']), timing)} | "
+                f"TIMING POSITION {position_text} | TIME LEFT {clock_text} | "
+                f"CONNECTED {state['connected']} PAUSED {state['game_paused']} | "
                 f"QUALI BEST LAPS {field_text} | "
-                f"PLAYER BEST {qualifying.get('player_best')} | "
-                f"THEORETICAL {qualifying.get('theoretical_best')} | "
-                f"TARGET {qualifying.get('target')} | "
-                f"REQUIRED DELTA {qualifying.get('delta_player_to_target_s')}s | "
+                f"PLAYER BEST {known(qualifying.get('player_best'))} | "
+                f"THEORETICAL {known(qualifying.get('theoretical_best'))} | "
+                f"TARGET {known(qualifying.get('target'))} | "
+                f"REQUIRED DELTA {delta_text} | "
+                f"{knockout_text}"
                 f"TYRE {tyre_compound} age {tyre_age} | "
-                f"WEATHER {weather} rain15 {rain15}% | "
+                f"WEATHER {weather} rain15 {rain15_text} | "
                 f"OPPORTUNITY {corner_text}. "
                 "Do not volunteer gaps ahead/behind; use best-lap comparisons."
             )
 
-        plan = state.get("strategy", {}).get("recommended", {})
+        strategy = state.get("strategy", {}) or {}
+        plan = strategy.get("recommended", {}) or {}
         strategy_clause = ""
-        red_restart = state.get("strategy", {}).get("red_flag_restart")
+        red_restart = strategy.get("red_flag_restart")
         if state.get("red_flag_active") or state.get("race_control_phase") == "red_flag":
             strategy_clause = " | RED FLAG RESTART " + json.dumps(red_restart or {"refresh_required": True}, separators=(",", ":"))
         if include_strategy:
             strategy_clause += (
-                f" | compound rule {state.get('strategy', {}).get('compound_rule', {})}"
-                f" | strategy {plan.get('instruction', 'strategy building')}"
+                f" | compound rule: {self._compound_rule_sentence(strategy)}"
+                f" | strategy {self._header_strategy_instruction(plan, state)}"
             )
-            summary = state.get("strategy", {}).get("model_summary", {}) or {}
+            summary = strategy.get("model_summary", {}) or {}
             compounds = summary.get("compounds", {}) or {}
             evidence_fields = (
                 "historical_laps_recorded", "historical_laps_observed", "live_laps_observed",
@@ -912,9 +1302,13 @@ class EngineerBrain:
                     if compound in {"SOFT", "MEDIUM", "HARD", "INTER", "WET"}
                     and isinstance(data, dict)
                 }
+                strategy_clause += f" | TYRE EVIDENCE {json.dumps(evidence, separators=(',', ':'))}"
+            # The confidence goes with any plan, with or without per-compound
+            # evidence: "call it provisional when confidence is low" cannot be
+            # followed by a call that was never told the confidence.
+            if compounds or plan:
                 strategy_clause += (
-                    f" | TYRE EVIDENCE {json.dumps(evidence, separators=(',', ':'))}"
-                    f" | plan confidence {state.get('strategy', {}).get('confidence', 'unknown')}: "
+                    f" | plan confidence {strategy.get('confidence', 'unknown')}: "
                     f"{summary.get('confidence_basis', 'basis unavailable')}"
                     f" | history compatibility {summary.get('history_compatibility_basis', 'not supplied')}"
                 )
@@ -930,6 +1324,18 @@ class EngineerBrain:
                 " otherwise, say so and offer the alternative rather than"
                 " silently reverting to the ranked plan."
             )
+        # A declined stop travels the same way. The unsolicited calls already
+        # honour the hold; a reply that did not know about it could restate
+        # the very call the driver had just turned down.
+        hold = state.get("strategy_hold", {}) or {}
+        if hold.get("active"):
+            declined_on = hold.get("set_at_lap")
+            strategy_clause += (
+                f" | STRATEGY HOLD until lap {hold.get('until_lap')}: the driver declined the pit call"
+                + (f" on lap {declined_on}" if declined_on else "")
+                + ". Do not call that stop again unless the driver asks for the plan; a race-control"
+                " change, rain, new damage or a tyre past its wear limit ends the hold early."
+            )
         temperature_unit = str(state.get("temperature_unit", "c")).lower()
         temperatures, temperature_label = _temperature_values(
             [float(value) for value in state["tyre"]["inner_temps_c"]],
@@ -940,7 +1346,7 @@ class EngineerBrain:
             formatted_temperatures = "unknown"
         wear = state["tyre"]["wear"] if freshness["tyre_wear_damage"]["available"] else "unknown"
         fuel_delta = f"{state['fuel_laps_delta']:+.1f}" if status_known else "unknown"
-        battery = f"{state['ers_pct']:.0f}" if status_known else "unknown"
+        battery = f"{state['ers_pct']:.0f}%" if status_known else "unknown"
         overtaking_label = (
             "Overtake Mode"
             if state.get("regulations_2026")
@@ -949,23 +1355,34 @@ class EngineerBrain:
         aid_status = "active" if (state.get("overtake_active") if state.get("regulations_2026") else state.get("drs_open")) else "inactive"
         if not freshness["overtake_active_aero"]["available"]:
             aid_status = "unknown"
+        position = (
+            f"P{state['player_position']}"
+            if timing["available"]
+            else "position " + self._confirmed(f"P{state['player_position']}", timing)
+        )
+        penalties = self._confirmed(
+            f"{state.get('penalties_s', 0)}s, drive-through "
+            f"{state.get('unserved_drive_through_penalties', 0)}, stop-go "
+            f"{state.get('unserved_stop_go_penalties', 0)}",
+            timing,
+        )
+        target_lap = target.get("target")
+        lap_text = self._confirmed(f"{state['current_lap']}/{state['total_laps']}", timing)
         return (
             freshness_clause + f"SESSION {state['session_type']} | {state['track_name']} | "
-            f"LAP {state['current_lap']}/{state['total_laps']} | "
-            f"P{state['player_position']} | CONNECTED {state['connected']} "
+            f"LAP {lap_text} | "
+            f"{position} | CONNECTED {state['connected']} "
             f"PAUSED {state['game_paused']} | "
             f"{tyre_compound} age {tyre_age} "
             f"wear FL/FR/RL/RR {wear} | "
             f"inner temps FL/FR/RL/RR {formatted_temperatures} {temperature_label} | "
             f"fuel delta {fuel_delta} laps | "
-            f"ERS {battery}% | {overtaking_label} {aid_status} | "
-            f"weather {weather} rain15 {rain15}% | "
+            f"ERS {battery} | {overtaking_label} {aid_status} | "
+            f"weather {weather} rain15 {rain15_text} | "
             f"race control {state.get('race_control_phase', 'green')} | "
-            f"FIA flag {state.get('fia_flag', 'none')} | "
-            f"penalties {state.get('penalties_s', 0)}s, drive-through "
-            f"{state.get('unserved_drive_through_penalties', 0)}, stop-go "
-            f"{state.get('unserved_stop_go_penalties', 0)} | "
-            f"target {target.get('target')} | opportunity {corner_text}"
+            f"FIA flag {self._confirmed(str(state.get('fia_flag', 'none')), freshness['fuel_battery_compound'])} | "
+            f"penalties {penalties} | "
+            f"target lap {target_lap or 'not set'} | opportunity {corner_text}"
             f"{strategy_clause}"
         )
 
@@ -3354,7 +3771,7 @@ class EngineerBrain:
         limit = _BRIEFING_SENTENCE_LIMITS.get(kind, 3)
         briefing_rule = (
             "This briefing has no situation header and no tools: narrate only the payload in the "
-            "request, and ignore any instruction above about calling a tool or reading the header. "
+            "request. "
             f"Length: at most {limit} sentences; anything past that is cut"
             + ("." if is_pre else ", except the final actionable instruction, which is always kept.")
         )
@@ -3383,15 +3800,15 @@ class EngineerBrain:
         """Run an opt-in, non-spoken A/B comparison on one frozen context."""
         state = await self.store.snapshot_analysis()
         include_strategy = self._is_strategy_request(utterance)
-        recent = state["radio_log"][-4:]
-        history = "\n".join(
-            f"{entry['role'].upper()}: {entry['text']}" for entry in recent
-            if not _contains_deliberation_for_history(str(entry.get("text", "")))
-            and (include_strategy or not self._is_strategy_request(str(entry.get("text", ""))))
-        )
+        recent = [
+            entry for entry in state["radio_log"][-4:]
+            if include_strategy or not self._is_strategy_request(str(entry.get("text", "")))
+        ]
+        history = "\n".join(_radio_history(recent, int(state.get("current_lap", 0) or 0)))
         prompt = (
             f"{await self._header(include_strategy=include_strategy)}\n"
-            "REQUEST FOCUS: answer only the latest driver request. Strategy is omitted unless requested.\n"
+            "REQUEST FOCUS: answer only the latest driver request. Strategy is omitted unless requested. "
+            f"{_RADIO_LABELS_NOTE}\n"
             f"RECENT RADIO:\n{history}\n"
             f"DRIVER: {utterance}"
         )
@@ -3401,12 +3818,19 @@ class EngineerBrain:
             if route == "deep"
             else settings.reasoning_effort
         )
+        tools = [schema for schema in self.tools.schemas() if schema["name"] != "record_lap_observation"]
         return await self.router.compare(
             prompt=prompt,
-            instructions=compose_persona(PERSONA, route=route),
+            instructions=compose_persona(
+                PERSONA,
+                route=route,
+                addenda=persona_addenda(
+                    state, utterance, {schema["name"] for schema in tools}, strategy=include_strategy
+                ),
+            ),
             route=route,
             effort=effort,
-            tools=[schema for schema in self.tools.schemas() if schema["name"] != "record_lap_observation"],
+            tools=tools,
             execute_tool=self.tools.call,
             max_rounds=4 if route == "deep" else 3,
         )
@@ -3449,7 +3873,7 @@ class EngineerBrain:
                 llm_last_tool_rounds=0,
                 llm_last_error="",
             )
-            if not await self.store.append_radio("engineer", direct, expected=origin):
+            if not await self.store.append_radio("engineer", direct, expected=origin, source="reply"):
                 raise SessionChangedError("Session changed; the previous radio request was discarded.")
             await self.database.save_radio_message(
                 origin, "engineer", direct, "deterministic_response"
@@ -3457,32 +3881,42 @@ class EngineerBrain:
             return direct
 
         state = await self.store.snapshot_analysis()
-        include_strategy = self._is_strategy_request(utterance)
+        # A refusal of the pit call sets the hold and is then worded by the
+        # model. The reply needs the plan it is declining and the next
+        # feasible option, computed here, or "Copy, staying out" is all it can
+        # say; and the brief has to say what to do with them.
+        declined = self._declined_this_turn(origin, state, utterance)
+        include_strategy = self._is_strategy_request(utterance) or declined
         # The conversation is kept intact. Previously any earlier turn that
         # looked like a strategy request was deleted from the history whenever
         # the current turn was not one, so a follow-up such as "please answer my
         # question" arrived with no question attached and the engineer replied
         # that it had not come through. Only leaked model deliberation is
-        # filtered, because that is not something the driver said or heard.
+        # filtered, and only from engineer lines, because that is not something
+        # the driver said or heard.
         recent = state["radio_log"][-9:]
-        history = "\n".join(
-            f"{entry['role'].upper()}: {entry['text']}"
-            for entry in recent[:-1]
-            if not _contains_deliberation_for_history(str(entry.get("text", "")))
+        history = "\n".join(_radio_history(recent[:-1], int(state.get("current_lap", 0) or 0)))
+        refusal_focus = (
+            "The driver has just declined the pit call: answer as the DECLINED PIT CALL line says. "
+            if declined
+            else "If the driver is correcting or refusing something, accept it and confirm briefly. "
         )
         prompt = (
             f"{await self._header(include_strategy=include_strategy)}\n"
-            "REQUEST FOCUS: answer the latest driver request, using the earlier radio only "
+            + (f"{self._declined_call_note(state)}\n" if declined else "")
+            + "REQUEST FOCUS: answer the latest driver request, using the earlier radio only "
             "as context for what it refers to. Do not append an unrelated pit call. "
-            "If the driver is correcting or refusing something, accept it and confirm briefly. "
+            f"{refusal_focus}"
             "Earlier radio describes observations at that earlier time. A new flag, pause, restart or "
             "telemetry update can change the situation; describe the new state without claiming an "
-            "earlier answer was wrong unless evidence from that earlier moment demonstrates an error.\n"
+            "earlier answer was wrong unless evidence from that earlier moment demonstrates an error. "
+            f"{_RADIO_LABELS_NOTE}\n"
             f"RECENT RADIO:\n{history}\n"
             f"DRIVER: {utterance}"
         )
         effort = settings.deep_reasoning_effort if route == "deep" else settings.reasoning_effort
         narration_started = time.monotonic()
+        offered = {schema["name"] for schema in self.tools.schemas_for_route(route)}
         try:
             text = await self._run(
                 prompt,
@@ -3492,6 +3926,7 @@ class EngineerBrain:
                     str(state.get("radio_verbosity", "standard")),
                     state.get("standing_instructions", []),
                     route=route,
+                    addenda=persona_addenda(state, utterance, offered, strategy=include_strategy),
                 ),
                 max_rounds=4 if route == "deep" else 3,
                 route=route,
@@ -3507,15 +3942,18 @@ class EngineerBrain:
             # _fast_answer, whose freshness guard keeps a stale or paused
             # value from being spoken as current.
             failure = self._provider_fallback_kind(exc)
+            # The computed-plan fallback answers a request for the plan, not
+            # a turn that only carries the plan because a call was declined.
+            asks_for_plan = self._is_strategy_request(utterance)
             lookup = None
-            if not include_strategy and not match_drivers(state.get("drivers", []), utterance):
+            if not asks_for_plan and not match_drivers(state.get("drivers", []), utterance):
                 lookup = self._quick_question_after_chat(utterance)
-            if failure is None or not (include_strategy or lookup):
+            if failure is None or not (asks_for_plan or lookup):
                 raise
             if not await self.store.matches_session(origin):
                 raise SessionChangedError("Session changed; the previous radio request was discarded.") from exc
             prefix = _PROVIDER_FALLBACK_PREFIXES[failure]
-            if include_strategy:
+            if asks_for_plan:
                 text = await self._strategy_fallback_answer(prefix)
                 fallback_model = (
                     "strategy-deadline-fallback" if failure == "deadline" else "strategy-provider-fallback"
@@ -3538,7 +3976,7 @@ class EngineerBrain:
             # response is explicitly identified as local, degraded guidance.
             await self.store.update(llm_provider="local", llm_model=fallback_model,
                                     llm_last_latency_ms=round(elapsed_ms, 1), llm_last_tool_rounds=0)
-        if not await self.store.append_radio("engineer", text, expected=origin):
+        if not await self.store.append_radio("engineer", text, expected=origin, source="reply"):
             raise SessionChangedError("Session changed; the previous radio request was discarded.")
         provider_name = self.last_provider_result.provider if self.last_provider_result is not None else "unknown"
         await self.database.save_radio_message(
@@ -3547,13 +3985,16 @@ class EngineerBrain:
         return text
 
     async def proactive(self, event: dict[str, Any]) -> str:
+        from .proactive import narration_facts
+
         state = await self.store.snapshot_analysis()
         recent_log = state.get("radio_log", [])[-8:]
-        recent_engineer = [
-            entry["text"]
-            for entry in recent_log
-            if entry.get("role") == "engineer"
-        ]
+        # Labelled like the reply history, so "do not repeat a recent call
+        # unless the situation materially changed" can see how old each is.
+        recent_engineer = _radio_history(
+            [entry for entry in recent_log if entry.get("role") == "engineer"],
+            int(state.get("current_lap", 0) or 0),
+        )
         # The driver's own last words. Without them the narrator could not see
         # that the driver had just declined the stop it was about to call.
         recent_driver = [
@@ -3561,6 +4002,12 @@ class EngineerBrain:
             for entry in recent_log
             if entry.get("role") == "driver"
         ][-2:]
+        # Only the facts this call speaks, never the queue record or the
+        # whole plan behind it.
+        facts = narration_facts(event, state)
+        kind = facts["type"]
+        carried = facts["facts"] if kind == "strategy_change" else facts["facts"].get("strategy") or {}
+        carries_plan = bool(carried.get("instruction"))
         strategy_events = {
             "strategy_change", "race_control", "tyre_wear",
             "compound_requirement", "undercut_threat",
@@ -3573,16 +4020,21 @@ class EngineerBrain:
             if hold.get("active")
             else ""
         )
+        # A call that carries the plan (a rival stopping, a penalty to serve)
+        # gets the plan's confidence in the header and the qualifier on its
+        # pit call, as the strategy calls themselves do.
+        strategy_call = kind in strategy_events or carries_plan
         prompt = (
-            f"{await self._header(include_strategy=event.get('type') in strategy_events)}\n"
+            f"{await self._header(include_strategy=strategy_call)}\n"
             f"{hold_line}"
-            f"PROACTIVE EVENT: {json.dumps(event, ensure_ascii=False)}\n"
+            f"PROACTIVE EVENT: {json.dumps(facts, ensure_ascii=False)}\n"
+            f"{_RADIO_LABELS_NOTE}\n"
             f"RECENT ENGINEER CALLS: {json.dumps(recent_engineer, ensure_ascii=False)}\n"
             f"RECENT DRIVER RADIO: {json.dumps(recent_driver, ensure_ascii=False)}"
         )
         # While the driver's hold runs the call must not restate the plan, so
         # there is no pit call to qualify.
-        is_strategy_call = event.get("type") in strategy_events and not hold.get("active")
+        is_strategy_call = strategy_call and not hold.get("active")
         text = await self._run(
             prompt,
             settings.reasoning_effort,
@@ -3615,7 +4067,7 @@ class EngineerBrain:
         cleaned = " ".join((text or "").split())
         if not cleaned:
             return
-        await self.store.append_radio("engineer", cleaned)
+        await self.store.append_radio("engineer", cleaned, source="proactive")
         await self.database.save_radio_message(
             await self.store.snapshot_analysis(), "engineer", cleaned, "proactive"
         )

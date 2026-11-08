@@ -146,7 +146,10 @@ async def test_later_forecast_sample_is_not_a_fifteen_minute_prediction(stack, m
     await store.update(weather_forecast=[{"time_offset_min": 30, "rain_pct": 0}], rain_next_15_pct=0)
     answer = await brain.ask("weather forecast")
     assert "no 15-minute rain probability" in answer
-    assert "rain15 unknown%" in await brain.situation_header(include_strategy=False)
+    header = await brain.situation_header(include_strategy=False)
+    assert "rain15 unknown |" in header
+    # "unknown%" read as a malformed number rather than a missing one.
+    assert "unknown%" not in header
 
 
 @pytest.mark.asyncio

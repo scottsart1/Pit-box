@@ -252,6 +252,171 @@ ROAST_LINES_BOTH: tuple[str, ...] = (
 )
 
 
+# What the narrator is given for each call: the facts its template speaks and
+# a few that support them. The queue record itself (deadlines, session keys,
+# blocked reasons) is bookkeeping, and the embedded strategy plan carries some
+# sixty keys (Monte Carlo quantiles, stint models, position probabilities,
+# projected points) that a no-tool call allowed three numbers had to choose
+# from. Nested values are reduced by the projections below.
+_NARRATION_FACTS: dict[str, tuple[str, ...]] = {
+    "progress_update": (
+        "lap", "mode_profile", "progress", "target", "racing_line", "qualifying", "gaps", "strategy",
+    ),
+    "race_control": ("from", "to", "strategy", "neutralisation", "red_flag_restart"),
+    "sc_restart": ("phase", "position", "ers_pct", "front_temps_c"),
+    "yellow_ahead": ("flag", "distance_ahead_m"),
+    "driver_check": (
+        "laps_to_window", "box_lap", "current_wear_pct", "degradation_s_per_lap",
+        "projected_finish_wear_pct", "candidate_plans",
+    ),
+    "tyre_wear": ("wear_fl_fr_rl_rr", "strategy"),
+    "lap_deleted": ("lap", "sector"),
+    "quali_clear_air": ("lap", "clear_air_estimate", "closest_gap_s", "target", "ers_pct", "tyre_temps"),
+    "blue_flag": ("flag", "position"),
+    "penalty_service": ("drive_through", "stop_go", "serve_at_stop", "strategy"),
+    "undercut_threat": ("driver", "position", "tyre", "gap_to_player_s", "instruction", "strategy"),
+    "rival_pitted": ("driver", "position", "tyre", "gap_to_player_s", "strategy"),
+    "safety_car_delta": ("phase", "safety_car_delta_s", "threshold_s"),
+    "corner_coaching": (
+        "corner_no", "name", "average_loss_s", "cause", "instruction",
+        "brake_point_delta_m", "apex_speed_delta_kph", "throttle_on_delta_m",
+    ),
+    "fuel_warning": ("fuel_laps_delta", "burn_kg_per_lap", "lift_and_coast_m_per_lap", "recommendation"),
+    "damage": ("max_damage_pct", "new_faults", "escalated", "repairable", *DAMAGE_KEYS, *DAMAGE_FAULT_KEYS),
+    "compound_requirement": ("laps_remaining", "used", "eligible", "strategy"),
+    "weather_crossover": (
+        "rain_15_pct", "wetness", "trend", "compound", "box_lap", "worth_stopping",
+        "ask_driver", "driver_question", "reason", "forecast",
+    ),
+    "penalty": ("penalties_s", "added_s", "total_s"),
+    "warning": ("corner_cutting_warnings",),
+    "race_start": ("grid_position", "clean_side", "ers_pct", "front_temps_c"),
+    "energy_low": ("ers_pct", "regulations_2026"),
+    "component_wear": ("component", "wear_pct", "components"),
+    "engine_failure": ("blown", "seized"),
+    "rival_pace": ("driver", "gap_to_player_s", "closing"),
+    "pace_roast": (
+        "lap", "reason", "position", "active_cars", "bottom_five", "delta_to_target_s", "target", "lap_time",
+    ),
+}
+# A pit plan as a call speaks it: the instruction (already worded with the
+# radio's stop guards), the stop itself, why, and what would change it.
+_PLAN_FACTS = (
+    "instruction", "box_lap", "fit_compound", "stops_remaining",
+    "stop_required_reason", "tyre_reason", "call_changes_if",
+)
+_PROGRESS_FACTS = (
+    "lap_num", "lap_time", "delta_to_target_s", "target", "tyre_compound", "tyre_age",
+    "max_wear_pct", "deg_s_per_lap", "fuel_delta_laps", "top_opportunity", "line_opportunity",
+)
+_QUALIFYING_FACTS = (
+    "session_best", "player_best", "theoretical_best", "target", "required_delta_s", "top_best_laps",
+)
+_TARGET_FACTS = ("target", "target_lap", "theoretical", "basis")
+
+
+def _plan_facts(plan: Any, state: dict[str, Any]) -> dict[str, Any]:
+    if not isinstance(plan, dict) or not plan:
+        return {}
+    facts = {key: plan[key] for key in _PLAN_FACTS if plan.get(key) not in (None, "", [])}
+    confidence = (state.get("strategy", {}) or {}).get("confidence")
+    if facts and confidence:
+        facts["plan_confidence"] = confidence
+    return facts
+
+
+def _opportunity_text(value: Any) -> Any:
+    """A coaching opportunity as its instruction: the finding dict is not radio."""
+    if isinstance(value, dict):
+        return str(value.get("instruction") or "").strip() or None
+    return value
+
+
+def _narration_value(key: str, value: Any, state: dict[str, Any]) -> Any:
+    if key == "strategy":
+        return _plan_facts(value, state)
+    if not isinstance(value, (dict, list)):
+        return value
+    if key == "progress" and isinstance(value, dict):
+        facts = {name: value.get(name) for name in _PROGRESS_FACTS}
+        facts["top_opportunity"] = _opportunity_text(facts.get("top_opportunity"))
+        facts["line_opportunity"] = _opportunity_text(facts.get("line_opportunity"))
+        return facts
+    if key == "racing_line" and isinstance(value, dict):
+        return {"top_opportunity": _opportunity_text(value.get("top_opportunity"))}
+    if key in {"qualifying", "target"} and isinstance(value, dict):
+        names = _QUALIFYING_FACTS if "session_best" in value or "player_best" in value else _TARGET_FACTS
+        facts = {name: value.get(name) for name in names}
+        if isinstance(facts.get("top_best_laps"), list):
+            facts["top_best_laps"] = [
+                {name: item.get(name) for name in ("name", "best_lap", "delta_to_best_s")}
+                for item in facts["top_best_laps"][:3]
+                if isinstance(item, dict)
+            ]
+        return facts
+    if key == "neutralisation" and isinstance(value, dict):
+        return {name: value.get(name) for name in ("phase", "effective_pit_loss_s")}
+    if key == "red_flag_restart" and isinstance(value, dict):
+        return {name: value.get(name) for name in ("active", "instruction")}
+    if key == "forecast" and isinstance(value, list):
+        return [
+            {name: sample.get(name) for name in ("time_offset_min", "rain_pct")}
+            for sample in value[:3]
+            if isinstance(sample, dict)
+        ]
+    if key == "components" and isinstance(value, list):
+        return [
+            {name: item.get(name) for name in ("component", "wear_pct")}
+            for item in value
+            if isinstance(item, dict)
+        ]
+    return value
+
+
+def _rounded(value: Any) -> Any:
+    """Floats as the radio would say them, not as the model computed them."""
+    if isinstance(value, bool) or not isinstance(value, (float, dict, list)):
+        return value
+    if isinstance(value, float):
+        return round(value, 3) if abs(value) < 10 else round(value, 2)
+    if isinstance(value, dict):
+        return {key: _rounded(item) for key, item in value.items() if item is not None}
+    return [_rounded(item) for item in value]
+
+
+def narration_facts(event: dict[str, Any], state: dict[str, Any]) -> dict[str, Any]:
+    """The facts an unsolicited call is narrated from, per event type.
+
+    Every fact the call's template speaks is kept, so a narrated call can say
+    what the template would; the queue bookkeeping and the bulk of the
+    strategy plan are left out. A type without an entry keeps only its plain
+    values. A damage call keeps only the components that are damaged.
+    """
+    kind = str(event.get("type") or "")
+    payload = event.get("payload") or {}
+    if not isinstance(payload, dict):
+        payload = {}
+    if kind == "strategy_change":
+        facts: dict[str, Any] = _plan_facts(payload, state)
+        if payload.get("hold_released_reason"):
+            facts["hold_released_reason"] = payload["hold_released_reason"]
+    elif kind in _NARRATION_FACTS:
+        facts = {
+            key: _narration_value(key, payload[key], state)
+            for key in _NARRATION_FACTS[kind]
+            if key in payload
+        }
+        if kind == "damage":
+            facts = {
+                key: value
+                for key, value in facts.items()
+                if key not in DAMAGE_KEYS + DAMAGE_FAULT_KEYS or value
+            }
+    else:
+        facts = {key: value for key, value in payload.items() if not isinstance(value, (dict, list))}
+    return {"type": kind, "critical": bool(event.get("critical")), "facts": _rounded(facts)}
+
+
 class ProactiveEngineer:
     """Reliable cadence-driven and event-driven unsolicited race radio."""
 
