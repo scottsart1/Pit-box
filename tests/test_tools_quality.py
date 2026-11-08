@@ -312,6 +312,100 @@ async def test_ers_deploy_mode_is_named(stack):
     assert (await tools.get_my_car_state())["ers_mode"] == "unknown mode 9"
 
 
+# --------------------------------------------------------------- lap analysis
+
+
+async def _session_laps(store):
+    times = {28: 89_602, 29: 89_411, 30: 89_477, 31: 89_545, 32: 89_512, 33: 89_782}
+
+    def apply(state):
+        state.completed_laps = [
+            {"lap_num": lap, "lap_time_ms": ms, "valid": True,
+             "s1_ms": 30_000 + (lap - 29) * 10, "s2_ms": 29_000, "s3_ms": ms - 59_000 - (lap - 29) * 10,
+             "corner_metrics": [{"name": "Turn 3", "loss_vs_pb_s": 0.05 * (lap - 28), "cause": "early brake"}],
+             "line_summary": {"available": True, "reference": "personal_best",
+                              "mean_abs_deviation_m": round(0.1 * lap, 2), "line_score": float(lap),
+                              "zones": [], "top_opportunity": None}}
+            for lap, ms in times.items()
+        ]
+        state.analysis = {
+            "last_lap_analyzed": 33,
+            "lap_summary": {"lap_num": 33, "lap_time_ms": 89_782, "personal_best_ms": 89_300,
+                            "delta_to_pb_s": 0.482, "top_corner_losses": []},
+            "racing_line": dict(state.completed_laps[-1]["line_summary"]),
+            "flagged_corners": [],
+        }
+    await store.mutate(apply)
+
+
+@pytest.mark.asyncio
+async def test_lap_analysis_answers_for_the_lap_and_reference_requested(stack):
+    store, tools = stack[0], stack[5]
+    await _session_laps(store)
+
+    result = await tools.call("get_lap_analysis", {"lap": "31", "compare_to": "session_best"})
+
+    assert result["analysed_lap"] == 31
+    assert result["reference"] == "session_best" and result["reference_lap"] == 29
+    assert result["delta_s"] == 0.134
+    assert result["comparison_basis"] == "against your current-session best (lap 29)"
+    assert result["sector_deltas_s"] == {"S1": 0.02, "S2": 0.0, "S3": 0.114}
+    assert "lap" not in result and "compare_to" not in result
+
+    pb = await tools.call("get_lap_analysis", {"lap": "last", "compare_to": "personal_best"})
+    assert pb["analysed_lap"] == 33 and pb["delta_s"] == 0.482
+    assert pb["top_corner_losses"][0] == {"name": "Turn 3", "loss_vs_pb_s": 0.25, "cause": "early brake"}
+
+    previous = await tools.call("get_lap_analysis", {"lap": "30", "compare_to": "previous_lap"})
+    assert previous["reference_lap"] == 29 and previous["delta_s"] == 0.066
+
+
+@pytest.mark.asyncio
+async def test_lap_analysis_never_substitutes_another_lap(stack):
+    store, tools = stack[0], stack[5]
+    await _session_laps(store)
+    missing = await tools.call("get_lap_analysis", {"lap": "12", "compare_to": "session_best"})
+    assert missing["available"] is False and "analysed_lap" not in missing
+    assert "laps 28 to 33" in missing["reason"]
+    line = await tools.call("get_racing_line_analysis", {"lap": "12"})
+    assert line["available"] is False and "analysed_lap" not in line
+
+
+@pytest.mark.asyncio
+async def test_racing_line_analysis_reports_the_requested_lap(stack):
+    store, tools = stack[0], stack[5]
+    await _session_laps(store)
+    line = await tools.call("get_racing_line_analysis", {"lap": "29"})
+    assert line["analysed_lap"] == 29 and line["line_score"] == 29.0
+    latest = await tools.call("get_racing_line_analysis", {"lap": "last"})
+    assert latest["analysed_lap"] == 33 and latest["line_score"] == 33.0
+
+
+@pytest.mark.asyncio
+async def test_tyre_condition_always_reports_each_wheel(stack):
+    store, tools = stack[0], stack[5]
+    await store.update(tyre={"compound": "MEDIUM", "age_laps": 24,
+                             "wear": [78.0, 80.52417, 71.0, 73.5],
+                             "inner_temps_c": [104.0, 105.0, 103.0, 103.0], "blisters": [0, 0, 0, 0]})
+    schema = next(item for item in tools.schemas() if item["name"] == "get_tyre_condition")
+    assert schema["parameters"]["properties"] == {}
+    result = await tools.call("get_tyre_condition", {})
+    assert result["wear"] == [78.0, 80.5, 71.0, 73.5]
+    assert result["inner_temps"] == [104.0, 105.0, 103.0, 103.0]
+    assert result["max_wear_pct"] == 80.5
+
+
+def test_free_text_arguments_say_what_they_accept(stack):
+    schemas = {item["name"]: item["parameters"]["properties"] for item in stack[5].schemas()}
+    assert schemas["get_lap_analysis"]["compare_to"]["enum"] == ["personal_best", "session_best", "previous_lap"]
+    assert "lap number" in schemas["get_lap_analysis"]["lap"]["description"]
+    assert "penalty" in schemas["get_session_events"]["types"]["description"]
+    assert "lap number" in schemas["what_if"]["scenario"]["description"]
+    for name in ("get_pace_verdict", "get_rival_car_state", "evaluate_undercut", "get_driver_lap_history"):
+        assert "ahead" in schemas[name]["driver"]["description"], name
+    assert "ahead" in schemas["get_gap"]["target"]["description"]
+
+
 # ------------------------------------------------------------- realtime bound
 
 

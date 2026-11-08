@@ -4,6 +4,7 @@ import asyncio
 import copy
 import logging
 import math
+import re
 from statistics import median, pstdev
 from typing import TYPE_CHECKING, Any
 
@@ -33,6 +34,17 @@ def fmt_ms(ms: int | float | None) -> str | None:
     minutes, remainder = divmod(value, 60_000)
     seconds, milliseconds = divmod(remainder, 1000)
     return f"{minutes}:{seconds:02d}.{milliseconds:03d}"
+
+
+# Spoken lap-comparison references, after lower-casing and turning
+# underscores and hyphens into spaces.
+LAP_REFERENCES = {
+    "personal best": "personal_best", "pb": "personal_best", "best ever": "personal_best",
+    "all time best": "personal_best", "session best": "session_best",
+    "session": "session_best", "best this session": "session_best",
+    "previous lap": "previous_lap", "previous": "previous_lap",
+    "lap before": "previous_lap", "last lap": "previous_lap",
+}
 
 
 def theil_sen(points: list[tuple[float, float]]) -> tuple[float, float] | None:
@@ -766,20 +778,139 @@ class AnalysisEngine:
             "summary": summary,
         }
 
+    # Lap words after lower-casing and turning underscores into spaces.
+    _LATEST_LAP_WORDS = frozenset({
+        "", "last", "latest", "last lap", "previous", "previous lap",
+        "this", "this lap", "current", "current lap",
+    })
+    _BEST_LAP_WORDS = frozenset({"best", "fastest", "best lap", "fastest lap", "session best"})
+
+    @classmethod
+    def _resolve_completed_lap(
+        cls, state: dict[str, Any], lap: Any,
+    ) -> tuple[dict[str, Any] | None, str | None]:
+        """The completed lap a spoken reference names, or why none matches.
+
+        "last" is the most recently analysed lap, "best" the fastest valid lap
+        this session, and a number that lap of the current timeline.
+        """
+        laps = [row for row in state.get("completed_laps", []) or [] if row.get("lap_num") is not None]
+        if not laps:
+            return None, "No completed lap has been recorded in this session yet."
+        text = " ".join(str(lap or "").lower().replace("_", " ").split())
+        by_number = {int(row["lap_num"]): row for row in laps}
+        if text in cls._LATEST_LAP_WORDS:
+            latest = (state.get("analysis", {}) or {}).get("last_lap_analyzed")
+            row = by_number.get(int(latest)) if latest is not None else None
+            return (row or laps[-1]), None
+        if text in cls._BEST_LAP_WORDS:
+            valid = [row for row in laps if row.get("valid") and int(row.get("lap_time_ms", 0) or 0) > 0]
+            if not valid:
+                return None, "No valid timed lap has been recorded in this session yet."
+            return min(valid, key=lambda row: int(row["lap_time_ms"])), None
+        digits = re.findall(r"\d+", text)
+        if len(digits) == 1:
+            number = int(digits[0])
+            if number in by_number:
+                return by_number[number], None
+            return None, (
+                f"Lap {number} is not among this session's completed laps "
+                f"(laps {min(by_number)} to {max(by_number)} are recorded)."
+            )
+        return None, "Name a lap number, last, or best."
+
     async def get_lap_analysis(
         self,
         lap: str = "last",
         compare_to: str = "personal_best",
     ) -> dict[str, Any]:
+        """Analyse the requested lap against the requested reference.
+
+        The result names the lap that was actually analysed and the reference
+        actually used, so a spoken answer cannot attach one lap's delta to
+        another lap number or comparison basis.
+        """
         state = await self.store.snapshot_analysis()
-        analysis = state.get("analysis", {})
-        return {
-            "lap": lap,
-            "compare_to": compare_to,
-            "summary": analysis.get("lap_summary", {}),
-            "top_corners": analysis.get("lap_summary", {}).get("top_corner_losses", []),
-            "flagged_corners": analysis.get("flagged_corners", []),
+        analysis = state.get("analysis", {}) or {}
+        row, reason = self._resolve_completed_lap(state, lap)
+        if row is None:
+            return {"available": False, "requested_lap": lap, "reason": reason}
+        lap_num = int(row["lap_num"])
+        lap_ms = int(row.get("lap_time_ms", 0) or 0)
+        if lap_ms <= 0:
+            return {"available": False, "requested_lap": lap, "analysed_lap": lap_num,
+                    "reason": f"Lap {lap_num} has no recorded lap time."}
+        reference = LAP_REFERENCES.get(
+            " ".join(re.sub(r"[_\-]", " ", str(compare_to or "").lower()).split())
+        )
+        if reference is None:
+            return {"available": False, "requested_lap": lap, "analysed_lap": lap_num,
+                    "reason": f"Unsupported comparison {compare_to!r}.",
+                    "accepted_references": ["personal_best", "session_best", "previous_lap"]}
+
+        completed = [item for item in state.get("completed_laps", []) or [] if item.get("lap_num") is not None]
+        session_valid = [item for item in completed if item.get("valid") and int(item.get("lap_time_ms", 0) or 0) > 0]
+        reference_row: dict[str, Any] | None = None
+        if reference == "session_best":
+            reference_row = min(session_valid, key=lambda item: int(item["lap_time_ms"]), default=None)
+            reference_ms = int(reference_row["lap_time_ms"]) if reference_row else 0
+            basis = (
+                f"against your current-session best (lap {reference_row['lap_num']})"
+                if reference_row else "against your current-session best"
+            )
+        elif reference == "previous_lap":
+            reference_row = next((item for item in reversed(completed) if int(item["lap_num"]) < lap_num), None)
+            reference_ms = int((reference_row or {}).get("lap_time_ms", 0) or 0)
+            basis = f"against lap {reference_row['lap_num']}" if reference_row else "against the previous lap"
+        else:
+            # The stored best at this track, including any faster lap this
+            # session set after the latest analysis looked it up.
+            candidates = [
+                int((analysis.get("lap_summary", {}) or {}).get("personal_best_ms", 0) or 0),
+                *(int(item["lap_time_ms"]) for item in session_valid),
+            ]
+            reference_ms = min((value for value in candidates if value > 0), default=0)
+            basis = "against your personal best at this track"
+        if reference_ms <= 0:
+            return {"available": False, "requested_lap": lap, "analysed_lap": lap_num,
+                    "reference": reference, "reason": "That reference lap time is not available."}
+
+        result: dict[str, Any] = {
+            "available": True,
+            "requested_lap": lap,
+            "analysed_lap": lap_num,
+            "lap_time": fmt_ms(lap_ms),
+            "valid": bool(row.get("valid")),
+            "reference": reference,
+            "reference_lap": int(reference_row["lap_num"]) if reference_row else None,
+            "reference_time": fmt_ms(reference_ms),
+            "delta_s": round((lap_ms - reference_ms) / 1000, 3),
+            "comparison_basis": basis,
         }
+        if reference_row is not None:
+            sectors = {}
+            for key in ("s1_ms", "s2_ms", "s3_ms"):
+                own, other = int(row.get(key) or 0), int(reference_row.get(key) or 0)
+                if own > 0 and other > 0:
+                    sectors[key[:2].upper()] = round((own - other) / 1000, 3)
+            if len(sectors) == 3:
+                result["sector_deltas_s"] = sectors
+        if reference == "personal_best":
+            losses = sorted(
+                (corner for corner in row.get("corner_metrics", []) or []
+                 if (corner.get("loss_vs_pb_s") or 0) > 0),
+                key=lambda corner: corner.get("loss_vs_pb_s") or 0, reverse=True,
+            )[:3]
+            result["top_corner_losses"] = [
+                {key: corner.get(key) for key in ("name", "loss_vs_pb_s", "cause") if corner.get(key) is not None}
+                for corner in losses
+            ]
+        result["repeated_corner_opportunities"] = analysis.get("flagged_corners", [])
+        result["interpretation"] = (
+            "delta_s is the analysed lap minus the reference: positive is slower. "
+            "repeated_corner_opportunities cover the recent analysed laps, not only this lap."
+        )
+        return result
 
     async def get_corner_analysis(
         self,
@@ -818,15 +949,30 @@ class AnalysisEngine:
         self,
         lap: str = "last",
     ) -> dict[str, Any]:
+        """The requested lap's line against the personal-best line."""
         state = await self.store.snapshot_analysis()
-        line = state.get("analysis", {}).get("racing_line", {})
+        analysis = state.get("analysis", {}) or {}
+        latest_line = analysis.get("racing_line", {}) or {}
+        row, reason = self._resolve_completed_lap(state, lap)
+        latest_requested = " ".join(str(lap or "").lower().replace("_", " ").split()) in self._LATEST_LAP_WORDS
+        if row is None and latest_line and latest_requested:
+            # Lap rows can trail the published analysis; the latest line stands.
+            row = {"lap_num": analysis.get("last_lap_analyzed")}
+        if row is None:
+            return {"available": False, "requested_lap": lap, "reason": reason}
+        line = row.get("line_summary") or (
+            latest_line if row.get("lap_num") == analysis.get("last_lap_analyzed") else {}
+        )
         if not line:
             return {
                 "available": False,
-                "reason": "No completed lap has been mapped yet.",
+                "requested_lap": lap,
+                "analysed_lap": row.get("lap_num"),
+                "reason": "No mapped racing line is stored for that lap.",
             }
         return {
-            "lap": lap,
+            "requested_lap": lap,
+            "analysed_lap": row.get("lap_num"),
             "available": bool(line.get("available")),
             "reference": line.get("reference"),
             "mean_abs_deviation_m": line.get("mean_abs_deviation_m"),
