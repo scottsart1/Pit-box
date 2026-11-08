@@ -494,7 +494,7 @@ class SessionState:
     drivers: list[DriverState] = field(
         default_factory=lambda: [DriverState(i) for i in range(24)]
     )
-    radio_log: list[dict[str, str]] = field(default_factory=list)
+    radio_log: list[dict[str, Any]] = field(default_factory=list)
     # Moves forward on every change to radio_log, including when a flashback
     # or a new session clears it, and never goes back. Live frames carry only
     # the newest 40 entries, so once the log is longer their length stops
@@ -1404,13 +1404,30 @@ class StateStore:
                 lap.update(timing)
             self.state.completed_laps = [by_lap[key] for key in sorted(by_lap)][-100:]
 
-    async def append_radio(self, role: str, text: str, *, expected: dict[str, Any] | None = None) -> bool:
+    async def append_radio(
+        self,
+        role: str,
+        text: str,
+        *,
+        expected: dict[str, Any] | None = None,
+        source: str | None = None,
+    ) -> bool:
+        """Add a line to the radio log.
+
+        Each line keeps the lap it was said on and, for engineer lines, where
+        it came from ("reply" to the driver, or "proactive" for a call the
+        engineer volunteered), so the history the model is given can tell an
+        old call from a current one and an unsolicited call from an answer.
+        """
         async with self._lock:
             if expected is not None:
                 from .session_guard import session_key
                 if session_key(self.state) != session_key(expected):
                     return False
-            self.state.radio_log.append({"role": role, "text": text})
+            entry: dict[str, Any] = {"role": role, "text": text, "lap": int(self.state.current_lap or 0)}
+            if source:
+                entry["source"] = source
+            self.state.radio_log.append(entry)
             self.state.radio_log = self.state.radio_log[-100:]
             self.state.radio_seq += 1
         if role == "engineer" and text and self.usage_event:

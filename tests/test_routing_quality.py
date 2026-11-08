@@ -136,7 +136,8 @@ async def test_a_pit_question_left_to_the_model_carries_the_plan_and_its_qualifi
     _model_reads_the_plan(brain, monkeypatch, calls)
     answer = await brain.ask(utterance)
     assert calls, "a compound or conditional pit question needs the model"
-    assert "| strategy Box lap 12 for HARD." in calls[0]["prompt"]
+    # The call as the radio says it, with its stop guards applied.
+    assert "| strategy Box lap 12 for hards." in calls[0]["prompt"]
     assert "confidence low" in answer.lower(), answer
 
 

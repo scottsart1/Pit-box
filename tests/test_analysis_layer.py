@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import pytest
 
-from pitwall.brain import PERSONA, EngineerBrain
+from pitwall.brain import PERSONA, QUESTION_PERSONA, EngineerBrain
 
 
 async def _race(stack, *, player_pace=96_500, rival_pace=95_900, rival_closing=True):
@@ -208,7 +208,11 @@ def test_persona_requires_analysis_over_readout():
     assert "you are analysing, not reading out" in flat
     assert "a number on its own is not an answer" in flat
     assert "trends beat snapshots" in flat
-    assert "get_pace_verdict" in flat and "get_race_picture" in flat
+    # The tools that produce the verdict are named in the brief every reply
+    # to the driver carries; the no-tool narration paths are not told to
+    # call them.
+    tools_brief = " ".join(QUESTION_PERSONA.lower().split())
+    assert "get_pace_verdict" in tools_brief and "get_race_picture" in tools_brief
 
 
 def test_realtime_radio_offers_the_analysis_tools():

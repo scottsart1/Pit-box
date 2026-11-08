@@ -12,13 +12,26 @@ from typing import Any
 
 import pytest
 
-from pitwall.brain import DEBRIEF_PERSONA, PERSONA, compose_persona
+from pitwall.brain import DEBRIEF_PERSONA, PERSONA, compose_persona, persona_addenda
 from pitwall.briefing import BriefingEngine
 
 
 # --------------------------------------------------------------------------
 # Prompt contract
 # --------------------------------------------------------------------------
+
+
+# The provenance contract is attached wherever the tools that return stored
+# measurements are offered (the deep route, and the A/B comparison).
+_REVIEW_TOOLS = {"list_saved_sessions", "get_session_summary", "compare_laps", "get_lap_findings"}
+
+
+def _review_brief(verbosity: str | None = None) -> str:
+    return compose_persona(
+        PERSONA,
+        verbosity,
+        addenda=persona_addenda({}, "review my saved session from yesterday", _REVIEW_TOOLS),
+    )
 
 
 @pytest.mark.parametrize(
@@ -34,25 +47,28 @@ from pitwall.briefing import BriefingEngine
 def test_persona_declares_every_provenance_label(phrase: str) -> None:
     """The model cannot honour a provenance contract it was never given."""
 
-    assert phrase in PERSONA
+    assert phrase in _review_brief()
 
 
 def test_persona_requires_naming_the_comparison_basis() -> None:
-    assert "name the comparison basis" in PERSONA
-    assert "A delta without its reference is" in PERSONA
+    assert "name the comparison basis" in _review_brief()
+    assert "A delta without its reference is" in _review_brief()
 
 
 def test_persona_forbids_substituting_zero_for_unavailable() -> None:
-    assert "Never substitute zero" in PERSONA
+    assert "Never substitute zero" in _review_brief()
 
 
 def test_persona_separates_measured_attributed_and_opportunity() -> None:
-    assert "Never promote an attributed interval or an opportunity into a measured fact." in PERSONA
+    assert "Never promote an attributed interval or an opportunity into a measured fact." in _review_brief()
 
 
 def test_persona_blocks_coaching_rival_technique_without_data() -> None:
-    assert "Never coach a rival's technique from data the" in PERSONA
-    assert "never fill the gap with the player's own values" in PERSONA
+    # Any reply to the driver may compare a rival, so this rule is in the
+    # question brief, not only in the saved-session contract.
+    brief = compose_persona(PERSONA, addenda=persona_addenda({}, "where is Max quicker than me", set()))
+    assert "Never coach a rival's technique from data the" in brief
+    assert "never fill the gap with the player's own values" in brief
 
 
 def test_debrief_persona_speaks_findings_with_segment_and_reference() -> None:
@@ -64,7 +80,7 @@ def test_debrief_persona_speaks_findings_with_segment_and_reference() -> None:
 def test_custom_persona_cannot_override_the_provenance_contract() -> None:
     """A user persona is sandwiched between the brief and the safety anchor."""
 
-    composed = compose_persona(PERSONA, "chatty")
+    composed = _review_brief("chatty")
     assert "Never substitute zero" in composed
     assert composed.rstrip().endswith(
         "tool's compound-rule legality and neutralisation state."
