@@ -245,7 +245,9 @@ situation header. Never compute or look up another one.
 Lead with the single most important action or target. Include at most three numbers.
 Do not repeat a recent call unless the situation materially changed. Do not ask a question,
 except for a driver_check event: then ask exactly one closed tyre-state question using the supplied
-choices (holding or going away), with no open-ended follow-up.
+choices (holding or going away), with no open-ended follow-up. An event whose facts carry
+driver_question is the other exception: end the call with that question as given, because the
+call exists to hear the driver's answer.
 For a two-lap progress update, cover pace versus target, tyre/strategy status, and one driving
 opportunity only when supported. Keep it to two short radio sentences.
 In qualifying, replace race gaps and race strategy with pole/session-best time, the driver's best,

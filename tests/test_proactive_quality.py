@@ -699,3 +699,297 @@ async def test_routine_news_waits_for_a_conversation_opened_while_it_was_worded(
     voice.realtime_active = False
     await engineer._deliver(await store.snapshot_radio())
     assert voice.spoken == ["Rear left at seventy percent."]
+
+
+# --- a barge-in, a silent conversation, a suspension ---------------------------
+
+
+def _voice_controller(store, brain, spoken, *, playback_s=0.0):
+    import asyncio
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    from pitwall.voice import NativeVoiceController
+
+    async def stream_speech(text, target=None, on_first_audio=None):
+        spoken.append(text)
+        if playback_s:
+            await asyncio.sleep(playback_s)
+        return True
+
+    audio = SimpleNamespace(
+        stop_playback=lambda: None, voice_ready=True, play_ack=AsyncMock(),
+        stream_speech=stream_speech, play_listening_cue=AsyncMock(),
+    )
+    return NativeVoiceController(store, brain, audio)
+
+
+@pytest.mark.asyncio
+async def test_keying_the_radio_over_a_call_does_not_silence_every_later_call(stack, monkeypatch, tmp_path):
+    """The cut call's cancellation used to end the delivery loop for good."""
+    import asyncio
+
+    monkeypatch.setattr(settings, "data_dir", tmp_path)
+    monkeypatch.setattr(settings, "voice_realtime_enabled", False)
+    monkeypatch.setattr(settings, "voice_stream_tts", True)
+    monkeypatch.setattr(settings, "proactive_safe_hold_s", 0.0)
+    monkeypatch.setattr(proactive_module, "DELIVER_INTERVAL_S", 0.01)
+    store, database, *_ = stack
+    played: list[str] = []
+    controller = _voice_controller(store, _Brain(database), played, playback_s=0.3)
+    store, engineer, _voice = await _race(stack)
+    engineer.voice = controller
+    deliver = asyncio.create_task(engineer._run_deliver())
+    try:
+        await store.update(penalties_s=5)
+        await engineer._detect(await store.snapshot_radio())
+        for _ in range(50):
+            if played:
+                break
+            await asyncio.sleep(0.01)
+        assert played and "penalty" in played[0]
+        controller._speech_task.cancel()  # what a push-to-talk press does
+        await asyncio.sleep(0.05)
+        assert not deliver.done()
+        await store.update(race_control_phase="safety_car", safety_car="full")
+        await engineer._detect(await store.snapshot_radio())
+        for _ in range(100):
+            if len(played) > 1:
+                break
+            await asyncio.sleep(0.01)
+        assert played[1:] == ["Race control: Safety car."]
+    finally:
+        deliver.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await deliver
+
+
+@pytest.mark.asyncio
+async def test_a_flag_is_not_held_by_the_reply_window_after_the_engineers_question(stack, monkeypatch, tmp_path):
+    monkeypatch.setattr(settings, "data_dir", tmp_path)
+    monkeypatch.setattr(settings, "voice_realtime_enabled", False)
+    monkeypatch.setattr(settings, "wake_enabled", True)
+    store, database, *_ = stack
+    played: list[str] = []
+    controller = _voice_controller(store, _Brain(database), played)
+    store, engineer, _voice = await _race(stack)
+    engineer.voice = controller
+    await controller.open_reply_window("engineer asked a question")
+    assert controller.is_busy and not controller.audio_busy
+    state = await store.snapshot_radio()
+    assert engineer._engine_block_reason(state, urgent=True) is None
+    assert engineer._engine_block_reason(state).startswith("engineer busy: wake window armed")
+    await store.update(race_control_phase="safety_car", safety_car="full")
+    await _tick(store, engineer)
+    assert played == ["Race control: Safety car."]
+    # The window the driver was answering in is given back afterwards.
+    assert controller.reply_window_armed
+
+
+@pytest.mark.asyncio
+async def test_a_flag_is_not_held_while_the_engineer_works_out_an_answer(stack, monkeypatch, tmp_path):
+    monkeypatch.setattr(settings, "data_dir", tmp_path)
+    monkeypatch.setattr(settings, "voice_realtime_enabled", False)
+    store, database, *_ = stack
+    played: list[str] = []
+    controller = _voice_controller(store, _Brain(database), played)
+    store, engineer, _voice = await _race(stack)
+    engineer.voice = controller
+    controller.busy = True  # transcribing and answering a driver question, nothing playing
+    await store.update(race_control_phase="vsc", safety_car="virtual")
+    await store.mutate(_set_tyre(wear=[50.0, 52.0, 71.0, 60.0]))
+    await _tick(store, engineer)
+    assert played == ["Race control: VSC."]
+    assert controller.busy_reason == "answering the driver"
+    # Routine news still waits for the conversation.
+    assert [event["type"] for event in engineer.pending] == ["tyre_wear"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("when", ["before delivery", "while it was worded"])
+async def test_a_penalty_that_meets_a_red_flag_is_still_said(stack, clock, when):
+    store, database, *_ = stack
+    holder: dict = {}
+
+    async def red_flag(event):
+        if when == "while it was worded" and event["type"] == "penalty":
+            await store.update(red_flag_active=True, race_control_phase="red_flag")
+            await holder["engineer"]._detect(await store.snapshot_radio())
+
+    brain = _Brain(database, during=red_flag, reply="Five-second penalty for causing a collision.")
+    store, engineer, voice = await _race(stack, brain=brain)
+    holder["engineer"] = engineer
+    await store.update(penalties_s=5)
+    await engineer._detect(await store.snapshot_radio())
+    if when == "before delivery":
+        await store.update(red_flag_active=True, race_control_phase="red_flag")
+    await _tick(store, engineer)
+    assert voice.spoken[0].startswith("Red flag, red flag.")
+    assert voice.spoken[1] == "Five-second penalty for causing a collision."
+
+
+@pytest.mark.asyncio
+async def test_an_unserved_drive_through_survives_a_red_flag(stack, clock):
+    store, engineer, voice = await _race(stack)
+    await store.update(unserved_drive_through_penalties=1)
+    await engineer._detect(await store.snapshot_radio())
+    await store.update(red_flag_active=True, race_control_phase="red_flag")
+    await _tick(store, engineer)
+    assert len(voice.spoken) == 2 and "Drive-through" in voice.spoken[1]
+
+
+# --- damage, component by component ----------------------------------------------
+
+
+async def _damage(store, engineer, clock, **values):
+    await store.mutate(lambda s: s.damage.update(values))
+    await _tick(store, engineer)
+    clock.offset += 30
+
+
+@pytest.mark.asyncio
+async def test_a_wing_hit_after_floor_damage_is_called_as_the_wing(stack, clock):
+    store, engineer, voice = await _race(stack)
+    await _damage(store, engineer, clock, floor=30)
+    await _damage(store, engineer, clock, front_left_wing=65)
+    assert voice.spoken[0].startswith("Floor damage 30 percent.")
+    assert voice.spoken[1].startswith("Front-wing damage 65 percent.")
+    assert "Floor" not in voice.spoken[1]
+
+
+@pytest.mark.asyncio
+async def test_floor_damage_beside_a_reported_wing_and_a_new_wing_hit_are_both_called(stack, clock):
+    store, engineer, voice = await _race(stack)
+    await _damage(store, engineer, clock, front_left_wing=65)
+    await _damage(store, engineer, clock, floor=30)
+    assert len(voice.spoken) == 2 and voice.spoken[1].startswith("Floor damage 30 percent.")
+    # The nose is changed at a stop, then hit again while the floor carries 30%.
+    await _damage(store, engineer, clock, front_left_wing=0)
+    await _damage(store, engineer, clock, front_left_wing=35)
+    assert voice.spoken[-1].startswith("Front-wing damage 35 percent.")
+
+
+@pytest.mark.asyncio
+async def test_a_wing_and_floor_hit_together_leads_with_the_repairable_wing(stack, clock):
+    store, engineer, voice = await _race(stack)
+    await _damage(store, engineer, clock, floor=25, front_left_wing=45)
+    assert voice.spoken == [
+        "Front-wing damage 45 percent. That is the one thing we can change at a stop; say the word "
+        "if the balance is costing you. Floor damage 25 percent. Expect reduced downforce; it cannot "
+        "be repaired at a stop."
+    ]
+
+
+# --- what a standing instruction may silence --------------------------------------
+
+
+def test_a_standing_instruction_does_not_silence_a_safety_critical_call():
+    tyres = [{"rule": "Do not raise tyres unless the driver asks or it is safety-critical."}]
+    assert ProactiveEngineer.is_suppressed("tyre_wear", tyres) is True
+    assert ProactiveEngineer.is_suppressed("tyre_wear", tyres, {"wear_fl_fr_rl_rr": [60, 61, 70, 66]}) is True
+    assert ProactiveEngineer.is_suppressed("tyre_wear", tyres, {"wear_fl_fr_rl_rr": [70, 71, 88, 80]}) is False
+
+    gearbox = [{"rule": "Do not raise gearbox unless the driver asks or it is safety-critical."}]
+    assert ProactiveEngineer.is_suppressed("damage", gearbox) is True
+    assert ProactiveEngineer.is_suppressed("damage", gearbox, {"gearbox": 30, "changed": ["gearbox"]}) is True
+    assert ProactiveEngineer.is_suppressed(
+        "damage", gearbox, {"gearbox": 30, "front_left_wing": 30, "changed": ["front_left_wing"]}
+    ) is False
+    assert ProactiveEngineer.is_suppressed(
+        "damage", gearbox, {"gearbox": 30, "ers_fault": True, "new_faults": ["ers_fault"], "changed": []}
+    ) is False
+
+
+@pytest.mark.asyncio
+async def test_a_silenced_gearbox_does_not_silence_a_wing_hit_and_an_ers_fault(stack, clock):
+    store, engineer, voice = await _race(stack)
+    await store.update(standing_instructions=[
+        {"rule": "Do not raise gearbox unless the driver asks or it is safety-critical.", "added_at": 1.0}
+    ])
+    await _damage(store, engineer, clock, gearbox=30)
+    assert voice.spoken == []
+    await _damage(store, engineer, clock, front_left_wing=70, ers_fault=True)
+    assert voice.spoken and voice.spoken[0].startswith("ERS fault reported.")
+    assert "Front-wing damage 70 percent" in voice.spoken[0]
+
+
+@pytest.mark.asyncio
+async def test_a_silenced_tyre_subject_still_warns_past_the_hard_limit(stack, clock):
+    store, engineer, voice = await _race(stack)
+    await store.update(standing_instructions=[
+        {"rule": "Do not raise tyres unless the driver asks or it is safety-critical.", "added_at": 1.0}
+    ])
+    await store.mutate(_set_tyre(wear=[60.0, 61.0, 70.0, 66.0]))
+    await _tick(store, engineer)
+    assert voice.spoken == []
+    clock.offset += 120
+    await store.mutate(_set_tyre(wear=[70.0, 71.0, 88.0, 80.0]))
+    await _tick(store, engineer)
+    assert len(voice.spoken) == 1 and "88 percent" in voice.spoken[0]
+
+
+# --- a declined stop, a question asked, a restart, a released hold ----------------
+
+
+@pytest.mark.asyncio
+async def test_a_narration_that_restates_a_declined_stop_is_replaced(stack, clock):
+    store, database, *_ = stack
+    brain = _Brain(database, reply="Rear left at 70 percent. Box lap 18 for hards, that's next lap.")
+    store, engineer, voice = await _race(stack, brain=brain, current_lap=17)
+    await store.update(
+        strategy={"recommended": {"box_lap": 18, "fit_compound": "HARD", "instruction": "Box lap 18 for HARD."}},
+        strategy_hold={"active": True, "until_lap": 22, "set_at_lap": 17, "baseline": {
+            "race_control_phase": "green", "wet": False, "compound": "MEDIUM", "damage": {}, "max_wear_pct": 70.0,
+        }},
+    )
+    await store.mutate(_set_tyre(wear=[55.0, 56.0, 70.0, 66.0], compound="MEDIUM"))
+    await _tick(store, engineer)
+    assert (await store.snapshot_radio())["strategy_hold"]["active"]
+    assert len(voice.spoken) == 1
+    assert "Box lap 18" not in voice.spoken[0]
+    assert voice.spoken[0].startswith("Tyre warning.")
+
+
+@pytest.mark.asyncio
+async def test_a_narrated_crossover_call_keeps_the_question_it_exists_to_ask(stack, clock):
+    store, database, *_ = stack
+    brain = _Brain(database, reply="Track is right at the crossover. Stay out on slicks for now.")
+    store, engineer, voice = await _race(stack, brain=brain)
+    event = {
+        "type": "weather_crossover",
+        "payload": {
+            "reason": "Track is right at the slick-inter crossover.", "ask_driver": True,
+            "driver_question": "How wet is it out there — is the line still taking a slick?",
+        },
+    }
+    spoken = await engineer._narrate(event, await store.snapshot_radio())
+    assert spoken.endswith("is the line still taking a slick?")
+    assert event["narration_rejected"] == "narration lost its question"
+    from pitwall.brain import PROACTIVE_PERSONA
+
+    assert "facts carry driver_question" in " ".join(PROACTIVE_PERSONA.split())
+
+
+def test_a_vsc_ending_is_not_told_to_watch_the_leader():
+    vsc = ProactiveEngineer._fallback_text({"type": "sc_restart", "payload": {"phase": "vsc_ending"}}, {})
+    assert "leader" not in vsc and vsc.startswith("VSC ending. Stay positive on the delta until green")
+    sc = ProactiveEngineer._fallback_text({"type": "sc_restart", "payload": {"phase": "safety_car_ending"}}, {})
+    assert "watch the leader for the go point" in sc
+
+
+@pytest.mark.asyncio
+async def test_a_released_hold_says_the_box_call_once_with_its_reason(stack, clock):
+    store, engineer, voice = await _race(stack, current_lap=21)
+    plan = {"box_lap": 22, "fit_compound": "HARD", "instruction": "Box lap 22 for HARD.", "stops_remaining": 1}
+    await store.update(
+        strategy={"recommended": plan, "plans": [], "confidence": "high"},
+        strategy_hold={"active": True, "until_lap": 21, "set_at_lap": 16, "reason": "No, staying out.",
+                       "baseline": {}, "raised_after_release": False},
+    )
+    await store.mutate(_set_tyre(wear=[55.0, 56.0, 70.0, 66.0]))
+    for _ in range(3):
+        await _tick(store, engineer)
+        clock.offset += 10
+    box_calls = [text for text in voice.spoken if "Box lap 22" in text]
+    assert len(box_calls) == 1, voice.spoken
+    assert "hold is released" in box_calls[0]
