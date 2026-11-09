@@ -15,7 +15,7 @@ from typing import Any
 
 from .catalog import SessionCatalog, session_id
 from .lap_history import authoritative_timing
-from .migrations import LATEST_SCHEMA_VERSION, MIGRATIONS
+from .migrations import LATEST_SCHEMA_VERSION, MIGRATIONS, RENUMBERED_MIGRATIONS
 from .session_guard import session_key
 
 log = logging.getLogger(__name__)
@@ -215,6 +215,23 @@ class PitWallDatabase:
                     "SELECT version, checksum FROM schema_versions"
                 ).fetchall()
             }
+            by_version = {migration.version: migration for migration in MIGRATIONS}
+            for earlier, current in RENUMBERED_MIGRATIONS.items():
+                if earlier not in applied or current in applied:
+                    continue
+                migration = by_version[current]
+                if applied[earlier] != migration.checksum:
+                    raise RuntimeError(
+                        "Applied migration checksum does not match this build: "
+                        f"{earlier} (now {current})"
+                    )
+                db.execute(
+                    "UPDATE schema_versions SET version = ?, app_version = ? WHERE version = ?",
+                    (current, migration.app_version, earlier),
+                )
+                db.execute(f"PRAGMA user_version={max([*applied, current])}")
+                db.commit()
+                applied[current] = applied.pop(earlier)
             for migration in MIGRATIONS:
                 prior_checksum = applied.get(migration.version)
                 if prior_checksum is not None:

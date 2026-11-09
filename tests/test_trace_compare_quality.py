@@ -732,3 +732,39 @@ async def test_the_session_export_carries_the_traces_it_flags(stack):
     exported = (await database.history_query(session_uid=7, include_traces=True))["radio"][0]
     assert exported["has_trace"] is True and exported["trace"] == trace
     assert "trace_json" not in exported
+
+
+@pytest.mark.asyncio
+async def test_a_database_a_test_build_upgraded_starts_and_keeps_its_traces(tmp_path):
+    """Pre-release builds recorded the trace migration as 5510; 5.6.0 calls it 5600."""
+    path = tmp_path / "pitwall.sqlite3"
+    database = PitWallDatabase(path)
+    await database.initialize()
+    kept = await database.save_radio_message(
+        {"session_uid": 7, "track_id": 12, "current_lap": 4}, "engineer", "Copy.", "x", trace={"path": "model"}
+    )
+    with sqlite3.connect(path) as db:
+        db.execute("UPDATE schema_versions SET version = 5510, app_version = '5.5.1' WHERE version = 5600")
+        db.execute("PRAGMA user_version=5510")
+
+    reopened = PitWallDatabase(path)
+    await reopened.initialize()
+
+    with sqlite3.connect(path) as db:
+        versions = {row[0]: row[1] for row in db.execute("SELECT version, app_version FROM schema_versions")}
+        user_version = db.execute("PRAGMA user_version").fetchone()[0]
+    assert 5510 not in versions and versions[5600] == "5.6.0"
+    assert user_version == 5600 and reopened.schema_version == 5600
+    assert (await reopened.radio_trace(kept))["trace"] == {"path": "model"}
+
+
+@pytest.mark.asyncio
+async def test_an_earlier_number_with_different_contents_is_refused(tmp_path):
+    path = tmp_path / "pitwall.sqlite3"
+    await PitWallDatabase(path).initialize()
+    with sqlite3.connect(path) as db:
+        db.execute(
+            "UPDATE schema_versions SET version = 5510, checksum = 'not-this-migration' WHERE version = 5600"
+        )
+    with pytest.raises(RuntimeError, match="5510"):
+        await PitWallDatabase(path).initialize()
