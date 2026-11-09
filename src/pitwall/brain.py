@@ -1550,6 +1550,15 @@ def hold_material_change(state: dict[str, Any], hold: dict[str, Any]) -> str | N
     return None
 
 
+def _freshness_clause(header: str) -> str:
+    """The leading FIELD FRESHNESS block of a situation header, or ""."""
+    prefix = "FIELD FRESHNESS "
+    if not header.startswith(prefix):
+        return ""
+    end = header.find(" | ", len(prefix))
+    return header[: end + 3] if end != -1 else ""
+
+
 class EngineerBrain:
     @staticmethod
     def _strategy_qualifier(plan: dict[str, Any] | None) -> str | None:
@@ -5365,12 +5374,17 @@ class EngineerBrain:
         # is context, not evidence: its numbers are earlier calls, not the
         # current state. Left on the event so delivery can check the
         # narration's numbers against exactly what the model was shown.
+        header = await self._header(include_strategy=strategy_call)
         evidence = (
-            f"{await self._header(include_strategy=strategy_call)}\n"
+            f"{header}\n"
             f"{hold_line}"
             f"PROACTIVE EVENT: {json.dumps(facts, ensure_ascii=False)}"
         )
-        event["narration_evidence"] = evidence
+        # The header opens with each packet group's age in seconds. Those ages
+        # tell the model what is stale; they are not facts a call may quote,
+        # and as evidence they would let an invented "0.3" pass whenever a
+        # packet happened to be 0.3 s old.
+        event["narration_evidence"] = evidence.replace(_freshness_clause(header), "", 1)
         prompt = (
             f"{evidence}\n"
             f"{_RADIO_LABELS_NOTE}\n"
