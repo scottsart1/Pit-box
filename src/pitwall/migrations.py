@@ -475,9 +475,9 @@ V5_2_ENGINEERING = Migration(
 )
 
 
-V5_5_RADIO_TRACE = Migration(
-    version=5510,
-    app_version="5.5.1",
+V5_6_RADIO_TRACE = Migration(
+    version=5600,
+    app_version="5.6.0",
     statements=(
         # How the driver reacted to the engineer's previous message (a repeat
         # request, a correction, a dispute), stored on the driver's own row.
@@ -501,6 +501,6 @@ MIGRATIONS: tuple[Migration, ...] = (
     V4_13_LIBRARY_INDEXES,
     V4_13_1_PLAYER_FLAG_CONTEXT,
     V5_2_ENGINEERING,
-    V5_5_RADIO_TRACE,
+    V5_6_RADIO_TRACE,
 )
 LATEST_SCHEMA_VERSION = MIGRATIONS[-1].version
