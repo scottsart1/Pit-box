@@ -263,7 +263,7 @@ async def test_the_trace_endpoint_returns_one_answers_evidence(stack, monkeypatc
 async def test_a_database_from_before_traces_migrates_and_stays_readable(tmp_path, monkeypatch):
     path = tmp_path / "pitwall.sqlite3"
     monkeypatch.setattr(
-        database_module, "MIGRATIONS", tuple(item for item in MIGRATIONS if item.version != 5510)
+        database_module, "MIGRATIONS", tuple(item for item in MIGRATIONS if item.version != 5600)
     )
     await PitWallDatabase(path).initialize()
     with sqlite3.connect(path) as db:
