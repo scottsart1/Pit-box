@@ -504,3 +504,10 @@ MIGRATIONS: tuple[Migration, ...] = (
     V5_6_RADIO_TRACE,
 )
 LATEST_SCHEMA_VERSION = MIGRATIONS[-1].version
+
+# Migrations that pre-release builds recorded under an earlier number. Test
+# builds of 5.6.0 applied the radio trace migration as 5510; it is the same
+# migration, with the same statements and checksum, as 5600. A database those
+# builds upgraded is relabelled rather than migrated twice, which would fail
+# on columns it already has.
+RENUMBERED_MIGRATIONS: dict[int, int] = {5510: 5600}
