@@ -109,25 +109,27 @@ router or firewall to the public internet automatically.
 ## What changed in 5.6.0
 
 **Answers keep their instruction.** When a reply runs past the radio's
-length, the cut drops a bare "Copy." and keeps the pit call and any closing
-question, and phrases such as "hold on" are no longer removed as leaked model
-reasoning. Settings → Engineer → Radio verbosity now changes the replies.
-Everyday questions such as "how are the tyres", "what's the gap ahead" and
-"can you hear me" are answered straight from telemetry, and "say again"
-replays the last line word for word. The DRIVE and STRATEGY radio panels no
-longer stop updating after 40 entries, and the Ask boxes show their answers.
+length, the cut drops a bare "Copy." and keeps any closing question and, in
+an answer about strategy, the pit call. Phrases such as "hold on" are no
+longer removed as leaked model reasoning. Settings → Engineer → Radio
+verbosity now changes the replies. Everyday questions such as "how are the
+tyres", "what's the gap ahead" and "can you hear me" are answered straight
+from telemetry, and "say again" replays the line just said, word for word.
+The DRIVE and STRATEGY radio panels no longer stop updating after 40
+entries, and the Ask boxes show their answers.
 
-**Pit calls.** "Should I box", "when do we box" and "what's the plan" get the
-ranked plan, as "should I pit" did. A low-confidence plan says so once, after
-the call and not on a rival's stop, and a what-if is priced at the lap you
-name and set against the ranked plan.
+**Pit calls.** In a race, "should I box", "when do we box" and "what's the
+plan" get the ranked plan, as "should I pit" did. A low-confidence plan says
+so once, after the call and not on a rival's stop, and a what-if is priced at
+the lap you name and set against the ranked plan.
 
 **What you decide stays decided.** "Okay, should we stay out?" and other
 questions no longer hold pit calls or lock a compound, spoken lap numbers are
-read, and the grid plan locks only on a plain agreement. A declined stop or an
-agreed tactic is honoured until it runs out, you stop or the race changes, and
-a standing instruction given beside a question is kept. Commands said in a
-realtime speech session are now stored as push-to-talk ones are.
+read, and the grid plan locks only on a plain agreement. A stop you decline
+is not called again for five laps, unless you stop or the race changes
+first, and an agreed tactic stands until the stop it was about. A standing
+instruction given beside a question is kept. Commands said in a realtime
+speech session are now stored as push-to-talk ones are.
 
 **Calls the engineer makes on its own.** Flag calls go first and no longer
 wait for the reply window. A flag, penalty or damage call you talk over is
@@ -138,10 +140,12 @@ template.
 
 **For operators.** On first start the database is backed up and upgraded to
 schema 5600, which stores a trace with each radio answer: route, provider,
-tool calls and results, and each step that shaped the line.
-`GET /api/radio/{id}/trace` returns one, and the session export includes
-them. `tools/engineer_eval.py` grades the engineer's answers offline;
-`--live` makes paid provider calls. The engineer's radio stays in English.
+tool calls and results, and each step that shaped the line. 5.5.1 cannot
+open the upgraded database, and a history transfer needs both devices on
+5.6.0. `GET /api/radio/{id}/trace` returns one trace, and the session export
+includes them. `tools/engineer_eval.py` grades the engineer's answers
+offline; `--live` makes paid provider calls. The engineer's radio stays in
+English.
 
 Windows remains an explicitly unsigned direct-download installer, and Android
 keeps the existing signing identity.

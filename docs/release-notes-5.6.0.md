@@ -1,34 +1,38 @@
 # Your Pit Box 5.6.0
 
-5.6.0 changes what the race engineer says on the radio and when. Answers
-keep their instruction, radio commands are read the way you meant them,
-calls the engineer makes on its own are no longer lost or repeated without
-reason, and a number the engineer volunteers is checked before it is spoken.
+5.6.0 changes what the race engineer says on the radio and when. A
+shortened answer keeps its instruction, a question is no longer taken as a
+command, a flag or penalty call you talk over is said again, and a number
+the engineer volunteers is checked before it is spoken.
 
 ## Answers
 
 - **The instruction survives.** When a reply is longer than the radio
-  allows, the cut now drops a bare "Copy." first and keeps the pit call, any
-  closing question and a short opener such as "No." with its instruction.
-  Ordinary phrases such as "hold on" are no longer removed as leaked model
-  reasoning, so "Stay out. Hold on, Safety Car is being deployed, box box
-  box." is no longer cut to "Stay out.".
+  allows, the cut now drops a bare "Copy." first and keeps any closing
+  question, the pit call in an answer about strategy, and a short opener
+  such as "No." with its instruction. Ordinary phrases such as "hold on"
+  are no longer removed as leaked model reasoning, so "Stay out. Hold on,
+  Safety Car is being deployed, box box box." is no longer cut to "Stay
+  out.".
 - **Settings → Engineer → Radio verbosity applies.** Terse or chatty there
   now changes the replies; before, it changed nothing. Settings shows the
   length in force, including one set by radio.
 - **More questions answered straight from telemetry.** "How are the tyres",
   "what's the gap ahead", "are we OK on fuel", "can you hear me", "check the
-  rain" and, outside qualifying, "best lap" and "pole", with the same check
-  that refuses stale data. After the flag, "what position am I" gives the
-  final classification.
+  rain" and, outside qualifying, "best lap" and "pole" no longer wait on the
+  model. Tyre, gap, fuel and weather answers still refuse stale data. Once
+  the game has sent the final classification, "what position am I" answers
+  from it.
 - **"Say again"** replays the engineer's last line word for word, with no
-  model call, when that line came just before, on the current lap, was heard
-  whole and race control has not changed since.
+  model call, when it came just before your request, was said on the
+  current lap and heard whole, and race control has not changed this lap or
+  in the last two minutes. Otherwise the engineer answers from the current
+  state.
 - **The lap and the car you asked about.** Lap analysis compares the lap you
   name with the reference you ask for, not the latest lap with your best.
-  Session events name the drivers and decode penalties. Every gap answer
-  reads the trend over about the last lap, so a rival is no longer "closing"
-  in one answer and "dropping back" in the next.
+  Session events name the drivers and decode penalties. Every answer about
+  whether a gap is growing reads it over about the last lap, so a rival is
+  no longer "closing" in one answer and "dropping back" in the next.
 - **Typed answers are shown.** The DRIVE and STRATEGY radio panels stopped
   updating after a session's 40th radio entry, and a typed question's answer
   then appeared nowhere. Both panels now redraw on every entry, and both Ask
@@ -41,22 +45,22 @@ reason, and a number the engineer volunteers is checked before it is spoken.
 
 ## Pit calls
 
-- **Every way of asking gets the plan.** "Should I box", "when do we box"
-  and "what's the plan" get the ranked plan, as "should I pit" did. "What's
-  my fuel and should I pit" or "should I pit if the safety car comes out"
-  goes to the engineer with the plan instead of getting the standing call
-  back.
+- **More ways of asking get the plan.** In a race, "should I box", "when do
+  we box" and "what's the plan" get the ranked plan, as "should I pit" did.
+  "What's my fuel and should I pit" or "should I pit if the safety car comes
+  out" goes to the engineer with the plan instead of getting the standing
+  call back.
 - **Confidence once, after the call.** A low-confidence plan's "provisional,
   confidence low" now follows the call in the same sentence, is not added
   when the reply already hedges, and lands on your call rather than on a
   rival's stop or a penalty. A volunteered call spoken from its template
   carries it too.
-- **What-ifs on any question.** The engineer can weigh a stop, a front-wing
-  change or the points at stake whatever words you use, not only when the
-  question has a planning word such as "what if". "This lap" and "in three
-  laps" are priced at the lap they mean, and the result is set against the
-  ranked plan, which it does not replace. Undercut and overcut accept
-  "teammate", a car number or a first name.
+- **What-ifs for every question.** The tools that price a stop, a
+  front-wing change or the points at stake are now offered for every
+  question, not only one with a planning word such as "what if". "This lap"
+  and "in three laps" are priced at the lap they mean, and the result is set
+  against the ranked plan, which it does not replace. Undercut and overcut
+  accept "teammate", a car number or a first name.
 
 ## What you decide stays decided
 
@@ -71,9 +75,10 @@ reason, and a number the engineer volunteers is checked before it is spoken.
 - **A declined stop stays declined.** After "I'm not boxing", no call the
   engineer makes on its own carries that stop, and asking when to box gets
   the next option. The five-lap hold ends early at a stop, including one for
-  the same compound, or when the race changes (a flag, rain, new damage, a
-  tyre past its wear limit), whether or not unsolicited calls are on. "Stay
-  out of trouble" no longer declines the stop.
+  the same compound, or when the race changes (a flag change, the track
+  turning wet, new damage, a tyre past its hard wear limit), whether or not
+  unsolicited calls are on. "Stay out of trouble" no longer declines the
+  stop.
 - **An agreed tactic ends with its stop.** "We'll go long" no longer binds
   the engineer, or shows on the dashboard, after the stop it was about.
 - **Standing instructions.** "What's the gap behind? And stop telling me
@@ -110,8 +115,8 @@ reason, and a number the engineer volunteers is checked before it is spoken.
   the session's brief carries the recent radio, any hold and the pit call as
   push-to-talk words it. A strategy question there no longer gets "too large
   for radio".
-- **Calls and answers are not lost or doubled.** A pit-wall call waits while
-  the engineer replies or you talk, and is said again if you talked over it
+- **Pit-wall calls wait their turn.** A pit-wall call waits while the
+  engineer replies or you talk, and is said again if you talked over it
   before any of it played. A reply that fails before saying anything useful
   is answered on the standard radio; one you already heard is not repeated
   in a second voice.
@@ -122,7 +127,8 @@ reason, and a number the engineer volunteers is checked before it is spoken.
   two columns to radio messages (schema 5600): a label on your lines that
   react to the previous answer (a repeat request, a correction, a dispute),
   and the trace of each answer. Once upgraded, the database is refused by
-  5.5.1; the backup is not.
+  5.5.1; the backup is not. A history transfer between two devices needs
+  both on 5.6.0.
 - **Answer traces.** Each answer the standard radio gives is saved with its
   route, provider and model, tool calls and results, the provider's own text
   and every step that changed it, in under about 40 KB. No credentials or
@@ -137,8 +143,8 @@ reason, and a number the engineer volunteers is checked before it is spoken.
   default, a scripted provider answers and no network call is made; `--live`
   sends the cases to your configured providers and makes paid API calls.
 - On the normal route, OpenAI reasoning models and the custom endpoint get
-  1,600 output tokens, then 4,000 on the retry, so the model's reasoning no
-  longer uses up the answer's budget and forces a second request. The
+  1,600 output tokens, then 4,000 on the retry, so the model's reasoning is
+  less likely to use up the answer's budget and force a second request. The
   settings are listed in `.env.example`.
 - The engineer's radio stays in English.
 
