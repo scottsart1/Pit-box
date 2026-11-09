@@ -17,7 +17,7 @@ from pathlib import Path
 
 import pytest
 
-from pitwall.brain import EngineerBrain
+from pitwall.brain import EngineerBrain, _freshness_clause
 from pitwall.config import settings
 from pitwall.grounding import SpokenNumber, lap_counts, place_counts, spoken_numbers, unsupported
 from pitwall.proactive import ProactiveEngineer
@@ -171,7 +171,11 @@ async def test_the_narrator_is_checked_against_exactly_what_it_was_shown(stack, 
     await brain.proactive(event)
 
     evidence = event["narration_evidence"]
-    assert shown[0].startswith(evidence + "\n")
+    # Exactly what the model was shown, less the packet ages that open the
+    # header: those say what is stale and are not facts a call may quote.
+    ages = _freshness_clause(shown[0])
+    assert ages.startswith("FIELD FRESHNESS ") and '"age_s"' in ages
+    assert shown[0].replace(ages, "", 1).startswith(evidence + "\n")
     assert "fuel delta -0.4 laps" in evidence
     assert 'PROACTIVE EVENT: {"type": "fuel_warning"' in evidence
     # Earlier radio is context, not evidence: its numbers are history.
@@ -418,3 +422,15 @@ def test_a_negation_elsewhere_in_the_sentence_does_not_undo_an_endorsement():
 def test_the_harness_calls_a_real_provider_only_when_asked_to_by_name(argv):
     with pytest.raises(SystemExit):
         engineer_eval.main(argv)
+
+
+@pytest.mark.asyncio
+async def test_packet_ages_are_not_evidence_for_a_narrated_number(stack, monkeypatch):
+    """The header's packet ages (e.g. 0.3 s) must not ground an invented 0.3."""
+    store, _database, engineer, _voice, prompts = await _narrating_race(stack, monkeypatch, INVENTED)
+    engineer._enqueue("fuel_warning", {"fuel_laps_delta": -0.4}, critical=True, cooldown_s=0.0)
+    event = engineer._select(await store.snapshot_radio())
+    await engineer.brain.proactive(event)
+    assert "FIELD FRESHNESS" in prompts[-1], "the model still sees which data is stale"
+    assert "FIELD FRESHNESS" not in event["narration_evidence"]
+    assert "age_s" not in event["narration_evidence"]
