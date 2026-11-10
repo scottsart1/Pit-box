@@ -452,7 +452,9 @@ def test_no_spoken_template_carries_mojibake():
 def test_templates_say_things_the_way_a_driver_hears_them():
     texts = _every_template()
     assert texts["race_control"] == "Race control: VSC ending."
-    assert texts["weather_crossover"] == "Track is wet. Box this lap for inters."
+    # A weather stop leads with the instruction; the pit entry is a fixed
+    # point on the lap and the evidence can follow it.
+    assert texts["weather_crossover"] == "Box this lap for inters. Track is wet."
     assert texts["penalty"].startswith("Another 5 second penalty; that is 10 seconds in total.")
     assert texts["progress_update"] == "Lap 12: target still building. Keep the lap clean."
     assert "MGU-H" in texts["component_wear"]
