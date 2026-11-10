@@ -1370,6 +1370,33 @@ class ProactiveEngineer:
         return int(state.get("speed_kph", 0) or 0) > 30
 
     @staticmethod
+    def _rejoin_clause(payload: dict[str, Any], state: dict[str, Any]) -> str:
+        """Where an imminent stop comes out, from the strategy's rejoin map.
+
+        Said only for a box call on this lap or the next, when the map names
+        the car ahead: further out the gaps will have moved before the stop.
+        """
+        instruction = str(payload.get("instruction") or "")
+        box = payload.get("box_lap")
+        current = int(state.get("current_lap", 0) or 0)
+        if box is None or not instruction.lower().startswith("box") or not 0 <= int(box) - current <= 1:
+            return ""
+        rows = (state.get("strategy") or {}).get("rejoin_map") or []
+        row = next((item for item in rows if item.get("box_lap") == int(box)), None)
+        if not row:
+            return ""
+        if int(row.get("rejoin_position", 0) or 0) == 1 and not row.get("car_ahead"):
+            return "You come out in the lead."
+        name = str(row.get("car_ahead") or "").strip()
+        gap = row.get("gap_ahead_s")
+        if not name or gap is None:
+            return ""
+        name = name.title() if name.isupper() else name
+        if row.get("clear_air"):
+            return f"You come out behind {name} in clear air."
+        return f"You come out {float(gap):.1f} seconds behind {name}."
+
+    @staticmethod
     def _call_signature(recommended: dict[str, Any]) -> tuple[Any, str, int]:
         """What a strategy call says, for telling two calls apart."""
         return (
@@ -2474,10 +2501,12 @@ class ProactiveEngineer:
             # The narrated call carries a low-confidence plan's qualifier, so
             # the template does too: a provisional plan must not sound firm
             # because narration was off or timed out.
-            return prefix + EngineerBrain.qualify_strategy_text(
+            text = prefix + EngineerBrain.qualify_strategy_text(
                 str(payload.get("instruction", "Strategy has changed; check the dashboard.")),
                 state.get("strategy", {}),
             )
+            clause = ProactiveEngineer._rejoin_clause(payload, state)
+            return f"{text} {clause}" if clause else text
         if kind == "driver_check":
             laps = int(payload.get("laps_to_window", 2) or 2)
             return (

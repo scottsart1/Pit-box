@@ -25,6 +25,7 @@ const view = {
   planSignature: "",
   rivals: null,
   rivalsFetchedAt: 0,
+  rejoinSignature: "",
   logSignature: "",
   radioSeq: -1,
   radioShown: [],
@@ -571,6 +572,85 @@ async function refreshRivals(s) {
   }
 }
 
+/* ---- Where you come out ---------------------------------------------------- */
+
+function shortName(name) {
+  return String(name || "").slice(0, 3).toUpperCase();
+}
+
+function neighbourText(name, gap) {
+  return name && gap != null ? `${shortName(name)} ${Number(gap).toFixed(1)}` : "—";
+}
+
+/* One column per stop lap: where the car rejoins and the air either side. The
+   recommended lap is outlined; clear-air laps carry a green rule and the word.
+   Tapping a lap prices that stop with the what-if. */
+function renderRejoinMap(s) {
+  const body = byId("stratRejoinRows");
+  if (!body) return;
+  const st = s.strategy || {};
+  const rows = Array.isArray(st.rejoin_map) ? st.rejoin_map : [];
+  const recommended = (st.recommended || {}).box_lap;
+  const signature = `${recommended}|` + rows.map((r) =>
+    `${r.box_lap}:${r.rejoin_position}:${r.car_ahead}:${r.gap_ahead_s}:${r.car_behind}:${r.gap_behind_s}`).join(";");
+  if (signature === view.rejoinSignature) return;
+  view.rejoinSignature = signature;
+  body.replaceChildren();
+  if (!st.available || !rows.length) {
+    const row = document.createElement("tr"), cell = document.createElement("td");
+    cell.className = "empty";
+    cell.textContent = i18n.t("Rejoin positions appear once a race plan exists.");
+    row.appendChild(cell);
+    body.appendChild(row);
+    return;
+  }
+  const lines = [
+    [i18n.t("Stop on lap"), null],
+    [i18n.t("Rejoin"), (r) => `P${r.rejoin_position}`],
+    [i18n.t("Car ahead"), (r) => neighbourText(r.car_ahead, r.gap_ahead_s)],
+    [i18n.t("Car behind"), (r) => neighbourText(r.car_behind, r.gap_behind_s)],
+    [i18n.t("Air"), (r) => r.clear_air === true ? i18n.t("clear air") : r.clear_air === false ? i18n.t("traffic") : "—"],
+  ];
+  for (const [label, value] of lines) {
+    const row = document.createElement("tr");
+    const head = document.createElement("th");
+    head.scope = "row";
+    head.textContent = label;
+    row.appendChild(head);
+    for (const item of rows) {
+      const cell = document.createElement(value ? "td" : "th");
+      if (!value) cell.scope = "col";
+      const classes = [];
+      if (item.box_lap === recommended) classes.push("is-recommended");
+      if (item.clear_air === true) classes.push("is-clear");
+      cell.className = classes.join(" ");
+      if (value) {
+        cell.textContent = value(item);
+      } else {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = "rejoin-lap";
+        button.textContent = String(item.box_lap);
+        button.setAttribute("aria-label", i18n.t("Price a stop on lap {lap}", { lap: item.box_lap }));
+        button.addEventListener("click", () => priceStopOnLap(item.box_lap));
+        cell.appendChild(button);
+      }
+      row.appendChild(cell);
+    }
+    body.appendChild(row);
+  }
+}
+
+function priceStopOnLap(lap) {
+  const form = byId("stratWhatIfForm");
+  if (!form) return;
+  byId("stratWhatIfText").value = "";
+  byId("stratWhatIfLap").value = String(lap);
+  const details = form.closest("details");
+  if (details) details.open = true;
+  form.requestSubmit();
+}
+
 /* ---- Direct-manipulation editing on the timeline -------------------------- */
 
 const DRY_CYCLE = ["SOFT", "MEDIUM", "HARD"];
@@ -960,6 +1040,7 @@ function renderAll(s) {
   renderCall(s);
   renderPlans(s);
   drawTimeline(s);
+  renderRejoinMap(s);
   renderRadio(s);
   refreshRivals(s);
 }
@@ -996,4 +1077,4 @@ if (HAS_DOM) {
   });
 }
 
-export { planKey, describeEvidence, renderCall, renderPlans, loadDecisionLog, renderRadio, sendAsk, COMPOUND_COLORS };
+export { planKey, describeEvidence, renderCall, renderPlans, renderRejoinMap, loadDecisionLog, renderRadio, sendAsk, COMPOUND_COLORS };

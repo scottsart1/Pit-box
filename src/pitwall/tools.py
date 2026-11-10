@@ -15,7 +15,7 @@ from .identity import display_name, match_drivers
 from .intent import normalize_text
 from .setup_advisor import SetupAdvisor
 from .state import StateStore
-from .strategy import StrategyEngine
+from .strategy import REJOIN_CLEAR_AIR_S, StrategyEngine
 
 if TYPE_CHECKING:
     from .catalog import SessionCatalog
@@ -2179,6 +2179,33 @@ class TelemetryTools:
     async def predict_rival_strategy(self, top_n: int = 6) -> dict[str, Any]:
         return await self.strategy.predict_rival_strategy(top_n)
 
+    async def get_rejoin_map(self) -> dict[str, Any]:
+        """Where the car comes out for a stop on each of the next laps."""
+        plan = await self.strategy.get_plan()
+        rows = list(plan.get("rejoin_map") or [])
+        if not plan.get("available", False) or not rows:
+            return {
+                "available": False,
+                "reason": plan.get("reason") or "No reachable stop lap is left to map.",
+            }
+        recommended = (plan.get("recommended") or {}).get("box_lap")
+        return {
+            "available": True,
+            "current_lap": rows[0]["box_lap"] if rows else None,
+            "recommended_box_lap": recommended,
+            "rows": [
+                {**row, "recommended": row.get("box_lap") == recommended}
+                for row in rows
+            ],
+            "clear_air_threshold_s": REJOIN_CLEAR_AIR_S,
+            "basis": (
+                "Each row stops on that lap with that lap's pit loss and compares projected race "
+                "time with every rival's, including the stops rivals are projected to make first. "
+                f"Clear air means at least {REJOIN_CLEAR_AIR_S:g} s to the car ahead on rejoining. "
+                "Rival stops are estimates; a row is only as good as them."
+            ),
+        }
+
     async def get_championship_scenario(self) -> dict[str, Any]:
         return await self.strategy.championship_scenario()
 
@@ -2618,12 +2645,15 @@ class TelemetryTools:
             ]
         if view.get("plans"):
             # The order StrategyEngine's ranking_key sorts by. A faster plan
-            # at the same finishing position ranks below a later stop, so a
-            # negative delta alone is no reason to change the call.
+            # at the same finishing position can rank below a later stop, so a
+            # small negative delta alone is no reason to change the call.
+            tolerance = float(settings.strategy_later_stop_tolerance_s)
             view["plan_comparison_basis"] = (
                 "Plans rank on legality, feasibility, then projected finishing position and "
-                "points; among equal finishes the later first stop ranks higher (except for a "
-                "red-flag tyre change) and risk-adjusted time only breaks the remaining ties. "
+                "points, then expected finish outside the points; among equal finishes the "
+                "later first stop ranks higher while it is "
+                f"no more than {tolerance:g} s slower than the quickest of them (except for a "
+                "red-flag tyre change), and risk-adjusted time decides the rest. "
                 "delta_vs_recommended_s is risk-adjusted race time minus the recommended "
                 "plan's; positive is slower. Each entry is a separate plan: never combine "
                 "laps from two entries."
@@ -2870,7 +2900,7 @@ class TelemetryTools:
             "uncertainty draws. It answers the hypothetical but does not replace the "
             "recommended call, which is ranked on finishing position first. Among "
             "equal finishing positions the ranking prefers the later stop, so time "
-            "alone does not change the call. time_delta_vs_recommended_s is this "
+            "alone, within a few seconds, does not change the call. time_delta_vs_recommended_s is this "
             "stop's risk-adjusted race time minus the recommended plan's; positive is "
             "slower. position_delta_vs_recommended is its projected finishing "
             "position minus the recommended plan's; positive is further back. "
@@ -4194,11 +4224,20 @@ class TelemetryTools:
                 {},
             ),
             (
+                "get_rejoin_map",
+                (
+                    "Where the car comes out for a stop on each of the next laps: rejoin position, "
+                    "the cars either side, the gaps to them and whether it is clear air. Use for "
+                    "'where do I come out if I box now' or 'which lap gets me clear air'."
+                ),
+                {},
+            ),
+            (
                 "what_if",
                 (
-                    "Simulate one hypothetical stop: tyre wear, legality and tyre-model time "
-                    "against the recommended plan. A simplified check that leaves out rejoin "
-                    "traffic and finishing position; it never replaces the ranked plan."
+                    "Price one hypothetical stop with the full planner: time, rejoin, finishing "
+                    "position and legality against the recommended plan. It never replaces the "
+                    "ranked plan."
                 ),
                 {
                     "scenario": {

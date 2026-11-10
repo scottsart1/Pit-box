@@ -255,6 +255,13 @@
       <canvas id="stratTimeline" class="analysis-canvas" width="1400" height="240" role="img" aria-label="Each ranked plan's stints along the race distance, with projected rival stops"></canvas>
       <details class="race-details"><summary>Edit the timeline</summary><div id="stratTimelineNote" class="field-help">Tap a stint in your plan to change its tyre, or tap a lap to move the stop. ▼ marks a stop; amber is the estimated pace drop.</div></details>
       <div id="stratRivalNote" class="field-help">Projected rival stops appear with live race telemetry.</div>
+      <div class="rejoin-strip">
+        <div class="eyebrow" id="stratRejoinHeading">Where you come out</div>
+        <div class="table-scroll" tabindex="0" aria-labelledby="stratRejoinHeading">
+          <table class="table rejoin-table"><caption class="sr-only">Rejoin position, the cars either side and clear air for a stop on each of the next laps</caption><tbody id="stratRejoinRows"><tr><td class="empty">Rejoin positions appear once a race plan exists.</td></tr></tbody></table>
+        </div>
+        <div class="field-help">Tap a lap to price that stop. Clear air is 2 s or more to the car ahead.</div>
+      </div>
     </section>
 
     <details class="panel-surface strategy-main-col race-details" aria-labelledby="stratPlansHeading">

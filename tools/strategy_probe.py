@@ -75,6 +75,11 @@ def build_field(
             for number in range(1, current_lap)
         ]
         driver.tyre_stints = [{"start_lap": 1, "end_lap": 255, "compound": compound}]
+        if index == 0:
+            # The player's own pace when no completed laps are recorded: the
+            # same as the field's, so a finishing position measures the plan
+            # rather than a car 5 s a lap off the pace.
+            driver.best_lap_ms = int(lap_ms(current_lap - 1) if callable(lap_ms) else lap_ms)
         drivers.append(driver)
     drivers[0].position = player_position
     others = [position for position in range(1, 21) if position != player_position]

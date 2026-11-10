@@ -2434,5 +2434,16 @@
  "½ lap/s": "½ Runde/s",
  "← B quicker": "← B schneller",
  "−10 m": "−10 m",
- "⚙ Dashboard": "⚙ Dashboard"
+ "⚙ Dashboard": "⚙ Dashboard",
+ "Air": "Luft",
+ "Car ahead": "Auto vorn",
+ "Car behind": "Auto hinten",
+ "Price a stop on lap {lap}": "Stopp in Runde {lap} bewerten",
+ "Rejoin": "Wiedereinstieg",
+ "Rejoin position, the cars either side and clear air for a stop on each of the next laps": "Position beim Wiedereinstieg, Autos davor und dahinter und freie Fahrt für einen Stopp in jeder der nächsten Runden",
+ "Rejoin positions appear once a race plan exists.": "Positionen beim Wiedereinstieg erscheinen, sobald ein Rennplan existiert.",
+ "Stop on lap": "Stopp in Runde",
+ "Tap a lap to price that stop. Clear air is 2 s or more to the car ahead.": "Tippe auf eine Runde, um diesen Stopp zu bewerten. Freie Fahrt heißt 2 s oder mehr zum Auto vorn.",
+ "Where you come out": "Wo du herauskommst",
+ "clear air": "freie Fahrt"
 }

@@ -51,6 +51,16 @@ const sizes = [[390,844], [428,926], [844,390], [960,800], [961,800],
           document.getElementById('stratRadio').textContent = 'Engineer: Hold the plan.\n'.repeat(80);
           document.getElementById('stratLog').innerHTML = Array.from({length: 30}, (_, i) =>
             `<div class="decision-entry"><span class="lap">Lap ${i+1}</span><span>Hold the plan</span></div>`).join('');
+          // Fifteen stop laps: the strip scrolls inside its own container.
+          const laps = Array.from({length: 15}, (_, i) => i + 12);
+          const row = (label, cell) => `<tr><th scope="row">${label}</th>${laps.map(cell).join('')}</tr>`;
+          document.getElementById('stratRejoinRows').innerHTML = [
+            row('Stop on lap', (lap) => `<th scope="col" class="${lap === 14 ? 'is-recommended' : ''}"><button type="button" class="rejoin-lap">${lap}</button></th>`),
+            row('Rejoin', (lap) => `<td>P${lap - 3}</td>`),
+            row('Car ahead', () => '<td>TSU 2.8</td>'),
+            row('Car behind', () => '<td>ALB 2.1</td>'),
+            row('Air', () => '<td class="is-clear">clear air</td>'),
+          ].join('');
         });
         const layout = await page.evaluate(() => {
           const box = el => { const r = el.getBoundingClientRect(); return {top:r.top,bottom:r.bottom,left:r.left,right:r.right}; };
