@@ -57,6 +57,34 @@ function largeRace() {
   return race;
 }
 
+// The strategy review the page fetches for a race: calls along the race,
+// two box calls on one lap and one on the next (their words must not
+// collide), and a row per stop of the player's.
+function reviewFor(payload) {
+  const player = (payload.drivers || []).find((d) => d.is_player);
+  const total = Math.max(2, ...(payload.laps || []).map((l) => Number(l.lap_number) || 0));
+  const stops = (payload.pit_stops || []).filter((s) => player && s.car_index === player.car_index);
+  const boxLap = stops[0]?.lap_number ?? Math.ceil(total / 2);
+  const calls = [];
+  for (let lap = 2; lap <= total; lap += 3) {
+    const said = lap % 2 === 0;
+    calls.push({ lap, type: 'progress_update', text: `Lap ${lap - 1}: target 1:31.200.`, delivered: said, outcome: said ? 'delivered' : 'superseded' });
+  }
+  calls.push(
+    { lap: boxLap, type: 'strategy_change', text: 'Box this lap for hards.', delivered: true, outcome: 'delivered' },
+    { lap: boxLap, type: 'weather_box_reminder', text: 'Box, box. Hards on.', delivered: true, outcome: 'delivered' },
+    { lap: Math.min(total, boxLap + 1), type: 'strategy_change', text: 'Box this lap for softs.', delivered: false, outcome: 'voice delivery failed' },
+  );
+  calls.sort((a, b) => a.lap - b.lap);
+  const rows = (stops.length ? stops : [{ lap_number: boxLap, from_compound: 'MEDIUM', to_compound: 'HARD' }]).map((s) => ({
+    lap: s.lap_number, from: s.from_compound, to: s.to_compound, phase: s.under_neutralisation ? 'safety_car' : 'green',
+    recommended_lap_at_the_time: s.lap_number - 1, called_on_lap: Math.max(1, s.lap_number - 2), laps_after_call: 2, heard: true,
+    hindsight_best_lap: s.lap_number - 1, cost_vs_hindsight_s: 2.4, places: 1, on_the_money: false,
+  }));
+  return { available: true, on_the_money_s: 1.5, calls, stops: rows, overrides: [],
+    weather: [{ spell: 1, laps_late: 1, cost_s: 3.2 }], undelivered: calls.filter((c) => !c.delivered).length };
+}
+
 function payloads() {
   const race = JSON.parse(fs.readFileSync(path.join(root, 'tests/fixtures/session_analysis_race.json'), 'utf8'));
   const practice = clone(race);
@@ -289,6 +317,8 @@ async function openPage(browser, viewport, sets) {
     const file = path.resolve(staticRoot, `.${url.pathname.slice('/static'.length)}`);
     if (url.pathname.startsWith('/static/') && file.startsWith(staticRoot + path.sep) && fs.existsSync(file)) return route.fulfill({ path: file });
     if (url.pathname === '/api/v1/sessions') return route.fulfill({ contentType: 'application/json', body: JSON.stringify({ items }) });
+    const review = url.pathname.match(/^\/api\/v1\/sessions\/([^/]+)\/strategy-review$/);
+    if (review && byId.has(decodeURIComponent(review[1]))) return route.fulfill({ contentType: 'application/json', body: JSON.stringify(reviewFor(byId.get(decodeURIComponent(review[1])))) });
     const match = url.pathname.match(/^\/api\/v1\/sessions\/([^/]+)\/analysis$/);
     if (match && byId.has(decodeURIComponent(match[1]))) {
       const payload = { ...byId.get(decodeURIComponent(match[1])), hide_outliers: url.searchParams.get('hide_outliers') === 'true' };
@@ -433,6 +463,9 @@ async function verticalSwipe(page, cdp, id) {
           const sessionId = String(set.payload.session_id);
           if (index > 0) await page.evaluate((id) => window.dispatchEvent(new CustomEvent('pitwall:analyze-session', { detail: { sessionId: id } })), sessionId);
           await waitForAnalysis(page, sessionId);
+          // A race's strategy review arrives after the analysis.
+          const race = Boolean(set.payload.session?.is_race);
+          if (race) await page.waitForFunction(() => !document.getElementById('analysisReview').hidden, null, { timeout: 5000 }).catch(() => {});
           await page.evaluate(() => { document.getElementById('analysis').scrollTop = 0; window.__opened.length = 0; });
           const g = await geometry(page);
           check(set, 'no-page-horizontal-overflow', g.docOverflow <= 1 && g.areaOverflow <= 1 && g.viewOverflow <= 1, { doc: g.docOverflow, area: g.areaOverflow, view: g.viewOverflow });
@@ -446,6 +479,15 @@ async function verticalSwipe(page, cdp, id) {
           check(set, 'chart-labels-inside-their-chart', !g.clipped.length, { clipped: g.clipped.slice(0, 6) });
           const expected = set.payload.session?.is_race ? CHARTS.length : CHARTS.length - 3;
           check(set, 'every-chart-drawn', g.charts.length === expected, { drawn: g.charts });
+          const review = await page.evaluate(() => ({
+            lane: !document.getElementById('analysisCallsLane').hidden, marks: document.querySelectorAll('#analysisCallsLane .sa-call').length,
+            words: [...document.querySelectorAll('#analysisCallsLane .sa-call-word')].map((t) => t.textContent),
+            rows: document.querySelectorAll('#analysisReviewTable tbody tr').length, panel: !document.getElementById('analysisReview').hidden,
+          }));
+          if (race) {
+            check(set, 'calls-lane-drawn', review.lane && review.marks >= 3 && review.words.length >= 1, review);
+            check(set, 'stops-review-shown', review.panel && review.rows >= 1, review);
+          } else check(set, 'no-review-outside-a-race', !review.lane && !review.panel, review);
           if (shots) await page.screenshot({ path: path.join(shots, `session-analysis-${set.name}-${label}.png`), scale: 'css' });
           if (shots && (process.env.PITBOX_SHOTS_CARDS || '').split(',').includes(set.name)) {
             const cards = await page.locator('#session-analysis .sa-card:visible, #session-analysis .sa-header, #session-analysis .sa-filters, #session-analysis .sa-kpis').all();

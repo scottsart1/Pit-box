@@ -1264,7 +1264,7 @@ function boxCall(call) {
 
 // The calls lane: one marker per call at its lap, on the stint chart's lap
 // axis, coloured by whether it was said. Box calls carry their word.
-export function callsLaneModel(analysis, review, { width = 1200, height = 34 } = {}) {
+export function callsLaneModel(analysis, review, { width = 1200, height = 40 } = {}) {
   const total = Math.max(1, lastLap(analysis));
   const margin = { l: 52, r: 12 };
   const x = scale(0, total, margin.l, width - margin.r);
@@ -1275,6 +1275,10 @@ export function callsLaneModel(analysis, review, { width = 1200, height = 34 } =
   for (const call of calls) perLap.set(lapOf(call), (perLap.get(lapOf(call)) || 0) + 1);
   const seen = new Map();
   const labelled = new Set();
+  // A word needs about this much room; a box call closer than that to the
+  // last labelled one keeps its marker and its reading but not its word.
+  const wordRoom = 40;
+  let lastWordX = -Infinity;
   const marks = calls.map((call, index) => {
     const lap = lapOf(call);
     const tone = callTone(call);
@@ -1285,10 +1289,11 @@ export function callsLaneModel(analysis, review, { width = 1200, height = 34 } =
     seen.set(lap, slot + 1);
     const lapWidth = x(1) - x(0);
     const step = count > 1 ? Math.min(9, (lapWidth - 4) / (count - 1)) : 0;
-    const box = boxCall(call) && !labelled.has(lap);
-    if (box) labelled.add(lap);
+    const markX = x(lap - 0.5) + (slot - (count - 1) / 2) * step;
+    const box = boxCall(call) && !labelled.has(lap) && markX - lastWordX >= wordRoom;
+    if (box) { labelled.add(lap); lastWordX = markX; }
     return {
-      key: `call-${index}`, x: x(lap - 0.5) + (slot - (count - 1) / 2) * step, y: height / 2, tone, word, box,
+      key: `call-${index}`, x: markX, y: height - 12, tone, word, box,
       text: i18n.t("Lap {lap} · {word} · {outcome}: {text}", { lap: `${lap}`, word, outcome: call.delivered ? outcomes.said : `${outcomes[tone]} (${call.outcome})`, text: call.text || "" }),
     };
   });

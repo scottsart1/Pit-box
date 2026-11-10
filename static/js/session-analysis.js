@@ -759,11 +759,11 @@ function renderReview() {
   if (hasCalls) {
     const model = M.callsLaneModel(state.analysis, review, { width: widthOf(byId("analysisStrategyChart")) });
     const svg = svgRoot(model.width, model.height, i18n.t("Calls: {said} said, {unsaid} not said. Arrow keys move between calls.", { said: model.said, unsaid: model.unsaid }), { interactive: true });
-    svg.append(svgElement("text", { class: "sa-label", x: model.left - 6, y: model.height / 2 + 4, "text-anchor": "end" }, i18n.t("Calls")));
+    svg.append(svgElement("text", { class: "sa-label", x: model.left - 6, y: model.height - 8, "text-anchor": "end" }, i18n.t("Calls")));
     model.marks.forEach((mark, index) => {
       const g = svgElement("g", { tabindex: -1, role: "img", class: `sa-call sa-mark sa-call-${mark.tone}`, "data-key": mark.key, "data-row": 0, "data-col": index, "aria-label": mark.text, "data-tip": mark.text });
       g.append(svgElement("circle", { cx: mark.x, cy: mark.y, r: mark.box ? 6 : 4 }));
-      if (mark.box) g.append(svgElement("text", { class: "sa-call-word", x: mark.x, y: mark.y - 9, "text-anchor": "middle" }, mark.word));
+      if (mark.box) g.append(svgElement("text", { class: "sa-call-word", x: mark.x, y: mark.y - 11, "text-anchor": "middle" }, mark.word));
       svg.append(g);
     });
     mount(lane, svg);
