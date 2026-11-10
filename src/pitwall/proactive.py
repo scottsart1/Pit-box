@@ -330,7 +330,7 @@ _NARRATION_FACTS: dict[str, tuple[str, ...]] = {
     "progress_update": (
         "lap", "mode_profile", "progress", "target", "racing_line", "qualifying", "gaps", "strategy",
     ),
-    "race_control": ("from", "to", "strategy", "neutralisation", "red_flag_restart"),
+    "race_control": ("from", "to", "strategy", "prepared", "neutralisation", "red_flag_restart"),
     "sc_restart": ("phase", "position", "ers_pct", "front_temps_c"),
     "yellow_ahead": ("flag", "distance_ahead_m"),
     "driver_check": (
@@ -1584,6 +1584,28 @@ class ProactiveEngineer:
         return text
 
     @staticmethod
+    def _prepared_neutralisation_call(phase: str, state: dict[str, Any]) -> str:
+        """The call prepared on this lap for a safety car or a VSC, said with the flag.
+
+        The published plan is still the green one when the flag changes (the
+        live recompute takes a moment), so the flag call would otherwise carry
+        the green instruction. Only for the lap it was prepared on, and only
+        while the pit entry is still ahead: past it, the stop cannot be made
+        this lap and the live recompute decides.
+        """
+        kind = {"safety_car": "safety_car", "vsc": "vsc"}.get(phase)
+        strategy = state.get("strategy") or {}
+        ready = strategy.get("if_neutralised") or {}
+        call = ready.get(kind) if kind else None
+        if not call or int(ready.get("lap", -1)) != int(state.get("current_lap", 0) or 0):
+            return ""
+        if (strategy.get("neutralisation") or {}).get("phase", "green") != "green":
+            return ""
+        if StrategyEngine._pit_entry_status(state) == "passed":
+            return ""
+        return str(call.get("instruction") or "")
+
+    @staticmethod
     def _rejoin_clause(payload: dict[str, Any], state: dict[str, Any]) -> str:
         """Where an imminent stop comes out, from the strategy's rejoin map.
 
@@ -2307,6 +2329,11 @@ class ProactiveEngineer:
             # wrong: it teaches the driver that nothing they say is retained.
             strategy_advice = self._advice(state)
             payload = {"from": previous, "to": phase, "strategy": strategy_advice, "neutralisation": state.get("strategy", {}).get("neutralisation", {})}
+            # The call prepared for this flag on this lap; it rides the same
+            # suppression as the plan advice.
+            prepared = self._prepared_neutralisation_call(phase, state) if strategy_advice else ""
+            if prepared:
+                payload["prepared"] = prepared
             if phase == "red_flag":
                 # A suspension change is a new opportunity, not the paid pit
                 # stop the driver may previously have declined.
@@ -2715,7 +2742,9 @@ class ProactiveEngineer:
             # revised plan".
             raw_phase = str(payload.get("to", "change"))
             phase = RACE_CONTROL_LABELS.get(raw_phase, raw_phase.replace("_", " ").capitalize())
-            advice = ProactiveEngineer._sentence((payload.get("strategy") or {}).get("instruction"))
+            advice = ProactiveEngineer._sentence(
+                payload.get("prepared") or (payload.get("strategy") or {}).get("instruction")
+            )
             return f"Race control: {phase}." + (f" {advice}" if advice else "")
         if kind == "yellow_ahead":
             # Short on purpose. This is spoken while the driver is arriving at

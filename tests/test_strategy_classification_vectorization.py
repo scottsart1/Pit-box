@@ -41,7 +41,11 @@ def scalar_reference(plan, state, rivals, outcomes):
              "P11-15": sum(11 <= p <= 15 for p in positions),
              "P16+": sum(p >= 16 for p in positions)}
     points = [0, 8, 7, 6, 5, 4, 3, 2, 1] if state.get("mode_profile") == "sprint" else [0, 25, 18, 15, 12, 10, 8, 6, 4, 2, 1]
+    points_places = 8 if state.get("mode_profile") == "sprint" else 10
     return {
+        "p_win": round(sum(p <= 1 for p in positions) / total, 4),
+        "p_podium": round(sum(p <= 3 for p in positions) / total, 4),
+        "p_points": round(sum(p <= points_places for p in positions) / total, 4),
         "outcome_distribution": {key: round(value / total, 4) for key, value in bands.items()},
         "position_probabilities": {f"P{key}": round(value / total, 4) for key, value in counts.items()},
         "points_expected": round(sum(points[p] if p < len(points) else 0 for p in positions) / total, 3),
