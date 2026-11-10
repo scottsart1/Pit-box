@@ -89,7 +89,9 @@ async def test_texas_p10_track_position_beats_a_faster_p19_rejoin(stack):
 
     result = await strategy.recompute()
     recommendation = result["recommended"]
-    stopping = next(plan for plan in result["plans"] if plan["stops_remaining"])
+    # The stop the failure was about: boxing on lap 21. A later stop rejoins
+    # from wherever the field has moved to by then.
+    stopping = next(plan for plan in result["plans"] if plan["box_laps"][:1] == [21])
 
     assert recommendation["stops_remaining"] == 0
     assert recommendation["projected_finish_position"] <= 10

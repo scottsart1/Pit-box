@@ -122,6 +122,7 @@ RADIO_TOOLS = (
     "get_target_lap_time",
     "get_pit_strategy",
     "predict_rival_strategy",
+    "get_rejoin_map",
     "evaluate_undercut",
     "evaluate_overcut",
     "what_if",

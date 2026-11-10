@@ -321,6 +321,11 @@ class Settings(BaseSettings):
     # Sakhir the call swung between a one-stop on hards and a two-stop on
     # softs several times a lap on gains that lasted a second at a time.
     strategy_switch_confirm_s: float = 20.0
+    # How much projected race time a later first stop may cost and still be
+    # preferred, among plans level on finishing position and points, for the
+    # track position it keeps. Beyond it the quicker plan wins. 3 s is about
+    # two cars' spacing in a train.
+    strategy_later_stop_tolerance_s: float = 3.0
     # Cold-tyre out-lap penalty (seconds) applied to the first lap of a fresh
     # stint, halved on the second lap. Ignoring warm-up makes an undercut look
     # better than it is, because the cold in/out laps are where the time goes.

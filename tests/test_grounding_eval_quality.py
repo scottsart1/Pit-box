@@ -374,11 +374,13 @@ async def test_the_harness_flags_a_stay_out_the_engine_says_is_not_legal(case_id
 
 @pytest.mark.asyncio
 async def test_the_harness_reports_a_box_lap_the_model_was_never_shown():
+    # 56 is a lap no plan shown for this scenario names. Pick another if the
+    # planner's shortlist comes to include it.
     case = {**_case("box-or-stay"), "scripted": {"tools": [["get_pit_strategy", {}]],
-                                                 "reply": "Box lap 58 for softs."}}
+                                                 "reply": "Box lap 56 for softs."}}
     app = engineer_eval._app_modules(engineer_eval.REPO)
     row = await engineer_eval.run_case(app, case, engineer_eval.SCRIPTED)
-    assert row["ungrounded"] == ["58"]
+    assert row["ungrounded"] == ["56"]
     assert not row["passed"] and row["checks"]["required_missing"]
 
 

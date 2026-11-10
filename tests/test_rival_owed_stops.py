@@ -164,3 +164,13 @@ def test_a_rival_on_slicks_slows_as_the_track_gets_wetter():
 def test_a_dry_race_is_untouched_by_the_weather_model():
     state = _state(_rival(stints=[], pit_stops=0), mode="sprint", current_lap=13, total_laps=16)
     assert _project(state) == _project(state, trajectory=[0.0] * 4)
+
+
+def test_a_set_younger_than_the_race_shows_a_change_the_counter_missed():
+    """Age 12 at lap 21 with no stop recorded: a tyre was changed, compound unknown."""
+    driver = _rival(age=12, pit_stops=0)
+    driver["current_lap"] = 21
+    assert StrategyEngine._rival_owes_compound(_state(current_lap=21, total_laps=28), driver) is False
+    fresh_from_the_start = _rival(age=20, pit_stops=0)
+    fresh_from_the_start["current_lap"] = 21
+    assert StrategyEngine._rival_owes_compound(_state(current_lap=21, total_laps=28), fresh_from_the_start) is True

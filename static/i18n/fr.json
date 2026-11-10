@@ -2464,5 +2464,16 @@
  "½ lap/s": "½ tour/s",
  "← B quicker": "← B plus rapide",
  "−10 m": "−10 m",
- "⚙ Dashboard": "⚙ Tableau de bord"
+ "⚙ Dashboard": "⚙ Tableau de bord",
+ "Air": "Air",
+ "Car ahead": "Voiture devant",
+ "Car behind": "Voiture derrière",
+ "Price a stop on lap {lap}": "Chiffrer un arrêt au tour {lap}",
+ "Rejoin": "Retour en piste",
+ "Rejoin position, the cars either side and clear air for a stop on each of the next laps": "Position au retour en piste, voitures de part et d’autre et air libre pour un arrêt à chacun des prochains tours",
+ "Rejoin positions appear once a race plan exists.": "Les positions au retour en piste apparaissent dès qu’un plan de course existe.",
+ "Stop on lap": "Arrêt au tour",
+ "Tap a lap to price that stop. Clear air is 2 s or more to the car ahead.": "Touchez un tour pour chiffrer cet arrêt. Air libre : 2 s ou plus sur la voiture devant.",
+ "Where you come out": "Où vous ressortez",
+ "clear air": "air libre"
 }

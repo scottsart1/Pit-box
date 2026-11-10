@@ -193,7 +193,12 @@ async def test_what_if_prices_pending_penalty_on_the_same_best_plan_axis(stack):
 
 
 @pytest.mark.asyncio
-async def test_held_radio_instruction_refreshes_current_penalty_metadata(stack):
+async def test_held_radio_instruction_refreshes_current_penalty_metadata(stack, monkeypatch):
+    # The hold needs a later winner while the call stands; the later-stop
+    # preference at any cost provides one, as in the stability scenario.
+    from pitwall.config import settings
+
+    monkeypatch.setattr(settings, "strategy_later_stop_tolerance_s", 1e6)
     store, _, engine, *_ = stack
     await store.update(session_uid=42, session_type="Race", mode_profile="race",
                        current_lap=14, total_laps=28, player_position=5, active_cars=20, track_id=13,

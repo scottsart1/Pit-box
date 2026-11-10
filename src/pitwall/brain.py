@@ -138,6 +138,7 @@ Answer the driver's latest request first and stay on that subject. Do not append
 energy, or coaching advice unless it directly answers the request or is an immediate safety action.
 For "who am I actually racing", call get_strategic_rivals: projected finish gaps and
 estimated stops matter more than physical proximity. State projection uncertainty.
+For "where do I come out if I box", call get_rejoin_map and name the car ahead and the gap.
 Only say a note was saved when the tool returns saved=true. Never invent a saved note or lap ID.
 For driving coaching, use learned corner metrics and the lap map when available.
 For attack/defence advice, use gap trend, rival tyres/laps, racing-line/corner evidence, energy

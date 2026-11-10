@@ -1121,6 +1121,35 @@ button:disabled,
 .strategy-side .controls { display: flex; gap: 8px; margin-top: 8px; }
 .strategy-side .controls input { flex: 1; min-width: 0; }
 
+.rejoin-strip { margin-top: 12px; }
+.rejoin-table { font-variant-numeric: tabular-nums; min-width: 640px; }
+.rejoin-table th[scope="row"] {
+  color: var(--text-2);
+  font-size: 11px;
+  letter-spacing: .12em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  text-align: left;
+}
+.rejoin-table td, .rejoin-table th[scope="col"] { text-align: center; white-space: nowrap; }
+/* One outlined column for the recommended lap; a green rule over clear air. */
+.rejoin-table .is-recommended { background: #142231; box-shadow: inset 2px 0 #3f86ff, inset -2px 0 #3f86ff; }
+.rejoin-table tr:last-child .is-recommended { box-shadow: inset 2px 0 #3f86ff, inset -2px 0 #3f86ff, inset 0 -2px #3f86ff; }
+.rejoin-table tr:first-child .is-recommended { box-shadow: inset 2px 0 #3f86ff, inset -2px 0 #3f86ff, inset 0 2px #3f86ff; }
+.rejoin-table tr:first-child .is-clear { box-shadow: inset 0 3px #49d17d; }
+.rejoin-table tr:first-child .is-recommended.is-clear { box-shadow: inset 2px 0 #3f86ff, inset -2px 0 #3f86ff, inset 0 3px #49d17d; }
+.rejoin-lap {
+  min-width: 44px;
+  min-height: 44px;
+  background: #0a1016;
+  color: inherit;
+  border: 1px solid #263542;
+  border-radius: 8px;
+  font-weight: 900;
+  cursor: pointer;
+}
+.rejoin-lap:hover, .rejoin-lap:focus-visible { border-color: #3f86ff; }
+
 .whatif-controls {
   display: grid;
   grid-template-columns: 110px 110px minmax(0, 1fr) auto;

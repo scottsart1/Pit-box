@@ -6,13 +6,20 @@ import pytest
 
 
 @pytest.mark.asyncio
-async def test_recompute_holds_radio_call_but_refreshes_the_whole_projection(stack):
+async def test_recompute_holds_radio_call_but_refreshes_the_whole_projection(stack, monkeypatch):
     """Drive a real lap/overtake transition through compute, stability and store.
 
     Lower wear growth makes a later stop the new winner while the original
     call is still inside its hold window. The driver also gains a position;
     every published classification statistic must follow that current state.
+
+    The later stop wins here only through the later-stop preference, which
+    this scenario needs at any cost so that a winner moves while the call is
+    held; the hold, not the ranking, is under test.
     """
+    from pitwall.config import settings
+
+    monkeypatch.setattr(settings, "strategy_later_stop_tolerance_s", 1e6)
     store, database, strategy, _, _, tools = stack
     await store.update(
         session_uid=42,
