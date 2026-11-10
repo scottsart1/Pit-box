@@ -354,6 +354,12 @@ RIVAL_BACK_TO_SLICKS_MARGIN = 0.10
 REJOIN_CLEAR_AIR_S = 2.0
 # Rows of the rejoin map: the next fifteen laps a stop could be made on.
 REJOIN_MAP_LAPS = 15
+# A cover stop holds when it rejoins at least this far ahead: closer, the out-
+# lap on cold tyres and the pit exit line give it away. A judgement.
+COVER_HOLD_MARGIN_S = 0.5
+# How far behind (or ahead) a stopping car can be and still matter: what two
+# laps of fresh tyres bridge, plus a second, within these bounds. Judgements.
+COVER_RANGE_BOUNDS_S = (1.5, 6.0)
 
 
 def _rival_in_pit_lane(driver: dict[str, Any]) -> bool:
@@ -5425,6 +5431,117 @@ class StrategyEngine:
         else:
             result["estimated_two_lap_gain_s"] = round(sum(rival["lap_times_s"][1:]) - sum(player_laps[1:]), 3)
         return result
+
+    def _player_old_laps(self, state: dict[str, Any], count: int) -> tuple[list[float], str]:
+        """The player's next ``count`` laps if they stay out, after the lap in progress."""
+        pools = [getattr(self, "_candidate_pool", None) or [], (state.get("strategy") or {}).get("plans") or []]
+        for pool in pools:
+            stay = next((plan for plan in pool if int(plan.get("stops_remaining", 0) or 0) == 0), None)
+            laps = [float(value) for value in ((stay or {}).get("stint_models") or [{}])[0].get("lap_times_s") or []]
+            if len(laps) >= 2:
+                ahead = laps[1:1 + count]
+                return ahead + [ahead[-1]] * (count - len(ahead)), "stay-out plan"
+        compound = str((state.get("tyre") or {}).get("compound", "MEDIUM")).upper()
+        deg = self._deg_for(state, compound, {})[0]
+        base = self._estimate_base_lap_s(state)
+        return [base + deg * j for j in range(1, count + 1)], "recent pace with the circuit's degradation"
+
+    def _rival_new_laps(
+        self, state: dict[str, Any], driver: dict[str, Any], count: int,
+    ) -> tuple[list[float], str, str] | None:
+        """A stopping rival's first ``count`` laps on its new set, out-lap first."""
+        old = str(driver.get("tyre_compound") or "UNKNOWN").upper()
+        if old not in DRY_COMPOUNDS:
+            return None
+        just_fitted = not _rival_in_pit_lane(driver) and int(driver.get("tyre_age", 99) or 0) <= 1
+        if just_fitted:
+            new, compound_basis = old, "observed"
+        else:
+            remaining = max(1, int(state.get("total_laps", 0) or 0) - int(state.get("current_lap", 0) or 0))
+            severity = TRACK_TYRE_SEVERITY.get(int(state.get("track_id", -1)), 1.0)
+            used = self._rival_compounds_used(driver)
+            new = self._rival_next_dry_compound(
+                used, remaining, severity, self._rival_owes_compound(state, driver)
+            )
+            compound_basis = "projected"
+        clean = {
+            "track_id": state.get("track_id", -1), "track_temp_c": state.get("track_temp_c", 30),
+            "current_lap": state.get("current_lap", 0), "tyre": {"compound": new, "age_laps": 0},
+            "driver_tyre_feedback": {}, "analysis": {}, "car_setup": {},
+        }
+        deg_old = self._deg_for({**clean, "tyre": {"compound": old}}, old, {})[0]
+        deg_new = self._deg_for(clean, new, {})[0]
+        reference = self._rival_pace_reference(driver, deg_old)
+        base = finite(reference.get("normalized_lap_s"))
+        observed = finite(reference.get("observed_lap_s"))
+        if base is None and observed is not None:
+            base = observed - deg_old * max(0, int(driver.get("tyre_age", 0) or 0))
+        pace_basis = "their own laps"
+        if base is None:
+            base, pace_basis = self._estimate_base_lap_s(state), "your pace, theirs unmeasured"
+        delta = COMPOUND_DELTA.get(new, 0.0) - (COMPOUND_DELTA.get(old, 0.0) if not just_fitted else 0.0)
+        cold = float(settings.strategy_cold_tyre_penalty_s)
+        laps = [
+            base + delta + deg_new * j + (cold if j == 1 else cold * 0.5 if j == 2 else 0.0)
+            for j in range(1, count + 1)
+        ]
+        return laps, new, f"{compound_basis} {new.lower()}s on {pace_basis}"
+
+    def cover_from_state(self, state: dict[str, Any], car_idx: int) -> dict[str, Any]:
+        """Whether a stop next lap, or the lap after, keeps a stopping rival behind.
+
+        A car ``g`` seconds behind stops and rejoins a pit loss further back.
+        Each lap after, its new tyres gain ``d`` on the player's old ones; when
+        the player stops ``k`` laps later both have paid the pit loss, so the
+        player rejoins ahead by ``g - (d1 + ... + dk)``. For a car ahead the
+        same gains are what the player must find to come out in front.
+        """
+        driver = next(
+            (item for item in state.get("drivers", []) if int(item.get("car_idx", -1)) == int(car_idx)), None
+        )
+        gap = finite((driver or {}).get("gap_to_player_s"))
+        if driver is None or gap is None:
+            return {"available": False, "reason": "No observed gap to that car."}
+        rival = self._rival_new_laps(state, driver, 3)
+        if rival is None:
+            return {"available": False, "reason": "The cover is only modelled for a change between dry tyres."}
+        new_laps, compound, rival_basis = rival
+        old_laps, player_basis = self._player_old_laps(state, 3)
+        gains = [old - new for old, new in zip(old_laps, new_laps, strict=False)]
+        cover_range = max(COVER_RANGE_BOUNDS_S[0], min(COVER_RANGE_BOUNDS_S[1], sum(gains[:2]) + 1.0))
+        result: dict[str, Any] = {
+            "available": True,
+            "driver": driver.get("name"),
+            "car_idx": int(car_idx),
+            "gap_s": round(gap, 2),
+            "side": "behind" if gap > 0 else "ahead",
+            "rival_compound": compound,
+            "gain_per_lap_s": [round(value, 2) for value in gains],
+            "cover_range_s": round(cover_range, 1),
+            "assumptions": [
+                f"Their laps: {rival_basis}, with a cold out-lap.",
+                f"Your laps: {player_basis}.",
+                "Both cars pay the same pit loss; traffic on either out-lap is not modelled.",
+            ],
+        }
+        if gap > 0:
+            options = [
+                {"box_in_laps": k, "margin_s": round(gap - sum(gains[:k]), 2),
+                 "holds": gap - sum(gains[:k]) >= COVER_HOLD_MARGIN_S}
+                for k in (1, 2, 3)
+            ]
+            holding = [item["box_in_laps"] for item in options if item["holds"]]
+            result.update(options=options, cover_by=max(holding) if holding else None)
+        else:
+            laps = 2
+            result.update(
+                clear_air_laps=laps,
+                pace_needed_s=round(max(0.0, abs(gap) + sum(gains[:laps])), 1),
+            )
+        return result
+
+    async def evaluate_cover(self, car_idx: int) -> dict[str, Any]:
+        return self.cover_from_state(await self.store.snapshot_analysis(), car_idx)
 
     async def evaluate_undercut(self, driver: str = "ahead") -> dict[str, Any]:
         return await self._evaluate_cut(driver, overcut=False)

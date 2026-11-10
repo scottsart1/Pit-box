@@ -125,6 +125,7 @@ RADIO_TOOLS = (
     "get_rejoin_map",
     "evaluate_undercut",
     "evaluate_overcut",
+    "evaluate_cover",
     "what_if",
     "get_tyre_sets_available",
     "get_attack_plan",

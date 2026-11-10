@@ -6,7 +6,6 @@ the numeric behaviour is pinned independently of any language model.
 
 from __future__ import annotations
 
-import time as _time
 import types
 
 import pytest
@@ -401,37 +400,44 @@ async def test_energy_low_fires_when_attacking_on_empty_battery(stack) -> None:
     assert "energy_low" not in _pending_types(engine)
 
 
+def _gap_samples(gaps: list[float], step_s: float = 10.0) -> list[dict]:
+    return [{"lap": 6, "gap_s": gap, "session_time_s": 1000.0 + step_s * index} for index, gap in enumerate(gaps)]
+
+
 @pytest.mark.asyncio
 async def test_rival_pace_flags_closing_car_behind(stack) -> None:
+    """Closing half a second over the last lap: the call reads the gap tool's trend."""
+    from pitwall.tools import TelemetryTools
+
     store, *_ = stack
     engine = _proactive(stack)
     store.state.player_car_index = 0
-    # Positive gap = behind. Chaser is 2.5s behind now, was 3.0s behind before.
     chaser = _driver(1, "Chaser", 5, 2.5, "SOFT", 6)
+    chaser.last_lap_ms = 90_000
+    chaser.gap_history = _gap_samples([3.0 - 0.05 * index for index in range(11)])
     store.state.drivers[1] = chaser
     await store.update(mode_profile="race")
-    # Seed a prior sample 9s ago with a larger gap so the car is closing.
-    engine._rival_gap_history[1] = (3.0, _time.monotonic() - 9.0)
-    engine._detect_rival_pace(await store.snapshot_analysis())
+    await engine._detect_rival_pace(await store.snapshot_analysis())
     assert "rival_pace" in _pending_types(engine)
+    call = next(item for item in engine.pending if item["type"] == "rival_pace")
+    tool = TelemetryTools._gap_trend({**(await store.snapshot_analysis())["drivers"][1]})
+    assert call["payload"]["gap_change_s_per_lap"] == tool["gap_change_s_per_lap"] < 0
+    assert call["payload"]["laps_to_contact"] == tool["laps_to_contact"]
 
 
 @pytest.mark.asyncio
-async def test_rival_pace_needs_a_full_window_not_every_tick(stack) -> None:
-    """The anchor sample must survive repeated polls so the 8s window accrues;
-    overwriting it every tick left elapsed at ~one poll and never triggered."""
+async def test_a_tow_down_one_straight_is_not_catching(stack) -> None:
+    """The gap dipped on a straight and came back: level over the lap, no call."""
     store, *_ = stack
     engine = _proactive(stack)
     store.state.player_car_index = 0
-    store.state.drivers[1] = _driver(1, "Chaser", 5, 2.6, "SOFT", 6)
+    chaser = _driver(1, "Chaser", 5, 2.5, "SOFT", 6)
+    chaser.last_lap_ms = 90_000
+    chaser.gap_history = _gap_samples([2.5, 2.5, 2.5, 2.5, 2.1, 2.0, 2.3, 2.5, 2.5, 2.5, 2.5])
+    store.state.drivers[1] = chaser
     await store.update(mode_profile="race")
-    snap = await store.snapshot_analysis()
-    # First poll seeds the anchor; a second poll moments later must not reset it.
-    engine._detect_rival_pace(snap)
-    anchor = engine._rival_gap_history[1]
-    engine._detect_rival_pace(snap)
-    assert engine._rival_gap_history[1] == anchor  # anchor preserved
-    assert "rival_pace" not in _pending_types(engine)  # window not yet elapsed
+    await engine._detect_rival_pace(await store.snapshot_analysis())
+    assert "rival_pace" not in _pending_types(engine)
 
 
 @pytest.mark.asyncio

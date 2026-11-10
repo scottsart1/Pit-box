@@ -2757,6 +2757,20 @@ class TelemetryTools:
     async def evaluate_overcut(self, driver: str = "ahead") -> dict[str, Any]:
         return await self.strategy.evaluate_overcut(await self._cut_target(driver))
 
+    async def evaluate_cover(self, driver: str = "behind") -> dict[str, Any]:
+        """If that car stops now, whether boxing in one, two or three laps keeps the place."""
+        state = await self.store.snapshot_analysis()
+        match = self._resolve_driver(state, driver)
+        if match is None or match.get("car_idx") == state.get("player_car_index"):
+            return {"available": False, "reason": f"No rival matches {driver!r}."}
+        cover = await self.strategy.evaluate_cover(int(match["car_idx"]))
+        if cover.get("available"):
+            cover["basis"] = (
+                "Margin is the gap minus what their new tyres gain on your old ones each lap, "
+                "both cars paying the same pit loss. It holds at 0.5 s or more."
+            )
+        return cover
+
     async def get_tyre_sets_available(self) -> dict[str, Any]:
         state = await self.store.snapshot_analysis()
         return {
@@ -4216,6 +4230,15 @@ class TelemetryTools:
             (
                 "evaluate_overcut",
                 "Evaluate an overcut against a driver.",
+                {"driver": dict(driver)},
+            ),
+            (
+                "evaluate_cover",
+                (
+                    "If that car stops now: for a car behind, whether boxing in one, two or three laps "
+                    "keeps you ahead and by how much; for a car ahead, the pace to find in clear air. "
+                    "Use for 'can I cover him?' and 'he's pitting, what do we do?'."
+                ),
                 {"driver": dict(driver)},
             ),
             (
