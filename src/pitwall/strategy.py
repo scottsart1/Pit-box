@@ -1350,6 +1350,7 @@ class StrategyEngine:
             "effective_pit_loss_s": round(effective, 2),
             "saving_vs_green_s": round(base - effective, 2),
             "pit_entry_status": pit_entry_status,
+            "pit_entry_fraction": PIT_ENTRY_FRACTION.get(int(state.get("track_id", -1)), 0.94),
             "pit_this_lap_available": red or pit_entry_status != "passed",
             "field_compression_expected": kind == "safety_car",
             "gaps_partly_preserved": kind == "vsc",
@@ -2758,7 +2759,10 @@ class StrategyEngine:
             else None
         )
         held["stop_required_reason"] = (
-            "mandatory compound change"
+            "track conditions"
+            if held.get("stops_remaining")
+            and (held.get("weather_crossover") or {}).get("worth_stopping")
+            else "mandatory compound change"
             if stay_out and not stay_out.get("legal")
             else "current tyre cannot reach the finish inside the operational wear margin"
             if stay_out and not stay_out.get("feasible")
@@ -3997,7 +4001,25 @@ class StrategyEngine:
 
         best = forced_weather_plan if force_weather else (override_match or automatic_best)
         second = next((plan for plan in ranked if plan is not best), best)
+        weather_override = None
+        if force_weather and best is not automatic_best:
+            # The conditions decided this stop, not the finishing-position
+            # ranking. Keep what the ranking preferred, so the disagreement
+            # is visible rather than hidden behind the weather call.
+            weather_override = {
+                "ranked_first": {
+                    "box_laps": list(automatic_best.get("box_laps") or []),
+                    "compounds": list(automatic_best.get("compounds") or []),
+                    "projected_finish_position": automatic_best.get("projected_finish_position"),
+                },
+                "time_gain_s": round(
+                    float(automatic_best.get("risk_adjusted_time_s", 0.0))
+                    - float(best.get("risk_adjusted_time_s", 0.0)), 2
+                ),
+            }
         best = dict(best)
+        if weather_override is not None:
+            best["weather_override"] = weather_override
         if force_weather and best.get("weather_crossover") is None:
             best["weather_crossover"] = {
                 **weather_crossover,
@@ -4078,7 +4100,12 @@ class StrategyEngine:
             )
             tyre_reason = f"Current {current_compound.lower()}s project to {best['projected_finish_wear_pct']:.0f}% at the finish."
         projected_rule = self._compound_rule(state, best.get("compounds", [])[1:])
-        if projected_rule["conditional_on_future_wet_use"]:
+        # The footnote is for a plan that relies on rain still to come. On a
+        # track already wet, or on the lap of the stop, it is a rules lecture
+        # in the middle of the one call that has to be heard.
+        if projected_rule["conditional_on_future_wet_use"] and not (
+            box_lap == current_lap or current_wetness >= rain.WETNESS_SLICK_INTER
+        ):
             instruction += (
                 " This plan meets the compound requirement only if the planned wet/intermediate"
                 " running actually happens; if it stays dry, a different dry compound is required."
@@ -4129,7 +4156,10 @@ class StrategyEngine:
             else None
         )
         stop_required_reason = (
-            "mandatory compound change"
+            "track conditions"
+            if best.get("stops_remaining")
+            and (best.get("weather_crossover") or {}).get("worth_stopping")
+            else "mandatory compound change"
             if not stay_out_plan.get("legal")
             else "current tyre cannot reach the finish inside the operational wear margin"
             if not stay_out_plan.get("feasible")

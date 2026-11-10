@@ -134,8 +134,8 @@ SUPPRESSIBLE_SUBJECTS: dict[str, frozenset[str]] = {
     "coaching": frozenset({"corner_coaching"}),
     "line": frozenset({"corner_coaching"}),
     "driving": frozenset({"corner_coaching"}),
-    "weather": frozenset({"weather_crossover"}),
-    "rain": frozenset({"weather_crossover"}),
+    "weather": frozenset({"weather_crossover", "weather_stand_down", "weather_box_reminder"}),
+    "rain": frozenset({"weather_crossover", "weather_stand_down", "weather_box_reminder"}),
     "rival": frozenset({"rival_pace", "rival_pitted", "undercut_threat"}),
     "rivals": frozenset({"rival_pace", "rival_pitted", "undercut_threat"}),
     "gap": frozenset({"rival_pace"}),
@@ -212,6 +212,8 @@ EVENT_PRIORITY = {
     "race_start": CRITICAL,
     "sc_restart": CRITICAL,
     "weather_crossover": CRITICAL,
+    "weather_stand_down": CRITICAL,
+    "weather_box_reminder": CRITICAL,
     "compound_requirement": IMPORTANT,
     "undercut_threat": IMPORTANT,
     "rival_pitted": IMPORTANT,
@@ -231,6 +233,33 @@ EVENT_PRIORITY = {
     "progress_update": ROUTINE,
     "corner_coaching": ROUTINE,
 }
+# The weather call, as levels. A call is queued when the level rises or what
+# it says changes, never on a timer, so a verdict that moves from "watching" to
+# "box now" is always said, and an unchanged one never twice.
+WEATHER_NONE, WEATHER_WATCH, WEATHER_ASK, WEATHER_STANDBY, WEATHER_BOX = range(5)
+WEATHER_LEVEL_LABELS = ("none", "watch", "ask", "stand by", "box")
+WET_TYRES = frozenset({"INTER", "WET"})
+# Wet enough, below the slick crossover, that a driver on slicks should hear
+# the conditions are being watched.
+WEATHER_WATCH_WETNESS = 0.15
+# Chance, summed over the forecast scenarios, that the surface passes the
+# slick crossover within this many laps: rain coming is worth a heads-up.
+WEATHER_HEADS_UP_CHANCE = 0.6
+WEATHER_HEADS_UP_LAPS = 3
+# On wet tyres, the heads-up that slicks are coming is given when the
+# projected surface falls through the crossover within this many laps.
+WEATHER_DRYING_HEADS_UP_LAPS = 5
+# A box call that was heard and not acted on is said again only when the case
+# for it has grown: half as much time again two laps on, or this much more
+# water. At most this many box calls for one compound in one spell.
+WEATHER_BOX_REPEAT_MIN_LAPS = 2
+WEATHER_BOX_REPEAT_MARGIN_GROWTH = 1.5
+WEATHER_BOX_REPEAT_WETNESS_RISE = 0.10
+WEATHER_BOX_MAX_CALLS = 3
+# A box call for the weather is said once more this far before the pit entry,
+# as a fraction of the lap, on the lap it was made.
+WEATHER_BOX_REMINDER_WINDOW = 0.12
+
 # Phases in which a safety-car delta time is being enforced.
 NEUTRALISED_PHASES = frozenset(
     {
@@ -307,9 +336,12 @@ _NARRATION_FACTS: dict[str, tuple[str, ...]] = {
     "damage": ("max_damage_pct", "new_faults", "escalated", "changed", "repairable", *DAMAGE_KEYS, *DAMAGE_FAULT_KEYS),
     "compound_requirement": ("laps_remaining", "used", "eligible", "strategy"),
     "weather_crossover": (
+        "level_label", "direction", "current_compound", "awaiting_confirmation",
         "rain_15_pct", "wetness", "trend", "compound", "box_lap", "worth_stopping",
         "ask_driver", "driver_question", "reason", "forecast",
     ),
+    "weather_stand_down": ("current_compound", "reason", "wetness"),
+    "weather_box_reminder": ("compound",),
     "penalty": ("penalties_s", "added_s", "total_s"),
     "warning": ("corner_cutting_warnings",),
     "race_start": ("grid_position", "clean_side", "ers_pct", "front_temps_c"),
@@ -485,7 +517,12 @@ class ProactiveEngineer:
         # (lap, zone) pairs already called, so a persisting yellow is
         # announced once rather than on every detection pass.
         self._yellow_called: set[tuple[int, int]] = set()
-        self._last_weather_alert = False
+        # Where the weather call last stood when it was queued (level,
+        # compound, box lap, direction, fitted tyre), the box calls the driver
+        # actually heard this spell, and the laps a pit-entry reminder was said.
+        self._last_weather_call: dict[str, Any] = {"level": WEATHER_NONE}
+        self._weather_box_heard: list[dict[str, Any]] = []
+        self._weather_reminded: set[tuple[int, str]] = set()
         self._last_penalties = 0
         self._last_warnings = 0
         self._last_damage_signature = ""
@@ -764,6 +801,7 @@ class ProactiveEngineer:
             # that then aged out unspoken.
             "rival_pace", "engine_failure", "rival_pitted",
             "driver_check", "pace_roast",
+            "weather_stand_down", "weather_box_reminder",
         }
         if event_type in coalesced:
             kept: list[dict[str, Any]] = []
@@ -776,7 +814,7 @@ class ProactiveEngineer:
                     kept.append(item)
             self.pending = deque(kept, maxlen=24)
         now = time.time()
-        is_flash = event_type in FLASH_EVENTS
+        is_flash = event_type in FLASH_EVENTS or self._weather_flash(event_type, payload)
         priority = (
             FLASH
             if is_flash
@@ -818,7 +856,9 @@ class ProactiveEngineer:
         # (lap, zone) pairs already called, so a persisting yellow is
         # announced once rather than on every detection pass.
         self._yellow_called: set[tuple[int, int]] = set()
-        self._last_weather_alert = False
+        self._last_weather_call = {"level": WEATHER_NONE}
+        self._weather_box_heard = []
+        self._weather_reminded = set()
         self._last_penalties = self._last_warnings = 0
         self._last_damage_signature = self._last_strategy_signature = ""
         self._reported_damage_band = 0
@@ -981,6 +1021,203 @@ class ProactiveEngineer:
                 cooldown_s=0.0,
                 expires_s=20.0,
             )
+
+    @staticmethod
+    def _weather_call(state: dict[str, Any]) -> dict[str, Any]:
+        """Where the weather call stands now: a level, and what it is about.
+
+        Read from the crossover the strategy engine published, so the radio
+        and the Strategy page cannot disagree about it. ``direction`` is
+        "to_wet", "to_dry" or "wet_to_wet"; ``fitted`` is the tyre on the car.
+        """
+        crossover = (state.get("strategy", {}) or {}).get("weather_crossover") or {}
+        fitted = str((state.get("tyre", {}) or {}).get("compound") or "UNKNOWN").upper()
+        on_wets = fitted in WET_TYRES
+        compound = str(crossover.get("compound") or "").upper()
+        call: dict[str, Any] = {
+            "level": WEATHER_NONE, "compound": "", "box_lap": None,
+            "direction": "to_dry" if on_wets else "to_wet", "fitted": fitted,
+        }
+        if not crossover:
+            return call
+        if compound in WET_TYRES and not on_wets:
+            call["direction"] = "to_wet"
+        elif compound and compound not in WET_TYRES and on_wets:
+            call["direction"] = "to_dry"
+        elif compound in WET_TYRES and on_wets and compound != fitted:
+            call["direction"] = "wet_to_wet"
+        box_lap = crossover.get("box_lap")
+        if (
+            crossover.get("worth_stopping") and box_lap is not None
+            and compound and compound != fitted
+        ):
+            current_lap = int(state.get("current_lap", 0) or 0)
+            call.update(
+                level=WEATHER_BOX if int(box_lap) <= current_lap else WEATHER_STANDBY,
+                compound=compound, box_lap=int(box_lap),
+            )
+            return call
+        if crossover.get("ask_driver"):
+            call.update(level=WEATHER_ASK, compound=compound)
+            return call
+        wetness = float(crossover.get("wetness", 0.0) or 0.0)
+        if on_wets:
+            # On wet tyres the news is the dry line coming, not the rain.
+            trajectory = [float(value) for value in crossover.get("trajectory") or []]
+            drying_soon = any(
+                value < rain.WETNESS_SLICK_INTER
+                for value in trajectory[:WEATHER_DRYING_HEADS_UP_LAPS]
+            )
+            if wetness < rain.WETNESS_SLICK_INTER or drying_soon:
+                call.update(level=WEATHER_WATCH, direction="to_dry")
+            return call
+        sky_wet = rain.equilibrium_wetness(str(state.get("weather", ""))) > 0
+        coming = sum(
+            float(item.get("probability", 0.0) or 0.0)
+            for item in crossover.get("scenarios") or []
+            if any(
+                float(value) >= rain.WETNESS_SLICK_INTER
+                for value in (item.get("trajectory") or [])[:WEATHER_HEADS_UP_LAPS]
+            )
+        )
+        if wetness >= WEATHER_WATCH_WETNESS or sky_wet or coming >= WEATHER_HEADS_UP_CHANCE:
+            call.update(level=WEATHER_WATCH, direction="to_wet")
+        return call
+
+    @staticmethod
+    def _weather_call_carries(recommended: dict[str, Any], state: dict[str, Any]) -> bool:
+        """Whether the weather call already says this stop, lap and tyre."""
+        call = ProactiveEngineer._weather_call(state)
+        return (
+            call["level"] >= WEATHER_STANDBY
+            and call["compound"] == str(recommended.get("fit_compound") or "").upper()
+            and call["box_lap"] == recommended.get("box_lap")
+        )
+
+    @staticmethod
+    def _weather_flash(event_type: str, payload: dict[str, Any] | None) -> bool:
+        """A weather call that names the stop now: spoken from its template at once."""
+        if event_type in {"weather_stand_down", "weather_box_reminder"}:
+            return True
+        return event_type == "weather_crossover" and (payload or {}).get("level") == WEATHER_BOX
+
+    def _weather_box_worth_repeating(self, call: dict[str, Any], crossover: dict[str, Any], lap: int) -> bool:
+        """Whether a box call already heard this spell has earned saying again."""
+        heard = [item for item in self._weather_box_heard if item["compound"] == call["compound"]]
+        if not heard:
+            return True
+        if len(heard) >= WEATHER_BOX_MAX_CALLS:
+            return False
+        last = heard[-1]
+        margin = float(crossover.get("payback_s") or crossover.get("margin_s") or 0.0)
+        wetness = float(crossover.get("wetness", 0.0) or 0.0)
+        return (
+            lap - int(last["lap"]) >= WEATHER_BOX_REPEAT_MIN_LAPS
+            and margin >= float(last["margin"]) * WEATHER_BOX_REPEAT_MARGIN_GROWTH
+        ) or wetness >= float(last["wetness"]) + WEATHER_BOX_REPEAT_WETNESS_RISE
+
+    def _detect_weather(self, state: dict[str, Any]) -> None:
+        """Say the weather call once per change of what it says.
+
+        The old trigger was a one-shot latch on "the track is wet", so a
+        verdict that moved from "wet, staying out" to "box now" never raised a
+        weather call at all, and a withdrawn stop was never stood down.
+        """
+        crossover = (state.get("strategy", {}) or {}).get("weather_crossover") or {}
+        call = self._weather_call(state)
+        last = self._last_weather_call
+        level, last_level = int(call["level"]), int(last.get("level", WEATHER_NONE))
+        current_lap = int(state.get("current_lap", 0) or 0)
+        fitted_changed = bool(last.get("fitted")) and call["fitted"] != last.get("fitted")
+        if fitted_changed or level < WEATHER_STANDBY:
+            # A stop was made, or the spell eased below a stop: the next box
+            # call is a new one.
+            self._weather_box_heard = []
+
+        stand_down = (
+            last_level >= WEATHER_STANDBY > level and not fitted_changed
+        )
+        news = False
+        if level > last_level:
+            news = True
+        elif level == last_level and level >= WEATHER_STANDBY:
+            if call["compound"] != last.get("compound"):
+                news = True
+            elif level == WEATHER_STANDBY:
+                old = last.get("box_lap")
+                news = old is None or call["box_lap"] < int(old) or call["box_lap"] - int(old) >= 2
+        elif level == last_level and level in {WEATHER_WATCH, WEATHER_ASK}:
+            news = call["direction"] != last.get("direction")
+        if news and level == WEATHER_BOX:
+            news = self._weather_box_worth_repeating(call, crossover, current_lap)
+
+        payload_common = {
+            "level": level,
+            "level_label": WEATHER_LEVEL_LABELS[level],
+            "direction": call["direction"],
+            "current_compound": call["fitted"],
+            "wetness": crossover.get("wetness"),
+            "reason": crossover.get("reason"),
+        }
+        if stand_down:
+            queued = self._enqueue(
+                "weather_stand_down", payload_common,
+                critical=True, cooldown_s=0.0, expires_s=30.0,
+            )
+            if queued:
+                self._last_weather_call = dict(call)
+        elif news:
+            queued = self._enqueue(
+                "weather_crossover",
+                {
+                    **payload_common,
+                    "rain_15_pct": state.get("rain_next_15_pct"),
+                    "trend": crossover.get("trend"),
+                    "compound": call["compound"] or crossover.get("compound"),
+                    "box_lap": call["box_lap"],
+                    "worth_stopping": crossover.get("worth_stopping"),
+                    "awaiting_confirmation": bool(crossover.get("awaiting_confirmation")),
+                    "ask_driver": crossover.get("ask_driver"),
+                    "driver_question": crossover.get("driver_question"),
+                    "margin_s": crossover.get("payback_s", crossover.get("margin_s")),
+                    "forecast": state.get("weather_forecast", []),
+                },
+                critical=True,
+                cooldown_s=0.0,
+            )
+            if queued:
+                self._last_weather_call = dict(call)
+        elif level < last_level or fitted_changed:
+            # Eased without anything to say: remember it, so the next rise
+            # is news again.
+            self._last_weather_call = dict(call)
+        self._detect_weather_box_reminder(state, call)
+
+    def _detect_weather_box_reminder(self, state: dict[str, Any], call: dict[str, Any]) -> None:
+        """"Box, box" once, just before the pit entry, on the lap the box call was heard."""
+        if call["level"] != WEATHER_BOX or int(state.get("pit_status", 0) or 0):
+            return
+        current_lap = int(state.get("current_lap", 0) or 0)
+        heard = [item for item in self._weather_box_heard if item["compound"] == call["compound"]]
+        if not heard or int(heard[-1]["lap"]) != current_lap:
+            return
+        key = (current_lap, call["compound"])
+        if key in self._weather_reminded:
+            return
+        track_length = float(state.get("track_length_m", 0) or 0)
+        if track_length <= 100:
+            return
+        fraction = float(state.get("lap_distance_m", 0) or 0) / track_length
+        neutralisation = (state.get("strategy", {}) or {}).get("neutralisation", {}) or {}
+        entry = float(neutralisation.get("pit_entry_fraction") or 0.94)
+        if not entry - WEATHER_BOX_REMINDER_WINDOW <= fraction < entry:
+            return
+        if self._enqueue(
+            "weather_box_reminder",
+            {"compound": call["compound"], "lap": current_lap},
+            critical=True, cooldown_s=0.0, expires_s=8.0,
+        ):
+            self._weather_reminded.add(key)
 
     def _detect_component_wear(self, state: dict[str, Any]) -> None:
         """Warn as each power-unit component crosses successive wear thresholds,
@@ -1175,15 +1412,37 @@ class ProactiveEngineer:
             # Old box/traffic/pace calls must not accompany suspension advice.
             return False
         if kind == "weather_crossover":
-            # Still worth saying while the surface is over the crossover, or
-            # while the model is still asking for the stop or the driver's read.
-            # A queued call must not be dropped just because the forecast
-            # percentage eased while the track stayed soaked.
-            published = (state.get("strategy", {}) or {}).get("weather_crossover") or {}
+            payload = event.get("payload", {}) or {}
+            if payload.get("level") is None:
+                # A call queued without a level (older records): still worth
+                # saying while the surface is over the crossover, or while the
+                # model is still asking for the stop or the driver's read.
+                published = (state.get("strategy", {}) or {}).get("weather_crossover") or {}
+                return (
+                    rain.surface_is_wet(state)
+                    or bool(published.get("worth_stopping"))
+                    or bool(published.get("ask_driver"))
+                )
+            # Worth saying while the call stands at least where it was queued.
+            # A box call the engine has since withdrawn, or one for a tyre it no
+            # longer wants, must not be spoken.
+            call = ProactiveEngineer._weather_call(state)
+            level = int(payload.get("level", WEATHER_NONE))
+            if call["level"] < level:
+                return False
+            if level >= WEATHER_STANDBY:
+                return call["compound"] == str(payload.get("compound") or "").upper()
+            return True
+        if kind == "weather_stand_down":
+            return ProactiveEngineer._weather_call(state)["level"] < WEATHER_STANDBY
+        if kind == "weather_box_reminder":
+            payload = event.get("payload", {}) or {}
+            call = ProactiveEngineer._weather_call(state)
             return (
-                rain.surface_is_wet(state)
-                or bool(published.get("worth_stopping"))
-                or bool(published.get("ask_driver"))
+                call["level"] == WEATHER_BOX
+                and call["compound"] == str(payload.get("compound") or "").upper()
+                and int(state.get("current_lap", 0) or 0) == int(payload.get("lap", -1))
+                and not int(state.get("pit_status", 0) or 0)
             )
         if kind == "fuel_warning":
             return float(state.get("fuel_laps_delta", 1.0)) < FUEL_SAVE_DELTA_LAPS
@@ -1835,31 +2094,7 @@ class ProactiveEngineer:
         # percentage. A forecast crossing 60% is not news on a track that is
         # already soaked, and a track drying under a 70% forecast is news the
         # percentage alone would never have reported.
-        crossover = (state.get("strategy", {}) or {}).get("weather_crossover") or {}
-        wet = bool(crossover) and (
-            bool(crossover.get("worth_stopping"))
-            or bool(crossover.get("ask_driver"))
-            or float(crossover.get("wetness", 0.0) or 0.0) >= rain.WETNESS_SLICK_INTER
-        )
-        if wet and not self._last_weather_alert:
-            self._enqueue(
-                "weather_crossover",
-                {
-                    "rain_15_pct": state.get("rain_next_15_pct"),
-                    "wetness": crossover.get("wetness"),
-                    "trend": crossover.get("trend"),
-                    "compound": crossover.get("compound"),
-                    "box_lap": crossover.get("box_lap"),
-                    "worth_stopping": crossover.get("worth_stopping"),
-                    "ask_driver": crossover.get("ask_driver"),
-                    "driver_question": crossover.get("driver_question"),
-                    "reason": crossover.get("reason"),
-                    "forecast": state.get("weather_forecast", []),
-                },
-                critical=True,
-                cooldown_s=0.0,
-            )
-        self._last_weather_alert = wet
+        self._detect_weather(state)
 
         # Fuel, tyre, penalty and damage calls describe a car being driven.
         # In the garage, and on the grid before the car has moved, the game
@@ -2129,7 +2364,10 @@ class ProactiveEngineer:
             old = self._last_strategy_signature
             self._last_strategy_signature = strategy_signature
             stability = state.get("strategy", {}).get("stability", {})
-            if old and not stability.get("held") and self._urgent_strategy(state):
+            if (
+                old and not stability.get("held") and self._urgent_strategy(state)
+                and not self._weather_call_carries(recommended, state)
+            ):
                 self._enqueue("strategy_change", self._spoken_advice(recommended, state), cooldown_s=15.0)
 
         current_stops = {int(d.get("car_idx", -1)): int(d.get("pit_stops", 0)) for d in state.get("drivers", [])}
@@ -2363,25 +2601,48 @@ class ProactiveEngineer:
         if kind == "compound_requirement":
             return "You still owe a second dry compound. We must fit a different compound before the finish."
         if kind == "weather_crossover":
-            # Three different things to say, and the difference matters to a
-            # driver: we are boxing, we need you to tell us something before we
-            # decide, or we have looked and we are staying out.
+            # Different things to say, and the difference matters to a driver:
+            # we are boxing, we are about to and need your read, we need you to
+            # tell us something before we decide, or we have looked and we are
+            # staying out. A stop leads with the instruction; the reason is
+            # cut to its first sentence so the pit entry is not passed while
+            # the evidence is read out.
+            reason = str(payload.get("reason") or "").strip()
+            first = ProactiveEngineer._first_sentence(reason)
+            tyre = ProactiveEngineer._compound_plural(payload.get("compound"))
+            if payload.get("awaiting_confirmation") and payload.get("compound"):
+                return f"{reason} How is the grip out there?".strip()
             if payload.get("ask_driver") and payload.get("driver_question"):
                 return (
-                    f"{payload.get('reason')} It is close enough that your read decides it. "
+                    f"{reason} It is close enough that your read decides it. "
                     f"{payload.get('driver_question')}"
-                )
+                ).strip()
             if payload.get("worth_stopping") and payload.get("compound"):
                 box = payload.get("box_lap")
-                where = f"Box lap {box}" if box else "Box this lap"
-                tyre = ProactiveEngineer._compound_plural(payload.get("compound"))
-                return f"{payload.get('reason')} {where} for {tyre}."
-            if payload.get("reason"):
-                return str(payload["reason"])
+                current = int(state.get("current_lap", 0) or 0)
+                where = (
+                    f"Box lap {box}"
+                    if box is not None and int(box) > current
+                    else "Box this lap"
+                )
+                return f"{where} for {tyre}. {first}".strip()
+            if reason:
+                if payload.get("level") == WEATHER_WATCH and payload.get("direction") == "to_dry":
+                    return f"{reason} I'll call the change to slicks."
+                if payload.get("level") == WEATHER_WATCH:
+                    return f"{reason} I'll call the stop if it comes."
+                return reason
             return (
                 f"Rain risk is {payload.get('rain_15_pct')} percent within fifteen minutes. "
                 "Stand by for a crossover call."
             )
+        if kind == "weather_stand_down":
+            current = ProactiveEngineer._compound_plural(payload.get("current_compound")) or "current tyres"
+            first = ProactiveEngineer._first_sentence(str(payload.get("reason") or ""))
+            return f"Cancel the stop. Stay out on the {current}. {first}".strip()
+        if kind == "weather_box_reminder":
+            tyre = ProactiveEngineer._compound_plural(payload.get("compound"))
+            return f"Box, box. {tyre.capitalize()} on." if tyre else "Box, box."
         if kind == "penalty":
             total = payload.get("total_s", payload.get("penalties_s"))
             added = payload.get("added_s", total)
@@ -2469,6 +2730,15 @@ class ProactiveEngineer:
         return COMPONENT_LABELS.get(
             raw.lower(), raw.upper().replace("_", "-")
         )
+
+    @staticmethod
+    def _first_sentence(text: str) -> str:
+        """The first sentence of a reason, for a call that must be short."""
+        cleaned = " ".join(str(text or "").split())
+        if not cleaned:
+            return ""
+        head, separator, _ = cleaned.partition(". ")
+        return head + "." if separator else cleaned
 
     @staticmethod
     def _compound_plural(compound: Any) -> str:
@@ -2573,6 +2843,12 @@ class ProactiveEngineer:
     @staticmethod
     def _safety_critical(event_type: str, payload: dict[str, Any]) -> bool:
         """A call no standing instruction may silence, whatever its subject."""
+        if event_type in {"weather_stand_down", "weather_box_reminder"}:
+            return True
+        if event_type == "weather_crossover":
+            # "Stop telling me about the weather" silences the watching, not
+            # the stop it is watching for.
+            return payload.get("level") == WEATHER_BOX
         if event_type == "tyre_wear":
             wear = [
                 float(value) for value in payload.get("wear_fl_fr_rl_rr") or []
@@ -2703,7 +2979,8 @@ class ProactiveEngineer:
     # compound still owed, a flag) may name it while the hold runs.
     _STOP_IS_THE_NEWS = frozenset({
         "penalty", "penalty_service", "damage", "engine_failure", "compound_requirement",
-        "weather_crossover", "race_control", "sc_restart", "safety_car_delta",
+        "weather_crossover", "weather_stand_down", "weather_box_reminder",
+        "race_control", "sc_restart", "safety_car_delta",
     })
 
     @classmethod
@@ -3009,6 +3286,15 @@ class ProactiveEngineer:
             self._last_spoken_at = time.monotonic()
             self._last_spoken_text = text
             self._last_spoken_type = str(event.get("type", ""))
+            payload = event.get("payload") or {}
+            if event.get("type") == "weather_crossover" and payload.get("level") == WEATHER_BOX:
+                # Only a box call actually heard counts against repeating it.
+                self._weather_box_heard.append({
+                    "lap": int(state.get("current_lap", 0) or 0),
+                    "compound": str(payload.get("compound") or "").upper(),
+                    "margin": float(payload.get("margin_s") or 0.0),
+                    "wetness": float(payload.get("wetness") or 0.0),
+                })
             signature = self._material_signature(event)
             if signature is not None:
                 self._delivered_signatures[self._last_spoken_type] = (
@@ -3114,12 +3400,21 @@ class ProactiveEngineer:
         if kind == "compound_requirement":
             return (bool(event.get("critical")),), REPEAT_HORIZON_S
         if kind == "weather_crossover":
+            if payload.get("level") is not None:
+                return (
+                    int(payload.get("level", WEATHER_NONE)),
+                    str(payload.get("compound") or ""),
+                    payload.get("box_lap"),
+                    str(payload.get("direction") or ""),
+                ), REPEAT_HORIZON_S
             return (
                 bool(payload.get("worth_stopping")),
                 bool(payload.get("ask_driver")),
                 str(payload.get("compound") or ""),
                 payload.get("box_lap"),
             ), REPEAT_HORIZON_S
+        if kind == "weather_stand_down":
+            return (str(payload.get("current_compound") or ""),), REPEAT_HORIZON_S
         if kind == "strategy_change":
             return (
                 *ProactiveEngineer._call_signature(payload),
@@ -3216,6 +3511,20 @@ class ProactiveEngineer:
             zone = self._flagged_zone_ahead(payload, state)
             if zone is not None:
                 payload["flag"], payload["distance_ahead_m"] = zone
+        if kind == "weather_crossover" and payload.get("level") is not None:
+            # A call that waited for a straight says the numbers as they are
+            # now: the lap it names and the reason, for the same tyre.
+            crossover = (state.get("strategy", {}) or {}).get("weather_crossover") or {}
+            call = self._weather_call(state)
+            if call["level"] == payload.get("level") and call["compound"] == str(
+                payload.get("compound") or ""
+            ).upper():
+                payload.update(
+                    box_lap=call["box_lap"],
+                    reason=crossover.get("reason", payload.get("reason")),
+                    wetness=crossover.get("wetness", payload.get("wetness")),
+                    margin_s=crossover.get("payback_s", payload.get("margin_s")),
+                )
         if kind in {"progress_update", "tyre_wear"} and "strategy" in payload:
             # When the driver's hold has just been released, the release call
             # says the plan with the reason it is back. Carried here as well,

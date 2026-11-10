@@ -3318,7 +3318,17 @@ class EngineerBrain:
         # lap 6" call made sixty seconds earlier, and the driver rightly
         # concluded the engineer had lost the plot.
         stop_reason = str(recommended.get("stop_required_reason") or "")
-        stop_is_forced = "mandatory" in stop_reason or "cannot reach" in stop_reason
+        # The weather is a forced stop too. Its own pricing already weighed
+        # the places lost in the lane against the conditions, and the finish
+        # projection's overtaking model was never built for cars several
+        # seconds a lap apart on different tyres.
+        weather = recommended.get("weather_crossover") or {}
+        stop_is_forced = (
+            "mandatory" in stop_reason
+            or "cannot reach" in stop_reason
+            or "track conditions" in stop_reason
+            or bool(weather.get("worth_stopping"))
+        )
         try:
             if (
                 not stop_is_forced
