@@ -657,6 +657,7 @@ def strategic_rivals(state: dict) -> dict:
                 "compound": rival.get("compound"),
                 "tyre_age": rival.get("tyre_age"),
                 "estimated_stops_remaining": rival.get("likely_remaining_stops"),
+                "stop_owed": bool(rival.get("stop_owed")),
                 "confidence": rival.get("confidence", "low"),
                 "gap_assumed": bool(rival.get("gap_assumed")),
                 "reason": "Closest projected finish after estimated stops, tyre pace and pending penalties.",

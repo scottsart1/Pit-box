@@ -325,6 +325,19 @@ TYPICAL_STINT_LAPS = {
     for compound in DEFAULT_WEAR_PER_LAP
 }
 
+# A car does not stop for tyres by choice with fewer than this many laps left
+# to run on the new set. The tyre-age table alone projected rivals stopping
+# three laps from the flag.
+RIVAL_MIN_LAPS_AFTER_STOP = 2
+# Share of race distance at which a rival that still owes its second dry
+# compound is expected to serve it, by the compound it is on, when its tyre
+# life does not force the stop sooner. A judgement, to be replaced by the
+# stint lengths the field has actually run this race.
+RIVAL_OWED_STOP_DISTANCE_SHARE = {"SOFT": 0.35, "MEDIUM": 0.45, "HARD": 0.60}
+# On wet tyres a rival is expected back on slicks only once the surface is this
+# far under the slick crossover: going back too early costs a second stop.
+RIVAL_BACK_TO_SLICKS_MARGIN = 0.10
+
 # F1 points for finishing positions 1..10 (2026 system unchanged from 2010+).
 F1_POINTS = {1: 25, 2: 18, 3: 15, 4: 12, 5: 10, 6: 8, 7: 6, 8: 4, 9: 2, 10: 1}
 SPRINT_POINTS = {position: 9 - position for position in range(1, 9)}
@@ -1621,6 +1634,95 @@ class StrategyEngine:
         )
         return reference
 
+    @staticmethod
+    def _rival_compounds_used(driver: dict[str, Any]) -> set[str]:
+        """Compounds a rival has raced on, plus the one it is on now."""
+        used = {
+            str(stint.get("compound") or "").upper()
+            for stint in driver.get("tyre_stints") or []
+            # A stint that ended on lap 0 is the set swapped on the grid.
+            if int(stint.get("end_lap", 0) or 0) >= 1
+        }
+        used.add(str(driver.get("tyre_compound") or "").upper())
+        return used - {"", "UNKNOWN", "FITTED"}
+
+    @classmethod
+    def _rival_owes_compound(cls, state: dict[str, Any], driver: dict[str, Any]) -> bool:
+        """Whether the two-compound rule still binds this rival.
+
+        The rule binds every car in a dry race, not only the player's: a rival
+        on its first dry compound will stop whether or not its tyres would
+        last. Running inters or wets waives it.
+        """
+        if str(state.get("mode_profile", "")) != "race":
+            return False
+        # A car that has stopped is only known to owe a compound when its stint
+        # history accounts for every stop; a missing history is not evidence
+        # that it ran one compound.
+        stops = int(driver.get("pit_stops", 0) or 0)
+        completed = [
+            stint for stint in (driver.get("tyre_stints") or [])[:-1]
+            if 1 <= int(stint.get("end_lap", 0) or 0) < 255
+        ]
+        if stops > len(completed):
+            return False
+        used = cls._rival_compounds_used(driver)
+        return not (used & WET_COMPOUNDS) and len(used & DRY_COMPOUNDS) == 1
+
+    @staticmethod
+    def _rival_owed_stop_offset(
+        state: dict[str, Any], compound: str, remaining: int,
+    ) -> int | None:
+        """Lap offset at which a rival is expected to serve an owed compound."""
+        if remaining < RIVAL_MIN_LAPS_AFTER_STOP + 1:
+            return None
+        total = int(state.get("total_laps", 0) or 0)
+        current = max(1, int(state.get("current_lap", 0) or 0))
+        share = RIVAL_OWED_STOP_DISTANCE_SHARE.get(str(compound).upper(), 0.45)
+        expected_box_lap = max(current, round(total * share))
+        offset = expected_box_lap - current + 1
+        return max(1, min(remaining - RIVAL_MIN_LAPS_AFTER_STOP, offset))
+
+    @staticmethod
+    def _rival_weather_change(
+        compound: str, trajectory: Sequence[float], wetness: float,
+    ) -> tuple[int, str] | None:
+        """(lap offset, tyre) at which the weather sends a rival to the pits.
+
+        The field reads the same surface. A car on slicks changes at the end
+        of the lap on which the projected surface passes the crossover; a car
+        on wet tyres comes back to slicks once the surface is clearly under it.
+        """
+        name = str(compound).upper()
+        # trajectory[k] is the surface on lap offset k; the stop is made at
+        # the end of the lap on which it crosses, so the new set runs from k+1.
+        surface = [float(value) for value in trajectory] or [float(wetness)]
+        if name in DRY_COMPOUNDS:
+            for index, value in enumerate(surface):
+                if value >= rain.WETNESS_SLICK_INTER:
+                    return index + 1, "WET" if value >= rain.WETNESS_INTER_WET else "INTER"
+            return None
+        if name in WET_COMPOUNDS:
+            threshold = rain.WETNESS_SLICK_INTER - RIVAL_BACK_TO_SLICKS_MARGIN
+            for index, value in enumerate(surface):
+                if value <= threshold:
+                    return index + 1, "DRY"
+        return None
+
+    @staticmethod
+    def _rival_next_dry_compound(
+        used: set[str], laps_after: int, severity: float, owes: bool,
+    ) -> str:
+        """The dry tyre a rival is expected to fit: the softest that lasts."""
+        candidates = [name for name in ("SOFT", "MEDIUM", "HARD") if not (owes and name in used)]
+        if not candidates:
+            candidates = ["MEDIUM"]
+        lasting = [
+            name for name in candidates
+            if TYPICAL_STINT_LAPS[name] / max(0.5, severity) >= laps_after
+        ]
+        return lasting[0] if lasting else candidates[-1]
+
     def _project_rival_finish_times(
         self,
         state: dict[str, Any],
@@ -1629,6 +1731,7 @@ class StrategyEngine:
         base_lap_s: float,
         effective_pit_loss_s: float,
         wetness: float = 0.0,
+        wetness_trajectory: Sequence[float] | None = None,
     ) -> list[dict[str, Any]]:
         """Project field finish times on the player's current time axis.
 
@@ -1646,6 +1749,11 @@ class StrategyEngine:
         # another car. Rival lap history measures pace, but does not contain
         # the fuel evidence needed to identify intrinsic rival degradation.
         clean_state["analysis"] = {}
+        severity = TRACK_TYRE_SEVERITY.get(int(state.get("track_id", -1)), 1.0)
+        trajectory = [float(value) for value in (wetness_trajectory or [])]
+        # Rivals' pace is observed at today's surface; a moving surface moves it.
+        weather_moving = bool(trajectory) and max([float(wetness), *trajectory]) > 0.05
+        cold_s = float(settings.strategy_cold_tyre_penalty_s)
         for driver in state.get("drivers", []):
             if int(driver.get("car_idx", -1)) == player_idx:
                 continue
@@ -1671,26 +1779,74 @@ class StrategyEngine:
                     compound, "MEDIUM", base_lap_s, wetness
                 )
             age = max(0, int(driver.get("tyre_age", 0) or 0))
-            typical = max(6, int(TYPICAL_STINT_LAPS.get(compound, 18)))
+            # Typical tyre life, shortened on a circuit that is hard on tyres.
+            def typical_for(name: str) -> int:
+                return max(6, round(TYPICAL_STINT_LAPS.get(name, 18) / max(0.5, severity)))
+
+            typical = typical_for(compound)
+            used = self._rival_compounds_used(driver)
+            owes = self._rival_owes_compound(state, driver)
+            owed_offset = self._rival_owed_stop_offset(state, compound, remaining) if owes else None
+            weather = (
+                self._rival_weather_change(compound, trajectory, wetness)
+                if weather_moving else None
+            )
             running_time = 0.0
             future_age = age
+            fitted, fitted_deg = compound, deg
             projected_laps: list[float] = []
             stop_offsets: list[int] = []
+            stop_compounds: list[str] = []
+            stop_reasons: list[str] = []
+            cold_until = -1
             for offset in range(max(0, remaining)):
                 # A racing stop happens after an in-lap, never before the
-                # already-in-progress lap. Reset at *every* later stop too.
-                if offset > 0 and future_age >= typical:
+                # already-in-progress lap, and leaves laps to use the new set.
+                reason = None
+                if offset > 0 and remaining - offset >= RIVAL_MIN_LAPS_AFTER_STOP:
+                    if weather is not None and offset == weather[0]:
+                        reason = "weather"
+                    elif owes and offset == owed_offset and not stop_offsets:
+                        reason = "owed_compound"
+                    elif future_age >= typical_for(fitted):
+                        reason = "tyre_life"
+                if reason is not None:
+                    laps_after = remaining - offset
+                    if reason == "weather" and weather is not None and weather[1] != "DRY":
+                        new = weather[1]
+                    else:
+                        new = self._rival_next_dry_compound(used, laps_after, severity, owes)
                     stop_offsets.append(offset)
+                    stop_compounds.append(new)
+                    stop_reasons.append(reason)
+                    used.add(new)
+                    owes = owes and not (new in WET_COMPOUNDS or len(used & DRY_COMPOUNDS) >= 2)
+                    fitted = new
+                    fitted_deg = self._deg_for(clean_state, new, {})[0] if new != compound else deg
                     future_age = 0
+                    cold_until = offset + 1
                 if pace_reference["age_end_reference"]:
                     # History records completed laps. The in-progress lap ends
                     # one age beyond current telemetry; after a stop the next
                     # completed fresh-set lap ends at age one.
-                    lap_time = float(pace_reference["normalized_lap_s"]) + deg * (future_age + 1)
+                    lap_time = float(pace_reference["normalized_lap_s"]) + fitted_deg * (future_age + 1)
                 else:
                     # Legacy data without an identifiable observation age
                     # retains its prior numeric behavior, explicitly labelled.
-                    lap_time = pace + deg * (future_age - age)
+                    lap_time = pace + fitted_deg * (future_age - age)
+                if fitted != compound:
+                    lap_time += COMPOUND_DELTA.get(fitted, 0.0) - COMPOUND_DELTA.get(compound, 0.0)
+                if weather_moving:
+                    # The observed pace carries today's surface on today's tyre.
+                    surface = trajectory[min(offset, len(trajectory) - 1)]
+                    lap_time += base_lap_s * (
+                        rain.lap_penalty_fraction(fitted, surface)
+                        - rain.lap_penalty_fraction(compound, wetness)
+                    )
+                if stop_offsets and offset <= cold_until:
+                    # A new set is cold for its out-lap and half the next, as
+                    # the player's own stints are priced.
+                    lap_time += cold_s if offset == stop_offsets[-1] else cold_s * 0.5
                 lap_time = max(1.0, lap_time)
                 projected_laps.append(round(lap_time, 6))
                 running_time += lap_time
@@ -1724,6 +1880,9 @@ class StrategyEngine:
                     "tyre_age": age,
                     "likely_remaining_stops": stops,
                     "likely_stop_offsets_laps": stop_offsets,
+                    "likely_stop_compounds": stop_compounds,
+                    "likely_stop_reasons": stop_reasons,
+                    "stop_owed": self._rival_owes_compound(state, driver),
                     "pit_stop_costs_s": pit_costs,
                     "pit_loss_basis": "Current reachable opportunity, then green-flag circuit prior.",
                     "deg_s_per_lap": round(float(deg), 4),
@@ -3706,6 +3865,7 @@ class StrategyEngine:
             base_lap_s,
             effective_pit_loss,
             current_wetness,
+            wetness_trajectory,
         )
         for plan in plans:
             self._annotate_finish_projection(
@@ -4466,6 +4626,8 @@ class StrategyEngine:
         current_lap = int(state.get("current_lap", 0))
         total_laps = int(state.get("total_laps", 0))
         player_pos = int(state.get("player_position", 0))
+        remaining = max(0, total_laps - current_lap + (1 if current_lap > 0 else 0))
+        severity = TRACK_TYRE_SEVERITY.get(int(state.get("track_id", -1)), 1.0)
         rivals: list[dict[str, Any]] = []
         for driver in state.get("drivers", []):
             if int(driver.get("car_idx", -1)) == int(state.get("player_car_index", -1)):
@@ -4475,8 +4637,19 @@ class StrategyEngine:
             gap = driver.get("gap_to_player_s")
             compound = str(driver.get("tyre_compound", "UNKNOWN")).upper()
             age = int(driver.get("tyre_age", 0))
-            typical = None if driver.get("restricted") else TYPICAL_STINT_LAPS.get(compound)
+            # Typical life on this circuit, as the finish projection uses it.
+            typical = (
+                None if driver.get("restricted") or compound not in TYPICAL_STINT_LAPS
+                else max(6, round(TYPICAL_STINT_LAPS[compound] / max(0.5, severity)))
+            )
             laps_to_stop = max(0, typical - age) if typical else None
+            basis = "typical_tyre_life" if laps_to_stop is not None else "unknown"
+            # A rival still on its first dry compound has a stop to make
+            # whether or not its tyres would last.
+            owes = self._rival_owes_compound(state, driver)
+            owed_offset = self._rival_owed_stop_offset(state, compound, remaining) if owes else None
+            if owed_offset is not None and (laps_to_stop is None or owed_offset - 1 < laps_to_stop):
+                laps_to_stop, basis = owed_offset - 1, "owed_compound"
             projected_stop_lap = (
                 current_lap + laps_to_stop
                 if laps_to_stop is not None and current_lap > 0
@@ -4505,9 +4678,14 @@ class StrategyEngine:
                         "unknown" if projected_stop_lap is None or total_laps <= 0
                         or compound in {"INTER", "WET"} or state.get("mode_profile") not in {"race", "sprint"}
                         or not state.get("connected") or rain.surface_is_wet(state)
-                        else "likely" if projected_stop_lap < total_laps else "unlikely_on_tyre_age"
+                        else "owed" if owes
+                        else "likely"
+                        if projected_stop_lap <= total_laps - RIVAL_MIN_LAPS_AFTER_STOP
+                        else "unlikely_on_tyre_age"
                     ),
-                    "confidence": "low",
+                    "stop_owed": owes,
+                    "stop_basis": basis,
+                    "confidence": "medium" if owes else "low",
                     "typical_stint_laps": typical,
                     "laps_until_estimated_stop": laps_to_stop,
                     "projected_stop_lap": (
@@ -4531,14 +4709,16 @@ class StrategyEngine:
             "rivals": selected,
             "scope": "opponents only; use the player's pit strategy for the player's remaining stops",
             "another_stop_counts": {label: sum(rival["another_stop"] == label for rival in selected)
-                                    for label in ("likely", "unlikely_on_tyre_age", "unknown")},
+                                    for label in ("owed", "likely", "unlikely_on_tyre_age", "unknown")},
             "rivals_observed": len(rivals),
             "truncated": len(rivals) > max(1, min(24, int(top_n))),
             "telemetry_stale": not state.get("connected", False),
             "note": (
-                "Stop laps are estimated from typical compound life; the game AI "
-                "may pit earlier or later. Completed stops are observed; another_stop is a low-confidence "
-                "tyre-age estimate, not a confirmed plan or exact count of remaining stops. "
+                "Stop laps are estimated from typical compound life on this circuit; the game AI "
+                "may pit earlier or later. Completed stops are observed. another_stop 'owed' means the car "
+                "has raced only one dry compound in a dry race, so the rules require it to stop; its lap is "
+                "an estimate. Otherwise another_stop is a low-confidence tyre-age estimate, not a confirmed "
+                "plan or exact count of remaining stops. "
                 "Unknown tyre data, wet weather and unknown race distance cannot establish a finish. "
                 "Compound rules, damage, weather changes and safety cars can require a stop even when tyre age suggests none."
             ),

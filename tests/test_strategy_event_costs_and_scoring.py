@@ -117,9 +117,20 @@ def test_raw_lane_duration_is_not_a_measured_net_pit_loss():
 
 @pytest.mark.asyncio
 async def test_rival_age_resets_after_every_projected_stop(stack):
+    """Every stop starts a fresh set, whatever tyre it is.
+
+    Losail (severity 1.30): a soft lasts round(17 / 1.3) = 13 laps and a hard
+    round(42 / 1.3) = 32. A soft at age 16 stops after one lap; nothing lasts
+    the 39 laps left, so it takes the hardest, which stops again 32 laps on;
+    seven laps remain and a soft lasts them. Each new set is cold for its
+    out-lap and half the next, as the player's stints are priced.
+    """
+    from pitwall.config import settings
+    from pitwall.strategy import COMPOUND_DELTA, DEFAULT_DEG, PIT_LOSS_SECONDS, TRACK_TYRE_SEVERITY
+
     _, _, engine, *_ = stack
     state = {
-        "player_car_index": 0, "player_position": 1, "track_id": 11,
+        "player_car_index": 0, "player_position": 1, "track_id": 32,
         "race_control_phase": "green", "safety_car": "none",
         "current_lap": 10, "drivers": [{
             "car_idx": 1, "position": 2, "tyre_compound": "SOFT",
@@ -128,11 +139,17 @@ async def test_rival_age_resets_after_every_projected_stop(stack):
         }],
     }
     projection = engine._project_rival_finish_times(state, {}, 40, 90, 24)[0]
-    # Explicit reference schedule: soft life 17, current age16; stops after
-    # 1, 18 and 35 of the 40 remaining laps. Observed pace90 belongs to age16.
-    ages = [16] + list(range(17)) + list(range(17)) + list(range(5))
-    expected = 1 + sum(90 + projection["deg_s_per_lap"] * (age - 16) for age in ages) + 3 * 24
-    assert projection["likely_remaining_stops"] == 3
+    assert projection["likely_stop_offsets_laps"] == [1, 33]
+    assert projection["likely_stop_compounds"] == ["HARD", "SOFT"]
+    severity, cold = TRACK_TYRE_SEVERITY[32], settings.strategy_cold_tyre_penalty_s
+    soft, hard = DEFAULT_DEG["SOFT"] * severity, DEFAULT_DEG["HARD"] * severity
+    # Observed pace 90 belongs to soft age 16 (no lap ages are known).
+    laps = [90.0]
+    laps += [90 + hard * (age - 16) + COMPOUND_DELTA["HARD"] - COMPOUND_DELTA["SOFT"]
+             + (cold if age == 0 else cold / 2 if age == 1 else 0) for age in range(32)]
+    laps += [90 + soft * (age - 16) + (cold if age == 0 else cold / 2 if age == 1 else 0)
+             for age in range(7)]
+    expected = 1 + sum(laps) + 2 * PIT_LOSS_SECONDS[32]
     assert projection["finish_time_s"] == pytest.approx(expected, abs=0.01)
 
 
