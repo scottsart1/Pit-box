@@ -138,6 +138,11 @@ class DriverState:
     history_updated_at: float = 0.0
 
 
+# Forecast changes kept per session: a two-hour race with a sample changing
+# every minute fits with room to spare.
+FORECAST_LOG_CAP = 600
+
+
 # What no screen draws, left out of the 4 Hz live frame. The engine, the tools
 # and the analysis profile keep all of it; the frame was 100 KB, two thirds of
 # it strategy detail that changes only on a recompute.
@@ -344,6 +349,10 @@ class SessionState:
     wheel_slip_angle: list[float] = field(default_factory=lambda: [0.0] * 4)
     weather: str = "Unknown"
     weather_forecast: list[dict[str, Any]] = field(default_factory=list)
+    # Every change to the forecast this session: what the game published and
+    # what the sky was when it did. What its rain chance turned out to mean is
+    # measured from these (tools/forecast_reliability.py).
+    forecast_log: list[dict[str, Any]] = field(default_factory=list)
     # Session-clock origin of the relative offsets; absent in older captures.
     weather_forecast_session_time_s: float | None = None
     # Forecast chances of rain (EA m_rainPercentage), including offset zero.
@@ -890,6 +899,9 @@ class StateStore:
                 data[name] = dup(value[-30:])
             elif name == "radio_log" and profile in {"live", "radio"}:
                 data[name] = dup(value[-40:])
+            elif name == "forecast_log" and profile in {"live", "radio"}:
+                # A record for calibration, not for the dashboard or the radio.
+                data[name] = []
             elif name == "feedback" and profile in {"live", "radio"}:
                 data[name] = dup(value[-10:])
             elif name == "analysis" and profile == "radio":
@@ -971,6 +983,18 @@ class StateStore:
             if strategy_revision == revision:
                 data["strategy"] = {"revision": revision, "unchanged": True}
             return json.dumps(data, separators=_JSON_SEPARATORS, ensure_ascii=False)
+
+    async def log_forecast(self, entry: dict[str, Any]) -> None:
+        """Record the forecast when the sky or any published sample changed."""
+        async with self._lock:
+            log = self.state.forecast_log
+            last = log[-1] if log else None
+            if last and (last.get("sky_now"), last.get("samples"), last.get("accuracy")) == (
+                entry.get("sky_now"), entry.get("samples"), entry.get("accuracy")
+            ):
+                return
+            log.append(entry)
+            del log[:-FORECAST_LOG_CAP]
 
     async def gap_histories(self, car_indexes: Iterable[int]) -> dict[int, list[dict[str, Any]]]:
         """Copies of a few cars' gap histories, which the radio snapshot omits."""

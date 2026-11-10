@@ -15,7 +15,7 @@ from typing import Any
 
 import numpy as np
 
-from . import rain
+from . import circuit_model, rain
 from .config import settings
 from .database import PitWallDatabase
 from .race_plan import plan_matches, remaining_plan
@@ -24,10 +24,22 @@ from .setup_model import setup_effects
 from .state import StateStore
 from .tyre_inventory import TyreInventory
 from .tyre_learning import exclusion_reason, finite, wear_deltas
+from .tyre_limits import (
+    CONSERVATIVE_PENALTY_PCT,
+    FEEDBACK_CONTRADICTS_HIGH_PCT,
+    FEEDBACK_CONTRADICTS_LOW_PCT,
+    OPERATIONAL_WEAR_LIMIT,
+    STINT_INFEASIBLE_PCT,
+    WEAR_PENALTY_AVERAGE_PCT,
+    WEAR_PENALTY_PEAK_PCT,
+    WEAR_PENALTY_STEEP_PEAK_PCT,
+    safety_limit_pct,
+)
 
 # Green-flag drive-through loss estimates. IDs follow f1-packets 2026 TRACKS.
 PIT_LOSS_SECONDS = {
     0: 22.0,  # Melbourne
+    2: 23.0,  # Shanghai; a judgement until measured (circuit_model)
     3: 23.5,  # Bahrain / Sakhir
     4: 22.0,  # Catalunya
     5: 19.5,  # Monaco
@@ -53,6 +65,17 @@ PIT_LOSS_SECONDS = {
     42: 24.0,  # Madrid
 }
 
+# A reversed layout uses the same pit lane and the same surface as its
+# circuit, so it inherits pit loss and tyre severity. Overtaking difficulty
+# and the pit entry point do not: the corners and the entry are different.
+LAYOUT_PARENT = {39: 7, 40: 17, 41: 26}
+
+
+def circuit_value(table: dict[int, float], track_id: int, default: Any) -> Any:
+    """A per-circuit table value, falling back to a reversed layout's circuit."""
+    return table.get(int(track_id), table.get(LAYOUT_PARENT.get(int(track_id), -1), default))
+
+
 # Approximate point beyond which a current-lap stop is no longer realistic.
 # This is deliberately conservative and can later be replaced by labelled maps.
 PIT_ENTRY_FRACTION = {
@@ -69,6 +92,7 @@ PIT_ENTRY_FRACTION = {
 # Track multiplier for cold-start wear/deg defaults before personal evidence exists.
 TRACK_TYRE_SEVERITY = {
     0: 1.00,
+    2: 1.10,  # Shanghai; a judgement until measured
     3: 1.15,
     4: 1.20,
     5: 0.88,
@@ -237,6 +261,7 @@ def _typical_adjacent_gap_s(state: dict[str, Any]) -> float:
 
 TRACK_OVERTAKING_DIFFICULTY = {
     0: 0.52,   # Melbourne
+    2: 0.42,   # Shanghai; a judgement
     3: 0.38,   # Bahrain
     4: 0.62,   # Catalunya
     5: 0.95,   # Monaco
@@ -308,13 +333,6 @@ DEFAULT_DEG = {
     "WET": 0.10,
 }
 
-OPERATIONAL_WEAR_LIMIT = {
-    "SOFT": 80.0,
-    "MEDIUM": 85.0,
-    "HARD": 88.0,
-    "INTER": 88.0,
-    "WET": 90.0,
-}
 
 DEFAULT_WEAR_PER_LAP = {
     "SOFT": 4.8,
@@ -748,9 +766,9 @@ class StrategyEngine:
         peak = max(wear, default=0.0)
         average = sum(wear) / len(wear) if wear else 0.0
         return (
-            max(0.0, average - 52.0) * 0.009
-            + max(0.0, peak - 58.0) * 0.008
-            + max(0.0, peak - 70.0) * 0.060
+            max(0.0, average - WEAR_PENALTY_AVERAGE_PCT) * 0.009
+            + max(0.0, peak - WEAR_PENALTY_PEAK_PCT) * 0.008
+            + max(0.0, peak - WEAR_PENALTY_STEEP_PEAK_PCT) * 0.060
         )
 
     @staticmethod
@@ -1254,6 +1272,14 @@ class StrategyEngine:
         return used
 
     @staticmethod
+    def _compound_rule_applies_to_event(state: dict[str, Any]) -> bool:
+        """Whether this event requires two different dry compounds at all."""
+        override = str(settings.strategy_compound_rule).lower()
+        if override in {"always", "never"}:
+            return override == "always"
+        return str(state.get("mode_profile", "idle")) == "race"
+
+    @staticmethod
     def _compound_rule(
         state: dict[str, Any], future: list[str] | None = None
     ) -> dict[str, Any]:
@@ -1262,11 +1288,12 @@ class StrategyEngine:
         all_compounds = used + [item for item in future if item not in used]
         wet_used = any(item in WET_COMPOUNDS for item in all_compounds)
         dry_used = sorted({item for item in all_compounds if item in DRY_COMPOUNDS})
-        applies = str(state.get("mode_profile", "idle")) == "race" and not wet_used
+        event_rule = StrategyEngine._compound_rule_applies_to_event(state)
+        applies = event_rule and not wet_used
         compliant = (not applies) or len(dry_used) >= 2
         observed_wet = any(item in WET_COMPOUNDS for item in used)
         observed_dry = {item for item in used if item in DRY_COMPOUNDS}
-        observed_compliant = (str(state.get("mode_profile", "idle")) != "race"
+        observed_compliant = (not event_rule
                               or observed_wet or len(observed_dry) >= 2)
         return {
             "applies": applies,
@@ -1291,6 +1318,8 @@ class StrategyEngine:
                 if applies
                 else "Wet/intermediate use waives the two-dry-compound check."
                 if wet_used
+                else "The two-dry-compound requirement is switched off in settings."
+                if str(settings.strategy_compound_rule).lower() == "never"
                 else "The two-dry-compound Race requirement does not apply to this session type."
             ),
         }
@@ -1353,7 +1382,7 @@ class StrategyEngine:
         historical: dict[str, Any],
     ) -> tuple[float, dict[str, Any]]:
         current = str(state.get("tyre", {}).get("compound", "MEDIUM")).upper()
-        severity = TRACK_TYRE_SEVERITY.get(int(state.get("track_id", -1)), 1.0)
+        severity = StrategyEngine._severity(state)
         default = DEFAULT_WEAR_PER_LAP.get(current, 3.2) * severity
         live_samples = StrategyEngine._live_wear_samples(state, current)
         observed: float | None = float(median(live_samples)) if len(live_samples) >= 3 else None
@@ -1459,7 +1488,7 @@ class StrategyEngine:
         adjusted = finite(model.get("condition_adjusted_wear_per_lap_pct"))
         measured = finite(model.get("max_wear_per_lap_pct"))
         inferred = finite(model.get("inferred_wear_per_lap_pct"))
-        severity = TRACK_TYRE_SEVERITY.get(int(state.get("track_id", -1)), 1.0)
+        severity = StrategyEngine._severity(state)
         value = DEFAULT_WEAR_PER_LAP.get(compound, 3.0) * severity * style_factor
         source, samples = "style_adjusted_track_default", 0
         if adjusted is not None and 0 < adjusted <= 15 and sample >= 6:
@@ -1493,7 +1522,7 @@ class StrategyEngine:
 
         live = (state.get("analysis", {}).get("deg_model", {}) or {}).get("compounds", {}).get(compound, {})
         prior = historical.get("compounds", {}).get(compound, {})
-        severity = TRACK_TYRE_SEVERITY.get(int(state.get("track_id", -1)), 1.0)
+        severity = StrategyEngine._severity(state)
         value, source, samples = DEFAULT_DEG.get(compound, 0.08) * severity, "track_default", 0
         measured = finite(prior.get("slope_s_per_lap"))
         inferred = finite(prior.get("inferred_deg_s_per_lap"))
@@ -1573,12 +1602,41 @@ class StrategyEngine:
         return "passed" if distance / track_length >= threshold else "available"
 
     @staticmethod
+    def _base_pit_loss_with_source(state: dict[str, Any]) -> tuple[float, str]:
+        # EA's lane timer measures time *in* the lane, not net loss. Net loss
+        # is measured instead from rivals' in- and out-laps across recorded
+        # races (circuit_model); until enough green stops agree with the table,
+        # the labelled circuit prior stands.
+        prior = circuit_value(PIT_LOSS_SECONDS, int(state.get("track_id", -1)), 22.5)
+        return circuit_model.measured(state.get("circuit_model"), "pit_loss_s", prior)
+
+    @staticmethod
     def _base_pit_loss(state: dict[str, Any]) -> float:
-        # EA's lane timer measures time *in* the lane. Net race-time loss also
-        # needs the main-track time between the same reference points, which
-        # the lap record does not supply. A long repair/penalty must not train
-        # a permanently inflated base loss. Keep the labelled circuit prior.
-        return PIT_LOSS_SECONDS.get(int(state.get("track_id", -1)), 22.5)
+        return StrategyEngine._base_pit_loss_with_source(state)[0]
+
+    @staticmethod
+    def _severity(state: dict[str, Any]) -> float:
+        """How hard the circuit is on tyres: measured when enough laps agree, else the table."""
+        prior = circuit_value(TRACK_TYRE_SEVERITY, int(state.get("track_id", -1)), 1.0)
+        return circuit_model.measured(state.get("circuit_model"), "severity", prior)[0]
+
+    async def _with_circuit_model(self, state: dict[str, Any]) -> dict[str, Any]:
+        """The state with this circuit's recorded measurements attached.
+
+        A store that cannot be read leaves the circuit tables in charge: a
+        calibration problem must never stop the planner.
+        """
+        if "circuit_model" in state:
+            return state
+        load = getattr(self.database, "load_preference", None)
+        track_id = int(state.get("track_id", -1))
+        model = None
+        if load is not None and track_id >= 0:
+            try:
+                model = await load(circuit_model.preference_key(track_id))
+            except Exception:  # noqa: BLE001 - see above
+                model = None
+        return {**state, "circuit_model": model if isinstance(model, dict) else {}}
 
     @staticmethod
     def _finish_penalty(car: dict[str, Any]) -> dict[str, Any]:
@@ -1649,7 +1707,7 @@ class StrategyEngine:
         return {
             "phase": kind,
             "base_pit_loss_s": round(base, 2),
-            "base_pit_loss_source": "circuit_prior",
+            "base_pit_loss_source": StrategyEngine._base_pit_loss_with_source(state)[1],
             "pit_loss_scope": "Normal-stop circuit prior; excludes unreported repair, drive-through and stop-go service durations. Pending time penalties are priced separately once.",
             "future_stop_assumption": "Green-flag loss after the current reachable opportunity; neutralisation duration is unknown.",
             "effective_pit_loss_s": round(effective, 2),
@@ -1968,7 +2026,7 @@ class StrategyEngine:
         on its first dry compound will stop whether or not its tyres would
         last. Running inters or wets waives it.
         """
-        if str(state.get("mode_profile", "")) != "race":
+        if not cls._compound_rule_applies_to_event(state):
             return False
         # A car that has stopped is only known to owe a compound when its stint
         # history accounts for every stop; a missing history is not evidence
@@ -2068,7 +2126,7 @@ class StrategyEngine:
         # another car. Rival lap history measures pace, but does not contain
         # the fuel evidence needed to identify intrinsic rival degradation.
         clean_state["analysis"] = {}
-        severity = TRACK_TYRE_SEVERITY.get(int(state.get("track_id", -1)), 1.0)
+        severity = StrategyEngine._severity(state)
         trajectory = [float(value) for value in (wetness_trajectory or [])]
         # Rivals' pace is observed at today's surface; a moving surface moves it.
         weather_moving = bool(trajectory) and max([float(wetness), *trajectory]) > 0.05
@@ -2979,15 +3037,15 @@ class StrategyEngine:
                 + deg * (age + age_end_offset) + wear_penalty + warm_up
             )
             uncertainty = 0.045 + (0.24 if compound == "SOFT" else 0.12 if compound == "MEDIUM" else 0.075) * (1.0 if min(deg_samples, wear_samples) < 3 else 0.35)
-            conservative_lap = expected_lap + uncertainty + max(0.0, peak_wear - 65.0) * 0.020
+            conservative_lap = expected_lap + uncertainty + max(0.0, peak_wear - CONSERVATIVE_PENALTY_PCT) * 0.020
             expected += expected_lap
             conservative += conservative_lap
             lap_times.append(expected_lap)
             wheel_projection.append([round(value, 2) for value in wear])
-            if peak_wear >= 92.0:
+            if peak_wear >= STINT_INFEASIBLE_PCT:
                 feasible = False
-                expected += 18.0 + (peak_wear - 92.0) * 2.0
-                conservative += 30.0 + (peak_wear - 92.0) * 3.0
+                expected += 18.0 + (peak_wear - STINT_INFEASIBLE_PCT) * 2.0
+                conservative += 30.0 + (peak_wear - STINT_INFEASIBLE_PCT) * 3.0
         if laps > 0 and "usable_life_laps" in set_info and starting_age + laps > usable_life:
             feasible = False
             conservative += (starting_age + laps - usable_life) * 8.0
@@ -3245,7 +3303,7 @@ class StrategyEngine:
             or phase != old_phase
             or phase == "red_flag"
             or weather_now
-            or max_wear >= 82.0
+            or max_wear >= safety_limit_pct(current_compound)
             or (old_box is not None and current_lap > old_box)
         )
         if material_trigger:
@@ -3576,7 +3634,7 @@ class StrategyEngine:
         for _ in range(2):
             if self._closing:
                 break
-            state = await self.store.snapshot_analysis()
+            state = await self._with_circuit_model(await self.store.snapshot_analysis())
             context = self._live_context(state)
             previous_strategy = dict(state.get("strategy", {}) or {})
             historical = await self.database.tyre_history_model(
@@ -3726,11 +3784,11 @@ class StrategyEngine:
             and (
                 (
                     feedback_adjustment.get("category") == "tyres_gone"
-                    and current_max_wear <= 45.0
+                    and current_max_wear <= FEEDBACK_CONTRADICTS_LOW_PCT
                 )
                 or (
                     feedback_adjustment.get("category") == "tyres_fine"
-                    and current_max_wear >= 75.0
+                    and current_max_wear >= FEEDBACK_CONTRADICTS_HIGH_PCT
                 )
             )
         )
@@ -5100,7 +5158,7 @@ class StrategyEngine:
         total_laps = int(state.get("total_laps", 0))
         player_pos = int(state.get("player_position", 0))
         remaining = max(0, total_laps - current_lap + (1 if current_lap > 0 else 0))
-        severity = TRACK_TYRE_SEVERITY.get(int(state.get("track_id", -1)), 1.0)
+        severity = StrategyEngine._severity(state)
         rivals: list[dict[str, Any]] = []
         for driver in state.get("drivers", []):
             if int(driver.get("car_idx", -1)) == int(state.get("player_car_index", -1)):
@@ -5460,7 +5518,7 @@ class StrategyEngine:
             new, compound_basis = old, "observed"
         else:
             remaining = max(1, int(state.get("total_laps", 0) or 0) - int(state.get("current_lap", 0) or 0))
-            severity = TRACK_TYRE_SEVERITY.get(int(state.get("track_id", -1)), 1.0)
+            severity = StrategyEngine._severity(state)
             used = self._rival_compounds_used(driver)
             new = self._rival_next_dry_compound(
                 used, remaining, severity, self._rival_owes_compound(state, driver)
@@ -5721,7 +5779,7 @@ class StrategyEngine:
         A stand-alone stint sum priced an intermediate on a dry track and set
         a deterministic total against the recommended plan's quantile.
         """
-        state = await self.store.snapshot_analysis()
+        state = await self._with_circuit_model(await self.store.snapshot_analysis())
         historical = await self.database.tyre_history_model(
             int(state.get("track_id", -1)), context=state
         )

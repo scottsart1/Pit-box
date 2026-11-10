@@ -87,7 +87,7 @@ def test_target_is_not_taken_from_a_retired_car():
         "analysis": {},
     }
     target = AnalysisEngine.compute_target(state)
-    assert target["basis"] == "sustainable race pace"
+    assert target["basis"].startswith("sustainable race pace")
     assert target["target_ms"] >= 95_000, "must not chase a retired car's 1:31"
 
 

@@ -1483,6 +1483,12 @@ class F1DatagramProtocol(asyncio.DatagramProtocol):
             session_link_identifier=int(getattr(packet, "session_link_identifier", 0)),
             strategy=strategy,
         )
+        await self.store.log_forecast({
+            "session_time_s": round(float(packet.header.session_time), 1),
+            "sky_now": WEATHER.get(int(packet.weather), "Unknown"),
+            "accuracy": int(getattr(packet, "forecast_accuracy", 0)),
+            "samples": [[item["time_offset_min"], item["weather"], item["rain_pct"]] for item in forecast],
+        })
 
     async def handle_PacketParticipantsData(self, packet: Any) -> None:
         count = min(int(packet.num_active_cars), 24)

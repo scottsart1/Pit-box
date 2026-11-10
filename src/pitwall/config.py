@@ -330,6 +330,11 @@ class Settings(BaseSettings):
     # wear by the percent, the field's sector times). A lap, a flag, the
     # weather, a tyre change, feedback or a rival's stop recomputes at once.
     strategy_min_recompute_interval_s: float = 4.0
+    # Whether a dry race requires two different dry compounds. "auto" applies
+    # it to every race; "always" and "never" force it, for an event the game
+    # treats differently (whether its shortest race lengths enforce it is not
+    # yet established from a capture).
+    strategy_compound_rule: str = "auto"
     # Cold-tyre out-lap penalty (seconds) applied to the first lap of a fresh
     # stint, halved on the second lap. Ignoring warm-up makes an undercut look
     # better than it is, because the cold in/out laps are where the time goes.
@@ -407,6 +412,14 @@ class Settings(BaseSettings):
         if isinstance(value, str) and value.strip().isdigit():
             return int(value.strip())
         return value
+
+    @field_validator("strategy_compound_rule")
+    @classmethod
+    def _valid_compound_rule(cls, value: str) -> str:
+        normalized = str(value).strip().lower()
+        if normalized not in {"auto", "always", "never"}:
+            raise ValueError("strategy_compound_rule must be auto, always or never")
+        return normalized
 
     @field_validator("ptt_release_mode")
     @classmethod

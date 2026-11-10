@@ -19,6 +19,16 @@ from .setup_insights import (
 from .state import StateStore
 from .strategy import StrategyEngine
 from .tyre_learning import exclusion_reason, stint_pace_model, wear_deltas
+from .tyre_limits import WEAR_PENALTY_STEEP_PEAK_PCT
+
+# The car ahead may pull the race target by this much at most: a target more
+# than 0.8 s under sustainable pace is not a target. A judgement.
+TARGET_MAX_PULL_MS = 800
+# The car ahead's lap counts only on a set within this many laps of the
+# player's, and when it is within this share of its own recent median (not an
+# in-lap or out-lap). Judgements.
+TARGET_AHEAD_MAX_AGE_GAP = 8
+TARGET_AHEAD_MAX_SPREAD = 0.02
 
 if TYPE_CHECKING:
     from .trace_archive import TraceArchiveService
@@ -521,7 +531,7 @@ class AnalysisEngine:
         if wear > 0 and float(wear_per_lap) > 0:
             cliff_lap = int(
                 state.get("current_lap", 0)
-                + max(0, math.floor((72 - wear) / float(wear_per_lap)))
+                + max(0, math.floor((WEAR_PENALTY_STEEP_PEAK_PCT - wear) / float(wear_per_lap)))
             )
         result.update(
             {
@@ -556,6 +566,33 @@ class AnalysisEngine:
             if delta < 0.5
             else "fuel positive",
         }
+
+    @staticmethod
+    def _comparable_car_ahead(state: dict[str, Any], ahead: dict[str, Any]) -> bool:
+        """Whether the car ahead's last lap is a pace the player could match.
+
+        Not on new softs against old mediums, not on inters against slicks,
+        not its in-lap or out-lap, and only under green.
+        """
+        last = int(ahead.get("last_lap_ms") or 0)
+        if last <= 0 or str(state.get("race_control_phase", "green")) != "green":
+            return False
+        if ahead.get("pit_lane_timer_active") or int(ahead.get("pit_status", 0) or 0):
+            return False
+        wet = {"INTER", "WET"}
+        mine = str((state.get("tyre") or {}).get("compound") or "").upper()
+        theirs = str(ahead.get("tyre_compound") or "").upper()
+        if (mine in wet) != (theirs in wet):
+            return False
+        my_age = int((state.get("tyre") or {}).get("age_laps", 0) or 0)
+        if abs(int(ahead.get("tyre_age", my_age) or 0) - my_age) > TARGET_AHEAD_MAX_AGE_GAP:
+            return False
+        recent = [
+            int(lap.get("lap_ms") or 0) for lap in (ahead.get("lap_history") or [])[-4:]
+            if int(lap.get("lap_ms") or 0) > 0 and int(lap.get("valid_flags", 1) or 0) & 1
+        ][-3:]
+        # Not an in-lap or out-lap: within 2% of its own recent median.
+        return not recent or abs(last - median(recent)) <= TARGET_AHEAD_MAX_SPREAD * median(recent)
 
     @staticmethod
     def compute_target(state: dict[str, Any]) -> dict[str, Any]:
@@ -608,9 +645,28 @@ class AnalysisEngine:
             )
             basis = "session best / theoretical best"
         else:
-            recent = [lap["lap_time_ms"] for lap in valid[-4:]]
-            target_ms = int(median(recent)) if recent else player_best
-            basis = "sustainable race pace"
+            # Race pace from clean laps only: a safety-car lap or an in-lap is
+            # valid, and a median taken from them set a target seconds slow.
+            # A lap in a pack is still race pace, so traffic does not count
+            # against it here.
+            clean = [
+                lap for lap in state.get("completed_laps", [])
+                if (lap.get("lap_time_ms") or 0) > 0
+                and exclusion_reason({
+                    "mode_profile": mode, **lap,
+                    "learning_exclusions": [
+                        tag for tag in lap.get("learning_exclusions") or [] if tag != "traffic"
+                    ],
+                }) is None
+            ]
+            recent = [lap["lap_time_ms"] for lap in clean[-4:]]
+            if recent:
+                target_ms = int(median(recent))
+                basis = f"sustainable race pace ({len(recent)} clean laps)"
+            else:
+                fallback = [lap["lap_time_ms"] for lap in valid[-4:]]
+                target_ms = int(median(fallback)) if fallback else player_best
+                basis = "recent laps; none clean yet"
             player_position = int(state.get("player_position", 0) or 0)
             # There is no car ahead of the leader. Retired and garaged cars
             # report position 0, so without the guard a race leader would be
@@ -628,9 +684,13 @@ class AnalysisEngine:
                 if player_position > 1
                 else None
             )
-            if ahead and ahead.get("last_lap_ms") and target_ms:
-                target_ms = min(target_ms, int(ahead["last_lap_ms"]) - 100)
-                basis = "pace required to pressure the car ahead"
+            if ahead and target_ms and AnalysisEngine._comparable_car_ahead(state, ahead):
+                # The car ahead pulls the target, by no more than a target a
+                # driver can sustain.
+                pulled = max(target_ms - TARGET_MAX_PULL_MS, int(ahead["last_lap_ms"]) - 100)
+                if pulled < target_ms:
+                    target_ms = pulled
+                    basis = "pace of the car ahead, capped"
         return {
             "target_ms": target_ms,
             "target": fmt_ms(target_ms),
