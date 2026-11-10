@@ -1461,7 +1461,7 @@ button:disabled,
 .sa-call-said circle { fill: #49d17d; }
 .sa-call-unsaid circle { fill: #ffc15c; }
 .sa-call-failed circle { fill: #ff6969; }
-.sa-call-word { fill: var(--text-1); font-size: 10px; font-weight: 800; letter-spacing: .04em; pointer-events: none; }
+.sa-call-word { fill: var(--text-1); font-size: 11px; font-weight: 800; pointer-events: none; }
 .sa-call:hover circle, .sa-call:focus circle { filter: brightness(1.2); }
 .sa-review { margin-top: 14px; }
 .sa-review-title { font-size: 11px; font-weight: 800; letter-spacing: .12em; text-transform: uppercase; color: var(--text-2); margin: 0 0 4px; }
