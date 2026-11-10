@@ -7,7 +7,7 @@ import json
 import math
 import time
 from collections import deque
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from dataclasses import asdict, dataclass, field, fields, is_dataclass
 from typing import Any, Literal
 
@@ -965,6 +965,16 @@ class StateStore:
             if strategy_revision == revision:
                 data["strategy"] = {"revision": revision, "unchanged": True}
             return json.dumps(data, separators=_JSON_SEPARATORS, ensure_ascii=False)
+
+    async def gap_histories(self, car_indexes: Iterable[int]) -> dict[int, list[dict[str, Any]]]:
+        """Copies of a few cars' gap histories, which the radio snapshot omits."""
+        wanted = {int(index) for index in car_indexes}
+        async with self._lock:
+            return {
+                int(driver.car_idx): copy.deepcopy(driver.gap_history)
+                for driver in self.state.drivers
+                if int(driver.car_idx) in wanted
+            }
 
     async def snapshot_radio(self) -> dict[str, Any]:
         """Live conditions for frequent radio checks, without traces or histories.

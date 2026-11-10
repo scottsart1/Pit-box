@@ -17,7 +17,8 @@ from .grounding import lap_counts, place_counts, unsupported
 from .session_guard import session_key, session_scoped
 from .setup_advisor import SetupAdvisor
 from .state import StateStore
-from .strategy import OPERATIONAL_WEAR_LIMIT, StrategyEngine
+from .strategy import COVER_RANGE_BOUNDS_S, OPERATIONAL_WEAR_LIMIT, StrategyEngine
+from .tools import TelemetryTools
 from .voice import NativeVoiceController
 
 log = logging.getLogger(__name__)
@@ -128,16 +129,16 @@ SUPPRESSIBLE_SUBJECTS: dict[str, frozenset[str]] = {
     "battery": frozenset({"energy_low"}),
     "ers": frozenset({"energy_low"}),
     "energy": frozenset({"energy_low"}),
-    "strategy": frozenset({"strategy_change", "compound_requirement", "driver_check"}),
-    "pit": frozenset({"strategy_change", "compound_requirement", "driver_check"}),
+    "strategy": frozenset({"strategy_change", "compound_requirement", "driver_check", "pit_window_open"}),
+    "pit": frozenset({"strategy_change", "compound_requirement", "driver_check", "pit_window_open"}),
     "corner": frozenset({"corner_coaching"}),
     "coaching": frozenset({"corner_coaching"}),
     "line": frozenset({"corner_coaching"}),
     "driving": frozenset({"corner_coaching"}),
     "weather": frozenset({"weather_crossover", "weather_stand_down", "weather_box_reminder"}),
     "rain": frozenset({"weather_crossover", "weather_stand_down", "weather_box_reminder"}),
-    "rival": frozenset({"rival_pace", "rival_pitted", "undercut_threat"}),
-    "rivals": frozenset({"rival_pace", "rival_pitted", "undercut_threat"}),
+    "rival": frozenset({"rival_pace", "rival_pitted", "rival_pitting", "undercut_threat"}),
+    "rivals": frozenset({"rival_pace", "rival_pitted", "rival_pitting", "undercut_threat"}),
     "gap": frozenset({"rival_pace"}),
     "update": frozenset({"progress_update"}),
     "updates": frozenset({"progress_update"}),
@@ -173,6 +174,15 @@ FLASH, CRITICAL, IMPORTANT, ROUTINE = -1, 0, 1, 2
 
 # Throttle above which the car is taken to be on a straight, for the strict
 # speaking window. Part throttle through a fast sweep is not a straight.
+# A car behind is called catching only inside this gap, at this rate a lap or
+# faster on the lap-long trend the gap tool reads. Judgements: three seconds is
+# DRS and dirty-air range plus a lap's error; two tenths is above lap noise.
+RIVAL_CATCHING_RANGE_S = 3.0
+RIVAL_CATCHING_RATE_S = 0.2
+# How often the catching call reads the field's gap histories.
+RIVAL_TREND_CHECK_INTERVAL_S = 5.0
+# Stops off the player's tyre and stop number that open the pit window.
+RIVAL_WINDOW_STOPS = 3
 SAFE_TO_SPEAK_MIN_THROTTLE = 0.45
 
 # Calls a red flag does not make stale: legality and the state of the car.
@@ -221,6 +231,8 @@ EVENT_PRIORITY = {
     "compound_requirement": IMPORTANT,
     "undercut_threat": IMPORTANT,
     "rival_pitted": IMPORTANT,
+    "rival_pitting": IMPORTANT,
+    "pit_window_open": IMPORTANT,
     "rival_pace": IMPORTANT,
     "strategy_change": IMPORTANT,
     "driver_check": IMPORTANT,
@@ -331,6 +343,11 @@ _NARRATION_FACTS: dict[str, tuple[str, ...]] = {
     "penalty_service": ("drive_through", "stop_go", "serve_at_stop", "strategy"),
     "undercut_threat": ("driver", "position", "tyre", "gap_to_player_s", "instruction", "strategy"),
     "rival_pitted": ("driver", "position", "tyre", "gap_to_player_s", "strategy"),
+    "rival_pitting": (
+        "driver", "position", "tyre", "gap_to_player_s", "side", "seen_in_lane",
+        "cover_holds_next_lap", "cover_margin_s", "cover_by", "clear_air_laps", "pace_needed_s", "also",
+    ),
+    "pit_window_open": ("cars", "compound", "first_lap", "last_lap", "box_lap"),
     "safety_car_delta": ("phase", "safety_car_delta_s", "threshold_s"),
     "corner_coaching": (
         "corner_no", "name", "average_loss_s", "cause", "instruction",
@@ -352,7 +369,7 @@ _NARRATION_FACTS: dict[str, tuple[str, ...]] = {
     "energy_low": ("ers_pct", "regulations_2026"),
     "component_wear": ("component", "wear_pct", "components"),
     "engine_failure": ("blown", "seized"),
-    "rival_pace": ("driver", "gap_to_player_s", "closing"),
+    "rival_pace": ("driver", "gap_to_player_s", "closing", "gap_change_s_per_lap", "laps_to_contact"),
     "pace_roast": (
         "lap", "reason", "position", "active_cars", "bottom_five", "delta_to_target_s", "target", "lap_time",
     ),
@@ -546,8 +563,15 @@ class ProactiveEngineer:
         self._last_blue_flag = False
         self._last_unserved_penalties = (0, 0)
         self._last_quali_release_lap = 0
-        # car_idx -> (gap_s, monotonic timestamp), for rival gap-trend detection.
-        self._rival_gap_history: dict[int, tuple[float, float]] = {}
+        # When the catching call last read the field's gap histories.
+        self._rival_trend_checked_at = float("-inf")
+        # Rival stops: whether each car was in the lane at the last pass, the
+        # stops already seen there or called, and what each car stopped from.
+        self._rival_in_pit: dict[int, bool] = {}
+        self._rival_stops_seen: set[tuple[int, int]] = set()
+        self._rival_stop_entry: dict[int, tuple[str, int]] = {}
+        self._window_stops: dict[tuple[str, int], dict[int, int]] = {}
+        self._window_called: set[tuple[str, int]] = set()
         # Per-component wear band already alerted, so each PU element escalates
         # independently rather than one shared band hiding the others.
         self._component_alert_bands: dict[str, int] = {}
@@ -880,7 +904,12 @@ class ProactiveEngineer:
         self._last_blue_flag = False
         self._last_unserved_penalties = (0, 0)
         self._last_quali_release_lap = 0
-        self._rival_gap_history = {}
+        self._rival_trend_checked_at = float("-inf")
+        self._rival_in_pit = {}
+        self._rival_stops_seen = set()
+        self._rival_stop_entry = {}
+        self._window_stops = {}
+        self._window_called = set()
         self._component_alert_bands = {}
         self._engine_failure_alerted = False
         self._energy_alert_lap = 0
@@ -1301,45 +1330,191 @@ class ProactiveEngineer:
                 expires_s=30.0,
             )
 
-    def _detect_rival_pace(self, state: dict[str, Any]) -> None:
-        """Flag a rival closing fast enough to be in range within a few laps."""
+    async def _detect_rival_pace(self, state: dict[str, Any]) -> None:
+        """Call a car behind that is catching, on the trend the gap tool reads.
+
+        A short wall-clock sample made one car "catching" on the radio and
+        "dropping back" in the answer to "is he catching?". The call reads the
+        same lap-long trend, with its conflict check, and says how soon.
+        """
         if state.get("mode_profile") not in {"race", "sprint"}:
             return
-        now = time.monotonic()
         player_idx = int(state.get("player_car_index", -1))
-        for driver in state.get("drivers", []):
+        close = [
+            int(driver.get("car_idx", -1)) for driver in state.get("drivers", [])
+            if int(driver.get("car_idx", -1)) != player_idx
+            and driver.get("gap_to_player_s") is not None
+            and 0 < float(driver["gap_to_player_s"]) <= RIVAL_CATCHING_RANGE_S
+        ]
+        now = time.monotonic()
+        if not close or now - self._rival_trend_checked_at < RIVAL_TREND_CHECK_INTERVAL_S:
+            return
+        self._rival_trend_checked_at = now
+        histories = await self.store.gap_histories(close)
+        names = {int(driver.get("car_idx", -1)): driver for driver in state.get("drivers", [])}
+        for idx in close:
+            driver = {**names[idx], "gap_history": histories.get(idx, [])}
+            trend = TelemetryTools._gap_trend(driver)
+            rate = trend.get("gap_change_s_per_lap")
+            if (
+                trend.get("trend") != "closing" or rate is None
+                or float(rate) > -RIVAL_CATCHING_RATE_S or trend.get("trend_conflict")
+            ):
+                continue
+            self._enqueue(
+                "rival_pace",
+                {
+                    "driver": driver.get("name"),
+                    "gap_to_player_s": round(float(driver["gap_to_player_s"]), 2),
+                    "closing": True,
+                    "gap_change_s_per_lap": rate,
+                    "laps_to_contact": trend.get("laps_to_contact"),
+                },
+                cooldown_s=30.0,
+                expires_s=35.0,
+            )
+
+    @staticmethod
+    def _rival_relevance(driver: dict[str, Any], state: dict[str, Any], cover: dict[str, Any] | None) -> int:
+        """How much a rival's stop matters to this race: 2 or more is radio.
+
+        3 within two places; 2 inside the range a fresh set can bridge, ahead
+        or behind, or named in a standing instruction ("tell me when Norris
+        stops"); 1 for the team-mate.
+        """
+        position = int(driver.get("position", 0) or 0)
+        player_position = int(state.get("player_position", 0) or 0)
+        if not player_position:
+            player_idx = int(state.get("player_car_index", -1))
+            player_position = next((
+                int(item.get("position", 0) or 0) for item in state.get("drivers", [])
+                if int(item.get("car_idx", -1)) == player_idx
+            ), 0)
+        if position and player_position and abs(position - player_position) <= 2:
+            return 3
+        score = 0
+        gap = driver.get("gap_to_player_s")
+        reach = float((cover or {}).get("cover_range_s") or COVER_RANGE_BOUNDS_S[0])
+        if gap is not None and abs(float(gap)) <= reach:
+            score = 2
+        name = str(driver.get("name") or "").strip().lower()
+        if name and any(name in str(item).lower() for item in state.get("standing_instructions", []) or []):
+            score = max(score, 2)
+        if driver.get("is_teammate"):
+            score = max(score, 1)
+        return score
+
+    async def _cover_for(self, car_idx: int) -> dict[str, Any] | None:
+        evaluate = getattr(self.strategy, "evaluate_cover", None)
+        if evaluate is None:
+            return None
+        try:
+            cover = await evaluate(car_idx)
+        except Exception:  # noqa: BLE001 - a call without the arithmetic still names the car
+            return None
+        return cover if isinstance(cover, dict) and cover.get("available") else None
+
+    async def _detect_rival_stops(self, state: dict[str, Any]) -> None:
+        """Call the stop that matters, at pit entry, once.
+
+        Stops were called from the stop counter, a lap late, for every car,
+        and two stops in one pass kept the higher car index whichever was
+        nearer. The lane is watched instead; the most relevant car is named,
+        the others relevant with it are listed, and the rest are left to the
+        Strategy page. The counter still catches a stop the lane never showed.
+        """
+        player_idx = int(state.get("player_car_index", -1))
+        racing = state.get("mode_profile") in {"race", "sprint"}
+        drivers = [d for d in state.get("drivers", []) if int(d.get("car_idx", -1)) != player_idx]
+        player = next((d for d in state.get("drivers", []) if int(d.get("car_idx", -1)) == player_idx), {})
+        candidates: list[tuple[dict[str, Any], bool]] = []
+        for driver in drivers:
             idx = int(driver.get("car_idx", -1))
+            stops = int(driver.get("pit_stops", 0) or 0)
+            in_pit = bool(driver.get("pit_lane_timer_active")) or int(driver.get("pit_status", 0) or 0) != 0
+            was = self._rival_in_pit.get(idx)
+            self._rival_in_pit[idx] = in_pit
+            if was is False and in_pit:
+                # The counter may move at entry or at exit; either way this
+                # stop has been seen.
+                self._rival_stops_seen.update({(idx, stops), (idx, stops + 1)})
+                self._rival_stop_entry[idx] = (str(driver.get("tyre_compound") or "").upper(),
+                                               int(state.get("current_lap", 0) or 0))
+                candidates.append((driver, True))
+            elif was and not in_pit:
+                self._note_window_stop(state, driver, player)
+            previous = self._last_pit_stops.get(idx) if self._last_pit_stops else None
+            if previous is not None and stops > previous and (idx, stops) not in self._rival_stops_seen:
+                self._rival_stops_seen.add((idx, stops))
+                candidates.append((driver, False))
+        if not racing or not candidates:
+            return
+        ranked = []
+        for driver, seen_in_lane in candidates:
+            cover = await self._cover_for(int(driver.get("car_idx", -1)))
+            relevance = self._rival_relevance(driver, state, cover)
             gap = driver.get("gap_to_player_s")
-            if idx == player_idx or gap is None:
-                continue
-            gap = float(gap)
-            previous = self._rival_gap_history.get(idx)
-            if previous is None:
-                self._rival_gap_history[idx] = (gap, now)
-                continue
-            prev_gap, prev_t = previous
-            elapsed = now - prev_t
-            # Keep the anchor sample until a full comparison window has passed;
-            # overwriting it every poll left elapsed at ~one tick, so the trend
-            # never accumulated and the call never fired.
-            if elapsed < 8.0:
-                continue
-            self._rival_gap_history[idx] = (gap, now)
-            # gap_to_player_s is negative for a car ahead and positive for a car
-            # behind; a closing car behind has a shrinking positive gap.
-            behind = gap > 0
-            closing = abs(gap) < abs(prev_gap) - 0.15
-            if behind and closing and abs(gap) <= 3.0:
-                self._enqueue(
-                    "rival_pace",
-                    {
-                        "driver": driver.get("name"),
-                        "gap_to_player_s": round(gap, 2),
-                        "closing": True,
-                    },
-                    cooldown_s=30.0,
-                    expires_s=35.0,
-                )
+            ranked.append((relevance, -abs(float(gap)) if gap is not None else -1e9, driver, cover, seen_in_lane))
+        relevant = sorted((item for item in ranked if item[0] >= 2), key=lambda item: item[:2], reverse=True)
+        if not relevant:
+            return
+        _, _, driver, cover, seen_in_lane = relevant[0]
+        gap = driver.get("gap_to_player_s")
+        options = (cover or {}).get("options") or []
+        next_lap = options[0] if options else None
+        payload = {
+            "driver": driver.get("name"),
+            "position": driver.get("position"),
+            "tyre": driver.get("tyre_compound"),
+            "gap_to_player_s": round(float(gap), 2) if gap is not None else None,
+            "side": (cover or {}).get("side") or ("behind" if gap is not None and float(gap) > 0 else "ahead"),
+            "seen_in_lane": seen_in_lane,
+            "cover_holds_next_lap": bool(next_lap and next_lap.get("holds")) if next_lap else None,
+            "cover_margin_s": next_lap.get("margin_s") if next_lap else None,
+            "cover_by": (cover or {}).get("cover_by"),
+            "clear_air_laps": (cover or {}).get("clear_air_laps"),
+            "pace_needed_s": (cover or {}).get("pace_needed_s"),
+            "also": [item[2].get("name") for item in relevant[1:]],
+        }
+        self._enqueue(
+            "rival_pitting",
+            payload,
+            critical=bool(payload["cover_holds_next_lap"]),
+            cooldown_s=0.0,
+            expires_s=25.0,
+        )
+
+    def _note_window_stop(self, state: dict[str, Any], driver: dict[str, Any], player: dict[str, Any]) -> None:
+        """Count stops off the player's tyre; three opens the window, said once a stint."""
+        idx = int(driver.get("car_idx", -1))
+        entry = self._rival_stop_entry.pop(idx, None)
+        compound = str((state.get("tyre") or {}).get("compound") or "").upper()
+        player_stops = int(player.get("pit_stops", 0) or 0)
+        if entry is None or entry[0] != compound or not compound:
+            return
+        if int(driver.get("pit_stops", 0) or 0) != player_stops + 1:
+            return
+        key = (compound, player_stops)
+        stopped = self._window_stops.setdefault(key, {})
+        stopped[idx] = entry[1]
+        if len(stopped) < RIVAL_WINDOW_STOPS or key in self._window_called:
+            return
+        if state.get("mode_profile") not in {"race", "sprint"}:
+            return
+        self._window_called.add(key)
+        laps = sorted(stopped.values())
+        self._enqueue(
+            "pit_window_open",
+            {
+                "cars": len(stopped),
+                "compound": compound,
+                "first_lap": laps[0],
+                "last_lap": laps[-1],
+                "box_lap": ((state.get("strategy") or {}).get("recommended") or {}).get("box_lap"),
+            },
+            cooldown_s=0.0,
+            expires_s=60.0,
+        )
 
     @staticmethod
     def _player(state: dict[str, Any]) -> dict[str, Any] | None:
@@ -1374,6 +1549,38 @@ class ProactiveEngineer:
     @staticmethod
     def _car_moving(state: dict[str, Any]) -> bool:
         return int(state.get("speed_kph", 0) or 0) > 30
+
+    @staticmethod
+    def _spoken_name(name: Any, default: str) -> str:
+        text = str(name or "").strip()
+        if not text:
+            return default
+        return text.title() if text.isupper() else text
+
+    @staticmethod
+    def _rival_pitting_text(payload: dict[str, Any]) -> str:
+        """The stop, and what it means for us, in the engine's own numbers."""
+        name = ProactiveEngineer._spoken_name(payload.get("driver"), "A rival")
+        gap = payload.get("gap_to_player_s")
+        gap_text = f"{abs(float(gap)):.1f}" if gap is not None else None
+        stopping = "is in the pits" if payload.get("seen_in_lane", True) else "has pitted"
+        if payload.get("side") == "ahead":
+            text = f"{name} ahead {'is in' if payload.get('seen_in_lane', True) else 'has pitted'}."
+            if payload.get("pace_needed_s") is not None and payload.get("clear_air_laps"):
+                text += (
+                    f" Clear air now: {payload['clear_air_laps']} laps to make "
+                    f"{float(payload['pace_needed_s']):.1f} seconds."
+                )
+        else:
+            text = f"{name} {stopping}" + (f", {gap_text} behind." if gap_text else ".")
+            if payload.get("cover_holds_next_lap") is True and payload.get("cover_margin_s") is not None:
+                text += f" Box next lap and you stay ahead by {float(payload['cover_margin_s']):.1f}."
+            elif payload.get("cover_holds_next_lap") is False:
+                text += " You can't cover it; stay out and run your race."
+        also = [ProactiveEngineer._spoken_name(item, "") for item in payload.get("also") or [] if item]
+        if also:
+            text += f" {' and '.join(also)} {'is' if len(also) == 1 else 'are'} in too."
+        return text
 
     @staticmethod
     def _rejoin_clause(payload: dict[str, Any], state: dict[str, Any]) -> str:
@@ -2340,7 +2547,7 @@ class ProactiveEngineer:
         self._detect_race_start(state)
         self._detect_component_wear(state)
         self._detect_energy(state)
-        self._detect_rival_pace(state)
+        await self._detect_rival_pace(state)
         self._detect_driver_check(state)
 
         unserved = (
@@ -2450,33 +2657,7 @@ class ProactiveEngineer:
                 self._enqueue("strategy_change", self._spoken_advice(recommended, state), cooldown_s=15.0)
 
         current_stops = {int(d.get("car_idx", -1)): int(d.get("pit_stops", 0)) for d in state.get("drivers", [])}
-        if self._last_pit_stops:
-            for driver in state.get("drivers", []):
-                idx = int(driver.get("car_idx", -1))
-                if idx != int(state.get("player_car_index", -1)) and current_stops.get(idx, 0) > self._last_pit_stops.get(idx, 0):
-                    gap = driver.get("gap_to_player_s")
-                    payload = {
-                        "driver": driver.get("name"),
-                        "position": driver.get("position"),
-                        "tyre": driver.get("tyre_compound"),
-                        "gap_to_player_s": gap,
-                        "strategy": self._advice(state),
-                    }
-                    self._enqueue("rival_pitted", payload, cooldown_s=0.0)
-                    if gap is not None and 0 < float(gap) <= 25.0:
-                        self._enqueue(
-                            "undercut_threat",
-                            {
-                                **payload,
-                                "instruction": (
-                                    "Car behind has stopped. Push for up to two clean laps "
-                                    "while protecting the limiting tyre, then reassess the cover stop."
-                                ),
-                            },
-                            critical=float(gap) <= 12.0,
-                            cooldown_s=0.0,
-                            expires_s=50.0,
-                        )
+        await self._detect_rival_stops(state)
         self._last_pit_stops = current_stops
 
     @staticmethod
@@ -2743,6 +2924,14 @@ class ProactiveEngineer:
                 payload.get("instruction")
                 or f"{payload.get('driver', 'A rival')} has boxed. We are recalculating the response."
             )
+        if kind == "rival_pitting":
+            return ProactiveEngineer._rival_pitting_text(payload)
+        if kind == "pit_window_open":
+            tyre = ProactiveEngineer._compound_plural(payload.get("compound")) or "your tyre"
+            first, last = payload.get("first_lap"), payload.get("last_lap")
+            laps = f"lap {first}" if first == last else f"laps {first} to {last}"
+            ours = f" Ours is lap {payload['box_lap']}." if payload.get("box_lap") is not None else ""
+            return f"The window is open: {payload.get('cars')} cars on {tyre} have stopped, {laps}.{ours}"
         if kind == "race_start":
             side = "clean side" if payload.get("clean_side") else "dirty side"
             return (
@@ -2795,9 +2984,17 @@ class ProactiveEngineer:
                 "assessing whether to continue."
             )
         if kind == "rival_pace":
+            name = ProactiveEngineer._spoken_name(payload.get("driver"), "Car behind")
+            gap = abs(float(payload.get("gap_to_player_s", 0.0)))
+            rate = payload.get("gap_change_s_per_lap")
+            contact = payload.get("laps_to_contact")
+            if rate is not None:
+                text = f"{name} is catching, {gap:.1f} back, {abs(float(rate)):.1f} a lap"
+                if contact is not None:
+                    text += f"; with you in about {max(1, round(float(contact)))} laps"
+                return text + ". Protect the tyres you will need to defend."
             return (
-                f"{payload.get('driver', 'Car behind')} is catching, "
-                f"{abs(float(payload.get('gap_to_player_s', 0.0))):.1f} seconds back "
+                f"{name} is catching, {gap:.1f} seconds back "
                 "and closing. Protect the tyres you will need to defend."
             )
         if kind == "pace_roast":

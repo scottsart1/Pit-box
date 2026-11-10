@@ -197,7 +197,8 @@ async def test_qualifying_progress_payload_uses_best_laps_not_gaps(stack):
     assert event["payload"]["qualifying"]["target"] == "1:28.400"
 
 @pytest.mark.asyncio
-async def test_rival_pitting_from_behind_queues_undercut_threat(stack):
+async def test_a_stop_the_lane_never_showed_is_still_called_from_the_counter(stack):
+    """The car behind, a place back: its stop is called once, by name, at its gap."""
     from pitwall.state import DriverState
 
     store, database, _, _, _, _ = stack
@@ -237,10 +238,13 @@ async def test_rival_pitting_from_behind_queues_undercut_threat(stack):
     await store.mutate(lambda state: setattr(state.drivers[1], "pit_stops", 1))
     await engineer._detect(await store.snapshot_analysis())
 
-    threats = [item for item in engineer.pending if item["type"] == "undercut_threat"]
-    assert len(threats) == 1
-    assert threats[0]["payload"]["driver"] == "Lawson"
-    assert threats[0]["payload"]["gap_to_player_s"] == pytest.approx(8.4)
+    calls = [item for item in engineer.pending if item["type"] == "rival_pitting"]
+    assert len(calls) == 1
+    assert calls[0]["payload"]["driver"] == "Lawson"
+    assert calls[0]["payload"]["gap_to_player_s"] == pytest.approx(8.4)
+    assert calls[0]["payload"]["seen_in_lane"] is False
+    # The generic eight-second "undercut threat" is gone.
+    assert not [item for item in engineer.pending if item["type"] == "undercut_threat"]
 
 
 @pytest.mark.asyncio
