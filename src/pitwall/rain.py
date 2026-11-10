@@ -266,6 +266,7 @@ def wetness_from_history(
     rain_pct: float | None = None,
     track_temp_c: float | None,
     active_cars: int = 0,
+    lap_fraction: float = 1.0,
 ) -> tuple[float, int]:
     """Integrate soak and drying across the weather each completed lap saw.
 
@@ -280,24 +281,38 @@ def wetness_from_history(
     current_target = equilibrium_wetness(weather)
     if not samples:
         return current_target, 0
+    series = surface_series(samples, track_temp_c=track_temp_c, active_cars=active_cars)
+    # Then the part of the lap in progress that has actually been driven.
+    wet = step_wetness(
+        series[-1], current_target, laps=max(0.0, min(1.0, float(lap_fraction))),
+        track_temp_c=track_temp_c, active_cars=active_cars,
+    )
+    return wet, len(samples)
+
+
+def surface_series(
+    samples: Sequence[dict[str, Any]],
+    *,
+    track_temp_c: float | None,
+    active_cars: int = 0,
+) -> list[float]:
+    """The surface at the start of the window and at the end of every lap in it."""
+    if not samples:
+        return []
     # Seed from the oldest lap's own conditions rather than from dry, so a race
     # that was already wet when the history window opens does not have to soak
     # from zero all over again.
-    first = samples[0]
-    wet = equilibrium_wetness(str(first.get("weather", "")))
+    wet = equilibrium_wetness(str(samples[0].get("weather", "")))
+    series = [wet]
     for lap in samples:
-        target = equilibrium_wetness(str(lap.get("weather", "")))
         wet = step_wetness(
             wet,
-            target,
+            equilibrium_wetness(str(lap.get("weather", ""))),
             track_temp_c=lap.get("track_temp_c", track_temp_c),
             active_cars=active_cars,
         )
-    # Then one more step for the lap in progress, which has no record yet.
-    wet = step_wetness(
-        wet, current_target, track_temp_c=track_temp_c, active_cars=active_cars
-    )
-    return wet, len(samples)
+        series.append(wet)
+    return series
 
 
 # --- Channel C: the lap times ----------------------------------------------
@@ -717,12 +732,26 @@ def estimate_wetness(
     laps = list(state.get("completed_laps", []))
 
     declared = equilibrium_wetness(weather)
+    track_length = finite(state.get("track_length_m")) or 0.0
+    lap_distance = finite(state.get("lap_distance_m"))
+    lap_fraction = (
+        max(0.0, min(1.0, lap_distance / track_length))
+        if lap_distance is not None and track_length > 100 else 1.0
+    )
     dynamic, history_laps = wetness_from_history(
         laps,
         weather=weather,
         track_temp_c=track_temp,
         active_cars=active_cars,
+        lap_fraction=lap_fraction,
     )
+    series = surface_series(
+        [lap for lap in laps if lap.get("weather")],
+        track_temp_c=track_temp, active_cars=active_cars,
+    )
+    # A completed lap measures the surface it was driven on, which is the
+    # surface of about half a lap before it ended, not the surface now.
+    surface_when_measured = (series[-2] + series[-1]) / 2 if len(series) >= 2 else dynamic
 
     dry_until = _last_dry_lap(laps)
     observations: list[dict[str, Any]] = []
@@ -740,7 +769,7 @@ def estimate_wetness(
     field = field_pace_observations(state, dry_until_lap=dry_until)
     observations.extend(field)
 
-    measured, pace_confidence, pace_samples = fit_wetness(observations, dynamic)
+    measured, pace_confidence, pace_samples = fit_wetness(observations, surface_when_measured)
     # A benchmark taken from a session that may never have been dry is weaker
     # evidence than one taken from laps known to be dry: if every lap of the race
     # so far was wet, every car's best lap was wet too and the ratios understate
@@ -756,8 +785,9 @@ def estimate_wetness(
     # the driver nudges whatever the numbers settled on. Weighting rather than
     # overriding, so no single channel can run away with a race on its own.
     wetness = dynamic
+    innovation = measured - surface_when_measured
     if pace_confidence > 0.0:
-        wetness += (measured - dynamic) * min(0.85, pace_confidence)
+        wetness += innovation * min(0.85, pace_confidence)
     if grip:
         wetness += (grip["wetness"] - wetness) * min(0.45, float(grip["weight"]))
     wetness = clamp_wetness(wetness)
@@ -775,11 +805,13 @@ def estimate_wetness(
     settled_laps = _laps_at_current_conditions(laps, declared)
     bias = 0.0
     if pace_confidence >= 0.35:
-        bias = (wetness - dynamic) * min(1.0, pace_confidence)
+        bias = innovation * min(0.85, pace_confidence) * min(1.0, pace_confidence)
 
     return {
         "wetness": round(wetness, 3),
         "equilibrium_bias": round(bias, 3),
+        "surface_when_measured": round(surface_when_measured, 3),
+        "lap_fraction": round(lap_fraction, 3),
         "settled_laps": settled_laps,
         "declared_wetness": round(declared, 3),
         "dynamic_wetness": round(dynamic, 3),
@@ -882,6 +914,36 @@ def _wetness_trend(
     return "steady"
 
 
+# Share of a forecast chance that persists with the conditions observed now.
+# EA publishes marginal chances and no correlation; the scenarios below already
+# assume one shared rank through the horizon, and the present is one more
+# sample of that rank. The remainder is treated as independent of the present.
+_FORECAST_PERSISTENCE = 0.8
+
+
+def conditioned_rain_probability(
+    chance: float, now_chance: float | None, raining_now: bool
+) -> float:
+    """Chance of rain at a future sample, given what is falling now.
+
+    With no offset-zero chance there is nothing to condition on and the
+    published chance is returned unchanged.
+    """
+    chance = max(0.0, min(1.0, float(chance)))
+    if now_chance is None:
+        return chance
+    now_chance = max(0.0, min(1.0, float(now_chance)))
+    if raining_now:
+        # Rain is falling: the shared rank sits below the present chance.
+        dependent = 1.0 if now_chance <= 0.0 else min(1.0, chance / now_chance)
+    elif now_chance >= 1.0:
+        # A dry sky under a 100% present chance: the forecast has no say.
+        return chance
+    else:
+        dependent = max(0.0, (chance - now_chance) / (1.0 - now_chance))
+    return _FORECAST_PERSISTENCE * dependent + (1.0 - _FORECAST_PERSISTENCE) * chance
+
+
 class WetnessScenario(TypedDict):
     probability: float
     trajectory: list[float]
@@ -928,12 +990,24 @@ def project_wetness_scenarios(
     active_cars = int(state.get("active_cars", 0) or 0)
     now_target = equilibrium_wetness(str(state.get("weather", "Unknown")))
 
+    now_sample = next(
+        (sample for sample in state.get("weather_forecast", []) or []
+         if finite(sample.get("time_offset_min")) == 0 and finite(sample.get("rain_pct")) is not None),
+        None,
+    )
+    now_chance = (
+        max(0.0, min(1.0, float(now_sample["rain_pct"]) / 100.0)) if now_sample else None
+    )
+    raining_now = now_target > 0.0
+
     def probability(sample: dict[str, Any]) -> float:
         pct = finite(sample.get("rain_pct"))
         if pct is None:
             # Older/synthetic samples without a chance retain their category.
             return 1.0 if equilibrium_wetness(str(sample.get("weather", ""))) > 0 else 0.0
-        return max(0.0, min(1.0, pct / 100.0))
+        return conditioned_rain_probability(
+            max(0.0, min(1.0, pct / 100.0)), now_chance, raining_now
+        )
 
     def project(rank: float | None) -> list[float]:
         trajectory: list[float] = []
@@ -1212,9 +1286,48 @@ def evaluate(
             "benefiting_laps": max(0, len(trajectory) - best_offset - 1),
         }
 
+    # A stop is committed on evidence about the surface, not on a label. The
+    # soak rate is a judgement; until something measured agrees with it the
+    # call is to stand by for the next lap.
+    grip = reading.get("driver_report") or {}
+    split = reading.get("compound_split") or {}
+    advantage = float(split.get("wet_advantage_fraction", 0.0) or 0.0)
+    to_wet = best_compound in WET_COMPOUNDS and current not in WET_COMPOUNDS
+    to_dry = best_compound in DRY_COMPOUNDS and current in WET_COMPOUNDS
+    measured = reading.get("measured_wetness")
+    measured_ok = float(reading.get("pace_confidence", 0.0)) >= 0.5 and measured is not None
+    confirmed = bool(
+        change_during_suspension
+        or not (to_wet or to_dry)
+        or (to_wet and (
+            wetness >= WETNESS_SLICK_INTER - 0.02
+            or (measured_ok and float(measured) >= 0.20)
+            or advantage > 0.0
+            or grip.get("category") in {"damp", "soaked", "flooded"}
+        ))
+        or (to_dry and (
+            wetness <= WETNESS_SLICK_INTER + 0.02
+            or (measured_ok and float(measured) <= 0.30)
+            or advantage < 0.0
+            or grip.get("category") in {"drying", "dry_line"}
+        ))
+    )
+    if should_change and not confirmed:
+        should_change = False
+        upcoming = {
+            "lap_offset": 1,
+            "compound": best_compound,
+            "gain_s": round(margin_s, 1),
+            "projected_wetness": trajectory[min(1, len(trajectory) - 1)],
+            "minutes_away": round(base_lap_s / 60.0),
+            "benefiting_laps": max(0, len(trajectory) - 2),
+            "awaiting_confirmation": True,
+        }
+
     return {
         "wetness": reading["wetness"],
         "reading": reading,
+        "confirmed": confirmed,
         "trajectory": trajectory,
         "trajectory_kind": "probability_weighted_mean",
         "scenarios": scenarios,
@@ -1244,13 +1357,34 @@ def evaluate(
             # What the conditions alone would ask for, before the pit lane is
             # priced in. "The right tyre" and "not worth the stop" are different
             # answers and a driver is owed the difference.
-            pace_best=(
-                min(penalties, key=lambda compound: penalties[compound][len(trajectory) // 2])
-                if trajectory else best_compound_for(wetness, penalties)
-            ),
+            pace_best=_pace_best(penalties, trajectory, wetness, current),
             upcoming=upcoming,
+            penalties=penalties,
+            base_lap_s=base_lap_s,
+            overhead_s=overhead,
         ),
     }
+
+
+def _pace_best(
+    penalties: dict[str, list[float]],
+    trajectory: Sequence[float],
+    wetness: float,
+    current: str,
+) -> str:
+    """The tyre the conditions ask for, before the pit lane is priced in.
+
+    Dry compounds share one weather penalty, so between them the fitted one
+    is the answer: naming another would tell a driver on mediums in the rain
+    that hards are "the tyre for it".
+    """
+    best = (
+        min(penalties, key=lambda compound: penalties[compound][len(trajectory) // 2])
+        if trajectory else best_compound_for(wetness, penalties)
+    )
+    if best in DRY_COMPOUNDS and current in DRY_COMPOUNDS:
+        return current
+    return best
 
 
 def _decision_uncertainty_s(
@@ -1321,6 +1455,10 @@ def _explain(
     should_change: bool,
     pace_best: str | None = None,
     upcoming: dict[str, Any] | None = None,
+    *,
+    penalties: dict[str, list[float]] | None = None,
+    base_lap_s: float = 0.0,
+    overhead_s: float = 0.0,
 ) -> str:
     """One sentence a driver can act on, with the evidence behind it."""
     wetness = float(reading["wetness"])
@@ -1335,10 +1473,14 @@ def _explain(
         if wetness >= 0.15
         else "dry"
     )
+    # The next few laps say where the track is going; the flag can be an
+    # hour away, and a forecast that dries the track by then is not a track
+    # drying now.
+    near = trajectory[min(2, len(trajectory) - 1)] if trajectory else wetness
     end = trajectory[-1] if trajectory else wetness
-    if end < wetness - 0.08:
-        direction = "drying through the stint"
-    elif end > wetness + 0.08:
+    if near < wetness - 0.05:
+        direction = "drying"
+    elif near > wetness + 0.05:
         direction = "getting wetter"
     else:
         # Nothing in the projection, so fall back to what the last few laps of
@@ -1348,6 +1490,10 @@ def _explain(
             "wetting": "getting wetter",
             "drying": "drying",
         }.get(str(reading.get("trend", "steady")), "holding")
+    if end < near - 0.15 and not direction.startswith("drying"):
+        direction += ", drying later in the race"
+    elif end > near + 0.15 and not direction.startswith("getting wetter"):
+        direction += ", wetter later in the race"
     evidence = []
     split = reading.get("compound_split")
     if split:
@@ -1372,6 +1518,14 @@ def _explain(
             f"{margin_s:.0f}s over the rest of the race against staying on "
             f"{staying['compound']}{tail}."
         )
+    if upcoming and upcoming.get("awaiting_confirmation"):
+        # The numbers want the stop now, but only the weather label says the
+        # track is wet. One lap, or one report from the driver, settles it.
+        return (
+            f"Track is {surface} and {direction}; {upcoming['compound']} is worth "
+            f"{float(upcoming['gain_s']):.0f}s on the forecast, standing by for the "
+            f"lap times to confirm it{tail}."
+        )
     if upcoming:
         # Not yet, but the lap is known — which is the difference between a
         # driver planning a stop and a driver being told to dive in.
@@ -1385,13 +1539,28 @@ def _explain(
         laps_left = int(staying.get("benefiting_laps", 0) or 0)
         if pace_best and pace_best != staying["compound"]:
             # The tyre is wrong for the conditions and staying out is still
-            # right, which is only ever true because there is not enough race
-            # left to pay for the pit lane. Say that, rather than claiming the
-            # wrong tyre is the right one.
+            # right. Either there is not enough race left to pay for the pit
+            # lane, or the forecast turns the conditions back before it would.
+            # Say whichever is true, rather than claiming the wrong tyre is
+            # the right one or blaming distance with half a race to run.
+            current = str(staying["compound"])
+            table = penalties or {}
+            gain_per_lap = (
+                (table[current][0] - table[pace_best][0]) * float(base_lap_s)
+                if table.get(current) and table.get(pace_best)
+                else 0.0
+            )
+            # The lap in progress is run on the fitted tyre either way.
+            if gain_per_lap * max(0, laps_left - 1) < float(overhead_s):
+                return (
+                    f"Track is {surface} and {direction}; {pace_best} is the tyre for it, "
+                    f"but with {laps_left} lap{'s' if laps_left != 1 else ''} left a stop "
+                    f"cannot repay the pit lane. Stay out and manage it{tail}."
+                )
             return (
-                f"Track is {surface} and {direction}; {pace_best} is the tyre for it, "
-                f"but with {laps_left} lap(s) left a stop cannot repay the pit lane. "
-                f"Stay out and manage it{tail}."
+                f"Track is {surface} and {direction}; {pace_best} is quicker now, but the "
+                f"forecast turns the conditions before a stop would pay for itself. "
+                f"Stay out for now{tail}."
             )
         return (
             f"Track is {surface} and {direction}; {staying['compound']} is still "
