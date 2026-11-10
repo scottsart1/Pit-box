@@ -59,7 +59,7 @@ def _status_response(
         source=current.source,
         detail=detail,
         provider=spec.id,
-        label=spec.label,
+        label=credentials.provider_label(spec),
     )
 
 

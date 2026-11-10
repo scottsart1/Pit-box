@@ -103,6 +103,7 @@ class Settings(BaseSettings):
     custom_llm_base_url: str = ""
     custom_llm_fast_model: str = ""
     custom_llm_deep_model: str = ""
+    # The name the Connection Center and key checks give the custom endpoint.
     custom_llm_label: str = "Custom endpoint"
     custom_llm_timeout_s: float = 30.0
     llm_failure_cooldown_s: float = 20.0
@@ -182,7 +183,6 @@ class Settings(BaseSettings):
     capture_max_gb: float = 20.0
     capture_min_free_gb: float = 2.0
     retention_days: int = 90
-    trace_chunk_seconds: float = 30.0
     analysis_workers: int = 2
     live_ws_max_hz: int = 10
     forward_queue_size: int = 4096
@@ -196,7 +196,6 @@ class Settings(BaseSettings):
     audio_min_rms: float = 120.0
     ptt_mask: int = 0
     ptt_min_hold_ms: int = 200
-    ptt_debounce_ms: int = 150
     ptt_max_recording_s: float = 15.0
     # UDP Action packets are edge-like on some controller/game paths. Your Pit Box
     # therefore never treats unrelated button packets as a release. A recording
@@ -283,7 +282,6 @@ class Settings(BaseSettings):
     # timeout the deterministic template is spoken instead.
     proactive_narration_enabled: bool = True
     proactive_narration_timeout_s: float = 6.0
-    proactive_safe_throttle: float = 0.65
     proactive_max_brake: float = 0.15
     proactive_max_lateral_g: float = 1.35
     proactive_safe_hold_s: float = 0.45
@@ -311,6 +309,8 @@ class Settings(BaseSettings):
     brutal_pace_tolerance_s: float = 0.4
 
     strategy_monte_carlo_samples: int = 320
+    # The quantile of the simulated race times a plan is ranked on: 0.5 ranks
+    # on the median outcome, 0.75 on a cautious one. Clamped to 0.5–0.95.
     strategy_risk_quantile: float = 0.75
     strategy_max_stops: int = 3
     # Prevent tiny simulation changes from moving the radio pit call every lap.
@@ -341,7 +341,6 @@ class Settings(BaseSettings):
     trace_min_distance_m: float = 0.5
     trace_min_interval_s: float = 0.02
     trace_max_points: int = 30_000
-    analysis_distance_step_m: float = 0.5
     trace_cache_max_mb: int = 128
 
     @property
@@ -482,8 +481,6 @@ class Settings(BaseSettings):
     @field_validator(
         "capture_max_gb",
         "capture_min_free_gb",
-        "trace_chunk_seconds",
-        "analysis_distance_step_m",
     )
     @classmethod
     def validate_positive_float_budget(cls, value: float) -> float:

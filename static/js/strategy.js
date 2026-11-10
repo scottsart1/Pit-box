@@ -556,7 +556,7 @@ async function refreshRivals(s) {
   const now = Date.now();
   if (now - view.rivalsFetchedAt < 10_000) return;
   view.rivalsFetchedAt = now;
-  if (!s.connected || s.mode_profile !== "race") {
+  if (!s.connected || !["race", "sprint"].includes(s.mode_profile)) {
     view.rivals = null;
     return;
   }
@@ -757,11 +757,18 @@ async function runWhatIf(event) {
     const stop = Number.isInteger(outcome.box_lap) && outcome.compound
       ? i18n.t("Box lap {lap} for {compound}", { lap: outcome.box_lap, compound: outcome.compound })
       : String(outcome.scenario);
-    const comparison = delta > 0
-      ? i18n.t("{scenario}: +{delta}s slower than the recommended plan (estimate).", { scenario: stop, delta: delta.toFixed(1) })
-      : delta < 0
-        ? i18n.t("{scenario}: {delta}s quicker than the recommended plan (estimate).", { scenario: stop, delta: Math.abs(delta).toFixed(1) })
-        : i18n.t("{scenario}: level with the recommended plan (estimate).", { scenario: stop });
+    // The same planner prices both, so the time and the finishing position
+    // are like for like; the ranking decides on the position first.
+    const finish = Number.isInteger(outcome.projected_finish_position)
+      ? " " + i18n.t("Finishes P{position}.", { position: outcome.projected_finish_position })
+      : "";
+    const comparison = outcome.matches_recommended
+      ? i18n.t("{scenario}: that is the recommended plan.", { scenario: stop })
+      : delta > 0
+        ? i18n.t("{scenario}: +{delta}s slower than the recommended plan (estimate).", { scenario: stop, delta: delta.toFixed(1) }) + finish
+        : delta < 0
+          ? i18n.t("{scenario}: {delta}s quicker than the recommended plan (estimate).", { scenario: stop, delta: Math.abs(delta).toFixed(1) }) + finish
+          : i18n.t("{scenario}: level with the recommended plan (estimate).", { scenario: stop }) + finish;
     const cover = outcome.feasible ? i18n.t("Tyres are expected to cover the stint.") : i18n.t("Tyres may not cover this stint.");
     const legality = outcome.compound_rule?.compliant === false ? ` ${i18n.t("Breaks the two-compound rule.")}` : "";
     result.textContent = `${comparison} ${cover}${legality}`;

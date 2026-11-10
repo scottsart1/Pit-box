@@ -171,6 +171,10 @@ DAMAGE_COMPONENT_SUBJECTS: dict[str, frozenset[str]] = {
 
 FLASH, CRITICAL, IMPORTANT, ROUTINE = -1, 0, 1, 2
 
+# Throttle above which the car is taken to be on a straight, for the strict
+# speaking window. Part throttle through a fast sweep is not a straight.
+SAFE_TO_SPEAK_MIN_THROTTLE = 0.45
+
 # Calls a red flag does not make stale: legality and the state of the car.
 # Their detectors fire once (a penalty when the total rises, damage when it
 # enters a new band), so a call dropped at the suspension was never made.
@@ -1578,7 +1582,7 @@ class ProactiveEngineer:
         return int(state.get("speed_kph", 0)) < 75 or (
             float(state.get("brake", 0)) <= settings.proactive_max_brake
             and abs(float(state.get("lateral_g", 0))) <= settings.proactive_max_lateral_g
-            and float(state.get("throttle", 0)) >= 0.45
+            and float(state.get("throttle", 0)) >= SAFE_TO_SPEAK_MIN_THROTTLE
         )
 
     @staticmethod
