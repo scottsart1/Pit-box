@@ -1432,6 +1432,7 @@ class StrategyEngine:
                 "declared": reading["declared_wetness"],
                 "surface_model": reading["dynamic_wetness"],
                 "measured_pace": reading["measured_wetness"],
+                "surface_when_measured": reading.get("surface_when_measured"),
                 "pace_confidence": reading["pace_confidence"],
                 "pace_samples": reading["pace_samples"],
                 "field_cars": reading["field_pace_cars"],
@@ -1455,6 +1456,7 @@ class StrategyEngine:
             "remaining_laps": remaining,
             "ask_driver": decision["should_ask_driver"],
             "driver_question": decision["driver_question"],
+            "confirmed": decision.get("confirmed", True),
             "reason": decision["reason"],
         }
 
@@ -1489,6 +1491,7 @@ class StrategyEngine:
                 "benefiting_laps": int(upcoming["benefiting_laps"]),
                 "payback_s": round(float(upcoming["gain_s"]), 1),
                 "projected_wetness_at_stop": upcoming["projected_wetness"],
+                "awaiting_confirmation": bool(upcoming.get("awaiting_confirmation")),
                 # The call is made and the lap is named; nothing is being
                 # deferred to the driver, whatever this lap's own margin was.
                 "ask_driver": False,
