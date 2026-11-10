@@ -1584,6 +1584,8 @@ def evaluate(
         "near_crossover": near_crossover,
         "pit_loss_s": round(float(pit_loss_s), 1),
         "remaining_laps": remaining,
+        # The dry pace every cost above is priced on.
+        "cost_base_lap_s": round(float(cost_base), 3),
         "reason": _explain(
             reading,
             best,

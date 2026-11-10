@@ -498,5 +498,12 @@
  "↑ NEXT POSITION": "↑ POSITION SUIVANTE",
  "↓ BEHIND · {position}": "↓ DERRIÈRE · {position}",
  "↓ CAR BEHIND": "↓ VOITURE DERRIÈRE",
- "＋ Add widgets": "＋ Ajouter des widgets"
+ "＋ Add widgets": "＋ Ajouter des widgets",
+ "Box lap {lap} for {tyre}": "Box au tour {lap} pour {tyre}",
+ "Track {surface}": "Piste {surface}",
+ "damp": "humide",
+ "dry": "sèche",
+ "flooded": "inondée",
+ "fully wet": "détrempée",
+ "wet": "mouillée"
 }

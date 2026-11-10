@@ -130,6 +130,7 @@ RADIO_TOOLS = (
     "get_tyre_sets_available",
     "get_attack_plan",
     "get_defence_plan",
+    "get_weather_picture",
     "get_weather_forecast",
     "get_session_events",
     "get_qualifying_targets",

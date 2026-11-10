@@ -1210,7 +1210,7 @@ class ProactiveEngineer:
                 "weather_crossover",
                 {
                     **payload_common,
-                    "rain_15_pct": state.get("rain_next_15_pct"),
+                    "rain_15_pct": state.get("rain_peak_15_pct", state.get("rain_next_15_pct")),
                     "trend": crossover.get("trend"),
                     "compound": call["compound"] or crossover.get("compound"),
                     "box_lap": call["box_lap"],

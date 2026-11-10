@@ -1289,6 +1289,13 @@ class F1DatagramProtocol(asyncio.DatagramProtocol):
             ]
             return int(candidates[-1]["rain_pct"]) if candidates else 0
 
+        def rain_peak(minutes: int) -> int:
+            """The highest chance at any sample inside the window, not the last one."""
+            return max(
+                (int(item["rain_pct"]) for item in forecast if 0 < item["time_offset_min"] <= minutes),
+                default=0,
+            )
+
         def rain_now() -> int:
             """Offset-zero chance of rain, not an observation of rain intensity."""
             return next(
@@ -1428,6 +1435,9 @@ class F1DatagramProtocol(asyncio.DatagramProtocol):
             rain_next_15_pct=rain_at(15),
             rain_next_30_pct=rain_at(30),
             rain_next_60_pct=rain_at(60),
+            rain_peak_15_pct=rain_peak(15),
+            rain_peak_30_pct=rain_peak(30),
+            rain_peak_60_pct=rain_peak(60),
             track_temp_c=int(packet.track_temperature),
             air_temp_c=int(packet.air_temperature),
             safety_car=safety_car,

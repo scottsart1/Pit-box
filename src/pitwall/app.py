@@ -1694,6 +1694,20 @@ async def strategy_what_if(request: WhatIfRequest) -> dict[str, object]:
     return await strategy.what_if(scenario, lap=request.lap, compound=compound)
 
 
+@app.get("/api/strategy/weather")
+async def strategy_weather_picture() -> dict[str, object]:
+    """The wet model as one picture: surface, forecast, projection, tyre costs and the call."""
+    from .weather_picture import weather_picture
+
+    return weather_picture(await store.snapshot_analysis())
+
+
+@app.get("/api/strategy/cover/{car_idx}")
+async def strategy_cover(car_idx: int) -> dict[str, object]:
+    """Whether boxing in one, two or three laps keeps a stopping rival behind."""
+    return await strategy.evaluate_cover(car_idx)
+
+
 @app.get("/api/strategy/rivals")
 async def strategy_rival_stops(
     top_n: int = Query(default=8, ge=1, le=12),
