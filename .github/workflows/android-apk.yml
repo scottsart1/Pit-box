@@ -25,6 +25,7 @@ on:
       - tools/engineering*.cjs
       - tools/setup-reference-ui-smoke.cjs
       - tools/driver-focus-ui-smoke.cjs
+      - tools/live-frame-ui-smoke.cjs
       - tools/pace-spark-ui-smoke.cjs
       - tools/overlay-ui-smoke.cjs
       - tools/all-workspaces-ui-smoke.cjs
@@ -87,6 +88,8 @@ jobs:
         run: NODE_PATH="$RUNNER_TEMP/pitbox-browser/node_modules" node tools/session-analysis-layout-smoke.cjs
       - name: Driver decisions and critical warnings at phone, tablet and desktop sizes
         run: NODE_PATH="$RUNNER_TEMP/pitbox-browser/node_modules" PITBOX_DRIVER_FOCUS_EVIDENCE="$RUNNER_TEMP/driver-focus" node tools/driver-focus-ui-smoke.cjs
+      - name: Live frames that leave the strategy out keep it on screen
+        run: NODE_PATH="$RUNNER_TEMP/pitbox-browser/node_modules" node tools/live-frame-ui-smoke.cjs
       - name: Native onboarding completion survives dashboard port changes
         run: NODE_PATH="$RUNNER_TEMP/pitbox-browser/node_modules" node tools/onboarding-persistence-ui-smoke.cjs
       - name: Recorded Lap Lab comparisons fit phone and tablet widths

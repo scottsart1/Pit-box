@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import asyncio
+import bisect
 import math
 import re
 import time
 import zlib
 from collections.abc import Iterable, Sequence
 from copy import deepcopy
+from dataclasses import dataclass
 from itertools import pairwise
 from statistics import median
 from typing import Any
@@ -399,6 +401,28 @@ def _surface_word(wetness: float) -> str:
     if wetness >= 0.15:
         return "damp"
     return "dry"
+
+
+@dataclass(frozen=True, slots=True)
+class FieldContext:
+    """What every plan's finish projection shares within one compute.
+
+    Built once from the projected field. Rebuilt for every plan, these were
+    most of the planner's time: the stint model itself was a ninth of it.
+    """
+
+    player_position: int
+    unobserved_ahead: int
+    field_size: int
+    field_size_source: str
+    finish_times: tuple[float, ...]  # ascending
+    typical_gap_s: float
+    worst_confidence: str  # "low", "medium" or "high"
+    observed_rivals: int
+    # Per rival behind now: (position, gap, finish time before penalties,
+    # offset of its last paid stop or -1), for the pit-cycle count.
+    cycle_rivals: tuple[tuple[int, float, float, int], ...] = ()
+    any_pending_penalty: bool = True
 
 
 class RejoinTable:
@@ -2217,6 +2241,7 @@ class StrategyEngine:
     @staticmethod
     def _pit_cycle_positions_recovered(
         plan: dict[str, Any], state: dict[str, Any], rivals: list[dict[str, Any]],
+        cycle_rivals: tuple[tuple[int, float, float, int], ...] | None = None,
     ) -> int:
         """Positions returned by later rival stops require no on-track pass.
 
@@ -2230,17 +2255,13 @@ class StrategyEngine:
         rejoin = int(plan.get("projected_rejoin_position", current))
         first_offset = max(0, int(plan["box_laps"][0]) - int(state.get("current_lap", 0)) + 1)
         first_cost = float((plan.get("pit_stop_costs_s") or [StrategyEngine._base_pit_loss(state)])[0])
-        recovered = 0
-        for rival in rivals:
-            position = int(rival.get("position", 0))
-            gap = finite(rival.get("current_gap_s"))
-            future_stops = zip(rival.get("likely_stop_offsets_laps", []), rival.get("pit_stop_costs_s", []))
-            if (current < position <= rejoin and gap is not None and 0 < gap < first_cost
-                    and float(rival.get("finish_time_before_penalties_s", rival.get("finish_time_s", 0)))
-                    > float(plan.get("projected_time_before_penalties_s", plan.get("projected_time_s", 0)))
-                    and any(offset > first_offset and cost > 0 for offset, cost in future_stops)):
-                recovered += 1
-        return recovered
+        own_time = float(plan.get("projected_time_before_penalties_s", plan.get("projected_time_s", 0)))
+        rows = StrategyEngine._cycle_rivals(rivals) if cycle_rivals is None else cycle_rivals
+        return sum(
+            1 for position, gap, finish, last_stop in rows
+            if current < position <= rejoin and gap < first_cost
+            and finish > own_time and last_stop > first_offset
+        )
 
     @staticmethod
     def _penalty_positions_recovered(
@@ -2292,6 +2313,9 @@ class StrategyEngine:
         state: dict[str, Any],
         rival_projections: list[dict[str, Any]],
         difficulty: float,
+        *,
+        pit_cycle: int | None = None,
+        typical_gap_s: float | None = None,
     ) -> float:
         lost = max(
             0,
@@ -2300,7 +2324,8 @@ class StrategyEngine:
         )
         if not plan.get("stops_remaining") or lost <= 0:
             return 0.0
-        pit_cycle = StrategyEngine._pit_cycle_positions_recovered(plan, state, rival_projections)
+        if pit_cycle is None:
+            pit_cycle = StrategyEngine._pit_cycle_positions_recovered(plan, state, rival_projections)
         final_stint = (plan.get("stint_models") or [{}])[-1]
         lap_times = [float(value) for value in final_stint.get("lap_times_s", [])]
         laps_after_stop = len(lap_times)
@@ -2366,10 +2391,51 @@ class StrategyEngine:
             # Unrounded: it is floored where it becomes a position, and
             # rounding first turned 5.994 places into five.
             return max(0.0, min(float(lost), pit_cycle + passed + min(partial, 0.999)))
-        cost_per_position = _typical_adjacent_gap_s(state) + overtake_tax
+        cost_per_position = (
+            _typical_adjacent_gap_s(state) if typical_gap_s is None else typical_gap_s
+        ) + overtake_tax
         if cost_per_position <= 0:
             return float(pit_cycle)
         return max(0.0, min(float(lost), pit_cycle + time_budget / cost_per_position))
+
+    @staticmethod
+    def _field_context(state: dict[str, Any], rival_projections: list[dict[str, Any]]) -> FieldContext:
+        active, source = StrategyEngine._projection_field_size(state, rival_projections)
+        confidences = {item.get("confidence") for item in rival_projections}
+        return FieldContext(
+            player_position=int(state.get("player_position", 1) or 1),
+            unobserved_ahead=StrategyEngine._unobserved_cars_ahead(state, rival_projections),
+            field_size=active,
+            field_size_source=source,
+            finish_times=tuple(sorted(float(rival.get("finish_time_s", 1e9)) for rival in rival_projections)),
+            typical_gap_s=_typical_adjacent_gap_s(state),
+            worst_confidence="low" if "low" in confidences else "medium" if "medium" in confidences else "high",
+            observed_rivals=len(rival_projections),
+            cycle_rivals=StrategyEngine._cycle_rivals(rival_projections),
+            any_pending_penalty=any(
+                float(rival.get("pending_finish_penalty_s", 0) or 0) > 0 for rival in rival_projections
+            ),
+        )
+
+    @staticmethod
+    def _cycle_rivals(rivals: list[dict[str, Any]]) -> tuple[tuple[int, float, float, int], ...]:
+        rows = []
+        for rival in rivals:
+            gap = finite(rival.get("current_gap_s"))
+            if gap is None or gap <= 0:
+                continue
+            paid = [
+                int(offset) for offset, cost in zip(
+                    rival.get("likely_stop_offsets_laps", []), rival.get("pit_stop_costs_s", [])
+                ) if cost > 0
+            ]
+            rows.append((
+                int(rival.get("position", 0)),
+                float(gap),
+                float(rival.get("finish_time_before_penalties_s", rival.get("finish_time_s", 0))),
+                max(paid, default=-1),
+            ))
+        return tuple(rows)
 
     def _annotate_finish_projection(
         self,
@@ -2378,27 +2444,30 @@ class StrategyEngine:
         rival_projections: list[dict[str, Any]],
         difficulty: float,
         difficulty_known: bool,
+        context: FieldContext | None = None,
     ) -> None:
+        field = context or self._field_context(state, rival_projections)
         projected_time = float(plan.get("projected_time_s", 1e9))
         raw_position = (
-            1
-            + self._unobserved_cars_ahead(state, rival_projections)
-            + sum(
-                1
-                for rival in rival_projections
-                if float(rival.get("finish_time_s", 1e9)) < projected_time
-            )
+            1 + field.unobserved_ahead + bisect.bisect_left(field.finish_times, projected_time)
             if rival_projections
-            else int(state.get("player_position", 1) or 1)
+            else field.player_position
         )
         rejoin = int(
             plan.get("projected_rejoin_position", state.get("player_position", 1))
             or 1
         )
-        recovered = self._expected_positions_recovered(
-            plan, state, rival_projections, difficulty
+        pit_cycle = self._pit_cycle_positions_recovered(
+            plan, state, rival_projections, field.cycle_rivals
         )
-        penalty_recovered = self._penalty_positions_recovered(plan, rival_projections)
+        recovered = self._expected_positions_recovered(
+            plan, state, rival_projections, difficulty,
+            pit_cycle=pit_cycle, typical_gap_s=field.typical_gap_s,
+        )
+        penalty_recovered = (
+            self._penalty_positions_recovered(plan, rival_projections)
+            if field.any_pending_penalty else 0
+        )
         recoverable = math.floor(recovered + 1e-9)
         best_from_rejoin = max(1, rejoin - recoverable - penalty_recovered)
         projected_position = (
@@ -2406,9 +2475,9 @@ class StrategyEngine:
             if int(plan.get("stops_remaining", 0) or 0) > 0
             else raw_position
         )
-        active, field_size_source = self._projection_field_size(state, rival_projections)
+        active, field_size_source = field.field_size, field.field_size_source
         projected_position = max(1, min(active, projected_position))
-        current = int(state.get("player_position", 1) or 1)
+        current = field.player_position
         plan.update(
             {
                 "projected_finish_position": projected_position,
@@ -2421,8 +2490,8 @@ class StrategyEngine:
                 # unrounded estimate; the distribution uses the same count.
                 "positions_recoverable": recoverable,
                 "penalty_positions_recovered": penalty_recovered,
-                "pit_cycle_positions_recovered": self._pit_cycle_positions_recovered(plan, state, rival_projections),
-                "observed_rival_count": len(rival_projections),
+                "pit_cycle_positions_recovered": pit_cycle,
+                "observed_rival_count": field.observed_rivals,
                 "expected_rival_count": max(0, active - 1),
                 "field_size_source": field_size_source,
                 "missing_field_assumption": "Unobserved cars ahead retain their order; their pace and pit schedule are unknown.",
@@ -2432,10 +2501,10 @@ class StrategyEngine:
                     "low"
                     if not difficulty_known
                     or field_size_source != "reported"
-                    or len(rival_projections) < max(0, active - 1)
-                    or any(item.get("confidence") == "low" for item in rival_projections)
+                    or field.observed_rivals < max(0, active - 1)
+                    or field.worst_confidence == "low"
                     else "medium"
-                    if any(item.get("confidence") == "medium" for item in rival_projections)
+                    if field.worst_confidence == "medium"
                     else "high"
                 ),
             }
@@ -3665,6 +3734,7 @@ class StrategyEngine:
                 plans.append(plan)
         simulation_cache: dict[tuple[Any, ...], dict[str, Any]] = {}
         baseline_simulation_cache: dict[tuple[Any, ...], dict[str, Any]] = {}
+        set_key_cache: dict[int, tuple[Any, tuple[tuple[str, str], ...]]] = {}
         feedback_free_state = dict(state)
         feedback_free_state["driver_tyre_feedback"] = {}
 
@@ -3687,16 +3757,24 @@ class StrategyEngine:
                 if isinstance(starting_wear, list)
                 else round(float(starting_wear), 3)
             )
-            set_key = tuple(
-                sorted(
-                    (str(key), str(value))
-                    for key, value in (set_info or {}).items()
-                    if key in {
-                        "compound", "wear_pct", "usable_life_laps",
-                        "life_span_laps", "lap_delta_ms", "source", "index", "fitted",
-                    }
+            # The same few set records come back for thousands of plans;
+            # their key is built once per record. The record is kept with
+            # its key so a reused id cannot match a different set.
+            held = set_key_cache.get(id(set_info))
+            if held is not None and held[0] is set_info:
+                set_key = held[1]
+            else:
+                set_key = tuple(
+                    sorted(
+                        (str(key), str(value))
+                        for key, value in (set_info or {}).items()
+                        if key in {
+                            "compound", "wear_pct", "usable_life_laps",
+                            "life_span_laps", "lap_delta_ms", "source", "index", "fitted",
+                        }
+                    )
                 )
-            )
+                set_key_cache[id(set_info)] = (set_info, set_key)
             key = (
                 str(compound), int(laps), int(starting_age), wear_key,
                 round(float(base_lap), 3), round(float(personal_factor), 4), set_key,
@@ -3764,6 +3842,10 @@ class StrategyEngine:
                             break
             return runnable_cache[key]
 
+        # The rule depends only on the compounds a plan fits; a few dozen
+        # schedules cover thousands of plans.
+        rule_cache: dict[tuple[str, ...], dict[str, Any]] = {}
+
         def make_plan(
             *,
             stops: int,
@@ -3812,7 +3894,11 @@ class StrategyEngine:
                 + traffic_cost * 1.35
                 + pending_penalty_s
             )
-            legality = self._compound_rule(state, compounds_in_plan[1:])
+            schedule = tuple(str(item).upper() for item in compounds_in_plan[1:])
+            if schedule not in rule_cache:
+                rule_cache[schedule] = self._compound_rule(state, list(schedule))
+            # Each plan gets its own copy: a view may annotate its rule.
+            legality = dict(rule_cache[schedule])
             feedback_feasible = all(bool(stint["feasible"]) for stint in stints) and legality["compliant"]
             baseline_stints = [
                 stint.get("without_driver_feedback", stint) for stint in stints
@@ -4272,6 +4358,8 @@ class StrategyEngine:
         track_id = int(state.get("track_id", -1))
         difficulty_known = track_id in TRACK_OVERTAKING_DIFFICULTY
         overtaking_difficulty = TRACK_OVERTAKING_DIFFICULTY.get(track_id, 0.60)
+        field_context = self._field_context(state, rival_projections)
+        feedback_free_context: FieldContext | None = None
         for plan in plans:
             self._annotate_finish_projection(
                 plan,
@@ -4279,6 +4367,7 @@ class StrategyEngine:
                 rival_projections,
                 overtaking_difficulty,
                 difficulty_known,
+                field_context,
             )
             if feedback_adjustment.get("active"):
                 baseline_plan = dict(plan)
@@ -4295,12 +4384,15 @@ class StrategyEngine:
                     stint.get("without_driver_feedback", stint)
                     for stint in plan.get("stint_models", [])
                 ]
+                if feedback_free_context is None:
+                    feedback_free_context = self._field_context(feedback_free_state, rival_projections)
                 self._annotate_finish_projection(
                     baseline_plan,
                     feedback_free_state,
                     rival_projections,
                     overtaking_difficulty,
                     difficulty_known,
+                    feedback_free_context,
                 )
                 plan["projected_finish_position_without_driver_feedback"] = (
                     baseline_plan["projected_finish_position"]

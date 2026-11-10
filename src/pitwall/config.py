@@ -326,6 +326,10 @@ class Settings(BaseSettings):
     # track position it keeps. Beyond it the quicker plan wins. 3 s is about
     # two cars' spacing in a train.
     strategy_later_stop_tolerance_s: float = 3.0
+    # Least time between recomputes caused only by continuous inputs (tyre
+    # wear by the percent, the field's sector times). A lap, a flag, the
+    # weather, a tyre change, feedback or a rival's stop recomputes at once.
+    strategy_min_recompute_interval_s: float = 4.0
     # Cold-tyre out-lap penalty (seconds) applied to the first lap of a fresh
     # stint, halved on the second lap. Ignoring warm-up makes an undercut look
     # better than it is, because the cold in/out laps are where the time goes.

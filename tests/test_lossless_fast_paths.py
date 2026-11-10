@@ -86,7 +86,10 @@ async def test_the_live_frame_json_is_the_copied_snapshot_encoded():
     store = await _populated_store()
     snapshot = await store.snapshot_live()
     assert snapshot["drivers"] and snapshot["traces"], "the fixture must populate the state"
-    assert await store.snapshot_live_json() == json.dumps(snapshot, **JSON)
+    frame = json.loads(await store.snapshot_live_json())
+    # The frame adds the strategy revision the dashboard acknowledges with.
+    assert isinstance(frame.pop("strategy_revision"), int)
+    assert json.dumps(frame, **JSON) == json.dumps(snapshot, **JSON)
     # The snapshot with copies stays independent of the live state.
     snapshot["drivers"][0]["name"] = "edited"
     snapshot["traces"].clear()

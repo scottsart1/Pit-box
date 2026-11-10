@@ -9,6 +9,7 @@ import sqlite3
 import time
 from collections.abc import Iterator
 from contextlib import closing, contextmanager
+from copy import deepcopy
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -70,6 +71,13 @@ class PitWallDatabase:
         self.schema_version = 0
         self.catalog = SessionCatalog(path)
         self._player_history_signature: tuple[Any, ...] | None = None
+        # Decoded tyre-history rows per (track, excluded session, limit), with
+        # the fingerprint of the laps they were read from. Laps change only
+        # when one is saved, corrected or deleted, and the planner asks for
+        # them on every recompute.
+        self._tyre_rows_cache: dict[tuple[int, int, int], tuple[tuple[Any, ...], dict[str, int], list[dict[str, Any]]]] = {}
+        # Fitted models on the same rows, by the query they were fitted for.
+        self._tyre_fit_cache: dict[tuple[Any, ...], dict[str, Any]] = {}
 
     async def initialize(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -1850,22 +1858,78 @@ class PitWallDatabase:
     def _tyre_history_model_sync(
         self, track_id: int, limit: int, context: dict[str, Any]
     ) -> dict[str, Any]:
-        from statistics import median
+        from .tyre_learning import exclusion_reason
 
-        from .tyre_learning import exclusion_reason, stint_pace_model, wear_deltas
+        session_uid = _session_uid_to_sqlite(context.get("session_uid", 0) or 0)
+        fingerprint, recorded_counts, rows = self._tyre_history_rows(track_id, session_uid, limit)
+        # The fit reads nothing of the context but this query. Fuel is taken
+        # to the whole kilogram, which moves a wear prediction by nothing a
+        # driver could see and lets a fit be reused within a lap.
+        tyre = context.get("tyre", {}) or {}
+        setup = context.get("car_setup", {}) or {}
+        context = {
+            **context,
+            "fuel_kg": float(round(float(context.get("fuel_kg", 0.0) or 0.0))),
+        }
+        fit_key = (
+            int(track_id), int(session_uid), int(limit), fingerprint,
+            float(tyre.get("age_laps", 1) or 1), context["fuel_kg"],
+            float(context.get("track_temp_c", 0.0) or 0.0), float(context.get("air_temp_c", 0.0) or 0.0),
+            str(context.get("mode_profile", "race")),
+            *(float(setup.get(name, 0.0) or 0.0) for name in ("front_wing", "rear_wing", "on_throttle")),
+        )
+        fitted = self._tyre_fit_cache.get(fit_key)
+        if fitted is not None:
+            return deepcopy(fitted)
 
-        recorded_counts: dict[str, int] = {}
+        grouped: dict[str, list[dict[str, Any]]] = {}
+        excluded: dict[str, int] = {}
+        for decoded in rows:
+            item = dict(decoded)
+            compound = str(item.get("compound") or "UNKNOWN").upper()
+            reason = exclusion_reason(item)
+            if reason:
+                excluded[reason] = excluded.get(reason, 0) + 1
+                continue
+            grouped.setdefault(compound, []).append(item)
+        result = self._tyre_history_fit(track_id, limit, context, recorded_counts, grouped, excluded)
+        if len(self._tyre_fit_cache) >= 32:
+            self._tyre_fit_cache.pop(next(iter(self._tyre_fit_cache)))
+        self._tyre_fit_cache[fit_key] = result
+        return deepcopy(result)
+
+    _TYRE_ROWS_FINGERPRINT_SQL = """
+        SELECT COUNT(*), COALESCE(MAX(id), 0), COALESCE(SUM(valid), 0),
+               COALESCE(SUM(lap_time_ms), 0), COALESCE(SUM(pit_status), 0)
+        FROM laps WHERE track_id=? AND session_uid != ?
+    """
+
+    def _tyre_history_rows(
+        self, track_id: int, session_uid: int, limit: int
+    ) -> tuple[tuple[Any, ...], dict[str, int], list[dict[str, Any]]]:
+        """Saved laps at a circuit for the tyre model, decoded once per change.
+
+        A cheap fingerprint of the circuit's laps (count, newest id, and sums
+        of validity, lap time and pit status) decides whether the decoded rows
+        from the last read still stand. It catches laps written through any
+        connection, including the session catalogue's invalidations.
+        """
+        key = (int(track_id), int(session_uid), int(limit))
         try:
             with self._connect() as db:
+                fingerprint = tuple(db.execute(self._TYRE_ROWS_FINGERPRINT_SQL, (track_id, session_uid)).fetchone())
+                cached = self._tyre_rows_cache.get(key)
+                if cached is not None and cached[0] == fingerprint:
+                    return cached
                 recorded_counts = {
                     str(row["compound"] or "UNKNOWN").upper(): int(row["lap_count"])
                     for row in db.execute(
                         """SELECT compound, COUNT(*) AS lap_count FROM laps
                            WHERE track_id=? AND session_uid != ? GROUP BY compound""",
-                        (track_id, _session_uid_to_sqlite(context.get("session_uid", 0) or 0)),
+                        (track_id, session_uid),
                     )
                 }
-                rows = db.execute(
+                raw_rows = db.execute(
                     """
                     SELECT l.session_uid, l.lap_num, l.session_type, l.valid, l.pit_status,
                            l.pit_lane_time_ms, l.weather, l.learning_exclusions_json,
@@ -1885,17 +1949,15 @@ class PitWallDatabase:
                     ORDER BY l.created_at DESC
                     LIMIT ?
                     """,
-                    (track_id, _session_uid_to_sqlite(context.get("session_uid", 0) or 0), limit),
+                    (track_id, session_uid, limit),
                 ).fetchall()
         except sqlite3.OperationalError:
             # A database whose schema has not been created yet (the endpoint
             # was called before the first connect) holds no tyre evidence.
             # "No evidence" is the honest deterministic answer, not a 500.
-            rows = []
-
-        grouped: dict[str, list[dict[str, Any]]] = {}
-        excluded: dict[str, int] = {}
-        for raw in rows:
+            return (), {}, []
+        rows: list[dict[str, Any]] = []
+        for raw in raw_rows:
             item = dict(raw)
             compound = str(item.get("compound") or "UNKNOWN").upper()
             if compound not in {"SOFT", "MEDIUM", "HARD", "INTER", "WET"}:
@@ -1907,11 +1969,24 @@ class PitWallDatabase:
                 item["learning_exclusions"] = json.loads(item.get("learning_exclusions_json") or "[]")
             except (json.JSONDecodeError, TypeError):
                 item["wear_start"], item["wear_end"], item["setup"] = [], [], {}
-            reason = exclusion_reason(item)
-            if reason:
-                excluded[reason] = excluded.get(reason, 0) + 1
-                continue
-            grouped.setdefault(compound, []).append(item)
+            rows.append(item)
+        if len(self._tyre_rows_cache) >= 8:
+            self._tyre_rows_cache.pop(next(iter(self._tyre_rows_cache)))
+        self._tyre_rows_cache[key] = (fingerprint, recorded_counts, rows)
+        return fingerprint, recorded_counts, rows
+
+    def _tyre_history_fit(
+        self,
+        track_id: int,
+        limit: int,
+        context: dict[str, Any],
+        recorded_counts: dict[str, int],
+        grouped: dict[str, list[dict[str, Any]]],
+        excluded: dict[str, int],
+    ) -> dict[str, Any]:
+        from statistics import median
+
+        from .tyre_learning import stint_pace_model, wear_deltas
 
         tyre = context.get("tyre", {})
         setup_context = context.get("car_setup", {}) or {}
