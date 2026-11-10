@@ -214,6 +214,15 @@ async def test_readiness_is_computed_once_a_lap():
     await engine.recompute()
     assert calls == ["green"]
 
+    # The tyre's age ticking over mid-lap is not a new decision.
+    def older(state):
+        state.tyre.age_laps += 1
+
+    await store.mutate(older)
+    calls.clear()
+    await engine.recompute()
+    assert calls == ["green"]
+
     def next_lap(state):
         state.current_lap = 21
 

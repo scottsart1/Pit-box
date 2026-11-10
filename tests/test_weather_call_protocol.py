@@ -167,6 +167,16 @@ def test_on_inters_the_news_is_the_dry_line_coming():
     assert call["direction"] == "to_dry"
 
 
+def test_just_after_a_stop_for_inters_a_damp_track_getting_wetter_is_not_drying():
+    """Seen in the wet replay: the drying heads-up said a lap after the stop, in rising rain."""
+    soaking = {"wetness": 0.30, "trend": "wetting", "compound": "INTER", "trajectory": [0.30, 0.36, 0.41, 0.45, 0.48]}
+    state = {"strategy": {"weather_crossover": soaking}, "tyre": {"compound": "INTER"},
+             "current_lap": 9, "weather": "Light rain"}
+    assert ProactiveEngineer._weather_call(state)["level"] == WEATHER_NONE
+    steady = {**soaking, "trend": "steady", "trajectory": [0.30] * 5}
+    assert ProactiveEngineer._weather_call({**state, "strategy": {"weather_crossover": steady}})["level"] == WEATHER_WATCH
+
+
 # --- WX-03: once per change of what it says ----------------------------------------
 
 

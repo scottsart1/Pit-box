@@ -267,3 +267,14 @@ async def test_the_cover_tool_resolves_the_car_by_name(stack):
     assert [option["box_in_laps"] for option in cover["options"]] == [1, 2, 3]
     assert "Margin is the gap" in cover["basis"]
     assert (await tools.evaluate_cover("nobody at all"))["available"] is False
+
+
+# --- the driver's own stop ---------------------------------------------------------------
+
+
+def test_a_rival_stop_is_not_called_while_the_driver_is_in_the_lane():
+    event = {"type": "rival_pitting", "session_uid": 1, "expires_at": 4e9, "payload": {"car_idx": 3}}
+    on_track = {"session_uid": 1, "pit_status": 0}
+    assert ProactiveEngineer._event_still_relevant(event, on_track)
+    assert not ProactiveEngineer._event_still_relevant(event, {**on_track, "pit_status": 1})
+    assert not ProactiveEngineer._event_still_relevant(event, {**on_track, "pit_lane_timer_active": True})

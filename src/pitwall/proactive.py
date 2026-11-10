@@ -1102,13 +1102,17 @@ class ProactiveEngineer:
             return call
         wetness = float(crossover.get("wetness", 0.0) or 0.0)
         if on_wets:
-            # On wet tyres the news is the dry line coming, not the rain.
+            # On wet tyres the news is the dry line coming, not the rain. A
+            # surface still under the slick line while it is getting wetter
+            # (just after a stop for inters) is not a dry line coming.
             trajectory = [float(value) for value in crossover.get("trajectory") or []]
-            drying_soon = any(
-                value < rain.WETNESS_SLICK_INTER
-                for value in trajectory[:WEATHER_DRYING_HEADS_UP_LAPS]
+            ahead = trajectory[:WEATHER_DRYING_HEADS_UP_LAPS]
+            drying_soon = (
+                len(ahead) >= 2 and ahead[-1] < ahead[0]
+                and any(value < rain.WETNESS_SLICK_INTER for value in ahead)
             )
-            if wetness < rain.WETNESS_SLICK_INTER or drying_soon:
+            wetting = str(crossover.get("trend") or "") == "wetting"
+            if (wetness < rain.WETNESS_SLICK_INTER and not wetting) or drying_soon:
                 call.update(level=WEATHER_WATCH, direction="to_dry")
             return call
         sky_wet = rain.equilibrium_wetness(str(state.get("weather", ""))) > 0
@@ -1163,6 +1167,12 @@ class ProactiveEngineer:
         verdict that moved from "wet, staying out" to "box now" never raised a
         weather call at all, and a withdrawn stop was never stood down.
         """
+        if int(state.get("pit_status", 0) or 0) != 0 or bool(state.get("pit_lane_timer_active")):
+            # The driver is making a stop. Until the car is out, the tyre on
+            # it and the plan are both in flux: a stand-down read off the old
+            # tyre ("Cancel the stop. Stay out on the mediums.") or a stand-by
+            # for the stop being made is wrong. Compared afresh at the exit.
+            return
         crossover = (state.get("strategy", {}) or {}).get("weather_crossover") or {}
         call = self._weather_call(state)
         last = self._last_weather_call
@@ -1448,7 +1458,10 @@ class ProactiveEngineer:
             if previous is not None and stops > previous and (idx, stops) not in self._rival_stops_seen:
                 self._rival_stops_seen.add((idx, stops))
                 candidates.append((driver, False))
-        if not racing or not candidates:
+        # In the lane the driver's own stop is happening: "box next lap to
+        # cover him" is moot, and the stops stay seen, not saved for later.
+        in_lane = int(state.get("pit_status", 0) or 0) != 0 or bool(state.get("pit_lane_timer_active"))
+        if not racing or not candidates or in_lane:
             return
         ranked = []
         for driver, seen_in_lane in candidates:
@@ -1675,6 +1688,11 @@ class ProactiveEngineer:
         if kind == "race_control":
             phase = "red_flag" if ProactiveEngineer._red_flag_active(state) else state.get("race_control_phase", "green")
             return event.get("payload", {}).get("to") == phase
+        if kind in {"rival_pitting", "weather_crossover", "weather_stand_down"} and (
+            int(state.get("pit_status", 0) or 0) != 0 or bool(state.get("pit_lane_timer_active"))
+        ):
+            # Queued before the driver turned in: their own stop is the news now.
+            return False
         if ProactiveEngineer._red_flag_active(state) and kind not in SURVIVES_SUSPENSION:
             # Old box/traffic/pace calls must not accompany suspension advice.
             return False
