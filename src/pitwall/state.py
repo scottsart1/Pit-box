@@ -138,6 +138,41 @@ class DriverState:
     history_updated_at: float = 0.0
 
 
+# What no screen draws, left out of the 4 Hz live frame. The engine, the tools
+# and the analysis profile keep all of it; the frame was 100 KB, two thirds of
+# it strategy detail that changes only on a recompute.
+_LIVE_RIVAL_EXCLUDED_FIELDS = frozenset({"lap_times_s", "pace_reference", "finish_penalty", "pit_stop_costs_s"})
+_LIVE_STINT_EXCLUDED_FIELDS = frozenset({
+    "wheel_projection", "lap_times_s", "setup_effects", "set_pace_reference", "without_driver_feedback",
+})
+_LIVE_LAP_EXCLUDED_FIELDS = frozenset({"corner_metrics", "setup", "incidents", "traffic_evidence", "trace"})
+
+
+def _trim_plan(plan: Any) -> Any:
+    if not isinstance(plan, dict) or not isinstance(plan.get("stint_models"), list):
+        return plan
+    return {**plan, "stint_models": [
+        {key: value for key, value in stint.items() if key not in _LIVE_STINT_EXCLUDED_FIELDS}
+        if isinstance(stint, dict) else stint
+        for stint in plan["stint_models"]
+    ]}
+
+
+def _trim_live_strategy(compact: dict[str, Any]) -> None:
+    """Drop from a shallow copy of the strategy what the live screens never read."""
+    rivals = compact.get("rival_finish_projections")
+    if isinstance(rivals, list):
+        compact["rival_finish_projections"] = [
+            {key: value for key, value in rival.items() if key not in _LIVE_RIVAL_EXCLUDED_FIELDS}
+            if isinstance(rival, dict) else rival
+            for rival in rivals
+        ]
+    if isinstance(compact.get("plans"), list):
+        compact["plans"] = [_trim_plan(plan) for plan in compact["plans"]]
+    if isinstance(compact.get("recommended"), dict):
+        compact["recommended"] = _trim_plan(compact["recommended"])
+
+
 def _surface_at_line(strategy: dict[str, Any]) -> dict[str, Any]:
     """The published wet reading at the line, for the per-lap record."""
     crossover = (strategy or {}).get("weather_crossover") or {}
@@ -603,6 +638,10 @@ class StateStore:
         self.event_queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue(maxsize=256)
         # Reference lap for the live delta: sorted (lap_distance_m, time_into_lap_s).
         self._delta_ref: list[tuple[float, float]] = []
+        # The strategy object the live frame last saw, and its revision. Every
+        # write replaces the dict, so a new object is a new revision.
+        self._live_strategy_ref: Any = None
+        self._live_strategy_revision = 0
 
     def _reset_session_locked(self) -> None:
         """Reset session-scoped state while retaining driver preferences/voice."""
@@ -868,6 +907,8 @@ class StateStore:
                     crossover = compact.get("weather_crossover")
                     if isinstance(crossover, dict) and crossover.get("trajectory"):
                         compact["weather_crossover"] = {**crossover, "trajectory": crossover["trajectory"][:12]}
+                    if profile == "live":
+                        _trim_live_strategy(compact)
                 data[name] = dup(compact)
             elif is_dataclass(value):
                 data[name] = asdict(value)
@@ -881,7 +922,10 @@ class StateStore:
         if profile == "live":
             # A bounded sparkline feed avoids returning the full completed-lap
             # history while still making the dashboard's pace trend useful.
-            data["recent_laps"] = dup(self.state.completed_laps[-8:])
+            data["recent_laps"] = dup([
+                {key: value for key, value in lap.items() if key not in _LIVE_LAP_EXCLUDED_FIELDS}
+                for lap in self.state.completed_laps[-8:]
+            ])
         return data
 
     async def snapshot(self) -> dict[str, Any]:
@@ -899,16 +943,27 @@ class StateStore:
         async with self._lock:
             return self._serialize_locked("live")
 
-    async def snapshot_live_json(self) -> str:
+    async def snapshot_live_json(self, strategy_revision: int | None = None) -> str:
         """The live snapshot already encoded for a websocket frame.
 
-        Identical text to ``json.dumps(await snapshot_live(), ...)`` as the
-        websocket layer encodes it, without first deep-copying every field:
-        the encoder runs under the store lock, so nothing can change the state
-        while it reads it, and no copy outlives the call.
+        The live snapshot, without first deep-copying every field: the encoder
+        runs under the store lock, so nothing can change the state while it
+        reads it, and no copy outlives the call.
+
+        Every frame carries ``strategy_revision``. A client that says it holds
+        the current revision gets ``{"revision": n, "unchanged": true}`` in
+        place of the strategy, which changes on a recompute and was two thirds
+        of every frame sent four times a second.
         """
         async with self._lock:
+            if self.state.strategy is not self._live_strategy_ref:
+                self._live_strategy_ref = self.state.strategy
+                self._live_strategy_revision += 1
+            revision = self._live_strategy_revision
             data = self._serialize_locked("live", copy_values=False)
+            data["strategy_revision"] = revision
+            if strategy_revision == revision:
+                data["strategy"] = {"revision": revision, "unchanged": True}
             return json.dumps(data, separators=_JSON_SEPARATORS, ensure_ascii=False)
 
     async def snapshot_radio(self) -> dict[str, Any]:

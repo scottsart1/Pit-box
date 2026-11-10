@@ -328,7 +328,7 @@ def test_five_point_nine_nine_four_is_not_six(monkeypatch, recovered, places):
     """The floor applies to the unrounded estimate, once."""
     engine = StrategyEngine(None, None)
     monkeypatch.setattr(StrategyEngine, "_expected_positions_recovered",
-                        staticmethod(lambda *args: recovered))
+                        staticmethod(lambda *args, **kwargs: recovered))
     plan = {
         "stops_remaining": 1, "box_laps": [10], "projected_rejoin_position": 14,
         "positions_lost_in_lane": 9, "projected_time_s": 2000.0, "pit_stop_costs_s": [PIT_S],

@@ -17,7 +17,7 @@ from .grounding import lap_counts, place_counts, unsupported
 from .session_guard import session_key, session_scoped
 from .setup_advisor import SetupAdvisor
 from .state import StateStore
-from .strategy import StrategyEngine
+from .strategy import OPERATIONAL_WEAR_LIMIT, StrategyEngine
 from .voice import NativeVoiceController
 
 log = logging.getLogger(__name__)
@@ -537,6 +537,9 @@ class ProactiveEngineer:
         self._reported_damage_faults: set[str] = set()
         self._last_strategy_signature = ""
         self._last_strategy_inputs_signature = ""
+        self._last_strategy_continuous_signature = ""
+        self._last_recompute_at = float("-inf")
+        self._recompute_times: deque[float] = deque()
         self._last_corner_signature = ""
         self._last_pit_stops: dict[int, int] = {}
         self._last_lap_invalid = False
@@ -869,6 +872,9 @@ class ProactiveEngineer:
         self._reported_damage_bands = {}
         self._reported_damage_faults = set()
         self._last_strategy_inputs_signature = self._last_corner_signature = ""
+        self._last_strategy_continuous_signature = ""
+        self._last_recompute_at = float("-inf")
+        self._recompute_times = deque()
         self._last_pit_stops = {}
         self._last_lap_invalid = False
         self._last_blue_flag = False
@@ -1843,7 +1849,11 @@ class ProactiveEngineer:
     async def _refresh_strategy_if_needed(self, state: dict[str, Any]) -> dict[str, Any]:
         if state.get("mode_profile") == "qualifying":
             return state
-        signature = repr((
+        tyre = state.get("tyre", {}) or {}
+        wear = [float(x) for x in tyre.get("wear", []) or []]
+        compound = str(tyre.get("compound") or "").upper()
+        # Inputs whose change is an event: the call is recomputed at once.
+        discrete = repr((
             int(state.get("current_lap", 0)), state.get("race_control_phase"),
             bool(state.get("red_flag_active")),
             repr(state.get("tyre_sets", [])), state.get("fitted_tyre_set_idx"),
@@ -1854,18 +1864,39 @@ class ProactiveEngineer:
             int(state.get("rain_now_pct", 0) or 0),
             int(state.get("last_lap_ms", 0) or 0),
             tuple(sorted((state.get("driver_grip_feedback", {}) or {}).items())),
-            state.get("tyre", {}).get("compound"), int(state.get("tyre", {}).get("age_laps", 0)),
-            tuple(round(float(x), 1) for x in state.get("tyre", {}).get("wear", [])),
+            tyre.get("compound"), int(tyre.get("age_laps", 0)),
+            # Crossing the wear limit changes what is feasible: at once.
+            max(wear, default=0.0) >= OPERATIONAL_WEAR_LIMIT.get(compound, 85.0),
             tuple(sorted((state.get("driver_tyre_feedback", {}) or {}).items())),
             state.get("strategy_risk_appetite", "balanced"),
             tuple((d.get("car_idx"), d.get("pit_stops"), d.get("tyre_compound")) for d in state.get("drivers", [])),
+        ))
+        # Inputs that move continuously. Wear to a tenth of a percent crossed
+        # a step on some wheel every second or so, and each step ran the
+        # whole planner; by the percent, and no more often than the floor.
+        continuous = repr((
+            tuple(int(x) for x in wear),
             ProactiveEngineer._sector_progress(state),
         ))
-        if signature != self._last_strategy_inputs_signature:
-            self._last_strategy_inputs_signature = signature
+        now = time.monotonic()
+        if discrete != self._last_strategy_inputs_signature or (
+            continuous != self._last_strategy_continuous_signature
+            and now - self._last_recompute_at >= float(settings.strategy_min_recompute_interval_s)
+        ):
+            self._last_strategy_inputs_signature = discrete
+            self._last_strategy_continuous_signature = continuous
+            self._last_recompute_at = now
+            self._recompute_times.append(now)
             await self.strategy.recompute()
             return await self.store.snapshot_radio()
         return state
+
+    def _recomputes_per_min(self) -> int:
+        """Planner runs this engineer asked for in the last minute."""
+        now = time.monotonic()
+        while self._recompute_times and now - self._recompute_times[0] > 60.0:
+            self._recompute_times.popleft()
+        return len(self._recompute_times)
 
     @staticmethod
     def _hold_material_change(
@@ -3672,6 +3703,7 @@ class ProactiveEngineer:
                     "delivery_state": "queued" if self.pending else "waiting",
                     "scheduler_delay_ms": round(delay, 1),
                     "evaluation_ms": round((time.monotonic() - started) * 1000, 1),
+                    "strategy_recomputes_per_min": self._recomputes_per_min(),
                     **b,
                 }))
             except asyncio.CancelledError:

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import sys
 import tempfile
@@ -1277,10 +1278,13 @@ async def websocket_state(websocket: WebSocket) -> None:
     memory mid-race.
     """
     await websocket.accept()
+    # The strategy revision the client holds, from its last acknowledgement.
+    # An older client acknowledges with "." and gets every frame in full.
+    held_strategy: int | None = None
     try:
         while True:
             try:
-                await websocket.send_text(await store.snapshot_live_json())
+                await websocket.send_text(await store.snapshot_live_json(held_strategy))
             except MemoryError:
                 # Serializing a frame is the largest single allocation this
                 # process makes at 4 Hz, so when the machine is out of memory
@@ -1306,9 +1310,10 @@ async def websocket_state(websocket: WebSocket) -> None:
                     await websocket.close()
                 return
             try:
-                await asyncio.wait_for(
+                acknowledgement = await asyncio.wait_for(
                     websocket.receive_text(), timeout=WEBSOCKET_ACK_TIMEOUT_S
                 )
+                held_strategy = _held_strategy_revision(acknowledgement)
             except TimeoutError:
                 log.warning(
                     "Dashboard stopped acknowledging live state after %.0fs; "
@@ -1320,6 +1325,16 @@ async def websocket_state(websocket: WebSocket) -> None:
             await asyncio.sleep(WEBSOCKET_PUSH_INTERVAL_S)
     except WebSocketDisconnect:
         pass
+
+
+def _held_strategy_revision(acknowledgement: str) -> int | None:
+    """The strategy revision a dashboard says it holds, or None for "send it"."""
+    try:
+        value = json.loads(acknowledgement)
+    except (TypeError, ValueError):
+        return None
+    revision = value.get("strategy") if isinstance(value, dict) else None
+    return revision if isinstance(revision, int) and not isinstance(revision, bool) else None
 
 
 @app.post("/api/ask")
