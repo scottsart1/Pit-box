@@ -277,6 +277,22 @@ def create_field_router(
                     detail={"code": "analysis_unavailable", "message": str(exc)},
                 ) from exc
 
+        @router.get("/{session_id}/strategy-review")
+        async def session_strategy_review(session_id: str) -> dict[str, Any]:
+            """Every strategy call of the session, joined to the stops and what they cost."""
+            try:
+                return await analysis_service.strategy_review(session_id)
+            except AnalysisSessionNotFoundError as exc:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail={"code": "session_not_found", "message": str(exc)},
+                ) from exc
+            except SessionAnalysisError as exc:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail={"code": "analysis_unavailable", "message": str(exc)},
+                ) from exc
+
     async def field_summary(session_id: str) -> dict[str, Any]:
         try:
             return await service.summary(session_id)

@@ -25,6 +25,7 @@ from pitwall.session_analysis import (
     stints_for,
     suspended_laps,
 )
+from pitwall.strategy_review import ON_THE_MONEY_S, strategy_review
 
 _DEFAULT = object()
 RACE = {"id": "ses_test", "session_type": "Race 2", "raw_session_type_id": 16, "track_id": 12}
@@ -498,3 +499,124 @@ def test_field_router_without_analysis_service_keeps_existing_routes(tmp_path: P
         FieldAnalysisService(tmp_path / "unused.sqlite3"), SessionAnalysisService(tmp_path / "unused.sqlite3")
     )
     assert "/api/v1/sessions/{session_id}/analysis" in {route.path for route in with_analysis.routes}
+
+
+# ------------------------------------------------------- strategy review (F-11)
+
+
+def _one_stop_race(*, old_deg_s: float = 0.4, rival_lap_s: float = 93.0):
+    """24 laps; the player boxes at the end of lap 17, mediums to hards, on a green track.
+
+    The medium loses ``old_deg_s`` a lap with age; the hard holds 90 s.
+    """
+    cars = [car(0, "RUSSELL", player=True), car(1, "ALBON")]
+    laps = []
+    for number in range(1, 25):
+        on_hard = number >= 18
+        age = number - 18 if on_hard else number - 1
+        seconds = 90.0 if on_hard else 90.0 + old_deg_s * age
+        pit = number in (17, 18)
+        laps.append(lap(0, number, int(round((seconds + (11.0 if pit else 0.0)) * 1000)), pit=pit,
+                        compound="HARD" if on_hard else "MEDIUM", age=age))
+        laps.append(lap(1, number, int(rival_lap_s * 1000), compound="HARD", age=number - 1))
+    return build_session_analysis(RACE, cars, laps)
+
+
+def _call(lap_num, kind="strategy_change", *, delivered=True, at=None, **payload):
+    return {"lap": lap_num, "type": kind, "payload": payload, "text": f"call on lap {lap_num}",
+            "delivered": delivered, "outcome": "delivered" if delivered else "superseded",
+            "queued_at": 1000.0 + lap_num * 90, "at": at or 1002.5 + lap_num * 90}
+
+
+def test_a_stop_two_laps_after_the_call_is_shown_as_such() -> None:
+    review = strategy_review(
+        _one_stop_race(),
+        snapshots=[{"lap": 14, "recommended": {"box_lap": 15, "fit_compound": "HARD"}}],
+        calls=[_call(12, box_lap=15, fit_compound="HARD"), _call(15, box_lap=15, fit_compound="HARD")],
+    )
+    (stop,) = review["stops"]
+    assert (stop["lap"], stop["from"], stop["to"], stop["phase"]) == (17, "MEDIUM", "HARD", "green")
+    assert stop["recommended_lap_at_the_time"] == 15
+    # Lap 12's call named lap 15: a stand-by. Lap 15's was the call to box.
+    assert stop["called_on_lap"] == 15 and stop["laps_after_call"] == 2
+    assert stop["heard"] is True
+
+
+def test_hindsight_uses_the_laps_that_were_set() -> None:
+    """The medium fell away at 0.4 s a lap: boxing five laps earlier was worth 0.4 × (12 + … + 16) s."""
+    review = strategy_review(_one_stop_race(old_deg_s=0.4))
+    (stop,) = review["stops"]
+    assert stop["hindsight_best_lap"] == 12
+    assert stop["cost_vs_hindsight_s"] == pytest.approx(0.4 * (12 + 13 + 14 + 15 + 16), abs=0.1)
+    assert stop["on_the_money"] is False
+    # Albon finished 4.4 s ahead, inside the 28 s: one place.
+    assert stop["places"] == 1
+    # A medium that held its pace: the stop lap made no difference.
+    flat = strategy_review(_one_stop_race(old_deg_s=0.0))["stops"][0]
+    assert flat["hindsight_best_lap"] == 17 and flat["cost_vs_hindsight_s"] == 0.0
+    assert flat["on_the_money"] is True and flat["cost_vs_hindsight_s"] < ON_THE_MONEY_S
+
+
+def test_a_call_that_was_never_spoken_is_counted() -> None:
+    review = strategy_review(
+        _one_stop_race(),
+        calls=[_call(16, box_lap=16, fit_compound="HARD", delivered=False), _call(10, "rival_pace")],
+    )
+    assert review["undelivered"] == 1
+    assert [row["outcome"] for row in review["calls"]] == ["delivered", "superseded"]
+    assert review["calls"][0]["wait_s"] == 2.5
+    # The only call to box was never said: the stop was called, not heard.
+    stop = review["stops"][0]
+    assert stop["called_on_lap"] == 16 and stop["heard"] is False
+
+
+def test_a_declined_call_is_an_override_with_both_sides() -> None:
+    review = strategy_review(
+        _one_stop_race(),
+        calls=[_call(15, box_lap=15, fit_compound="HARD", at=2400.0)],
+        driver_turns=[{"lap": 15, "text": "No, I'm staying out", "label": "", "at": 2405.0},
+                      {"lap": 15, "text": "Copy", "label": "", "at": 2406.0}],
+    )
+    assert review["overrides"] == [
+        {"lap": 15, "kind": "declined", "engine": "call on lap 15", "driver": "No, I'm staying out"},
+    ]
+
+
+def test_a_spell_of_rain_is_read_from_the_laps_and_the_calls() -> None:
+    conditions = {number: {"weather": "Light rain" if number >= 11 else "Clear",
+                           "surface_estimate": 0.0 if number < 11 else 0.2 if number == 11 else 0.5}
+                  for number in range(1, 25)}
+    calls = [_call(11, "weather_crossover", level=1), _call(13, "weather_crossover", level=4, compound="INTER")]
+    review = strategy_review(_one_stop_race(), calls=calls, conditions=conditions)
+    (spell,) = review["weather"]
+    assert spell["rain_from_lap"] == 11 and spell["surface_crossed_on_lap"] == 12
+    assert spell["first_heads_up_lap"] == 11 and spell["box_called_on_lap"] == 13
+    # The player stopped for hards here, not inters: no wet stop to time.
+    assert spell["stopped_on_lap"] is None and spell["laps_late"] is None
+
+
+@pytest.mark.asyncio
+async def test_the_review_route_reads_the_calls_stored_for_the_recording(tmp_path: Path) -> None:
+    from datetime import datetime
+
+    path = tmp_path / "pitwall.sqlite3"
+    key = await _stored_race(path)
+    inside = datetime.fromisoformat("2026-10-08T13:30:00+00:00").timestamp()
+    with sqlite3.connect(path) as db:
+        db.execute("UPDATE recorded_sessions SET legacy_session_uid=770077 WHERE id=?", (key,))
+        for lap_num, delivered, at in ((2, 1, inside), (3, 0, inside + 60), (3, 1, inside + 7200)):
+            db.execute(
+                "INSERT INTO proactive_calls(session_uid, track_id, lap_num, event_type, payload_json, text, "
+                "delivered, outcome, refusal_reason, queued_at, created_at) VALUES (770077, 12, ?, 'progress_update', "
+                "'{}', 'Lap call', ?, ?, '', ?, ?)",
+                (lap_num, delivered, "delivered" if delivered else "expired", at - 1.0, at),
+            )
+        db.commit()
+    app = FastAPI()
+    app.include_router(create_field_router(FieldAnalysisService(path), SessionAnalysisService(path)))
+    client = TestClient(app)
+    body = client.get(f"/api/v1/sessions/{key}/strategy-review").json()
+    # The third call is two hours after this recording ended: another session's.
+    assert [(row["lap"], row["outcome"]) for row in body["calls"]] == [(2, "delivered"), (3, "expired")]
+    assert body["undelivered"] == 1 and body["available"] is True
+    assert client.get("/api/v1/sessions/ses_missing/strategy-review").status_code == 404

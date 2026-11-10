@@ -2560,5 +2560,62 @@
   "one": "La pluie lui fait gagner {count} place.",
   "other": "La pluie lui fait gagner {count} places.",
   "many": "La pluie lui fait gagner {count} places."
+ },
+ "Battery": "Batterie",
+ "Best on known pace": "Meilleur au rythme connu",
+ "Box": "Stand",
+ "Call": "Appel",
+ "Called": "Annoncé",
+ "Calls": "Appels",
+ "Calls: {said} said, {unsaid} not said. Arrow keys move between calls.": "Appels : {said} dits, {unsaid} non dits. Les flèches passent d’un appel à l’autre.",
+ "Cancel": "Annulé",
+ "Cost": "Coût",
+ "Damage": "Dégâts",
+ "Flag": "Drapeau",
+ "Fuel": "Carburant",
+ "Heard": "Entendu",
+ "Hindsight compares stop laps on the lap times that were set; a stop within 1.5 s of the best is on the money. It is not a claim about what could have been known at the time.": "Le recul compare les tours d’arrêt sur les temps réellement réalisés ; un arrêt à moins de 1,5 s du meilleur est dans le mille. Ce n’est pas une affirmation sur ce qu’on pouvait savoir sur le moment.",
+ "Lap {lap} · {word} · {outcome}: {text}": "Tour {lap} · {word} · {outcome} : {text}",
+ "Penalty": "Pénalité",
+ "Places": "Places",
+ "Rain": "Pluie",
+ "Recommended": "Recommandé",
+ "Restart": "Relance",
+ "Rival": "Rival",
+ "Window": "Fenêtre",
+ "Your stops and the calls behind them": "Vos arrêts et les appels qui les ont précédés",
+ "Your stops, the calls behind them and hindsight on the laps that were set": "Vos arrêts, les appels qui les ont précédés et le recul sur les tours réalisés",
+ "no": "non",
+ "not called": "non annoncé",
+ "not comparable": "non comparable",
+ "not said": "non dit",
+ "on the money": "dans le mille",
+ "said": "dit",
+ "yes": "oui",
+ "{seconds} s": "{seconds} s",
+ "lap {lap}, stopped {count} laps later": {
+  "one": "tour {lap}, arrêt {count} tour plus tard",
+  "other": "tour {lap}, arrêt {count} tours plus tard",
+  "many": "tour {lap}, arrêt {count} tours plus tard"
+ },
+ "rain spell {spell}: stopped {count} laps after the track crossed to inters": {
+  "one": "averse {spell} : arrêt {count} tour après le passage aux intermédiaires",
+  "other": "averse {spell} : arrêt {count} tours après le passage aux intermédiaires",
+  "many": "averse {spell} : arrêt {count} tours après le passage aux intermédiaires"
+ },
+ "{count} calls": {
+  "one": "{count} appel",
+  "other": "{count} appels",
+  "many": "{count} appels"
+ },
+ "{count} calls declined or disputed": {
+  "one": "{count} appel refusé ou contesté",
+  "other": "{count} appels refusés ou contestés",
+  "many": "{count} appels refusés ou contestés"
+ },
+ "{count} never said": {
+  "one": "{count} jamais dit",
+  "other": "{count} jamais dits",
+  "many": "{count} jamais dits"
  }
 }

@@ -2526,5 +2526,57 @@
  "Rain gains it {count} places.": {
   "one": "Regen bringt ihm {count} Platz.",
   "other": "Regen bringt ihm {count} Plätze."
+ },
+ "Battery": "Batterie",
+ "Best on known pace": "Beste bei bekanntem Tempo",
+ "Box": "Box",
+ "Call": "Funkspruch",
+ "Called": "Angesagt",
+ "Calls": "Funk",
+ "Calls: {said} said, {unsaid} not said. Arrow keys move between calls.": "Funksprüche: {said} gesagt, {unsaid} nicht gesagt. Pfeiltasten wechseln zwischen Funksprüchen.",
+ "Cancel": "Abbruch",
+ "Cost": "Kosten",
+ "Damage": "Schaden",
+ "Flag": "Flagge",
+ "Fuel": "Sprit",
+ "Heard": "Gehört",
+ "Hindsight compares stop laps on the lap times that were set; a stop within 1.5 s of the best is on the money. It is not a claim about what could have been known at the time.": "Der Rückblick vergleicht Stopp-Runden anhand der gefahrenen Rundenzeiten; ein Stopp innerhalb von 1,5 s des besten sitzt genau. Er behauptet nicht, was man damals hätte wissen können.",
+ "Lap {lap} · {word} · {outcome}: {text}": "Runde {lap} · {word} · {outcome}: {text}",
+ "Penalty": "Strafe",
+ "Places": "Plätze",
+ "Rain": "Regen",
+ "Recommended": "Empfohlen",
+ "Restart": "Neustart",
+ "Rival": "Rivale",
+ "Window": "Fenster",
+ "Your stops and the calls behind them": "Deine Stopps und die Funksprüche dahinter",
+ "Your stops, the calls behind them and hindsight on the laps that were set": "Deine Stopps, die Funksprüche dahinter und der Rückblick auf die gefahrenen Runden",
+ "no": "nein",
+ "not called": "nicht angesagt",
+ "not comparable": "nicht vergleichbar",
+ "not said": "nicht gesagt",
+ "on the money": "genau richtig",
+ "said": "gesagt",
+ "yes": "ja",
+ "{seconds} s": "{seconds} s",
+ "lap {lap}, stopped {count} laps later": {
+  "one": "Runde {lap}, Stopp {count} Runde später",
+  "other": "Runde {lap}, Stopp {count} Runden später"
+ },
+ "rain spell {spell}: stopped {count} laps after the track crossed to inters": {
+  "one": "Regenphase {spell}: Stopp {count} Runde nach dem Wechselpunkt zu Inters",
+  "other": "Regenphase {spell}: Stopp {count} Runden nach dem Wechselpunkt zu Inters"
+ },
+ "{count} calls": {
+  "one": "{count} Funkspruch",
+  "other": "{count} Funksprüche"
+ },
+ "{count} calls declined or disputed": {
+  "one": "{count} Funkspruch abgelehnt oder bestritten",
+  "other": "{count} Funksprüche abgelehnt oder bestritten"
+ },
+ "{count} never said": {
+  "one": "{count} nie gesagt",
+  "other": "{count} nie gesagt"
  }
 }
