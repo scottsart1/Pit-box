@@ -1824,6 +1824,22 @@ class ProactiveEngineer:
         )
         return ProactiveEngineer._advice(state) if urgent else {}
 
+    @staticmethod
+    def _sector_progress(state: dict[str, Any]) -> tuple[int, int] | None:
+        """How far the field is into posting this lap's sectors, in fives.
+
+        While rain is falling or due, the wet model reads the field's sectors
+        as they arrive. Counting them in fives recomputes as the evidence
+        lands without recomputing at the telemetry rate.
+        """
+        weather = str(state.get("weather", "")).lower()
+        if not ("rain" in weather or weather == "storm" or int(state.get("rain_now_pct", 0) or 0) > 20):
+            return None
+        drivers = state.get("drivers", []) or []
+        s1 = sum(1 for driver in drivers if int(driver.get("current_s1_ms", 0) or 0) > 0)
+        s2 = sum(1 for driver in drivers if int(driver.get("current_s2_ms", 0) or 0) > 0)
+        return s1 // 5, s2 // 5
+
     async def _refresh_strategy_if_needed(self, state: dict[str, Any]) -> dict[str, Any]:
         if state.get("mode_profile") == "qualifying":
             return state
@@ -1843,6 +1859,7 @@ class ProactiveEngineer:
             tuple(sorted((state.get("driver_tyre_feedback", {}) or {}).items())),
             state.get("strategy_risk_appetite", "balanced"),
             tuple((d.get("car_idx"), d.get("pit_stops"), d.get("tyre_compound")) for d in state.get("drivers", [])),
+            ProactiveEngineer._sector_progress(state),
         ))
         if signature != self._last_strategy_inputs_signature:
             self._last_strategy_inputs_signature = signature

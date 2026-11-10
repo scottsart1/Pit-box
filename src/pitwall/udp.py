@@ -3,10 +3,12 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import math
 import time
 from collections import deque
 from collections.abc import Awaitable, Callable, Iterable
 from dataclasses import dataclass
+from statistics import median
 from typing import Any
 
 from f1.packets import SESSIONS, resolve
@@ -88,6 +90,13 @@ WEATHER = {
     5: "Storm",
 }
 SAFETY_CAR = {0: "none", 1: "full", 2: "virtual", 3: "formation"}
+# Weather labels under which a car's tyre surface temperature is its dry
+# baseline.
+DRY_WEATHER_LABELS = frozenset({"clear", "light cloud", "overcast"})
+# Time constants for a car's tyre surface temperature: the last ten seconds,
+# and about a lap of dry running. Judgements; F-10 measures what a drop means.
+SURFACE_TEMP_RECENT_S = 10.0
+SURFACE_TEMP_BASELINE_S = 90.0
 # The SAME enum as SAFETY_CAR above, and it must stay identical. It was
 # previously written without the "none" member, which shifted every value by
 # one: a full safety car was announced to the driver as "virtual" and a virtual
@@ -1262,6 +1271,10 @@ class F1DatagramProtocol(asyncio.DatagramProtocol):
                 "track_temp_c": int(sample.track_temperature),
                 "air_temp_c": int(sample.air_temperature),
                 "rain_pct": int(sample.rain_percentage),
+                # The published enum is 0 up, 1 down, 2 no change; kept raw
+                # until a capture confirms it in the wet.
+                "track_temp_trend": int(getattr(sample, "track_temperature_change", 2)),
+                "air_temp_trend": int(getattr(sample, "air_temperature_change", 2)),
             }
             for sample in samples
             # EA includes the forecast's session type. A later qualifying/race
@@ -1609,6 +1622,16 @@ class F1DatagramProtocol(asyncio.DatagramProtocol):
                 driver.pit_lane_timer_active = bool(lap.pit_lane_timer_active)
                 driver.pit_lane_time_ms = int(lap.pit_lane_time_in_lane_in_ms)
                 driver.pit_stop_timer_ms = int(lap.pit_stop_timer_in_ms)
+                # Sector times of the lap in progress: zero until each sector
+                # is complete, and reset when the next lap begins.
+                driver.current_s1_ms = _ms(
+                    int(getattr(lap, "sector1_time_minutes_part", 0)),
+                    int(getattr(lap, "sector1_time_ms_part", 0)),
+                )
+                driver.current_s2_ms = _ms(
+                    int(getattr(lap, "sector2_time_minutes_part", 0)),
+                    int(getattr(lap, "sector2_time_ms_part", 0)),
+                )
                 if driver.pit_lane_timer_active:
                     driver.current_pit_stop_max_ms = max(
                         int(driver.current_pit_stop_max_ms),
@@ -1749,7 +1772,17 @@ class F1DatagramProtocol(asyncio.DatagramProtocol):
             for entry in packet.car_telemetry_data
         ]
 
+        # Smoothing for each car's tyre surface temperature, by elapsed session
+        # time so it does not depend on the packet rate the game is set to.
+        now = float(packet.header.session_time)
+        last = getattr(self, "_field_temps_at", None)
+        elapsed = max(0.0, min(1.0, now - last)) if last is not None else 0.0
+        self._field_temps_at = now
+        recent_share = 1.0 - math.exp(-elapsed / SURFACE_TEMP_RECENT_S)
+        baseline_share = 1.0 - math.exp(-elapsed / SURFACE_TEMP_BASELINE_S)
+
         def apply_field(state):  # type: ignore[no-untyped-def]
+            dry = str(state.weather).lower() in DRY_WEATHER_LABELS
             for index, (speed, drs, inner, surface) in enumerate(field_samples):
                 if index >= len(state.drivers):
                     break
@@ -1760,6 +1793,20 @@ class F1DatagramProtocol(asyncio.DatagramProtocol):
                 driver.drs_open = drs
                 driver.tyre_inner_temps_c = inner
                 driver.tyre_surface_temps_c = surface
+                current = median(surface) if surface else 0.0
+                if current <= 0 or speed < 80 or driver.pit_lane_timer_active:
+                    continue
+                if driver.surface_temp_recent_c is None:
+                    driver.surface_temp_recent_c = current
+                else:
+                    driver.surface_temp_recent_c += (current - driver.surface_temp_recent_c) * recent_share
+                if dry:
+                    if driver.surface_temp_baseline_c is None:
+                        driver.surface_temp_baseline_c = current
+                    else:
+                        driver.surface_temp_baseline_c += (
+                            current - driver.surface_temp_baseline_c
+                        ) * baseline_share
 
         await self.store.mutate(apply_field)
         if player_index is None:
