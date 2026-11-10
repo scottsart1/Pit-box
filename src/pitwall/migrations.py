@@ -492,6 +492,20 @@ V5_6_RADIO_TRACE = Migration(
 )
 
 
+V5_7_LAP_CONDITIONS = Migration(
+    version=5700,
+    app_version="5.7.0",
+    statements=(
+        # The conditions a lap was driven in, for calibrating the wet model:
+        # the surface estimate at the line, the field's sector-pace ratio, the
+        # fall in the field's tyre surface temperature, and whether the lap was
+        # interrupted for the whole field or by a local yellow. One JSON object
+        # so the next measurement needs no further migration.
+        "ALTER TABLE laps ADD COLUMN conditions_json TEXT NOT NULL DEFAULT '{}'",
+    ),
+)
+
+
 MIGRATIONS: tuple[Migration, ...] = (
     V4_2_CATALOG,
     V4_2_COMPARISON_RESULTS,
@@ -502,6 +516,7 @@ MIGRATIONS: tuple[Migration, ...] = (
     V4_13_1_PLAYER_FLAG_CONTEXT,
     V5_2_ENGINEERING,
     V5_6_RADIO_TRACE,
+    V5_7_LAP_CONDITIONS,
 )
 LATEST_SCHEMA_VERSION = MIGRATIONS[-1].version
 

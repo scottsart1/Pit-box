@@ -28,6 +28,7 @@ from .intent import (
     utterance_mood,
 )
 from .prerace import PreRacePlanner
+from .tyre_limits import safety_limit_pct
 from .providers import (
     ProviderDeadlineError,
     ProviderRequestError,
@@ -1567,7 +1568,8 @@ def hold_material_change(state: dict[str, Any], hold: dict[str, Any]) -> str | N
         [float(value) for value in (state.get("tyre", {}) or {}).get("wear", [0]) or [0]]
         or [0.0]
     )
-    if max_wear >= 82.0 and float(baseline.get("max_wear_pct", 0.0) or 0.0) < 82.0:
+    limit = safety_limit_pct((state.get("tyre", {}) or {}).get("compound", ""))
+    if max_wear >= limit and float(baseline.get("max_wear_pct", 0.0) or 0.0) < limit:
         return f"limiting tyre wear crossed the hard safety limit at {max_wear:.0f}%"
     return None
 

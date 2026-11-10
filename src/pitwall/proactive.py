@@ -17,8 +17,9 @@ from .grounding import lap_counts, place_counts, unsupported
 from .session_guard import session_key, session_scoped
 from .setup_advisor import SetupAdvisor
 from .state import StateStore
-from .strategy import COVER_RANGE_BOUNDS_S, OPERATIONAL_WEAR_LIMIT, StrategyEngine
+from .strategy import COVER_RANGE_BOUNDS_S, StrategyEngine
 from .tools import TelemetryTools
+from .tyre_limits import WEAR_CALL_PCT, WEAR_CALL_REARM_PCT, operational_limit_pct, safety_limit_pct
 from .voice import NativeVoiceController
 
 log = logging.getLogger(__name__)
@@ -1691,7 +1692,7 @@ class ProactiveEngineer:
         if kind == "fuel_warning":
             return float(state.get("fuel_laps_delta", 1.0)) < FUEL_SAVE_DELTA_LAPS
         if kind == "tyre_wear":
-            return max(state.get("tyre", {}).get("wear", [0]) or [0]) >= 62
+            return max(state.get("tyre", {}).get("wear", [0]) or [0]) >= WEAR_CALL_REARM_PCT
         if kind == "damage":
             d = state.get("damage", {})
             return max([int(d.get(key, 0)) for key in DAMAGE_KEYS] or [0]) > 10 or any(
@@ -1982,7 +1983,7 @@ class ProactiveEngineer:
         wear = max(
             [float(value) for value in (state.get("tyre", {}) or {}).get("wear", [0]) or [0]]
         )
-        return wear >= 82.0
+        return wear >= safety_limit_pct((state.get("tyre", {}) or {}).get("compound", ""))
 
     @staticmethod
     def _spoken_advice(
@@ -2032,7 +2033,7 @@ class ProactiveEngineer:
         neutralised = str(state.get("race_control_phase", "green")) != "green"
         urgent = (
             neutralised
-            or wear >= 82.0
+            or wear >= safety_limit_pct(state.get("tyre", {}).get("compound", ""))
             or (box_lap is not None and int(box_lap) <= current_lap + 1)
         )
         return ProactiveEngineer._advice(state) if urgent else {}
@@ -2073,7 +2074,7 @@ class ProactiveEngineer:
             tuple(sorted((state.get("driver_grip_feedback", {}) or {}).items())),
             tyre.get("compound"), int(tyre.get("age_laps", 0)),
             # Crossing the wear limit changes what is feasible: at once.
-            max(wear, default=0.0) >= OPERATIONAL_WEAR_LIMIT.get(compound, 85.0),
+            max(wear, default=0.0) >= operational_limit_pct(compound),
             tuple(sorted((state.get("driver_tyre_feedback", {}) or {}).items())),
             state.get("strategy_risk_appetite", "balanced"),
             tuple((d.get("car_idx"), d.get("pit_stops"), d.get("tyre_compound")) for d in state.get("drivers", [])),
@@ -2403,11 +2404,12 @@ class ProactiveEngineer:
                 cooldown_s=90.0,
             )
         wear = max(state.get("tyre", {}).get("wear", [0]) or [0])
-        if wear < 62:
+        if wear < WEAR_CALL_REARM_PCT:
             # Fresh tyres: the next stint's warnings start from scratch.
             self._delivered_signatures.pop("tyre_wear", None)
-        if not in_garage and wear >= 65:
-            self._enqueue("tyre_wear", {"wear_fl_fr_rl_rr": state.get("tyre", {}).get("wear"), "strategy": self._urgent_strategy(state)}, critical=wear >= 82, cooldown_s=60.0)
+        if not in_garage and wear >= WEAR_CALL_PCT:
+            limit = safety_limit_pct(state.get("tyre", {}).get("compound", ""))
+            self._enqueue("tyre_wear", {"wear_fl_fr_rl_rr": state.get("tyre", {}).get("wear"), "compound": state.get("tyre", {}).get("compound"), "strategy": self._urgent_strategy(state)}, critical=wear >= limit, cooldown_s=60.0)
 
         penalties, warnings = int(state.get("penalties_s", 0)), int(state.get("corner_cutting_warnings", 0))
         if in_garage:
@@ -3132,7 +3134,7 @@ class ProactiveEngineer:
                 float(value) for value in payload.get("wear_fl_fr_rl_rr") or []
                 if isinstance(value, (int, float))
             ]
-            return bool(wear) and max(wear) >= 82.0
+            return bool(wear) and max(wear) >= safety_limit_pct(payload.get("compound", ""))
         if event_type == "damage":
             news = payload.get("changed")
             if not isinstance(news, list):
@@ -3640,7 +3642,7 @@ class ProactiveEngineer:
             ]
             worst = max(wear) if wear else 0.0
             advice = str((payload.get("strategy") or {}).get("instruction") or "")
-            return ((int(worst) // 10) * 10, worst >= 82.0, advice), None
+            return ((int(worst) // 10) * 10, worst >= safety_limit_pct(payload.get("compound", "")), advice), None
         if kind == "fuel_warning":
             delta = payload.get("fuel_laps_delta")
             band = math.floor(float(delta) * 2) if isinstance(delta, (int, float)) else None

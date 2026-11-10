@@ -2492,5 +2492,19 @@
  "tyre surface {drop}° cooler than dry running": "Reifenoberfläche {drop}° kühler als im Trockenen",
  "watch": "beobachten",
  "your report": "deine Meldung",
- "Box lap {lap} for {tyre}": "Box in Runde {lap} für {tyre}"
+ "Box lap {lap} for {tyre}": "Box in Runde {lap} für {tyre}",
+ "Calibration": "Kalibrierung",
+ "Circuit model": "Streckenmodell",
+ "Forget this circuit": "Diese Strecke vergessen",
+ "Forget what recorded races measured at {track}?": "Vergessen, was aufgezeichnete Rennen in {track} gemessen haben?",
+ "Measured and table values for {track}": "Gemessene und Tabellenwerte für {track}",
+ "Measurements update at the end of every race.": "Messungen werden am Ende jedes Rennens aktualisiert.",
+ "No race recorded yet. Measurements start with the first finished race.": "Noch kein Rennen aufgezeichnet. Messungen beginnen mit dem ersten beendeten Rennen.",
+ "Open this page to load the circuit model.": "Öffne diese Seite, um das Streckenmodell zu laden.",
+ "The circuit model is unavailable.": "Das Streckenmodell ist nicht verfügbar.",
+ "What your recorded races have measured at each circuit, beside the built-in tables the strategy uses until enough races agree. Pit loss needs 8 green-flag stops, tyre severity 30 car-laps, the safety-car rate 3 races. A measurement far from the table is shown but not used.": "Was deine aufgezeichneten Rennen auf jeder Strecke gemessen haben, neben den eingebauten Tabellen, die die Strategie nutzt, bis genug Rennen übereinstimmen. Der Boxenverlust braucht 8 Stopps unter Grün, die Reifenhärte 30 Auto-Runden, die Safety-Car-Rate 3 Rennen. Eine Messung weit weg von der Tabelle wird angezeigt, aber nicht genutzt.",
+ "{track} · current circuit": "{track} · aktuelle Strecke",
+ "Pit loss": "Boxenverlust",
+ "Tyre severity": "Reifenhärte der Strecke",
+ "Safety cars a lap": "Safety-Cars pro Runde"
 }

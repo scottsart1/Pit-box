@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import math
 import os
 import shutil
 import sqlite3
@@ -59,6 +60,25 @@ def _restore_session_uid(record: dict[str, Any]) -> dict[str, Any]:
     if "session_uid" in record:
         record["session_uid"] = _session_uid_from_sqlite(record["session_uid"])
     return record
+
+
+# The per-lap conditions kept for wet-model calibration.
+_LAP_CONDITION_KEYS = (
+    "surface_estimate", "field_sector_ratio", "field_surface_temp_drop_c",
+    "full_course_neutralised", "local_yellow",
+)
+
+
+def _lap_conditions(lap: dict[str, Any]) -> dict[str, Any]:
+    """The calibration fields of a lap record, finite numbers and flags only."""
+    conditions: dict[str, Any] = {}
+    for key in _LAP_CONDITION_KEYS:
+        value = lap.get(key)
+        if isinstance(value, bool):
+            conditions[key] = value
+        elif isinstance(value, (int, float)) and math.isfinite(float(value)):
+            conditions[key] = round(float(value), 4)
+    return conditions
 
 
 class PitWallDatabase:
@@ -824,8 +844,9 @@ class PitWallDatabase:
                     track_temp_c, air_temp_c, weather, mode_profile,
                     fuel_start_kg, fuel_end_kg, position,
                     s1_ms, s2_ms, s3_ms, pit_status, pit_lane_time_ms,
-                    setup_json, trace_json, created_at, learning_exclusions_json
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    setup_json, trace_json, created_at, learning_exclusions_json,
+                    conditions_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(session_uid, lap_num) DO UPDATE SET
                     lap_time_ms=excluded.lap_time_ms,
                     valid=excluded.valid,
@@ -849,7 +870,8 @@ class PitWallDatabase:
                     pit_lane_time_ms=excluded.pit_lane_time_ms,
                     setup_json=excluded.setup_json,
                     trace_json=excluded.trace_json,
-                    learning_exclusions_json=excluded.learning_exclusions_json
+                    learning_exclusions_json=excluded.learning_exclusions_json,
+                    conditions_json=excluded.conditions_json
                 """,
                 (
                     _session_uid_to_sqlite(lap["session_uid"]),
@@ -881,6 +903,7 @@ class PitWallDatabase:
                     json.dumps(lap.get("trace", []), separators=(",", ":")),
                     float(lap.get("created_at", time.time())),
                     json.dumps(lap.get("learning_exclusions", [])),
+                    json.dumps(_lap_conditions(lap), allow_nan=False),
                 ),
             )
             self._write_corner_rows_sync(
@@ -1784,6 +1807,32 @@ class PitWallDatabase:
                 (key, json.dumps(value), time.time()),
             )
 
+    async def load_preferences_with_prefix(self, prefix: str) -> dict[str, Any]:
+        """Every stored preference whose key starts with ``prefix``."""
+        async with self._lock:
+            return await asyncio.to_thread(self._load_preferences_with_prefix_sync, str(prefix))
+
+    def _load_preferences_with_prefix_sync(self, prefix: str) -> dict[str, Any]:
+        with self._connect() as db:
+            rows = db.execute("SELECT key, value_json FROM user_preferences").fetchall()
+        result: dict[str, Any] = {}
+        for row in rows:
+            if not str(row["key"]).startswith(prefix):
+                continue
+            try:
+                result[str(row["key"])] = json.loads(row["value_json"])
+            except (json.JSONDecodeError, TypeError):
+                continue
+        return result
+
+    async def delete_preference(self, key: str) -> None:
+        async with self._lock:
+            await asyncio.to_thread(self._delete_preference_sync, str(key))
+
+    def _delete_preference_sync(self, key: str) -> None:
+        with self._connect() as db:
+            db.execute("DELETE FROM user_preferences WHERE key=?", (key,))
+
     async def load_preference(self, key: str, default: Any = None) -> Any:
         async with self._lock:
             return await asyncio.to_thread(self._load_preference_sync, str(key), default)
@@ -2530,13 +2579,18 @@ class PitWallDatabase:
                     SELECT session_uid, track_id, track_name, session_type,
                            lap_num, lap_time_ms, valid, compound,
                            tyre_age_start, tyre_age_end, position,
-                           s1_ms, s2_ms, s3_ms, created_at
+                           s1_ms, s2_ms, s3_ms, created_at, weather, conditions_json
                     FROM laps{where}
                     ORDER BY created_at DESC LIMIT ?
                     """,
                     (*params, limit),
                 ).fetchall()
             ]
+            for lap in laps:
+                try:
+                    lap["conditions"] = json.loads(lap.pop("conditions_json", None) or "{}")
+                except (json.JSONDecodeError, TypeError):
+                    lap["conditions"] = {}
             strategies = [
                 _restore_session_uid(dict(row))
                 for row in db.execute(

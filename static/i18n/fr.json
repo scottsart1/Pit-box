@@ -2522,5 +2522,19 @@
  "tyre surface {drop}° cooler than dry running": "surface des pneus {drop}° plus froide qu’au sec",
  "watch": "surveiller",
  "your report": "ton retour",
- "Box lap {lap} for {tyre}": "Box au tour {lap} pour {tyre}"
+ "Box lap {lap} for {tyre}": "Box au tour {lap} pour {tyre}",
+ "Calibration": "Étalonnage",
+ "Circuit model": "Modèle du circuit",
+ "Forget this circuit": "Oublier ce circuit",
+ "Forget what recorded races measured at {track}?": "Oublier ce que les courses enregistrées ont mesuré à {track} ?",
+ "Measured and table values for {track}": "Valeurs mesurées et de table pour {track}",
+ "Measurements update at the end of every race.": "Les mesures sont mises à jour à la fin de chaque course.",
+ "No race recorded yet. Measurements start with the first finished race.": "Aucune course enregistrée. Les mesures commencent avec la première course terminée.",
+ "Open this page to load the circuit model.": "Ouvre cette page pour charger le modèle du circuit.",
+ "The circuit model is unavailable.": "Le modèle du circuit est indisponible.",
+ "What your recorded races have measured at each circuit, beside the built-in tables the strategy uses until enough races agree. Pit loss needs 8 green-flag stops, tyre severity 30 car-laps, the safety-car rate 3 races. A measurement far from the table is shown but not used.": "Ce que tes courses enregistrées ont mesuré sur chaque circuit, à côté des tables intégrées que la stratégie utilise tant que trop peu de courses concordent. La perte au stand demande 8 arrêts sous drapeau vert, la sévérité des pneus 30 tours-voiture, le taux de voiture de sécurité 3 courses. Une mesure trop éloignée de la table est affichée mais pas utilisée.",
+ "{track} · current circuit": "{track} · circuit actuel",
+ "Pit loss": "Perte au stand",
+ "Tyre severity": "Sévérité des pneus",
+ "Safety cars a lap": "Voitures de sécurité par tour"
 }

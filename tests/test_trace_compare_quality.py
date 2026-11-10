@@ -754,7 +754,10 @@ async def test_a_database_a_test_build_upgraded_starts_and_keeps_its_traces(tmp_
         versions = {row[0]: row[1] for row in db.execute("SELECT version, app_version FROM schema_versions")}
         user_version = db.execute("PRAGMA user_version").fetchone()[0]
     assert 5510 not in versions and versions[5600] == "5.6.0"
-    assert user_version == 5600 and reopened.schema_version == 5600
+    # Relabelled, not migrated twice; the newest migration still stands.
+    from pitwall.migrations import LATEST_SCHEMA_VERSION
+
+    assert user_version == LATEST_SCHEMA_VERSION and reopened.schema_version == LATEST_SCHEMA_VERSION
     assert (await reopened.radio_trace(kept))["trace"] == {"path": "model"}
 
 

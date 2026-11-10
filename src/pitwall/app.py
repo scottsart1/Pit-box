@@ -30,7 +30,7 @@ from fastapi.responses import (
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import __version__
+from . import __version__, circuit_model
 from .analysis import AnalysisEngine
 from .analysis_jobs import AnalysisJobService
 from .api.analysis import create_analysis_router
@@ -88,7 +88,12 @@ from .settings_service import (
 from .setup_advisor import SetupAdvisor
 from .state import StateStore
 from .storage_service import RetentionPolicy, StorageService
-from .strategy import StrategyEngine
+from .strategy import (
+    PIT_LOSS_SECONDS,
+    TRACK_TYRE_SEVERITY,
+    StrategyEngine,
+    circuit_value,
+)
 from .tools import TelemetryTools
 from .trace_archive import TraceArchiveService
 from .trace_store import RecoveryReport, TraceStore
@@ -291,10 +296,29 @@ async def _persist_briefing(
     return {"kind": kind, "payload": payload, "text": text}
 
 
+async def _learn_circuit(snapshot: dict[str, object]) -> None:
+    """Fold a finished race into its circuit's measured pit loss, severity and safety-car rate."""
+    track_id = int(snapshot.get("track_id", -1) or -1)
+    if track_id < 0:
+        return
+    key = circuit_model.preference_key(track_id)
+    model = await database.load_preference(key, {}) or {}
+    updated = circuit_model.learn_from_session(snapshot, model)
+    if updated != model:
+        await database.save_preference(key, updated)
+
+
 async def _persist_finished_session() -> None:
     """Persist the result now; keep optional provider/audio latency off UDP."""
     snapshot = await store.snapshot_analysis()
     await database.upsert_session(snapshot)
+    try:
+        await _learn_circuit(snapshot)
+        session = int(snapshot.get("session_uid", 0) or 0)
+        if session and snapshot.get("forecast_log"):
+            await database.save_preference(f"forecast_log:{session}", snapshot["forecast_log"])
+    except Exception:  # noqa: BLE001 - calibration must never cost the saved result
+        log.exception("Could not update the circuit model from this race")
     game_uid = int(snapshot.get("session_uid", 0) or 0)
     if game_uid:
         await database.catalog.finalize_session(
@@ -1245,6 +1269,10 @@ async def export_session_json(
     data = await database.history_query(
         track_id=track_id, session_uid=session_uid, limit=limit, include_traces=True
     )
+    if session_uid:
+        # What the forecast said through the session, for calibration.
+        live_log = (await store.snapshot_analysis()).get("forecast_log") or []
+        data["forecast_log"] = live_log or await database.load_preference(f"forecast_log:{session_uid}", [])
     return JSONResponse(
         data,
         headers={"Content-Disposition": 'attachment; filename="pitwall_session.json"'},
@@ -1692,6 +1720,35 @@ async def strategy_what_if(request: WhatIfRequest) -> dict[str, object]:
     if request.lap is not None and not 0 <= request.lap <= 200:
         raise HTTPException(400, "lap must be between 0 and 200")
     return await strategy.what_if(scenario, lap=request.lap, compound=compound)
+
+
+@app.get("/api/circuit-model")
+async def circuit_models() -> dict[str, object]:
+    """What recorded races have measured at each circuit, beside the tables."""
+    stored = await database.load_preferences_with_prefix("circuit_model:")
+    snapshot = await store.peek("track_id", "track_name")
+    current = int(snapshot.get("track_id", -1) or -1)
+    ids = sorted({int(key.split(":", 1)[1]) for key in stored if key.split(":", 1)[1].lstrip("-").isdigit()}
+                 | ({current} if current >= 0 else set()))
+    circuits = []
+    for track_id in ids:
+        priors = {
+            "pit_loss_s": circuit_value(PIT_LOSS_SECONDS, track_id, 22.5),
+            "severity": circuit_value(TRACK_TYRE_SEVERITY, track_id, 1.0),
+        }
+        name = TRACKS.get(track_id, f"Circuit {track_id}")
+        circuits.append({
+            **circuit_model.summary(track_id, name, stored.get(circuit_model.preference_key(track_id)), priors),
+            "current": track_id == current,
+            "has_data": circuit_model.preference_key(track_id) in stored,
+        })
+    return {"circuits": circuits}
+
+
+@app.delete("/api/circuit-model/{track_id}")
+async def forget_circuit_model(track_id: int) -> dict[str, object]:
+    await database.delete_preference(circuit_model.preference_key(track_id))
+    return {"forgotten": track_id}
 
 
 @app.get("/api/strategy/weather")

@@ -209,6 +209,13 @@
     <div id="forwarderList" class="forwarder-list" aria-live="polite"><div class="empty">No forwarding targets configured.</div></div>
   </section>
 
+  <section class="panel-surface calibration-panel" aria-labelledby="circuitModelHeading">
+    <div class="section-heading"><div><div class="eyebrow">Calibration</div><h2 id="circuitModelHeading">Circuit model</h2></div></div>
+    <p class="field-help">What your recorded races have measured at each circuit, beside the built-in tables the strategy uses until enough races agree. Pit loss needs 8 green-flag stops, tyre severity 30 car-laps, the safety-car rate 3 races. A measurement far from the table is shown but not used.</p>
+    <div id="circuitModelStatus" class="inline-notice" role="status" aria-live="polite">Open this page to load the circuit model.</div>
+    <div id="circuitModelList" class="circuit-model-list"></div>
+  </section>
+
   <section class="panel-surface diagnose-panel" aria-labelledby="diagnoseHeading">
     <div class="section-heading"><div><div class="eyebrow">Guided checks</div><h2 id="diagnoseHeading">Troubleshooter</h2></div><button id="diagnoseNetwork" class="button ghost" type="button">Run diagnostics</button></div>
     <div id="diagnoseStatus" class="inline-notice" role="status" aria-live="polite">No diagnostic run yet.</div>
@@ -1405,6 +1412,7 @@ $('rivalCompare').ontoggle=()=>{lastRivalKey='';loadRivals()};$('objectiveDown')
      navigated document (this file) is revalidated, so versioned subresource
      URLs bust reliably on upgrade. Keep in step with the app version. -->
 <script type="module" src="/static/js/connection.js?v=5.6.0"></script>
+<script type="module" src="/static/js/calibration.js?v=5.6.0"></script>
 <script type="module" src="/static/js/workspaces.js?v=5.6.0"></script>
 <script type="module" src="/static/js/session-analysis.js?v=5.6.0"></script>
 <script type="module" src="/static/js/engineering.js?v=5.6.0"></script>

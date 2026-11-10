@@ -8,7 +8,7 @@ from .analysis import AnalysisEngine, fmt_ms
 from .database import PitWallDatabase
 from .setup_advisor import SetupAdvisor
 from .state import StateStore
-from .strategy import PIT_LOSS_SECONDS, TRACK_TYRE_SEVERITY, points_for_position
+from .strategy import PIT_LOSS_SECONDS, TRACK_TYRE_SEVERITY, circuit_value, points_for_position
 from .tools import TelemetryTools
 from .udp import TRACKS
 
@@ -203,10 +203,10 @@ class BriefingEngine:
             }
             for item in review.get("corner_opportunities", [])[:3]
         ]
-        severity = float(TRACK_TYRE_SEVERITY.get(selected, 1.0))
+        severity = float(circuit_value(TRACK_TYRE_SEVERITY, selected, 1.0))
         total_laps = int(state.get("total_laps", 0) or 0) if int(state.get("track_id", -1)) == selected else 0
         expected_stops = 2 if severity >= 1.24 and (not total_laps or total_laps >= 28) else 1
-        pit_loss = float(PIT_LOSS_SECONDS.get(selected, 22.5))
+        pit_loss = float(circuit_value(PIT_LOSS_SECONDS, selected, 22.5))
         strategies = self._strategy_candidates(
             mode, total_laps, target.get("lap_time_ms"), pit_loss, expected_stops
         )
