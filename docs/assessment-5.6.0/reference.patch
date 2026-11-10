@@ -1,0 +1,595 @@
+diff --git a/src/pitwall/brain.py b/src/pitwall/brain.py
+index c3161a6..68cbce8 100644
+--- a/src/pitwall/brain.py
++++ b/src/pitwall/brain.py
+@@ -3318,7 +3318,12 @@ class EngineerBrain:
+         # lap 6" call made sixty seconds earlier, and the driver rightly
+         # concluded the engineer had lost the plot.
+         stop_reason = str(recommended.get("stop_required_reason") or "")
+-        stop_is_forced = "mandatory" in stop_reason or "cannot reach" in stop_reason
++        weather = recommended.get("weather_crossover") or {}
++        stop_is_forced = (
++            "mandatory" in stop_reason
++            or "cannot reach" in stop_reason
++            or bool(weather.get("worth_stopping"))
++        )
+         try:
+             if (
+                 not stop_is_forced
+diff --git a/src/pitwall/config.py b/src/pitwall/config.py
+index c2307ba..71fdd7b 100644
+--- a/src/pitwall/config.py
++++ b/src/pitwall/config.py
+@@ -321,6 +321,10 @@ class Settings(BaseSettings):
+     # Sakhir the call swung between a one-stop on hards and a two-stop on
+     # softs several times a lap on gains that lasted a second at a time.
+     strategy_switch_confirm_s: float = 20.0
++    # How much projected race time a later first stop may cost and still be
++    # preferred for the track position it keeps. Beyond it the quicker plan
++    # wins. 3 s is about two cars' spacing in a train.
++    strategy_later_stop_tolerance_s: float = 3.0
+     # Cold-tyre out-lap penalty (seconds) applied to the first lap of a fresh
+     # stint, halved on the second lap. Ignoring warm-up makes an undercut look
+     # better than it is, because the cold in/out laps are where the time goes.
+diff --git a/src/pitwall/engineering.py b/src/pitwall/engineering.py
+index 7d1705c..d675ae9 100644
+--- a/src/pitwall/engineering.py
++++ b/src/pitwall/engineering.py
+@@ -626,7 +626,7 @@ def strategic_rivals(state: dict) -> dict:
+     strategy = state.get("strategy") or {}
+     plan = strategy.get("recommended") or {}
+     player_time = number(plan.get("projected_time_s"))
+-    if state.get("mode_profile") != "race" or player_time is None:
++    if state.get("mode_profile") not in {"race", "sprint"} or player_time is None:
+         return {
+             "available": False,
+             "reason": "A race and a current finish projection are needed.",
+@@ -668,9 +668,8 @@ def strategic_rivals(state: dict) -> dict:
+     return {
+         "available": bool(rivals),
+         "rivals": rivals[:5],
+-        "player_projected_position": plan.get(
+-            "expected_position", plan.get("projected_position")
+-        ),
++        "player_projected_position": plan.get("projected_finish_position"),
++        "player_expected_position": plan.get("expected_finish_position"),
+         "player_stops_remaining": plan.get("stops_remaining"),
+         "caveat": "Forecasts depend on the selected plan and estimated rival stops. Stops owed are estimates, not observed obligations; missing gaps lower confidence.",
+     }
+diff --git a/src/pitwall/rain.py b/src/pitwall/rain.py
+index d627d4e..105da2a 100644
+--- a/src/pitwall/rain.py
++++ b/src/pitwall/rain.py
+@@ -266,6 +266,7 @@ def wetness_from_history(
+     rain_pct: float | None = None,
+     track_temp_c: float | None,
+     active_cars: int = 0,
++    lap_fraction: float = 1.0,
+ ) -> tuple[float, int]:
+     """Integrate soak and drying across the weather each completed lap saw.
+ 
+@@ -280,24 +281,38 @@ def wetness_from_history(
+     current_target = equilibrium_wetness(weather)
+     if not samples:
+         return current_target, 0
++    series = surface_series(samples, track_temp_c=track_temp_c, active_cars=active_cars)
++    # Then the part of the lap in progress that has actually been driven.
++    wet = step_wetness(
++        series[-1], current_target, laps=max(0.0, min(1.0, float(lap_fraction))),
++        track_temp_c=track_temp_c, active_cars=active_cars,
++    )
++    return wet, len(samples)
++
++
++def surface_series(
++    samples: Sequence[dict[str, Any]],
++    *,
++    track_temp_c: float | None,
++    active_cars: int = 0,
++) -> list[float]:
++    """The surface at the start of the window and at the end of every lap in it."""
++    if not samples:
++        return []
+     # Seed from the oldest lap's own conditions rather than from dry, so a race
+     # that was already wet when the history window opens does not have to soak
+     # from zero all over again.
+-    first = samples[0]
+-    wet = equilibrium_wetness(str(first.get("weather", "")))
++    wet = equilibrium_wetness(str(samples[0].get("weather", "")))
++    series = [wet]
+     for lap in samples:
+-        target = equilibrium_wetness(str(lap.get("weather", "")))
+         wet = step_wetness(
+             wet,
+-            target,
++            equilibrium_wetness(str(lap.get("weather", ""))),
+             track_temp_c=lap.get("track_temp_c", track_temp_c),
+             active_cars=active_cars,
+         )
+-    # Then one more step for the lap in progress, which has no record yet.
+-    wet = step_wetness(
+-        wet, current_target, track_temp_c=track_temp_c, active_cars=active_cars
+-    )
+-    return wet, len(samples)
++        series.append(wet)
++    return series
+ 
+ 
+ # --- Channel C: the lap times ----------------------------------------------
+@@ -717,12 +732,26 @@ def estimate_wetness(
+     laps = list(state.get("completed_laps", []))
+ 
+     declared = equilibrium_wetness(weather)
++    track_length = finite(state.get("track_length_m")) or 0.0
++    lap_distance = finite(state.get("lap_distance_m"))
++    lap_fraction = (
++        max(0.0, min(1.0, lap_distance / track_length))
++        if lap_distance is not None and track_length > 100 else 1.0
++    )
+     dynamic, history_laps = wetness_from_history(
+         laps,
+         weather=weather,
+         track_temp_c=track_temp,
+         active_cars=active_cars,
++        lap_fraction=lap_fraction,
++    )
++    series = surface_series(
++        [lap for lap in laps if lap.get("weather")],
++        track_temp_c=track_temp, active_cars=active_cars,
+     )
++    # A completed lap measures the surface it was driven on, which is the
++    # surface of about half a lap before it ended, not the surface now.
++    surface_when_measured = (series[-2] + series[-1]) / 2 if len(series) >= 2 else dynamic
+ 
+     dry_until = _last_dry_lap(laps)
+     observations: list[dict[str, Any]] = []
+@@ -740,7 +769,7 @@ def estimate_wetness(
+     field = field_pace_observations(state, dry_until_lap=dry_until)
+     observations.extend(field)
+ 
+-    measured, pace_confidence, pace_samples = fit_wetness(observations, dynamic)
++    measured, pace_confidence, pace_samples = fit_wetness(observations, surface_when_measured)
+     # A benchmark taken from a session that may never have been dry is weaker
+     # evidence than one taken from laps known to be dry: if every lap of the race
+     # so far was wet, every car's best lap was wet too and the ratios understate
+@@ -756,8 +785,9 @@ def estimate_wetness(
+     # the driver nudges whatever the numbers settled on. Weighting rather than
+     # overriding, so no single channel can run away with a race on its own.
+     wetness = dynamic
++    innovation = measured - surface_when_measured
+     if pace_confidence > 0.0:
+-        wetness += (measured - dynamic) * min(0.85, pace_confidence)
++        wetness += innovation * min(0.85, pace_confidence)
+     if grip:
+         wetness += (grip["wetness"] - wetness) * min(0.45, float(grip["weight"]))
+     wetness = clamp_wetness(wetness)
+@@ -775,7 +805,7 @@ def estimate_wetness(
+     settled_laps = _laps_at_current_conditions(laps, declared)
+     bias = 0.0
+     if pace_confidence >= 0.35:
+-        bias = (wetness - dynamic) * min(1.0, pace_confidence)
++        bias = innovation * min(0.85, pace_confidence) * min(1.0, pace_confidence)
+ 
+     return {
+         "wetness": round(wetness, 3),
+@@ -882,6 +912,36 @@ def _wetness_trend(
+     return "steady"
+ 
+ 
++# Share of a forecast chance that persists with the conditions observed now.
++# EA publishes marginal chances and no correlation; the scenarios below already
++# assume one shared rank through the horizon, and the present is one more
++# sample of that rank. The remainder is treated as independent of the present.
++_FORECAST_PERSISTENCE = 0.8
++
++
++def conditioned_rain_probability(
++    chance: float, now_chance: float | None, raining_now: bool
++) -> float:
++    """Chance of rain at a future sample, given what is falling now.
++
++    With no offset-zero chance there is nothing to condition on and the
++    published chance is returned unchanged.
++    """
++    chance = max(0.0, min(1.0, float(chance)))
++    if now_chance is None:
++        return chance
++    now_chance = max(0.0, min(1.0, float(now_chance)))
++    if raining_now:
++        # Rain is falling: the shared rank sits below the present chance.
++        dependent = 1.0 if now_chance <= 0.0 else min(1.0, chance / now_chance)
++    elif now_chance >= 1.0:
++        # A dry sky under a 100% present chance: the forecast has no say.
++        return chance
++    else:
++        dependent = max(0.0, (chance - now_chance) / (1.0 - now_chance))
++    return _FORECAST_PERSISTENCE * dependent + (1.0 - _FORECAST_PERSISTENCE) * chance
++
++
+ class WetnessScenario(TypedDict):
+     probability: float
+     trajectory: list[float]
+@@ -928,12 +988,24 @@ def project_wetness_scenarios(
+     active_cars = int(state.get("active_cars", 0) or 0)
+     now_target = equilibrium_wetness(str(state.get("weather", "Unknown")))
+ 
++    now_sample = next(
++        (sample for sample in state.get("weather_forecast", []) or []
++         if finite(sample.get("time_offset_min")) == 0 and finite(sample.get("rain_pct")) is not None),
++        None,
++    )
++    now_chance = (
++        max(0.0, min(1.0, float(now_sample["rain_pct"]) / 100.0)) if now_sample else None
++    )
++    raining_now = now_target > 0.0
++
+     def probability(sample: dict[str, Any]) -> float:
+         pct = finite(sample.get("rain_pct"))
+         if pct is None:
+             # Older/synthetic samples without a chance retain their category.
+             return 1.0 if equilibrium_wetness(str(sample.get("weather", ""))) > 0 else 0.0
+-        return max(0.0, min(1.0, pct / 100.0))
++        return conditioned_rain_probability(
++            max(0.0, min(1.0, pct / 100.0)), now_chance, raining_now
++        )
+ 
+     def project(rank: float | None) -> list[float]:
+         trajectory: list[float] = []
+@@ -1212,9 +1284,48 @@ def evaluate(
+             "benefiting_laps": max(0, len(trajectory) - best_offset - 1),
+         }
+ 
++    # A stop is committed on evidence about the surface, not on a label. The
++    # soak rate is a judgement; until something measured agrees with it the
++    # call is to stand by for the next lap.
++    grip = reading.get("driver_report") or {}
++    split = reading.get("compound_split") or {}
++    advantage = float(split.get("wet_advantage_fraction", 0.0) or 0.0)
++    to_wet = best_compound in WET_COMPOUNDS and current not in WET_COMPOUNDS
++    to_dry = best_compound in DRY_COMPOUNDS and current in WET_COMPOUNDS
++    measured = reading.get("measured_wetness")
++    measured_ok = float(reading.get("pace_confidence", 0.0)) >= 0.5 and measured is not None
++    confirmed = bool(
++        change_during_suspension
++        or not (to_wet or to_dry)
++        or (to_wet and (
++            wetness >= WETNESS_SLICK_INTER - 0.02
++            or (measured_ok and float(measured) >= 0.20)
++            or advantage > 0.0
++            or grip.get("category") in {"damp", "soaked", "flooded"}
++        ))
++        or (to_dry and (
++            wetness <= WETNESS_SLICK_INTER + 0.02
++            or (measured_ok and float(measured) <= 0.30)
++            or advantage < 0.0
++            or grip.get("category") in {"drying", "dry_line"}
++        ))
++    )
++    if should_change and not confirmed:
++        should_change = False
++        upcoming = {
++            "lap_offset": 1,
++            "compound": best_compound,
++            "gain_s": round(margin_s, 1),
++            "projected_wetness": trajectory[min(1, len(trajectory) - 1)],
++            "minutes_away": int(round(base_lap_s / 60.0)),
++            "benefiting_laps": max(0, len(trajectory) - 2),
++            "awaiting_confirmation": True,
++        }
++
+     return {
+         "wetness": reading["wetness"],
+         "reading": reading,
++        "confirmed": confirmed,
+         "trajectory": trajectory,
+         "trajectory_kind": "probability_weighted_mean",
+         "scenarios": scenarios,
+@@ -1244,15 +1355,33 @@ def evaluate(
+             # What the conditions alone would ask for, before the pit lane is
+             # priced in. "The right tyre" and "not worth the stop" are different
+             # answers and a driver is owed the difference.
+-            pace_best=(
+-                min(penalties, key=lambda compound: penalties[compound][len(trajectory) // 2])
+-                if trajectory else best_compound_for(wetness, penalties)
+-            ),
++            pace_best=_pace_best(penalties, trajectory, wetness, current),
+             upcoming=upcoming,
+         ),
+     }
+ 
+ 
++def _pace_best(
++    penalties: dict[str, list[float]],
++    trajectory: Sequence[float],
++    wetness: float,
++    current: str,
++) -> str:
++    """The tyre the conditions ask for, before the pit lane is priced in.
++
++    Dry compounds share one weather penalty, so between them the fitted one
++    is the answer: naming another would tell a driver on mediums in the rain
++    that hards are "the tyre for it".
++    """
++    best = (
++        min(penalties, key=lambda compound: penalties[compound][len(trajectory) // 2])
++        if trajectory else best_compound_for(wetness, penalties)
++    )
++    if best in DRY_COMPOUNDS and current in DRY_COMPOUNDS:
++        return current
++    return best
++
++
+ def _decision_uncertainty_s(
+     state: dict[str, Any],
+     reading: dict[str, Any],
+diff --git a/src/pitwall/strategy.py b/src/pitwall/strategy.py
+index c8c02b8..462550f 100644
+--- a/src/pitwall/strategy.py
++++ b/src/pitwall/strategy.py
+@@ -1617,6 +1617,35 @@ class StrategyEngine:
+         )
+         return reference
+ 
++    @staticmethod
++    def _rival_owed_stop_offset(
++        state: dict[str, Any], driver: dict[str, Any], remaining: int, typical: int, age: int,
++    ) -> int | None:
++        """Laps from now at which a rival serves a compound change it still owes.
++
++        The two-compound rule binds every car in a dry race. A rival on its
++        first dry compound will stop whether or not its tyres would last.
++        """
++        if str(state.get("mode_profile", "")) != "race" or remaining < 3:
++            return None
++        used = {
++            str(stint.get("compound") or "").upper()
++            for stint in driver.get("tyre_stints") or []
++            if int(stint.get("end_lap", 0) or 0) >= 1
++        }
++        used.add(str(driver.get("tyre_compound") or "").upper())
++        if used & WET_COMPOUNDS or len(used & DRY_COMPOUNDS) >= 2:
++            return None
++        if not used & DRY_COMPOUNDS:
++            return None
++        if age + remaining > typical:
++            # Tyre life already forces the stop; the ordinary rule times it.
++            return None
++        total = int(state.get("total_laps", 0) or 0)
++        current = max(1, int(state.get("current_lap", 0) or 0))
++        expected_lap = max(current + 1, round(total * 0.45))
++        return max(1, min(remaining - 2, expected_lap - current + 1))
++
+     def _project_rival_finish_times(
+         self,
+         state: dict[str, Any],
+@@ -1672,10 +1701,14 @@ class StrategyEngine:
+             future_age = age
+             projected_laps: list[float] = []
+             stop_offsets: list[int] = []
++            owed_offset = self._rival_owed_stop_offset(state, driver, remaining, typical, age)
+             for offset in range(max(0, remaining)):
+                 # A racing stop happens after an in-lap, never before the
+                 # already-in-progress lap. Reset at *every* later stop too.
+-                if offset > 0 and future_age >= typical:
++                # Nobody stops for tyres with fewer than two laps to run.
++                if offset > 0 and remaining - offset >= 2 and (
++                    future_age >= typical or (offset == owed_offset and not stop_offsets)
++                ):
+                     stop_offsets.append(offset)
+                     future_age = 0
+                 if pace_reference["age_end_reference"]:
+@@ -3843,6 +3876,11 @@ class StrategyEngine:
+         if risk_appetite not in {"conservative", "balanced", "aggressive"}:
+             risk_appetite = "balanced"
+ 
++        group_best_time: dict[tuple[Any, ...], float] = {}
++
++        def primary_key(plan: dict[str, Any]) -> tuple[Any, ...]:
++            return ranking_key(plan)[:6]
++
+         def ranking_key(plan: dict[str, Any]) -> tuple[Any, ...]:
+             if risk_appetite == "conservative":
+                 appetite_position = int(
+@@ -3872,7 +3910,7 @@ class StrategyEngine:
+             # are not. The driver ran long instead and finished P5.
+             box_laps = plan.get("box_laps") or []
+             first_stop = int(box_laps[0]) if box_laps else int(total_laps) + 1
+-            return (
++            primary = (
+                 # A disqualified car scores nothing, so an illegal plan can
+                 # never outrank a legal one whatever the appetite says.
+                 not plan.get("legal", True),
+@@ -3886,12 +3924,26 @@ class StrategyEngine:
+                 int(plan.get("projected_finish_position", 99)),
+                 appetite_position,
+                 -float(appetite_points),
+-                # Retaining track position by delaying a paid stop has value;
+-                # a free suspension change gives up no track position.
+-                0 if red_flag_change else -first_stop,
+-                float(plan.get("risk_adjusted_time_s", 1e9)),
++            )
++            time_s = float(plan.get("risk_adjusted_time_s", 1e9))
++            # Retaining track position by delaying a paid stop has value, but
++            # only while the delay is free: beyond the tolerance the quicker
++            # plan wins. A free suspension change gives up no track position.
++            within = (
++                time_s - group_best_time.get(primary, time_s)
++                <= settings.strategy_later_stop_tolerance_s
++            )
++            return (
++                *primary,
++                0 if red_flag_change or not within else -first_stop,
++                time_s,
+                 int(plan.get("stops_remaining", 9)),
+             )
++        for plan in shortlisted:
++            key = primary_key(plan)
++            time_s = float(plan.get("risk_adjusted_time_s", 1e9))
++            if time_s < group_best_time.get(key, math.inf):
++                group_best_time[key] = time_s
+         # Remembered for _stabilize_radio_plan, which needs to find the plan
+         # currently being spoken even when it is not in the top five.
+         self._candidate_pool = list(shortlisted)
+@@ -3908,7 +3960,9 @@ class StrategyEngine:
+         override_match: dict[str, Any] | None = None
+         override_warning = ""
+         plan_tail: dict[str, Any] | None = None
+-        if driver_override.get("enabled") and driver_override.get("locked") and not force_weather:
++        # A what-if is never replaced by the weather plan it is compared with.
++        honour_override = not force_weather or bool(state.get("_what_if"))
++        if driver_override.get("enabled") and driver_override.get("locked") and honour_override:
+             full_plan = driver_override.get("plan") or {}
+             if full_plan.get("compounds"):
+                 # A whole-race plan constrains every stop that is left, not just
+@@ -3952,7 +4006,7 @@ class StrategyEngine:
+         if (
+             driver_override.get("enabled")
+             and driver_override.get("locked")
+-            and not force_weather
++            and honour_override
+             and plan_tail is None
+         ):
+             requested_lap = driver_override.get("next_box_lap")
+@@ -3992,7 +4046,11 @@ class StrategyEngine:
+             else:
+                 override_warning = "No legal plan matches the driver override."
+ 
+-        best = forced_weather_plan if force_weather else (override_match or automatic_best)
++        best = (
++            override_match if state.get("_what_if") and override_match is not None
++            else forced_weather_plan if force_weather
++            else (override_match or automatic_best)
++        )
+         second = next((plan for plan in ranked if plan is not best), best)
+         best = dict(best)
+         if force_weather and best.get("weather_crossover") is None:
+@@ -4930,80 +4988,67 @@ class StrategyEngine:
+             requested_lap = (
+                 int(match.group(1)) if match else int(state.get("current_lap", 0)) + 1
+             )
+-        requested_lap = max(int(state.get("current_lap", 0)), requested_lap)
+-        if compound is None:
+-            compound = base.get("recommended", {}).get("fit_compound") or "HARD"
+         current_lap = int(state.get("current_lap", 0))
+         total_laps = int(state.get("total_laps", 0))
+-        remaining = max(
+-            0,
+-            total_laps - current_lap + (1 if current_lap > 0 else 0),
+-        )
+-        first_laps = max(1, requested_lap - current_lap + 1)
+-        if first_laps >= remaining:
++        requested_lap = max(current_lap, 1, requested_lap)
++        best = base.get("recommended", {}) or {}
++        if compound is None:
++            compound = best.get("fit_compound") or "HARD"
++        if not base.get("available") or requested_lap >= total_laps:
+             return {
+                 "available": False,
+-                "reason": "That stop is after the race distance.",
++                "reason": base.get("reason") or "That stop is after the race distance.",
+             }
+-        style_factor, evidence = self._driver_wear_factor(state, historical)
+-        base_lap = self._estimate_base_lap_s(state)
+-        pre = self._simulate_stint(
+-            state,
+-            str(state["tyre"]["compound"]),
+-            first_laps,
+-            int(state["tyre"]["age_laps"]),
+-            max(state["tyre"]["wear"] or [0]),
+-            base_lap,
+-            historical,
+-            style_factor,
+-            None,
+-        )
+-        post = self._simulate_stint(
+-            state,
+-            compound,
+-            remaining - first_laps,
+-            0,
+-            0.0,
+-            base_lap,
+-            historical,
+-            style_factor,
+-            self._available_sets(state).get(compound),
+-        )
+-        neutral = self._neutralisation(state)
+-        penalty = base.get("finish_penalty") or self._finish_penalty(state)
+-        pending_penalty_s = float(penalty["pending_s"])
+-        total = (
+-            float(pre["expected_time_s"])
+-            + float(neutral["effective_pit_loss_s"])
+-            + float(post["expected_time_s"])
+-            + pending_penalty_s
++        # The same planner that ranks the live plans prices the hypothetical:
++        # weather, rejoin traffic, tyre inventory and the uncertainty draws are
++        # then identical on both sides of the comparison.
++        query = deepcopy(state)
++        query["strategy_override"] = {
++            "enabled": True, "locked": True, "next_box_lap": requested_lap,
++            "next_compound": compound, "preferred_stops": 1,
++        }
++        query["_what_if"] = True
++        scenario_plan, _ = await self._compute_isolated(query, historical)
++        plan = scenario_plan.get("recommended", {}) or {}
++        compounds = [str(item).upper() for item in plan.get("compounds") or []]
++        matched = (
++            (plan.get("box_laps") or [None])[0] == requested_lap
++            and len(compounds) == 2 and compounds[1] == compound
+         )
+-        risk = (
+-            float(pre["conservative_time_s"])
+-            + float(neutral["effective_pit_loss_s"])
+-            + float(post["conservative_time_s"])
+-            + pending_penalty_s
++        if not matched:
++            warning = (plan.get("driver_override") or {}).get("warning")
++            return {
++                "available": False,
++                "scenario": f"Box lap {requested_lap} for {compound}",
++                "box_lap": requested_lap,
++                "compound": compound,
++                "reason": warning or "No executable plan matches that stop.",
++            }
++        _, evidence = self._driver_wear_factor(state, historical)
++        delta = float(plan.get("risk_adjusted_time_s", 0.0)) - float(
++            best.get("risk_adjusted_time_s", plan.get("risk_adjusted_time_s", 0.0))
+         )
+-        best_time = float(base.get("recommended", {}).get("risk_adjusted_time_s", risk))
+-        legality = self._compound_rule(state, [compound])
+         return {
+             "available": True,
+             "scenario": f"Box lap {requested_lap} for {compound}",
+             # The same stop as values, so a screen can word it in its own language.
+             "box_lap": requested_lap,
+             "compound": compound,
+-            "projected_time_s": round(total, 2),
+-            "projected_time_before_penalties_s": round(total - pending_penalty_s, 2),
+-            "pending_finish_penalty_s": pending_penalty_s,
+-            "finish_penalty": penalty,
+-            "risk_adjusted_time_s": round(risk, 2),
+-            "delta_to_best_s": round(risk - best_time, 2),
+-            "projected_finish_wear_pct": round(
+-                float(post["projected_finish_wear_pct"]), 1
+-            ),
+-            "feasible": bool(
+-                pre["feasible"] and post["feasible"] and legality["compliant"]
+-            ),
+-            "compound_rule": legality,
++            "projected_time_s": plan.get("projected_time_s"),
++            "projected_time_before_penalties_s": plan.get("projected_time_before_penalties_s"),
++            "pending_finish_penalty_s": plan.get("pending_finish_penalty_s"),
++            "finish_penalty": plan.get("finish_penalty"),
++            "risk_adjusted_time_s": plan.get("risk_adjusted_time_s"),
++            "delta_to_best_s": round(delta, 2),
++            "projected_finish_position": plan.get("projected_finish_position"),
++            "position_delta_to_best": int(plan.get("projected_finish_position", 0) or 0)
++            - int(best.get("projected_finish_position", 0) or 0),
++            "projected_rejoin_position": plan.get("projected_rejoin_position"),
++            "traffic_cost_s": plan.get("traffic_cost_s"),
++            "matches_recommended": self._radio_signature(plan) == self._radio_signature(best),
++            "projected_finish_wear_pct": plan.get("projected_finish_wear_pct"),
++            "feasible": bool(plan.get("feasible") and plan.get("legal")),
++            "legal": bool(plan.get("legal")),
++            "compound_rule": plan.get("compound_rule") or self._compound_rule(state, [compound]),
+             "personal_wear_model": evidence,
+         }
