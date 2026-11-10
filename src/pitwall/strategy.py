@@ -19,6 +19,7 @@ from . import circuit_model, rain
 from .config import settings
 from .database import PitWallDatabase
 from .race_plan import plan_matches, remaining_plan
+from .race_simulator import RaceSimulation, finishing_chances
 from .session_guard import session_identity
 from .setup_model import setup_effects
 from .state import StateStore
@@ -691,6 +692,9 @@ class StrategyEngine:
         # stability hold can find a held plan that is no longer in the top
         # five. See _stabilize_radio_plan.
         self._candidate_pool: list[dict[str, Any]] = []
+        # ((context, lap), result) of the last safety-car readiness: computed
+        # once a lap, reused by the lap's later recomputes.
+        self._readiness_cache: tuple[tuple[str, int], dict[str, Any]] | None = None
         # (radio signature, first seen race time) of a faster plan that has
         # not yet been the faster plan for long enough to be spoken.
         self._pending_switch: tuple[tuple[Any, ...], float] | None = None
@@ -2582,6 +2586,8 @@ class StrategyEngine:
         state: dict[str, Any],
         rival_projections: list[dict[str, Any]],
         outcome_times: np.ndarray,
+        *,
+        race: RaceSimulation | None = None,
     ) -> dict[str, Any]:
         active, _ = StrategyEngine._projection_field_size(state, rival_projections)
         rejoin = int(plan.get("projected_rejoin_position", 1) or 1)
@@ -2596,10 +2602,15 @@ class StrategyEngine:
         # instead of rebuilding those facts for every sample in every plan.
         if rival_projections:
             missing = StrategyEngine._unobserved_cars_ahead(state, rival_projections)
-            rival_times = np.asarray([
-                float(rival.get("finish_time_s", 1e9)) for rival in rival_projections
-            ])
-            raw = 1 + missing + np.count_nonzero(rival_times[:, None] < outcomes[None, :], axis=0)
+            if race is not None and race.rival_times.shape == (len(rival_projections), len(outcomes)):
+                # Each draw's own field: rivals that stopped under its safety
+                # car, or on the wrong tyre for its weather.
+                field = race.rival_times
+            else:
+                field = np.asarray([
+                    float(rival.get("finish_time_s", 1e9)) for rival in rival_projections
+                ])[:, None]
+            raw = 1 + missing + np.count_nonzero(field < outcomes[None, :], axis=0)
         else:
             raw = np.full(outcomes.shape, int(state.get("player_position", 1) or 1), dtype=int)
         if int(plan.get("stops_remaining", 0) or 0) > 0:
@@ -2640,7 +2651,12 @@ class StrategyEngine:
         expected_points = sum(points_for_position(position, mode) * count for position, count in counts.items()) / total
         upside = int(np.quantile(positions, 0.10, method="nearest"))
         downside = int(np.quantile(positions, 0.90, method="nearest"))
+        exposure = {
+            **finishing_chances(positions, mode),
+            **(race.sensitivities(positions) if race is not None else {}),
+        }
         return {
+            **exposure,
             "outcome_distribution": {
                 key: round(value, 4) for key, value in bands.items()
             },
@@ -3146,6 +3162,9 @@ class StrategyEngine:
         effective_pit_loss_s: float,
         samples: int,
         risk_quantile: float = 0.75,
+        *,
+        race: RaceSimulation | None = None,
+        start_compound: str = "MEDIUM",
     ) -> dict[str, Any]:
         samples = max(80, min(1200, int(samples)))
         # Compare every candidate against the same race draws. A different
@@ -3206,10 +3225,18 @@ class StrategyEngine:
                     + np.abs(draws[:, 2]) * traffic_sigma)
         if not plan.get("feasible", True):
             outcomes += np.random.default_rng(seed ^ 0xA57E).uniform(12.0, 35.0, samples)
+        # The time quantiles measure the model's own uncertainty about this
+        # plan. The drawn races (a stop under a safety car is cheaper, the
+        # drawn weather costs its tyres) decide where it finishes in each of
+        # them: the position distribution the risk appetite reads.
+        raced = (
+            outcomes + race.plan_adjustment(plan, start_compound)
+            if race is not None and race.samples == samples else outcomes
+        )
         return {
             "samples": samples,
             "simulation_samples": samples,
-            "uncertainty_basis": "heuristic_per_stint_model",
+            "uncertainty_basis": "heuristic_per_stint_model" + ("+race_simulation" if race is not None else ""),
             "calibrated": False,
             "sampling_basis": "shared_race_draws",
             "stint_evidence_samples": stint_evidence,
@@ -3227,7 +3254,8 @@ class StrategyEngine:
             "mean_s": round(float(np.mean(outcomes)), 2),
             "uncertainty_s": round(float(np.std(outcomes)), 2),
             "evidence_samples": evidence,
-            "_outcome_times_s": outcomes,
+            **({"race_mean_s": round(float(np.mean(raced)), 2)} if raced is not outcomes else {}),
+            "_outcome_times_s": raced,
         }
 
     @staticmethod
@@ -3620,6 +3648,61 @@ class StrategyEngine:
                 raise
             return plan, worker._candidate_pool
 
+    async def _safety_car_readiness(
+        self, state: dict[str, Any], historical: dict[str, Any], plan: dict[str, Any], context: Any,
+    ) -> dict[str, Any] | None:
+        """What to do if a safety car or a VSC came out on this lap, decided before it does.
+
+        Two isolated computes with the phase set, once a lap: the later
+        recomputes of the lap reuse them. Under a neutralisation, or without a
+        green plan, there is nothing to prepare.
+        """
+        lap = int(state.get("current_lap", 0) or 0)
+        recommended = plan.get("recommended") or {}
+        if (
+            str(state.get("mode_profile", "")) not in {"race", "sprint"}
+            or str(state.get("race_control_phase", "green")) != "green"
+            or not plan.get("available") or not recommended or lap < 1
+        ):
+            return None
+        key = (repr(context), lap)
+        cached = self._readiness_cache
+        if cached is not None and cached[0] == key:
+            return cached[1]
+        green_signature = (tuple(recommended.get("box_laps") or []), tuple(recommended.get("compounds") or []))
+        result: dict[str, Any] = {"lap": lap}
+        for kind, phase, safety in (("safety_car", "safety_car", "full"), ("vsc", "vsc", "virtual")):
+            variant = {**state, "race_control_phase": phase, "safety_car": safety}
+            try:
+                neutral, neutral_pool = await self._compute_isolated(variant, historical)
+            except Exception:  # noqa: BLE001 - readiness is a convenience, never a blocker
+                continue
+            best = neutral.get("recommended") or {}
+            if not best:
+                continue
+            same = next((
+                item for item in [*(neutral.get("plans") or []), *neutral_pool]
+                if (tuple(item.get("box_laps") or []), tuple(item.get("compounds") or [])) == green_signature
+            ), None)
+            gain = (
+                round(float(same.get("risk_adjusted_time_s", 0.0)) - float(best.get("risk_adjusted_time_s", 0.0)), 1)
+                if same is not None else None
+            )
+            result[kind] = {
+                "instruction": best.get("instruction"),
+                "box_lap": best.get("box_lap"),
+                "fit_compound": best.get("fit_compound"),
+                "stops_remaining": best.get("stops_remaining"),
+                # Against keeping the green plan under the same neutralisation.
+                "gain_vs_green_plan_s": gain,
+                "position_change": (
+                    int(recommended.get("projected_finish_position", 0) or 0)
+                    - int(best.get("projected_finish_position", 0) or 0)
+                ),
+            }
+        self._readiness_cache = (key, result)
+        return result
+
     async def recompute(self) -> dict[str, Any]:
         if self._closing:
             return (await self.store.peek("strategy"))["strategy"]
@@ -3640,7 +3723,11 @@ class StrategyEngine:
             historical = await self.database.tyre_history_model(
                 int(state.get("track_id", -1)), context=state
             )
-            plan, pool = await self._compute_isolated(state, infer_unrun_compounds(historical))
+            inferred = infer_unrun_compounds(historical)
+            plan, pool = await self._compute_isolated(state, inferred)
+            readiness = await self._safety_car_readiness(state, inferred, plan, context)
+            if readiness is not None:
+                plan = {**plan, "if_neutralised": readiness}
             applied = False
 
             def publish(live: Any) -> None:
@@ -4557,6 +4644,12 @@ class StrategyEngine:
         for required in self._best_per_shape(plans):
             if all(required is not item for item in shortlisted):
                 shortlisted.append(required)
+        # Possible races, shared by every shortlisted plan: a safety car or a
+        # VSC, a weather scenario, rivals stopping a lap early or late.
+        race = RaceSimulation.build(
+            state, rival_projections, weather_crossover, remaining,
+            settings.strategy_monte_carlo_samples,
+        )
         for plan in shortlisted:
             plan["monte_carlo"] = self._monte_carlo_profile(
                 plan,
@@ -4564,11 +4657,13 @@ class StrategyEngine:
                 effective_pit_loss,
                 settings.strategy_monte_carlo_samples,
                 settings.strategy_risk_quantile,
+                race=race,
+                start_compound=current_compound,
             )
             outcome_times = plan["monte_carlo"].pop("_outcome_times_s")
             plan.update(
                 self._position_distribution(
-                    plan, state, rival_projections, outcome_times
+                    plan, state, rival_projections, outcome_times, race=race,
                 )
             )
             plan["risk_adjusted_time_s"] = plan["monte_carlo"]["risk_s"]
@@ -4993,6 +5088,7 @@ class StrategyEngine:
                 ),
             },
             "rejoin_map": rejoin_map,
+            "race_simulation": race.summary(),
             "recommended": {
                 **best,
                 "box_lap": box_lap,

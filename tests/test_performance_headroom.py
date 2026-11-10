@@ -97,7 +97,9 @@ async def test_the_projection_is_unchanged():
 
     Rewrite the fixture (``python -m tools.strategy_projection_snapshot
     --write``) only for an intended change to the model, and say which in the
-    commit: Shanghai's tyre severity entry moved scenario 3's times, not its call.
+    commit: Shanghai's tyre severity entry moved scenario 3's times, not its call;
+    the race simulator's safety cars moved scenario 10's expected finish, and
+    with it the better of two adjacent laps outside the points.
     """
     from tools.strategy_projection_snapshot import snapshot
 

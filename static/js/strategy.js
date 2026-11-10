@@ -64,6 +64,22 @@ function post(path, body) {
 
 /* ---- Current call --------------------------------------------------------- */
 
+/* What the engine would do if a safety car came out on this lap, prepared
+   before it does. Said only on the lap it was computed for. */
+function readinessLine(s) {
+  const ready = s.strategy?.if_neutralised;
+  const lap = Number(s.current_lap);
+  if (!ready || Number(ready.lap) !== lap || !ready.safety_car) return "";
+  const call = ready.safety_car;
+  const tyre = call.fit_compound ? `${String(call.fit_compound).toLowerCase()}s` : "";
+  const gain = Number(call.gain_vs_green_plan_s);
+  if (Number(call.box_lap) !== lap || !tyre) return i18n.t("If a safety car comes out this lap: stay out.");
+  return Number.isFinite(gain) && gain >= 1
+    ? i18n.t("If a safety car comes out this lap: box for {tyre}, about {gain} s better.", { tyre, gain: Math.round(gain) })
+    : i18n.t("If a safety car comes out this lap: box for {tyre}.", { tyre });
+}
+globalThis.readinessLine = readinessLine;
+
 function redFlagRestart(s) {
   if (globalThis.confirmedSessionFinish?.(s)) return null;
   if (!(s.red_flag_active || s.race_control_phase === "red_flag" || s.fia_flag === "red")) return null;
@@ -201,7 +217,7 @@ function renderCall(s) {
     ? globalThis.tyreStintInsight(s)
     : { headline: i18n.t("Tyre data unavailable"), stop: "", warning: "", tone: "muted" };
   byId("stratWhy").textContent = [tyres.headline, tyres.stop].filter(Boolean).join(" · ");
-  byId("stratChange").textContent = tyres.warning;
+  byId("stratChange").textContent = [tyres.warning, readinessLine(s)].filter(Boolean).join(" · ");
   byId("stratChange").className = "small " + tyres.tone;
   const mc = rec.monte_carlo || {};
   const finish = finishDisplay(rec);
@@ -230,6 +246,7 @@ function renderCall(s) {
   byId("stratNotice").textContent = notices.join(" ");
   byId("stratReasoning").textContent = [rec.rationale, rec.tyre_reason,
     rec.change_condition ? i18n.t("Changes if: {condition}", { condition: rec.change_condition }) : "",
+    sensitivityLine(rec),
     st.available ? i18n.t("Pit loss estimate: {seconds}s.", { seconds: st.pit_loss_s ?? "—" }) : ""].filter(Boolean).join(" ");
   byId("stratLearning").textContent = st.available ? planEvidence(s) : "";
   const rule = st.observed_compound_rule || st.compound_rule || {};
@@ -316,6 +333,50 @@ function adoptPlan(plan, statusNode) {
     });
 }
 
+/* Win, podium and points chances across the drawn races, as three small bars
+   under a plan's finish. */
+function chanceBars(plan) {
+  const chances = [["win", plan.p_win], ["podium", plan.p_podium], ["points", plan.p_points]];
+  if (!chances.every(([, value]) => Number.isFinite(Number(value)) && value !== null)) return null;
+  const pct = (value) => Math.round(Math.max(0, Math.min(1, Number(value))) * 100);
+  const bars = document.createElement("div");
+  bars.className = "chance-bars";
+  bars.setAttribute("role", "img");
+  bars.setAttribute("aria-label", i18n.t("Win {win}% · podium {podium}% · points {points}%",
+    { win: pct(plan.p_win), podium: pct(plan.p_podium), points: pct(plan.p_points) }));
+  for (const [name, value] of chances) {
+    const bar = document.createElement("span");
+    bar.className = `chance-bar chance-${name}`;
+    bar.setAttribute("title", `${pct(value)}%`);
+    const fill = document.createElement("span");
+    fill.className = "chance-fill";
+    if (fill.style) fill.style.width = `${pct(value)}%`;
+    bar.appendChild(fill);
+    bars.appendChild(bar);
+  }
+  return bars;
+}
+
+/* What a safety car and rain do to the recommended plan, in places, from
+   the drawn races. Under half a place is not worth a sentence. */
+function sensitivityLine(rec) {
+  const places = (value) => Math.round(Math.abs(Number(value)));
+  const parts = [];
+  const sc = Number(rec.safety_car_swing);
+  if (rec.safety_car_swing != null && Number.isFinite(sc) && Math.abs(sc) >= 0.5) {
+    parts.push(sc > 0
+      ? i18n.tp(places(sc), "A safety car gains this plan {count} place on average.", "A safety car gains this plan {count} places on average.", { count: places(sc) })
+      : i18n.tp(places(sc), "A safety car costs this plan {count} place on average.", "A safety car costs this plan {count} places on average.", { count: places(sc) }));
+  }
+  const wet = Number(rec.rain_swing);
+  if (rec.rain_swing != null && Number.isFinite(wet) && Math.abs(wet) >= 0.5) {
+    parts.push(wet > 0
+      ? i18n.tp(places(wet), "Rain costs it {count} place.", "Rain costs it {count} places.", { count: places(wet) })
+      : i18n.tp(places(wet), "Rain gains it {count} place.", "Rain gains it {count} places.", { count: places(wet) }));
+  }
+  return parts.join(" ");
+}
+
 function renderPlans(s) {
   const st = s.strategy || {};
   const restart = redFlagRestart(s);
@@ -386,11 +447,15 @@ function renderPlans(s) {
       finish.supported ? `${plan.monte_carlo?.p75_s ?? plan.risk_adjusted_time_s ?? "—"}s` : "—",
       `${plan.projected_max_wear_pct ?? "—"}%`,
     ];
-    for (const text of cells) {
+    cells.forEach((text, column) => {
       const cell = document.createElement("td");
       cell.textContent = String(text);
+      if (column === 3 && finish.supported) {
+        const bars = chanceBars(plan);
+        if (bars) cell.appendChild(bars);
+      }
       row.appendChild(cell);
-    }
+    });
     const verdict = document.createElement("td");
     verdict.textContent = finish.verdict;
     verdict.className = finish.supported && !finish.conditional ? "good" : "warn";
@@ -1311,4 +1376,4 @@ if (HAS_DOM) {
   });
 }
 
-export { planKey, describeEvidence, renderCall, renderPlans, renderRejoinMap, renderWeather, loadDecisionLog, renderRadio, sendAsk, COMPOUND_COLORS };
+export { planKey, describeEvidence, readinessLine, chanceBars, sensitivityLine, renderCall, renderPlans, renderRejoinMap, renderWeather, loadDecisionLog, renderRadio, sendAsk, COMPOUND_COLORS };

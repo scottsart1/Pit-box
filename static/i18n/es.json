@@ -2514,5 +2514,25 @@
  "{track} · current circuit": "{track} · circuito actual",
  "Pit loss": "Pérdida en boxes",
  "Tyre severity": "Severidad de neumáticos",
- "Safety cars a lap": "Coches de seguridad por vuelta"
+ "Safety cars a lap": "Coches de seguridad por vuelta",
+ "If a safety car comes out this lap: stay out.": "Si sale el coche de seguridad esta vuelta: sigue en pista.",
+ "If a safety car comes out this lap: box for {tyre}, about {gain} s better.": "Si sale el coche de seguridad esta vuelta: entra a por {tyre}, unos {gain} s mejor.",
+ "If a safety car comes out this lap: box for {tyre}.": "Si sale el coche de seguridad esta vuelta: entra a por {tyre}.",
+ "Win {win}% · podium {podium}% · points {points}%": "Victoria {win} % · podio {podium} % · puntos {points} %",
+ "A safety car gains this plan {count} places on average.": {
+  "one": "Un coche de seguridad hace ganar a este plan {count} posición de media.",
+  "other": "Un coche de seguridad hace ganar a este plan {count} posiciones de media."
+ },
+ "A safety car costs this plan {count} places on average.": {
+  "one": "Un coche de seguridad le cuesta a este plan {count} posición de media.",
+  "other": "Un coche de seguridad le cuesta a este plan {count} posiciones de media."
+ },
+ "Rain costs it {count} places.": {
+  "one": "La lluvia le cuesta {count} posición.",
+  "other": "La lluvia le cuesta {count} posiciones."
+ },
+ "Rain gains it {count} places.": {
+  "one": "La lluvia le hace ganar {count} posición.",
+  "other": "La lluvia le hace ganar {count} posiciones."
+ }
 }

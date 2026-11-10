@@ -1163,6 +1163,11 @@ button:disabled,
 }
 
 .rejoin-strip { margin-top: 12px; }
+.chance-bars { display: grid; grid-template-columns: repeat(3, 1fr); gap: 3px; margin-top: 4px; width: 72px; }
+.chance-bar { display: block; height: 4px; background: #263542; border-radius: 2px; overflow: hidden; }
+.chance-fill { display: block; height: 100%; background: #49d17d; }
+.chance-win .chance-fill { background: #ffc15c; }
+.chance-podium .chance-fill { background: #3f86ff; }
 .rejoin-table { font-variant-numeric: tabular-nums; min-width: 640px; }
 .rejoin-table th[scope="row"] {
   color: var(--text-2);
