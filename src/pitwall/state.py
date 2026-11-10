@@ -80,6 +80,14 @@ class DriverState:
     pit_lane_timer_active: bool = False
     pit_lane_time_ms: int = 0
     pit_stop_timer_ms: int = 0
+    # Sector times of the lap in progress, zero until the sector is complete.
+    # They read the surface a third of a lap after it changes, from every car.
+    current_s1_ms: int = 0
+    current_s2_ms: int = 0
+    # Median tyre surface temperature, smoothed over the last few seconds and
+    # over the dry running; their difference is published, not acted on.
+    surface_temp_recent_c: float | None = None
+    surface_temp_baseline_c: float | None = None
     # Condition, from the per-car damage packet.
     tyre_wear: list[float] = field(default_factory=lambda: [0.0] * 4)
     tyre_damage: list[int] = field(default_factory=lambda: [0] * 4)
@@ -128,6 +136,17 @@ class DriverState:
     # answers. This is independent of restricted session-history packets.
     gap_history: list[dict[str, float | int]] = field(default_factory=list)
     history_updated_at: float = 0.0
+
+
+def _surface_at_line(strategy: dict[str, Any]) -> dict[str, Any]:
+    """The published wet reading at the line, for the per-lap record."""
+    crossover = (strategy or {}).get("weather_crossover") or {}
+    source = crossover.get("wetness_source") or {}
+    return {
+        "surface_estimate": crossover.get("wetness"),
+        "field_sector_ratio": source.get("field_sector_ratio"),
+        "field_surface_temp_drop_c": source.get("field_surface_temp_drop_c"),
+    }
 
 
 # Fields omitted from the 4 Hz live snapshot. Tools and briefings read them
@@ -1001,6 +1020,13 @@ class StateStore:
                 state.safety_car not in ("none", "") or state.red_flag_active
                 or state.fia_flag in {"yellow", "red"})):
             reasons.append("neutralised_lap")
+        # Which kind of interruption, for the wet model. Tyre learning drops
+        # either; the surface reading only loses a lap to the whole field
+        # being slowed, not to a yellow in one marshal sector.
+        if state.safety_car not in ("none", "") or state.red_flag_active:
+            start["full_course_neutralised"] = True
+        elif state.fia_flag in {"yellow", "red"}:
+            start["local_yellow"] = True
 
     async def mark_packet(
         self,
@@ -1315,6 +1341,11 @@ class StateStore:
                     # test the field's laps get in the archive.
                     "flag_context": "neutralised_lap"
                     in start.get("learning_exclusions", []),
+                    "full_course_neutralised": bool(start.get("full_course_neutralised")),
+                    "local_yellow": bool(start.get("local_yellow")),
+                    # The surface as the strategy read it when the lap ended,
+                    # with the fast evidence beside it, for calibration.
+                    **_surface_at_line(state.strategy),
                     "setup": copy.deepcopy(start.get("setup", state.car_setup)),
                     "incidents": [copy.deepcopy(event) for event in state.events_log if event.get("lap") == old_lap
                                   and event.get("type") in {"PENA", "COLL", "RTMT", "SPTP", "SCAR", "RDFL"}],

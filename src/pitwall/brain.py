@@ -794,9 +794,22 @@ _GRIP_PATTERNS = {
         "soaking", "soaked", "it's properly wet", "fully wet", "very wet",
         "it's pouring", "no grip anywhere", "wet everywhere", "needs wets",
     ),
+    # First match wins, so the plain "it's wet" sits after the stronger
+    # reports and before damp.
+    "wet": (
+        "it's wet", "its wet", "track is wet", "track's wet", "it's really wet",
+        "i need inters", "need inters", "give me inters", "put me on inters",
+        "box for inters", "inters now", "too wet for slicks",
+    ),
     "damp": (
         "it's damp", "still damp", "greasy", "slippery off line",
         "damp off line", "wet off line", "treacherous",
+    ),
+    # Rain in the air, the surface not yet wet: a heads-up, not a confirmation.
+    "spitting": (
+        "it's raining", "its raining", "started raining", "starting to rain",
+        "rain is starting", "spots of rain", "drops of rain", "drizzle",
+        "drizzling", "it's spitting", "rain on the visor",
     ),
     "drying": (
         "it's drying", "track is drying", "starting to dry", "drying out",
@@ -809,6 +822,13 @@ _GRIP_PATTERNS = {
         "bone dry", "track is dry",
     ),
 }
+
+# Said of worn tyres in the dry as often as of a wet track, so read as a damp
+# surface only while rain is falling or due now.
+_GRIP_LOSS_PATTERNS = (
+    "losing grip", "no grip", "getting slippery", "it's slippery",
+    "struggling for grip",
+)
 
 # A lap can be slow because the track changed or because the driver did. When
 # they say which, the wet model stops reading that lap as evidence of rain.
@@ -4702,7 +4722,19 @@ class EngineerBrain:
         of the pace evidence, so a spin never reads as a change in the weather.
         """
         lap = int(state.get("current_lap", 0) or 0)
-        for category, patterns in _GRIP_PATTERNS.items():
+        # "Is it raining at the back of the circuit?" asks; it reports nothing.
+        asking = utterance_mood(normalize_text(utterance)) == "question"
+        raining = (
+            "rain" in str(state.get("weather", "")).lower()
+            or str(state.get("weather", "")).lower() == "storm"
+            or int(state.get("rain_now_pct", 0) or 0) > 0
+        )
+        categories = list(_GRIP_PATTERNS.items())
+        if raining:
+            categories.append(("damp", _GRIP_LOSS_PATTERNS))
+        for category, patterns in categories:
+            if asking:
+                break
             if any(pattern in lowered for pattern in patterns):
                 await self.store.update(
                     driver_grip_feedback={

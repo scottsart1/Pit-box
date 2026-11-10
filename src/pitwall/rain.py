@@ -157,6 +157,13 @@ _PACE_FIT_TOLERANCE = 0.05
 # groups lapping the same track in the same minute carries none of that, so it
 # is the stronger measurement and is weighted accordingly.
 _SPLIT_GAP_WEIGHT = 12.0
+# The most the sectors of the lap in progress move the estimate. Below the
+# lap-time channel's 0.85: one or two sectors per car, against a reference of
+# a few dry laps. A judgement, for F-10 to calibrate.
+_FAST_CHANNEL_WEIGHT = 0.6
+# Dry laps a pace benchmark is taken over: the most recent, so fuel burn does
+# not leave it behind the car's present dry pace.
+_DRY_BENCHMARK_LAPS = 5
 
 
 def _interpolate(anchors: Sequence[tuple[float, float]], x: float) -> float:
@@ -356,15 +363,63 @@ def _reference_sectors(laps: Sequence[dict[str, Any]]) -> list[float] | None:
 
 
 def _neutralised(record: dict[str, Any]) -> bool:
-    return (
+    """Whether the whole field was slowed: a safety car, VSC or red flag.
+
+    A lap that records which kind of interruption it had is judged on that: a
+    yellow in one marshal sector slows the cars that pass it, not the field.
+    Laps recorded before the distinction keep the older, wider test.
+    """
+    live = (
         record.get("safety_car") not in (None, "none", "")
         or bool(record.get("red_flag_active"))
         or record.get("race_control_phase") in {
             "safety_car", "safety_car_ending", "vsc", "vsc_ending",
             "formation", "red_flag",
         }
-        or "neutralised_lap" in (record.get("learning_exclusions") or [])
     )
+    if "full_course_neutralised" in record:
+        return bool(record["full_course_neutralised"]) or live
+    return live or "neutralised_lap" in (record.get("learning_exclusions") or [])
+
+
+# Lap tags that make a lap no evidence of the surface at all. A change of
+# weather during the lap is not among them: it is the signal.
+_WET_EVIDENCE_DROPS = frozenset({
+    "pit_lap", "tyre_change", "telemetry_gap", "missing_telemetry",
+    "history_timing_mismatch", "setup_change",
+})
+# How much a doubtful lap counts for. Judgements: a lap in traffic or past a
+# local yellow, or off the track somewhere, still carries most of the
+# surface's effect on lap time.
+_WET_EVIDENCE_TRAFFIC = 0.6
+_WET_EVIDENCE_LOCAL_YELLOW = 0.5
+_WET_EVIDENCE_INVALID = 0.6
+
+
+def _wet_evidence_weight(lap: dict[str, Any]) -> float:
+    """0 drops the lap; below 1 keeps it as weaker evidence.
+
+    Tyre learning drops every doubtful lap, which is right for a wear rate and
+    wrong for the surface: the lap the rain arrived on, a lap in a pack and a
+    lap past a spun car are the laps that carry the change.
+    """
+    if (finite(lap.get("lap_time_ms")) or 0) <= 0:
+        return 0.0
+    if lap.get("pit_status") or lap.get("pit_lane_time_ms"):
+        return 0.0
+    if _neutralised(lap):
+        return 0.0
+    tags = set(lap.get("learning_exclusions") or [])
+    if tags & _WET_EVIDENCE_DROPS:
+        return 0.0
+    weight = 1.0
+    if "traffic" in tags:
+        weight *= _WET_EVIDENCE_TRAFFIC
+    if lap.get("local_yellow"):
+        weight *= _WET_EVIDENCE_LOCAL_YELLOW
+    if not lap.get("valid", True) or "invalid_lap" in tags:
+        weight *= _WET_EVIDENCE_INVALID
+    return weight
 
 
 def _field_pace_block_reason(state: dict[str, Any]) -> str | None:
@@ -413,7 +468,11 @@ def player_pace_observation(
     # all, and worse, drags the joint fit toward dry.
     benchmark = "dry_laps"
     if dry:
-        base: float | None = float(median([float(lap["lap_time_ms"]) / 1000.0 for lap in dry]))
+        # The last five clean dry laps: fuel burn makes the car about 0.05 s a
+        # lap quicker every lap, so a whole-race median sits behind its
+        # present dry pace and hides the first percent of a wet loss.
+        recent_dry = dry[-_DRY_BENCHMARK_LAPS:]
+        base: float | None = float(median([float(lap["lap_time_ms"]) / 1000.0 for lap in recent_dry]))
     else:
         clean = [
             float(lap["lap_time_ms"]) / 1000.0
@@ -429,9 +488,11 @@ def player_pace_observation(
     reference_sectors = _reference_sectors(dry[-8:]) if dry else None
     excluded = {int(value) for value in incident_laps}
     usable: list[dict[str, Any]] = []
+    weights: list[float] = []
     dropped = 0
     for lap in laps[-3:]:
-        if exclusion_reason(lap) is not None:
+        weight = _wet_evidence_weight(lap)
+        if weight <= 0.0:
             dropped += 1
             continue
         if int(lap.get("lap_num", 0) or 0) in excluded:
@@ -441,6 +502,7 @@ def player_pace_observation(
             dropped += 1
             continue
         usable.append(lap)
+        weights.append(weight)
     observation = {
         "source": "player",
         "compound": str(state.get("tyre", {}).get("compound", "UNKNOWN")).upper(),
@@ -458,7 +520,10 @@ def player_pace_observation(
     # without lap-compound metadata retain the previous current-tyre fallback.
     observation["compound"] = str(latest.get("compound") or observation["compound"]).upper()
     observation["ratio"] = round(float(latest["lap_time_ms"]) / 1000.0 / base, 4)
-    observation["samples"] = len(usable)
+    # Doubtful laps count for part of a lap, so the fit and its confidence
+    # see the evidence as it is.
+    observation["samples"] = max(1, round(sum(weights)))
+    observation["evidence_weight"] = round(sum(weights), 2)
     observation["recent_median_ratio"] = round(
         float(median(float(lap["lap_time_ms"]) / 1000.0 for lap in usable)) / base, 4
     )
@@ -472,6 +537,19 @@ def _driver_compound_at(driver: dict[str, Any], lap_num: int) -> str:
         if start <= lap_num <= (end or lap_num):
             return str(stint.get("compound", "UNKNOWN")).upper()
     return str(driver.get("tyre_compound", "UNKNOWN")).upper()
+
+
+def _pit_adjacent_laps(driver: dict[str, Any]) -> set[int]:
+    """A car's in-laps and out-laps: laps driven partly in the pit lane."""
+    ends = {
+        int(stint.get("end_lap", 0) or 0)
+        for stint in driver.get("tyre_stints", []) or []
+        if 0 < int(stint.get("end_lap", 0) or 0) < 255
+    }
+    exits = {int(item.get("lap", 0) or 0) for item in driver.get("pit_stop_history", []) or []}
+    # A stint ends on its in-lap; the next lap is the out-lap. The stop
+    # history records the lap the car left the pit lane on.
+    return ends | {lap + 1 for lap in ends} | exits
 
 
 def field_pace_observations(
@@ -513,6 +591,13 @@ def field_pace_observations(
         ]
         if len(history) < 2:
             continue
+        # An in-lap or out-lap is the pit lane, not the track: for a car that
+        # has just changed to inters its in-lap reads as a slick 25% off the
+        # pace.
+        pit_laps = _pit_adjacent_laps(driver)
+        history = [lap for lap in history if int(lap.get("lap_num", 0) or 0) not in pit_laps]
+        if len(history) < 2:
+            continue
         dry_laps = [
             float(lap["lap_ms"]) / 1000.0
             for lap in history
@@ -521,7 +606,7 @@ def field_pace_observations(
             and int(lap.get("valid_flags", 0) or 0) & 1
         ]
         if len(dry_laps) >= 2:
-            base = float(median(dry_laps))
+            base = float(median(dry_laps[-_DRY_BENCHMARK_LAPS:]))
             benchmark = "dry_window"
         else:
             # No lap in the recorded window is known to have been dry, which is
@@ -575,6 +660,106 @@ def field_pace_observations(
         start = (len(observations) - sample_cars) // 2
         observations = observations[start : start + sample_cars]
     return observations
+
+
+def _yellow_sectors(state: dict[str, Any]) -> set[int]:
+    """Sectors (1-3) holding a marshal zone that shows a yellow or a red."""
+    s2 = finite(state.get("sector2_start_m")) or 0.0
+    s3 = finite(state.get("sector3_start_m")) or 0.0
+    flagged: set[int] = set()
+    for zone in state.get("marshal_zones", []) or []:
+        if str(zone.get("flag", "")).lower() not in {"yellow", "red"}:
+            continue
+        start = finite(zone.get("start_m"))
+        if start is None or s2 <= 0 or s3 <= s2:
+            # Without sector boundaries a flag cannot be placed: every
+            # sector is treated as flagged.
+            return {1, 2, 3}
+        flagged.add(1 if start < s2 else 2 if start < s3 else 3)
+    return flagged
+
+
+def sector_pace_observations(
+    state: dict[str, Any],
+    *,
+    dry_until_lap: int | None,
+    sample_cars: int = 8,
+) -> list[dict[str, Any]]:
+    """The field's pace in the sectors of the lap in progress.
+
+    A completed lap reports the surface about half a lap late. Each car's first
+    and second sectors arrive a third of a lap after the surface changes, from
+    every car at once, each against the same car's own dry sectors.
+    """
+    if _field_pace_block_reason(state):
+        return []
+    flagged = _yellow_sectors(state)
+    player_idx = int(state.get("player_car_index", -1))
+    observations: list[dict[str, Any]] = []
+    for driver in state.get("drivers", []):
+        if not driver.get("active") or int(driver.get("car_idx", -1)) == player_idx:
+            continue
+        if driver.get("restricted") or driver.get("pit_lane_timer_active") or driver.get("pit_status"):
+            continue
+        if str(driver.get("result_label", "")) in RETIRED_RESULT_LABELS:
+            continue
+        lap_now = int(driver.get("current_lap", 0) or 0)
+        pit_laps = _pit_adjacent_laps(driver)
+        if lap_now in pit_laps:
+            continue
+        references: list[float | None] = []
+        for key in ("s1_ms", "s2_ms"):
+            values = [
+                float(lap[key])
+                for lap in driver.get("lap_history", []) or []
+                if dry_until_lap
+                and 1 < int(lap.get("lap_num", 0) or 0) <= dry_until_lap
+                and int(lap.get("lap_num", 0) or 0) not in pit_laps
+                and int(lap.get("valid_flags", 0) or 0) & 1
+                and (finite(lap.get("s1_ms")) or 0) > 0
+                and (finite(lap.get("s2_ms")) or 0) > 0
+            ]
+            references.append(float(median(values)) if len(values) >= 2 else None)
+        ratios = []
+        for sector, (current_key, reference) in enumerate(
+            zip(("current_s1_ms", "current_s2_ms"), references), start=1
+        ):
+            current = finite(driver.get(current_key)) or 0.0
+            if current > 0 and reference and sector not in flagged:
+                ratios.append(current / reference)
+        if not ratios:
+            continue
+        observations.append({
+            "source": "field_sector",
+            "car_idx": int(driver.get("car_idx", -1)),
+            "name": str(driver.get("name", "")),
+            "compound": str(driver.get("tyre_compound", "UNKNOWN")).upper(),
+            "ratio": round(sum(ratios) / len(ratios), 4),
+            "sectors": len(ratios),
+            "samples": 1,
+        })
+    observations.sort(key=lambda item: float(item["ratio"]))
+    if len(observations) > sample_cars:
+        start = (len(observations) - sample_cars) // 2
+        observations = observations[start : start + sample_cars]
+    return observations
+
+
+def field_surface_temp_drop_c(state: dict[str, Any]) -> float | None:
+    """Median fall in the field's tyre surface temperature from its dry running.
+
+    Water on the track cools the tyre surface within seconds. What a given
+    drop means for the surface is not yet measured, so this is published and
+    never fitted.
+    """
+    drops = [
+        float(driver["surface_temp_baseline_c"]) - float(driver["surface_temp_recent_c"])
+        for driver in state.get("drivers", [])
+        if driver.get("active") and not driver.get("pit_lane_timer_active")
+        and finite(driver.get("surface_temp_baseline_c")) is not None
+        and finite(driver.get("surface_temp_recent_c")) is not None
+    ]
+    return round(float(median(drops)), 1) if len(drops) >= 3 else None
 
 
 def compound_split(observations: Sequence[dict[str, Any]]) -> dict[str, Any] | None:
@@ -685,8 +870,11 @@ def fit_wetness(
 GRIP_REPORT_WETNESS = {
     "flooded": (0.95, 0.85),
     "soaked": (0.72, 0.75),
+    "wet": (0.50, 0.70),
     "damp": (0.38, 0.65),
     "drying": (0.22, 0.70),
+    # Rain in the air, the surface still dry: it confirms nothing.
+    "spitting": (0.12, 0.55),
     "dry_line": (0.10, 0.80),
 }
 
@@ -788,6 +976,13 @@ def estimate_wetness(
     innovation = measured - surface_when_measured
     if pace_confidence > 0.0:
         wetness += innovation * min(0.85, pace_confidence)
+    # The sectors of the lap in progress describe the surface now, not half
+    # a lap ago, so they are fitted on their own, against the surface model
+    # now, and pull the estimate after the lap-time innovation.
+    sectors = sector_pace_observations(state, dry_until_lap=dry_until)
+    fast_measured, fast_confidence, _ = fit_wetness(sectors, dynamic)
+    if fast_confidence > 0.0:
+        wetness += (fast_measured - wetness) * min(_FAST_CHANNEL_WEIGHT, fast_confidence)
     if grip:
         wetness += (grip["wetness"] - wetness) * min(0.45, float(grip["weight"]))
     wetness = clamp_wetness(wetness)
@@ -832,7 +1027,17 @@ def estimate_wetness(
         else None,
         "compound_split": compound_split([*field, *( [player] if player and player.get("ratio") else [] )]),
         "driver_report": grip,
-        "trend": _wetness_trend(laps, weather),
+        "fast_measured_wetness": round(fast_measured, 3) if sectors else None,
+        "fast_confidence": round(fast_confidence, 3),
+        "fast_cars": len(sectors),
+        "field_sector_ratio": (
+            round(float(median([float(item["ratio"]) for item in sectors])), 4) if sectors else None
+        ),
+        "field_surface_temp_drop_c": field_surface_temp_drop_c(state),
+        "trend": _wetness_trend(laps, weather, series=series, now=dynamic),
+        # Every curve behind this reading (penalties, equilibria, soak and dry
+        # rates) is a judgement until F-10 fits it to recorded wet races.
+        "calibration": "judgement",
     }
 
 
@@ -900,16 +1105,26 @@ def _incident_laps(state: dict[str, Any]) -> list[int]:
 def _wetness_trend(
     laps: Sequence[dict[str, Any]],
     weather: str,
+    *,
+    series: Sequence[float] | None = None,
+    now: float | None = None,
 ) -> str:
-    """Whether the surface is getting wetter or drying, from the last few laps."""
-    if len(laps) < 2:
-        return "steady"
-    recent = laps[-3:]
-    earlier = equilibrium_wetness(str(recent[0].get("weather", "")))
-    now = equilibrium_wetness(weather)
-    if now > earlier + 0.05:
+    """Whether the surface is getting wetter or drying, over the last laps.
+
+    Read from the surface model where there is one: a label that changed three
+    laps ago says nothing about whether the track is still soaking.
+    """
+    if series and now is not None:
+        earlier = float(series[-3] if len(series) >= 3 else series[0])
+        current = float(now)
+    else:
+        if len(laps) < 2:
+            return "steady"
+        earlier = equilibrium_wetness(str(laps[-3:][0].get("weather", "")))
+        current = equilibrium_wetness(weather)
+    if current > earlier + 0.05:
         return "wetting"
-    if now < earlier - 0.05:
+    if current < earlier - 0.05:
         return "drying"
     return "steady"
 
@@ -1154,6 +1369,7 @@ def evaluate(
     available_compounds: Iterable[str] | None = None,
     dry_base_lap_s: float | None = None,
     change_during_suspension: bool = False,
+    pit_loss_green_s: float | None = None,
 ) -> dict[str, Any]:
     """Decide the tyre from projected race time, and say how sure that is.
 
@@ -1185,7 +1401,15 @@ def evaluate(
     if current and current != "UNKNOWN":
         candidates.add(current)
     penalties = expected_lap_penalties(sorted(candidates | {current}), scenarios)
-    costs = _cumulative_costs(penalties, base_lap_s)
+    # Penalties are fractions of dry pace. Priced on a wet lap time they were
+    # inflated by the wet loss itself, 15% at a wetness of 0.5.
+    player = reading.get("player_pace") or {}
+    cost_base = (
+        float(player["dry_base_lap_s"])
+        if player.get("benchmark") == "dry_laps" and finite(player.get("dry_base_lap_s"))
+        else float(base_lap_s)
+    )
+    costs = _cumulative_costs(penalties, cost_base)
     overhead = (
         # A change made during a suspension is free: the field is stationary and
         # nothing is being raced while the tyre goes on.
@@ -1193,6 +1417,16 @@ def evaluate(
         if change_during_suspension
         else max(0.0, float(pit_loss_s)) + WET_CHANGE_WARMUP_S
     )
+    # A safety car's discount is for a stop on this lap; one laps away pays
+    # the green-flag loss, unless the caller knows no other.
+    later_overhead = (
+        overhead
+        if change_during_suspension or pit_loss_green_s is None
+        else max(0.0, float(pit_loss_green_s)) + WET_CHANGE_WARMUP_S
+    )
+
+    def overhead_at(box_offset: int) -> float:
+        return overhead if box_offset == 0 else later_overhead
     stay_cost = costs[current][len(trajectory)] if current in costs else 0.0
 
     def change_cost(compound: str, box_offset: int) -> float:
@@ -1207,7 +1441,7 @@ def evaluate(
         return (
             costs[current][split]
             + (costs[compound][len(trajectory)] - costs[compound][split])
-            + overhead
+            + overhead_at(box_offset)
         )
 
     # Which lap to change on is part of the question, not something to settle
@@ -1246,8 +1480,8 @@ def evaluate(
         options.append(
             {
                 "compound": compound,
-                "weather_cost_s": round(at_box - overhead, 2),
-                "change_overhead_s": round(overhead, 2),
+                "weather_cost_s": round(at_box - overhead_at(option_offset), 2),
+                "change_overhead_s": round(overhead_at(option_offset), 2),
                 "total_s": round(at_box, 2),
                 "is_change": True,
                 "benefiting_laps": len(trajectory)
@@ -1262,7 +1496,7 @@ def evaluate(
     )
 
     uncertainty = _decision_uncertainty_s(
-        state, reading, trajectory, base_lap_s, remaining
+        state, reading, trajectory, cost_base, remaining
     )
     near_crossover = _nearest_crossover(wetness)
     is_change = best_offset is not None
@@ -1296,18 +1530,22 @@ def evaluate(
     to_dry = best_compound in DRY_COMPOUNDS and current in WET_COMPOUNDS
     measured = reading.get("measured_wetness")
     measured_ok = float(reading.get("pace_confidence", 0.0)) >= 0.5 and measured is not None
+    fast = reading.get("fast_measured_wetness")
+    fast_ok = float(reading.get("fast_confidence", 0.0) or 0.0) >= 0.5 and fast is not None
     confirmed = bool(
         change_during_suspension
         or not (to_wet or to_dry)
         or (to_wet and (
             wetness >= WETNESS_SLICK_INTER - 0.02
             or (measured_ok and float(measured) >= 0.20)
+            or (fast_ok and float(fast) >= 0.20)
             or advantage > 0.0
-            or grip.get("category") in {"damp", "soaked", "flooded"}
+            or grip.get("category") in {"damp", "wet", "soaked", "flooded"}
         ))
         or (to_dry and (
             wetness <= WETNESS_SLICK_INTER + 0.02
             or (measured_ok and float(measured) <= 0.30)
+            or (fast_ok and float(fast) <= 0.30)
             or advantage < 0.0
             or grip.get("category") in {"drying", "dry_line"}
         ))
@@ -1360,7 +1598,7 @@ def evaluate(
             pace_best=_pace_best(penalties, trajectory, wetness, current),
             upcoming=upcoming,
             penalties=penalties,
-            base_lap_s=base_lap_s,
+            base_lap_s=cost_base,
             overhead_s=overhead,
         ),
     }

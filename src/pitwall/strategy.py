@@ -1699,6 +1699,8 @@ class StrategyEngine:
             pit_loss_s=effective_pit_loss_s,
             available_compounds=available_compounds,
             change_during_suspension=red_flag_change,
+            # A neutralisation's cheap stop is for this lap only.
+            pit_loss_green_s=(neutralisation or {}).get("base_pit_loss_s"),
         )
         reading = decision["reading"]
         wetness = float(decision["wetness"])
@@ -1712,6 +1714,12 @@ class StrategyEngine:
                 "pace_confidence": reading["pace_confidence"],
                 "pace_samples": reading["pace_samples"],
                 "field_cars": reading["field_pace_cars"],
+                "fast_measured": reading.get("fast_measured_wetness"),
+                "fast_confidence": reading.get("fast_confidence", 0.0),
+                "fast_cars": reading.get("fast_cars", 0),
+                "field_sector_ratio": reading.get("field_sector_ratio"),
+                # Published, not fitted: what a fall means is not yet measured.
+                "field_surface_temp_drop_c": reading.get("field_surface_temp_drop_c"),
                 "driver_report": reading["driver_report"],
             },
             "compound_split": reading["compound_split"],

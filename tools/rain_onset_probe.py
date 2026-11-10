@@ -72,33 +72,46 @@ def player_laps(
                 "s2_ms": third,
                 "s3_ms": ms - 2 * third,
                 "learning_exclusions": list(exclusions.get(number, [])),
+                # A neutralised lap in these scenarios is a yellow shown to
+                # this car, recorded as the app records it: a local flag,
+                # not a safety car.
+                "full_course_neutralised": False,
+                "local_yellow": "neutralised_lap" in exclusions.get(number, []),
             }
         )
     return laps
 
 
-def rivals(upto: int, rain_lap: int, cars: int = 19) -> list[dict[str, Any]]:
+def rivals(
+    upto: int, rain_lap: int, cars: int = 19, *, sectors_of_lap: int | None = None,
+) -> list[dict[str, Any]]:
+    """The field, with sector times on every lap.
+
+    ``sectors_of_lap`` posts the first two sectors of that lap, in progress,
+    as the lap-data packet does at mid-lap.
+    """
     field = []
     for index in range(1, cars + 1):
-        history = [
-            {
-                "lap_num": number,
-                "lap_ms": int(lap_time_s(number, rain_lap) * 1000 + index * 40),
-                "valid_flags": 1,
-            }
-            for number in range(1, upto + 1)
-        ]
-        field.append(
-            {
-                "car_idx": index,
-                "name": f"CAR{index}",
-                "active": True,
-                "result_label": "active",
-                "tyre_compound": "MEDIUM",
-                "lap_history": history,
-                "tyre_stints": [{"start_lap": 1, "end_lap": 255, "compound": "MEDIUM"}],
-            }
-        )
+        history = []
+        for number in range(1, upto + 1):
+            ms = int(lap_time_s(number, rain_lap) * 1000 + index * 40)
+            history.append({
+                "lap_num": number, "lap_ms": ms, "valid_flags": 1,
+                "s1_ms": ms // 3, "s2_ms": ms // 3, "s3_ms": ms - 2 * (ms // 3),
+            })
+        car = {
+            "car_idx": index,
+            "name": f"CAR{index}",
+            "active": True,
+            "result_label": "active",
+            "tyre_compound": "MEDIUM",
+            "lap_history": history,
+            "tyre_stints": [{"start_lap": 1, "end_lap": 255, "compound": "MEDIUM"}],
+        }
+        if sectors_of_lap is not None:
+            ms = int(lap_time_s(sectors_of_lap, rain_lap) * 1000 + index * 40)
+            car.update(current_lap=sectors_of_lap, current_s1_ms=ms // 3, current_s2_ms=ms // 3)
+        field.append(car)
     return field
 
 
@@ -112,10 +125,13 @@ def state_at(
     exclusions: dict[int, list[str]] | None = None,
     forecast_weather: str = "Light rain",
     weather_now: str | None = None,
+    mid_lap: bool = False,
 ) -> dict[str, Any]:
     completed = current_lap - 1
     raining = current_lap >= rain_lap
+    position = {"track_length_m": 5000, "lap_distance_m": 3400} if mid_lap else {}
     return {
+        **position,
         "weather": weather_now or ("Light rain" if raining else "Clear"),
         "weather_forecast": [
             {
@@ -136,7 +152,10 @@ def state_at(
         "tyre": {"compound": "MEDIUM"},
         "current_lap": current_lap,
         "player_car_index": 0,
-        "drivers": rivals(completed, rain_lap) if with_field else [],
+        "drivers": (
+            rivals(completed, rain_lap, sectors_of_lap=current_lap if mid_lap else None)
+            if with_field else []
+        ),
     }
 
 
@@ -197,11 +216,11 @@ def run_scenario(label: str, rain_pct: int, verbose: bool, **overrides: Any) -> 
     }
 
 
-def run_dry_control(verbose: bool) -> dict[str, Any]:
+def run_dry_control(verbose: bool, **timing: Any) -> dict[str, Any]:
     """Dry sky, dry track, and a 50% forecast that never arrives."""
     false_calls = 0
     for lap in (12, 13, 14):
-        decision = evaluate_at(lap, 999, 50, weather_now="Overcast")
+        decision = evaluate_at(lap, 999, 50, weather_now="Overcast", **timing)
         false_calls += int(bool(decision["should_change"]))
         if verbose:
             print(
@@ -237,13 +256,19 @@ def main() -> int:
         metavar="LAPS",
         help="fail unless every rain scenario boxes within this many laps and holds the call",
     )
+    parser.add_argument(
+        "--mid-lap",
+        action="store_true",
+        help="evaluate two-thirds into each lap, with the field's first two sectors posted",
+    )
     args = parser.parse_args()
 
+    timing = {"mid_lap": True} if args.mid_lap else {}
     results = [
-        run_scenario(label, pct, not args.quiet, **overrides)
+        run_scenario(label, pct, not args.quiet, **timing, **overrides)
         for label, pct, overrides in SCENARIOS
     ]
-    control = run_dry_control(not args.quiet)
+    control = run_dry_control(not args.quiet, **timing)
 
     print("\nscenario                                                             first call   held  slick loss")
     for item in results:
