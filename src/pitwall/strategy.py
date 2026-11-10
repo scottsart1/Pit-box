@@ -694,7 +694,7 @@ class StrategyEngine:
         self._candidate_pool: list[dict[str, Any]] = []
         # ((context, lap), result) of the last safety-car readiness: computed
         # once a lap, reused by the lap's later recomputes.
-        self._readiness_cache: tuple[tuple[str, int], dict[str, Any]] | None = None
+        self._readiness_cache: tuple[tuple[Any, ...], dict[str, Any]] | None = None
         # (radio signature, first seen race time) of a faster plan that has
         # not yet been the faster plan for long enough to be spoken.
         self._pending_switch: tuple[tuple[Any, ...], float] | None = None
@@ -3649,7 +3649,7 @@ class StrategyEngine:
             return plan, worker._candidate_pool
 
     async def _safety_car_readiness(
-        self, state: dict[str, Any], historical: dict[str, Any], plan: dict[str, Any], context: Any,
+        self, state: dict[str, Any], historical: dict[str, Any], plan: dict[str, Any],
     ) -> dict[str, Any] | None:
         """What to do if a safety car or a VSC came out on this lap, decided before it does.
 
@@ -3665,11 +3665,17 @@ class StrategyEngine:
             or not plan.get("available") or not recommended or lap < 1
         ):
             return None
-        key = (repr(context), lap)
+        green_signature = (tuple(recommended.get("box_laps") or []), tuple(recommended.get("compounds") or []))
+        # Once a lap: the live context also moves when the tyre's age ticks
+        # over mid-lap, which is not a new decision. A stop made or a new
+        # green plan is.
+        key = (
+            *(state.get(name) for name in ("session_uid", "restart_epoch", "timeline_epoch", "total_laps")),
+            lap, str((state.get("tyre") or {}).get("compound", "")), green_signature,
+        )
         cached = self._readiness_cache
         if cached is not None and cached[0] == key:
             return cached[1]
-        green_signature = (tuple(recommended.get("box_laps") or []), tuple(recommended.get("compounds") or []))
         result: dict[str, Any] = {"lap": lap}
         for kind, phase, safety in (("safety_car", "safety_car", "full"), ("vsc", "vsc", "virtual")):
             variant = {**state, "race_control_phase": phase, "safety_car": safety}
@@ -3725,7 +3731,7 @@ class StrategyEngine:
             )
             inferred = infer_unrun_compounds(historical)
             plan, pool = await self._compute_isolated(state, inferred)
-            readiness = await self._safety_car_readiness(state, inferred, plan, context)
+            readiness = await self._safety_car_readiness(state, inferred, plan)
             if readiness is not None:
                 plan = {**plan, "if_neutralised": readiness}
             applied = False

@@ -11,6 +11,17 @@ four seconds. The generator is deliberately not a physics model; it produces
 *plausible and self-consistent* timing, tyre and energy data, which is what the
 deterministic layers consume.
 
+A rain spell can be added: from a given lap of the player's the sky turns to
+the given rain, the surface soaks at ``rain.py``'s own rate, every car's lap
+and sector times follow ``rain.py``'s penalty for its tyre at that wetness, and
+the cars stop for intermediates two laps later. The forecast samples carry the
+given chance of rain before it arrives.
+
+    python tools/replay_demo.py --laps 20 --rain-from-lap 8 --rain "Light rain" --forecast-chance 50
+
+``race_packets`` yields the same race as (session time, datagram) pairs without
+a socket or a clock, for ``tools/strategy_replay.py``.
+
 Nothing here is imported by the application. It exists so a change can be seen
 working end to end before it reaches a real session.
 """
@@ -22,7 +33,10 @@ import json
 import math
 import random
 import socket
+import sys
 import time
+from collections.abc import Callable, Iterator
+from dataclasses import dataclass
 from pathlib import Path
 
 from f1.packets import (
@@ -40,6 +54,10 @@ from f1.packets import (
     PacketSessionData,
     PacketSessionHistoryData,
 )
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+
+from pitwall import rain as rain_model
 
 # driver_id, team_id, race number, surname, relative pace (s/lap vs the leader)
 GRID = [
@@ -66,9 +84,26 @@ GRID = [
 ]
 PLAYER_INDEX = 5  # the driver runs as Russell, mid-grid, so there is a race on
 
-COMPOUNDS = {"SOFT": 16, "MEDIUM": 17, "HARD": 18}
-WEAR_PER_LAP = {"SOFT": 2.9, "MEDIUM": 1.9, "HARD": 1.3}
-PACE_OFFSET = {"SOFT": -0.55, "MEDIUM": 0.0, "HARD": 0.45}
+COMPOUNDS = {"SOFT": 16, "MEDIUM": 17, "HARD": 18, "INTER": 7, "WET": 8}
+WEAR_PER_LAP = {"SOFT": 2.9, "MEDIUM": 1.9, "HARD": 1.3, "INTER": 1.6, "WET": 1.4}
+# Dry pace by tyre. On a wet surface every tyre is slowed by rain.py's own
+# penalty for it, so a wet tyre on a dry track pays that, not an offset here.
+PACE_OFFSET = {"SOFT": -0.55, "MEDIUM": 0.0, "HARD": 0.45, "INTER": 0.0, "WET": 0.0}
+WEATHER_CODES = {"Clear": 0, "Light cloud": 1, "Overcast": 2, "Light rain": 3, "Heavy rain": 4, "Storm": 5}
+TRACK_TEMP_C = 34
+# Laps after the rain begins that a car stops for intermediates.
+INTER_STOP_DELAY_LAPS = 2
+# Share of the lap at which a stopping car turns into the pit lane.
+PIT_ENTRY_FRACTION = 0.94
+
+
+@dataclass(frozen=True)
+class RainSpell:
+    """Rain from the start of the player's ``from_lap`` to the flag."""
+
+    from_lap: int
+    label: str = "Light rain"
+    forecast_chance: int = 50
 
 TRACK_ID = 13  # Suzuka
 TRACK_LENGTH = 5807
@@ -148,7 +183,7 @@ def header(packet_id: int, session_time: float, frame: int) -> PacketHeader:
 class Car:
     """One car's simulated race state."""
 
-    def __init__(self, index: int, spec: tuple) -> None:
+    def __init__(self, index: int, spec: tuple, rng: random.Random | None = None) -> None:
         driver_id, team_id, number, name, pace = spec
         self.index = index
         self.driver_id = driver_id
@@ -169,7 +204,7 @@ class Car:
         self.tyre_age = 0
         self.wear = [0.0, 0.0, 0.0, 0.0]
         self.stops = 0
-        self.stop_lap = random.randint(12, 20)
+        self.stop_lap = (rng or random).randint(12, 20)
         self.in_pit_for = 0.0
         self.pit_stationary_ms = 0
         self.fuel = 100.0
@@ -179,16 +214,45 @@ class Car:
         self.speed = 0
         self.sectors: list[tuple[int, int, int]] = []
         self.position_history: list[int] = []
+        # (last lap on the tyre, compound) for every finished stint.
+        self.stints: list[tuple[int, str]] = []
+        self.wetness = 0.0
+        self.pitting = False
 
     @property
     def lap_time_s(self) -> float:
-        return (
+        dry = (
             BASE_LAP_S
             + self.pace
             + PACE_OFFSET[self.compound]
             + self.tyre_age * 0.045
             + self.damage * 0.02
         )
+        if self.compound in {"INTER", "WET"} or self.wetness > 0:
+            return dry * (1.0 + rain_model.lap_penalty_fraction(self.compound, self.wetness))
+        return dry
+
+    def stop_after_this_lap(self, spell: RainSpell | None, raining: bool) -> str | None:
+        """The tyre this car stops for at the end of the lap it is on, if it does."""
+        if (
+            spell is not None and spell.forecast_chance > 0
+            and self.lap + 1 == spell.from_lap + INTER_STOP_DELAY_LAPS
+            and self.compound not in {"INTER", "WET"}
+        ):
+            return "INTER"
+        if self.lap + 1 == self.stop_lap and self.stops == 0 and not raining:
+            return "HARD" if self.compound != "HARD" else "MEDIUM"
+        return None
+
+    def change_tyres(self, compound: str) -> None:
+        self.stints.append((self.lap - 1, self.compound))
+        self.stops += 1
+        self.compound = compound
+        self.tyre_age = 0
+        self.wear = [0.0] * 4
+        self.in_pit_for = 21.0
+        self.pit_stationary_ms = 2400
+        self.race_time += 20.0
 
 
 def build_participants(cars: list[Car], session_time: float, frame: int) -> bytes:
@@ -208,11 +272,35 @@ def build_participants(cars: list[Car], session_time: float, frame: int) -> byte
     return bytes(packet)
 
 
-def build_session(session_time: float, frame: int, total_laps: int, lap: int) -> bytes:
+# The forecast the demo has always shown: rain likely in half an hour.
+DEFAULT_FORECAST = ((5, 1, 10), (15, 1, 25), (30, 3, 55))
+
+
+def forecast_for(spell: RainSpell | None, lap: int) -> tuple[int, tuple[tuple[int, int, int], ...]]:
+    """The sky now and the forecast samples (minutes ahead, sky, chance) on the player's lap."""
+    if spell is None:
+        return 1, DEFAULT_FORECAST
+    wet_code = WEATHER_CODES.get(spell.label, 3)
+    if spell.forecast_chance <= 0:
+        return 1, tuple((minutes, 1, 0) for minutes in (0, 5, 10, 15, 30))
+    if lap >= spell.from_lap:
+        # Raining to the flag, and the forecast says so.
+        return wet_code, tuple((minutes, wet_code, max(80, spell.forecast_chance)) for minutes in (0, 5, 10, 15, 30))
+    minutes_to_rain = (spell.from_lap - lap) * BASE_LAP_S / 60.0
+    return 2, tuple(
+        (minutes, wet_code if minutes >= minutes_to_rain else 2,
+         spell.forecast_chance if minutes >= minutes_to_rain else 10)
+        for minutes in (0, 5, 10, 15, 30)
+    )
+
+
+def build_session(session_time: float, frame: int, total_laps: int, lap: int,
+                  spell: RainSpell | None = None) -> bytes:
     packet = PacketSessionData()
     packet.header = header(1, session_time, frame)
-    packet.weather = 1
-    packet.track_temperature = 34
+    sky, samples = forecast_for(spell, lap)
+    packet.weather = sky
+    packet.track_temperature = TRACK_TEMP_C
     packet.air_temperature = 26
     packet.total_laps = total_laps
     packet.track_length = TRACK_LENGTH
@@ -228,13 +316,13 @@ def build_session(session_time: float, frame: int, total_laps: int, lap: int) ->
         # A yellow appears in one sector during the middle of the race.
         packet.marshal_zones[zone].zone_flag = 3 if (zone == 3 and 14 <= lap <= 17) else 1
     packet.safety_car_status = 0
-    packet.num_weather_forecast_samples = 3
-    for offset, (minutes, rain) in enumerate(((5, 10), (15, 25), (30, 55))):
+    packet.num_weather_forecast_samples = len(samples)
+    for offset, (minutes, weather, rain) in enumerate(samples):
         sample = packet.weather_forecast_samples[offset]
         sample.session_type = 15
         sample.time_offset = minutes
-        sample.weather = 1 if rain < 40 else 3
-        sample.track_temperature = 34 - offset
+        sample.weather = weather
+        sample.track_temperature = TRACK_TEMP_C - offset
         sample.air_temperature = 26 - offset
         sample.rain_percentage = rain
     packet.forecast_accuracy = 0
@@ -289,6 +377,8 @@ def build_lap_data(cars: list[Car], session_time: float, frame: int) -> bytes:
         entry.sector = 0 if car.distance < TRACK_LENGTH * 0.34 else (1 if car.distance < TRACK_LENGTH * 0.71 else 2)
         entry.grid_position = car.grid
         entry.driver_status = 1 if not car.in_pit_for else 2
+        # 1 in the lane on the way in, 2 in the pit area.
+        entry.pit_status = 2 if car.in_pit_for > 0 else 1 if car.pitting else 0
         entry.result_status = 7 if car.retired else 2
         entry.pit_lane_timer_active = 1 if car.in_pit_for > 0 else 0
         entry.pit_lane_time_in_lane_in_ms = int(car.in_pit_for * 1000)
@@ -445,7 +535,7 @@ def build_history(car: Car, session_time: float, frame: int) -> bytes:
     packet.header = header(11, session_time, frame)
     packet.car_idx = car.index
     packet.num_laps = max(1, len(car.lap_times))
-    packet.num_tyre_stints = max(1, car.stops + 1)
+    packet.num_tyre_stints = len(car.stints) + 1
     best = min(car.lap_times) if car.lap_times else 0
     packet.best_lap_time_lap_num = (
         car.lap_times.index(best) + 1 if car.lap_times else 0
@@ -461,10 +551,11 @@ def build_history(car: Car, session_time: float, frame: int) -> bytes:
         entry.sector3_time_minutes_part = s3 // 60000
         entry.sector3_time_ms_part = s3 % 60000
         entry.lap_valid_bit_flags = 0x0F
-    stint = packet.tyre_stints_history_data[0]
-    stint.end_lap = 255
-    stint.tyre_actual_compound = COMPOUNDS[car.compound]
-    stint.tyre_visual_compound = COMPOUNDS[car.compound]
+    for slot, (end_lap, compound) in enumerate([*car.stints, (255, car.compound)][:8]):
+        stint = packet.tyre_stints_history_data[slot]
+        stint.end_lap = end_lap
+        stint.tyre_actual_compound = COMPOUNDS[compound]
+        stint.tyre_visual_compound = COMPOUNDS[compound]
     return bytes(packet)
 
 
@@ -489,31 +580,51 @@ def build_event(code: str, session_time: float, frame: int, **fields) -> bytes:
     return bytes(packet)
 
 
-def run(host: str, port: int, total_laps: int, speed: float, seed: int,
-        *, summary_output: Path | None = None) -> None:
-    random.seed(seed)
-    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    target = (host, port)
-    cars = [Car(index, spec) for index, spec in enumerate(GRID)]
+def race_packets(
+    total_laps: int,
+    seed: int,
+    *,
+    spell: RainSpell | None = None,
+    tick: float = 0.10,
+    session_uid: int | None = None,
+    on_tick: Callable[[Car, int], None] | None = None,
+) -> Iterator[tuple[float, bytes]]:
+    """The whole race as (session time, datagram), ending with the final classification.
+
+    ``tick`` is simulated seconds per step. Everything random comes from
+    ``seed``, so the same arguments give the same bytes.
+    """
+    global SESSION_UID
+    if session_uid is not None:
+        SESSION_UID = int(session_uid)
+    rng = random.Random(seed)
+    cars = [Car(index, spec, rng) for index, spec in enumerate(GRID)]
     frame = 0
     session_time = 0.0
-    tick = 0.10          # simulated seconds per step
-    wall_tick = tick / speed
     history_cursor = 0
     player = cars[PLAYER_INDEX]
+    wetness = 0.0
+    # Steps between the slower packets, as the 10 Hz demo always sent them.
+    every = {name: max(1, round(base / tick)) for name, base in
+             (("status", 0.5), ("session", 1.0), ("history", 0.3), ("trap", 9.7))}
 
-    print(f"Sending synthetic F1 26 telemetry to {host}:{port}")
-    print(f"  {len(cars)} cars, {total_laps} laps, {speed:.0f}x speed")
-    print(f"  You are {GRID[PLAYER_INDEX][3].decode()} (car {PLAYER_INDEX}), starting P{PLAYER_INDEX + 1}")
-
-    sock.sendto(build_participants(cars, session_time, frame), target)
-    sock.sendto(build_session(session_time, frame, total_laps, 1), target)
+    yield session_time, build_participants(cars, session_time, frame)
+    yield session_time, build_session(session_time, frame, total_laps, 1, spell)
 
     while player.lap <= total_laps:
         frame += 1
         session_time += tick
+        raining = spell is not None and player.lap >= spell.from_lap
+        if spell is not None:
+            target = rain_model.equilibrium_wetness(spell.label) if raining else 0.0
+            wetness = rain_model.step_wetness(
+                wetness, target, laps=tick / BASE_LAP_S, track_temp_c=TRACK_TEMP_C,
+                active_cars=sum(1 for car in cars if not car.retired),
+            )
+        events: list[bytes] = []
 
         for car in cars:
+            car.wetness = wetness
             if car.retired:
                 continue
             if car.in_pit_for > 0:
@@ -529,18 +640,22 @@ def run(host: str, port: int, total_laps: int, speed: float, seed: int,
             car.race_time += tick
             car.speed = int(300 - 140 * abs(math.sin(car.distance / TRACK_LENGTH * 6 * math.pi)))
             # Deploy on the straights, harvest under braking, so the store
-            # oscillates across a lap the way a real one does.
+            # oscillates across a lap the way a real one does, between about
+            # half and full. At 620 kJ/s out and 240 kJ/s in, the 4 MJ store
+            # emptied on every main straight.
             lap_fraction = car.distance / TRACK_LENGTH
             deploying = lap_fraction > 0.82 or 0.40 < lap_fraction < 0.52
             car.ers = max(
                 0.0,
                 min(
                     4_000_000.0,
-                    car.ers + (-620_000 if deploying else 240_000) * tick,
+                    car.ers + (-120_000 if deploying else 55_000) * tick,
                 ),
             )
             car.fuel = max(0.0, car.fuel - 0.019 * tick)
 
+            stopping = car.stop_after_this_lap(spell, raining)
+            car.pitting = stopping is not None and car.distance >= PIT_ENTRY_FRACTION * TRACK_LENGTH
             if car.distance >= TRACK_LENGTH:
                 car.distance -= TRACK_LENGTH
                 lap_ms = int(car.lap_time_s * 1000)
@@ -558,59 +673,74 @@ def run(host: str, port: int, total_laps: int, speed: float, seed: int,
                     min(99.0, value + rate * factor)
                     for value, factor in zip(car.wear, (0.95, 0.92, 1.08, 1.05))
                 ]
-                if car.lap == car.stop_lap and car.stops == 0:
-                    car.stops += 1
-                    car.compound = "HARD" if car.compound != "HARD" else "MEDIUM"
-                    car.tyre_age = 0
-                    car.wear = [0.0] * 4
-                    car.in_pit_for = 21.0
-                    car.pit_stationary_ms = 2400
-                    car.race_time += 20.0
+                if stopping is not None:
+                    car.pitting = False
+                    car.change_tyres(stopping)
                 # The scripted retirement and damage belong to AI cars. When
                 # --driver puts the player in one of those seats the script
                 # moves to the neighbouring car: a retired player never
                 # completes the race, so the send loop would spin for ever.
                 if car.index == (17 if PLAYER_INDEX == 16 else 16) and car.lap == 19:
                     car.retired = True
-                    sock.sendto(build_event("RTMT", session_time, frame, vehicle_idx=car.index), target)
+                    events.append(build_event("RTMT", session_time, frame, vehicle_idx=car.index))
                 if car.index == (9 if PLAYER_INDEX == 8 else 8) and car.lap == 7:
                     car.damage = 34
 
-        sock.sendto(build_lap_data(cars, session_time, frame), target)
-        sock.sendto(build_motion(cars, session_time, frame), target)
-        sock.sendto(build_telemetry(cars, session_time, frame), target)
-        sock.sendto(build_telemetry2(cars, session_time, frame), target)
+        yield from ((session_time, event) for event in events)
+        yield session_time, build_lap_data(cars, session_time, frame)
+        yield session_time, build_motion(cars, session_time, frame)
+        yield session_time, build_telemetry(cars, session_time, frame)
+        yield session_time, build_telemetry2(cars, session_time, frame)
 
-        if frame % 5 == 0:
-            sock.sendto(build_car_status(cars, session_time, frame), target)
-            sock.sendto(build_car_damage(cars, session_time, frame), target)
-        if frame % 10 == 0:
-            sock.sendto(build_session(session_time, frame, total_laps, player.lap), target)
-            sock.sendto(build_participants(cars, session_time, frame), target)
-            sock.sendto(build_lap_positions(cars, session_time, frame), target)
-        if frame % 3 == 0:
+        if frame % every["status"] == 0:
+            yield session_time, build_car_status(cars, session_time, frame)
+            yield session_time, build_car_damage(cars, session_time, frame)
+        if frame % every["session"] == 0:
+            yield session_time, build_session(session_time, frame, total_laps, player.lap, spell)
+            yield session_time, build_participants(cars, session_time, frame)
+            yield session_time, build_lap_positions(cars, session_time, frame)
+        if frame % every["history"] == 0:
             car = cars[history_cursor % len(cars)]
             history_cursor += 1
-            sock.sendto(build_history(car, session_time, frame), target)
-        if frame % 97 == 0:
-            sock.sendto(
-                build_event("SPTP", session_time, frame, vehicle_idx=0, speed=328.6),
-                target,
-            )
+            yield session_time, build_history(car, session_time, frame)
+        if frame % every["trap"] == 0:
+            yield session_time, build_event("SPTP", session_time, frame, vehicle_idx=0, speed=328.6)
+        if on_tick is not None:
+            on_tick(player, total_laps)
 
+    frame += 1
+    yield session_time, build_lap_positions(cars, session_time, frame)
+    yield session_time, build_final_classification(cars, session_time, frame, total_laps)
+
+
+def run(host: str, port: int, total_laps: int, speed: float, seed: int,
+        *, summary_output: Path | None = None, spell: RainSpell | None = None) -> None:
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    target = (host, port)
+
+    print(f"Sending synthetic F1 26 telemetry to {host}:{port}")
+    print(f"  {len(GRID)} cars, {total_laps} laps, {speed:.0f}x speed")
+    print(f"  You are {GRID[PLAYER_INDEX][3].decode()} (car {PLAYER_INDEX}), starting P{PLAYER_INDEX + 1}")
+    if spell is not None:
+        print(f"  {spell.label} from lap {spell.from_lap}, forecast {spell.forecast_chance}%")
+
+    def progress(player: Car, laps: int) -> None:
         print(
-            f"\r  lap {player.lap:>2}/{total_laps}  P{player.position:<2} "
+            f"\r  lap {player.lap:>2}/{laps}  P{player.position:<2} "
             f"{player.compound:<6} age {player.tyre_age:>2}  "
             f"wear {max(player.wear):>4.1f}%  ",
             end="",
             flush=True,
         )
-        time.sleep(wall_tick)
 
-    frame += 1
-    sock.sendto(build_lap_positions(cars, session_time, frame), target)
-    final_bytes = build_final_classification(cars, session_time, frame, total_laps)
-    sock.sendto(final_bytes, target)
+    final_bytes = b""
+    clock = 0.0
+    for session_time, data in race_packets(total_laps, seed, spell=spell, on_tick=progress):
+        if session_time > clock:
+            time.sleep((session_time - clock) / speed)
+            clock = session_time
+        sock.sendto(data, target)
+        final_bytes = data
     # UDP has no delivery acknowledgement. At accelerated replay speeds the
     # receiver's OS buffer can still contain the last burst of race telemetry;
     # a single terminal datagram can disappear even though the race advanced.
@@ -660,12 +790,21 @@ def main() -> None:
         "--driver", default=None,
         help="surname of the grid driver to run as (default: Russell)",
     )
+    parser.add_argument("--rain-from-lap", type=int, default=None,
+                        help="the player's lap the rain starts on (default: a dry race)")
+    parser.add_argument("--rain", default="Light rain", choices=["Light rain", "Heavy rain", "Storm"])
+    parser.add_argument("--forecast-chance", type=int, default=50,
+                        help="the rain chance the forecast gives before it arrives")
     arguments = parser.parse_args()
     select_circuit(arguments.circuit)
     if arguments.driver:
         select_driver(arguments.driver)
+    spell = (
+        RainSpell(arguments.rain_from_lap, arguments.rain, arguments.forecast_chance)
+        if arguments.rain_from_lap else None
+    )
     run(arguments.host, arguments.port, arguments.laps, arguments.speed, arguments.seed,
-        summary_output=arguments.summary_output)
+        summary_output=arguments.summary_output, spell=spell)
 
 
 if __name__ == "__main__":
