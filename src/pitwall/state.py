@@ -353,6 +353,12 @@ class SessionState:
     rain_next_15_pct: int = 0
     rain_next_30_pct: int = 0
     rain_next_60_pct: int = 0
+    # The highest chance at any forecast sample within the window. The fields
+    # above are the last sample at or before it: 80% at five minutes then 10%
+    # at fifteen read as "10 percent within fifteen minutes".
+    rain_peak_15_pct: int = 0
+    rain_peak_30_pct: int = 0
+    rain_peak_60_pct: int = 0
     track_temp_c: int = 0
     air_temp_c: int = 0
     # Marshal-zone flags around the lap, each with a start fraction (0..1) and a

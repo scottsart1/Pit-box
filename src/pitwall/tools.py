@@ -890,32 +890,47 @@ class TelemetryTools:
             )
         return result
 
-    async def get_weather_forecast(self, horizon_min: int = 30) -> dict[str, Any]:
+    async def get_weather_picture(self) -> dict[str, Any]:
+        """The wet model as the radio and the Strategy page read it.
+
+        Surface, sky, forecast with the chance given the rain falling now,
+        projection to the flag, every tyre's cost and the call. Answering from
+        the raw samples let the engineer say "rain in ten minutes, 60%" while
+        the radio had already called the track past the crossover.
+        """
+        from .weather_picture import weather_picture
+
         state = await self.store.snapshot_analysis()
         freshness = self.packet_freshness(state, 1)
         if not freshness["available"]:
             return {"available": False, "freshness": freshness, "reason": "Current weather telemetry is unavailable."}
+        picture = weather_picture(state)
+        picture["freshness"] = freshness
+        picture["basis"] = (
+            "chance_given_now_pct conditions the game's chance on the rain falling now; "
+            "the call, its margin and the tyre costs are the strategy engine's own. "
+            "The curves are judgements until fitted to recorded wet races."
+        )
+        return picture
+
+    async def get_weather_forecast(self, horizon_min: int = 30) -> dict[str, Any]:
+        """The weather picture, with the raw samples inside a horizon."""
+        picture = await self.get_weather_picture()
+        if not picture.get("available"):
+            return picture
+        state = await self.store.snapshot_analysis()
         samples = [
             sample
             for sample in state.get("weather_forecast", [])
             if sample.get("time_offset_min", 0) <= horizon_min
         ]
-        crossover = next(
-            (sample for sample in samples if sample.get("rain_pct", 0) >= 60),
-            None,
-        )
         return {
-            "available": True,
-            "freshness": freshness,
+            **picture,
             "current": state["weather"],
             "track_temp_c": state["track_temp_c"],
             "air_temp_c": state["air_temp_c"],
             "samples": samples,
             "forecast_available": bool(samples),
-            "rain_crossover_basis": "First forecast sample with at least 60 percent rain probability; not a measured tyre crossover or a guaranteed rain start.",
-            "rain_crossover_min": crossover.get("time_offset_min")
-            if crossover
-            else None,
         }
 
     async def get_gap(self, target: str = "ahead") -> dict[str, Any]:
@@ -4004,8 +4019,17 @@ class TelemetryTools:
                 },
             ),
             (
+                "get_weather_picture",
+                (
+                    "The wet model in one answer: surface wetness and its sources, sky, forecast "
+                    "(with the chance given the rain falling now), projection to the flag, every "
+                    "tyre's cost and the weather call. Use for rain, wet, inters, slicks or a dry line."
+                ),
+                {},
+            ),
+            (
                 "get_weather_forecast",
-                "Get current weather and forecast samples through a horizon.",
+                "The weather picture plus the raw forecast samples through a horizon.",
                 {"horizon_min": {"type": "integer", "minimum": 5, "maximum": 60}},
             ),
             (

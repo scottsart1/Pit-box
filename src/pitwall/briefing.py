@@ -250,7 +250,7 @@ class BriefingEngine:
             "weather": {
                 "available": connected_here,
                 "current": state.get("weather") if connected_here else None,
-                "rain_15_pct": state.get("rain_next_15_pct") if connected_here else None,
+                "rain_15_pct": state.get("rain_peak_15_pct", state.get("rain_next_15_pct")) if connected_here else None,
                 "forecast": state.get("weather_forecast", []) if connected_here else [],
                 "reason": None if connected_here else "No live Session packet is available.",
             },

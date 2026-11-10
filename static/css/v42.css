@@ -1121,6 +1121,39 @@ button:disabled,
 .strategy-side .controls { display: flex; gap: 8px; margin-top: 8px; }
 .strategy-side .controls input { flex: 1; min-width: 0; }
 
+/* Track conditions on STRATEGY: surface, forecast, projection, tyre costs. */
+.weather-wall > summary { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+.weather-wall > summary h2 { margin: 0; }
+.weather-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr);
+  gap: 12px;
+  margin: 12px 0;
+}
+.weather-box {
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid #263542;
+  border-radius: 10px;
+  background: #0f1720;
+}
+.weather-surface-head { display: flex; justify-content: space-between; align-items: baseline; margin: 4px 0 8px; }
+.weather-surface-head b { font-weight: 900; font-size: 20px; letter-spacing: .04em; }
+.weather-bar { position: relative; height: 12px; border-radius: 6px; background: #1a2733; overflow: hidden; }
+.weather-bar span { position: absolute; inset: 0 auto 0 0; width: 0; background: #3f86ff; }
+.weather-bar .tick { position: absolute; top: 0; bottom: 0; width: 2px; background: #ffc15c; }
+.weather-bar .slick-inter { left: 35%; }
+.weather-bar .inter-wet { left: 75%; }
+.weather-scale { position: relative; display: flex; justify-content: space-between; height: 18px; margin: 4px 0 6px; }
+.weather-scale .cross-label { position: absolute; transform: translateX(-50%); color: #ffc15c; }
+.weather-table { font-variant-numeric: tabular-nums; min-width: 420px; }
+.weather-table th[scope="row"] { color: var(--text-2); font-size: 11px; letter-spacing: .12em; text-transform: uppercase; text-align: left; white-space: nowrap; }
+.weather-table td, .weather-table th[scope="col"] { text-align: center; white-space: nowrap; }
+.weather-canvas { width: 100%; height: 160px; }
+@media (max-width: 720px) {
+  .weather-grid { grid-template-columns: 1fr; }
+}
+
 .rejoin-strip { margin-top: 12px; }
 .rejoin-table { font-variant-numeric: tabular-nums; min-width: 640px; }
 .rejoin-table th[scope="row"] {

@@ -235,6 +235,32 @@
       <details class="race-details"><summary>Why this call</summary><div id="stratReasoning" class="small muted"></div><div id="stratMeta" class="small muted"></div><div id="stratLearning" class="small muted"></div></details>
     </section>
 
+    <details id="stratWeather" class="panel-surface strategy-main-col race-details weather-wall" aria-labelledby="stratWeatherHeading">
+      <summary><h2 id="stratWeatherHeading">Track conditions</h2><span id="stratWeatherPill" class="state-chip" data-state="neutral">none</span><span id="stratWeatherSummary" class="small muted">Waiting for weather telemetry.</span></summary>
+      <div class="weather-grid">
+        <div class="weather-box" aria-labelledby="stratSurfaceLabel">
+          <div class="eyebrow" id="stratSurfaceLabel">Surface</div>
+          <div class="weather-surface-head"><b id="stratSurfaceWord">—</b><span id="stratSurfaceValue" translate="no">—</span></div>
+          <div class="weather-bar" role="img" id="stratSurfaceBar" aria-label="Track wetness against the tyre crossovers"><span id="stratSurfaceFill"></span><i class="tick slick-inter"></i><i class="tick inter-wet"></i></div>
+          <div class="weather-scale small muted"><span>dry</span><span>damp</span><span class="cross-label" style="left:35%">S/I</span><span class="cross-label" style="left:75%">I/W</span><span>flooded</span></div>
+          <div id="stratSurfaceSources" class="small muted"></div>
+        </div>
+        <div class="weather-box" aria-labelledby="stratForecastLabel">
+          <div class="eyebrow" id="stratForecastLabel">Next 30 minutes</div>
+          <div class="table-scroll" tabindex="0" aria-labelledby="stratForecastLabel">
+            <table class="table weather-table"><caption class="sr-only">Forecast sky, the game's rain chance, the chance given the rain falling now, and track temperature</caption><tbody id="stratForecastRows"><tr><td class="empty">No forecast yet.</td></tr></tbody></table>
+          </div>
+        </div>
+      </div>
+      <div class="eyebrow">Surface to the flag</div>
+      <canvas id="stratWetness" class="analysis-canvas weather-canvas" width="1400" height="200" role="img" aria-label="Projected track wetness to the flag: the wettest and driest forecast cases, the expected surface, and the tyre crossovers"></canvas>
+      <div class="table-scroll" tabindex="0" aria-label="Scrollable tyre costs in the projected conditions">
+        <table class="table weather-table"><caption class="sr-only">What each tyre costs now and to the flag in the projected conditions</caption><thead><tr><th scope="col">Tyre</th><th scope="col">Now</th><th scope="col">To the flag</th><th scope="col">Stop</th><th scope="col">Net against staying</th></tr></thead><tbody id="stratWeatherTyres"><tr><td colspan="5" class="empty">Tyre costs appear once the wet model runs.</td></tr></tbody></table>
+      </div>
+      <div id="stratWeatherConfirm" class="small"></div>
+      <div id="stratWeatherCalibration" class="small muted">The tyre curves are estimates that have not yet been fitted to recorded wet races.</div>
+    </details>
+
     <details class="panel-surface strategy-main-col race-details" aria-labelledby="stratPlannerHeading">
       <summary><h2 id="stratPlannerHeading">Plan a race</h2></summary><span id="stratPlannerBasis" class="field-help">Uses your stored tyre evidence for this circuit.</span>
       <form id="stratPlannerForm" class="whatif-controls" novalidate>
@@ -961,7 +987,10 @@ function renderLiveCar(s,now=Date.now()){
   const rain15=Array.isArray(s.weather_forecast)?s.weather_forecast.find(sample=>sample?.time_offset_min===15&&finite(sample.rain_pct)&&sample.rain_pct>=0&&sample.rain_pct<=100):null;
   const forecast=rain15?i18n.t('rain at 15 min {rain}',{rain:value(rain15.rain_pct,'%')}):i18n.t('15-min rain forecast unavailable');
   /* s.weather is one of the game's fixed weather names (udp.py WEATHER, or "Unknown"). */
-  $('weather').textContent=!session?i18n.t('Unavailable'):`${s.weather?i18n.t(s.weather):i18n.t('Unavailable')} · ${forecast}`+(finite(wx.wetness)?` · ${i18n.t('track {surface}',{surface:surfaceWord(wx.wetness)})}${wx.trend&&wx.trend!=='steady'?` (${wx.trend==='wetting'?i18n.t('wetting'):wx.trend==='drying'?i18n.t('drying'):wx.trend})`:''}`:'');
+  /* A weather stop that is called leads the line, in the warning tone: the same call the radio makes, from the same published crossover. */
+  const fittedTyre=String(s.tyre?.compound||'').toUpperCase(),wxCompound=String(wx.compound||'').toUpperCase(),wxBox=session&&wx.worth_stopping&&Number.isInteger(wx.box_lap)&&wxCompound&&wxCompound!==fittedTyre;
+  $('weather').className=wxBox?'warn':'';
+  $('weather').textContent=!session?i18n.t('Unavailable'):wxBox?i18n.t('BOX lap {lap} · {tyre} — track {surface}',{lap:wx.box_lap,tyre:wxCompound.toLowerCase(),surface:surfaceWord(Number(wx.wetness)||0)}):`${s.weather?i18n.t(s.weather):i18n.t('Unavailable')} · ${forecast}`+(finite(wx.wetness)?` · ${i18n.t('track {surface}',{surface:surfaceWord(wx.wetness)})}${wx.trend&&wx.trend!=='steady'?` (${wx.trend==='wetting'?i18n.t('wetting'):wx.trend==='drying'?i18n.t('drying'):wx.trend})`:''}`:'');
   const source=s.source_mode==='replay'?i18n.t('Recorded replay'):s.source_mode==='demo'?i18n.t('Sample data'):i18n.t('Live telemetry');
   $('carDataStatus').textContent=!live?i18n.t('Current car data unavailable'):telemetry&&status&&damage?source:source+' · '+i18n.t('some car readings unavailable');
   $('carDataStatus').className='small '+(telemetry&&status&&damage?'muted':'warn');

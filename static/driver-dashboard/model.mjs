@@ -32,6 +32,11 @@ export function raceFlag(s,{fresh=true}={}) {
   if((!p&&!f)||(p&&!['green','racing'].includes(p))||(f&&!['none','green'].includes(f)))return makeFlag('unknown','#91a6b8',i18n.t('RACE CONTROL'),i18n.t('Status unavailable. Follow in-game race control.'));
   return makeFlag('green','#49d17d',i18n.t('GREEN FLAG'),i18n.t('Track clear. Racing.'));
 }
+/* The surface word and the weather stop, from the crossover the strategy engine published: the radio's call, not a second opinion. */
+function surfaceWord(wx){const w=finite(wx?.wetness);if(w===null)return null;return w>=.85?i18n.t('flooded'):w>=.75?i18n.t('fully wet'):w>=.35?i18n.t('wet'):w>=.15?i18n.t('damp'):i18n.t('dry')}
+function weatherCall(s){const wx=s.strategy?.weather_crossover||{},compound=String(wx.compound||'').toUpperCase(),fitted=String(s.tyre?.compound||'').toUpperCase();
+  if(!wx.worth_stopping||!Number.isInteger(wx.box_lap)||!compound||compound===fitted)return null;
+  return i18n.t('Box lap {lap} for {tyre}',{lap:wx.box_lap,tyre:compound.toLowerCase()})}
 export function normalizeState(s,{ageMs=0,transport='live',now=Date.now()}={}) {
   if(!s||typeof s!=='object')s={};
   const freshGroup=id=>transport==='demo'||(finite(s.packet_group_freshness?.[id])!==null&&(now/1000-s.packet_group_freshness[id])>=-5&&(now/1000-s.packet_group_freshness[id])<5);
@@ -94,6 +99,7 @@ export function normalizeState(s,{ageMs=0,transport='live',now=Date.now()}={}) {
     throttle:carData?input(s.throttle):null,brake:carData?input(s.brake):null,steer:carData&&finite(s.steer)!==null?Math.min(1,Math.max(-1,s.steer)):null,
     lateral:motionData?finite(s.lateral_g):null,longitudinal:motionData?finite(s.longitudinal_g):null,
     weather:sessionData?String(s.weather||i18n.t('Unavailable')):i18n.t('Unavailable'),timeLeft:sessionData?finite(s.session_time_left_s):null,
+    surfaceWord:sessionData?surfaceWord(s.strategy?.weather_crossover):null,weatherCall:sessionData?weatherCall(s):null,
     progress:lapData&&positive(s.track_length_m)!==null&&finite(s.lap_distance_m)!==null?Math.min(100,Math.max(0,s.lap_distance_m/s.track_length_m*100)):null,
     damage:mapValues(s.damage,['front_left_wing','front_right_wing','rear_wing','floor','diffuser','sidepod','engine','gearbox']),
     components:{...mapValues(s.component_wear,['ice','tc','mguk','mguh','es','ce']),mguh:damageData&&regulations2026===false?percent(s.component_wear?.mguh):null},

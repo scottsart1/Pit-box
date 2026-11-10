@@ -1768,6 +1768,8 @@ class StrategyEngine:
             "uncertainty_s": decision["uncertainty_s"],
             "pit_loss_s": round(float(effective_pit_loss_s), 1),
             "remaining_laps": remaining,
+            "dry_base_lap_s": decision.get("cost_base_lap_s", base_lap_s),
+            "lap_s": round(float(base_lap_s), 3),
             "ask_driver": decision["should_ask_driver"],
             "driver_question": decision["driver_question"],
             "confirmed": decision.get("confirmed", True),

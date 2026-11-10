@@ -26,6 +26,10 @@ const view = {
   rivals: null,
   rivalsFetchedAt: 0,
   rejoinSignature: "",
+  weather: null,
+  weatherFetchedAt: 0,
+  weatherWasRelevant: false,
+  weatherOpenedByUser: false,
   logSignature: "",
   radioSeq: -1,
   radioShown: [],
@@ -572,6 +576,234 @@ async function refreshRivals(s) {
   }
 }
 
+/* ---- Track conditions --------------------------------------------------------- */
+
+/* The five weather call levels, and the chip tone each is shown in: green for
+   none and watch, amber for ask and stand by, red for box. */
+const WEATHER_TONES = { none: "healthy", watch: "healthy", ask: "warning", "stand by": "warning", box: "error" };
+const sourceLabel = (name) => ({
+  surface_model: i18n.t("surface model"), lap_pace: i18n.t("lap pace"), sector_pace: i18n.t("sector pace"),
+  split_field: i18n.t("split field"), driver: i18n.t("your report"),
+}[name] || name);
+
+function fixed(value, digits = 2) {
+  return Number.isFinite(Number(value)) && value !== null ? Number(value).toFixed(digits) : "—";
+}
+
+function signed(value, digits = 1) {
+  if (!Number.isFinite(Number(value)) || value === null) return "—";
+  const number = Number(value);
+  return `${number > 0 ? "+" : number < 0 ? "−" : ""}${Math.abs(number).toFixed(digits)}`;
+}
+
+async function refreshWeather() {
+  const now = Date.now();
+  if (now - view.weatherFetchedAt < 5_000) return;
+  view.weatherFetchedAt = now;
+  try {
+    view.weather = await api("/api/strategy/weather");
+  } catch {
+    view.weather = null;
+  }
+  renderWeather(view.weather);
+}
+
+function renderWeather(picture) {
+  const section = byId("stratWeather");
+  if (!section) return;
+  const pill = byId("stratWeatherPill");
+  const summary = byId("stratWeatherSummary");
+  if (!picture || picture.available === false) {
+    pill.textContent = i18n.t("none");
+    pill.dataset.state = "neutral";
+    summary.textContent = i18n.t("Waiting for weather telemetry.");
+    return;
+  }
+  const call = picture.call || {};
+  const label = call.label || "none";
+  pill.dataset.state = WEATHER_TONES[label] || "neutral";
+  pill.textContent = label === "box" || label === "stand by"
+    ? [i18n.t(label), call.compound ? `${String(call.compound).toLowerCase()}s` : null,
+      Number.isInteger(call.box_lap) ? i18n.t("lap {lap}", { lap: call.box_lap }) : null].filter(Boolean).join(" · ")
+    : i18n.t(label);
+  const surface = picture.surface || {};
+  if (!picture.relevant) {
+    summary.textContent = i18n.t("Dry. No rain forecast inside the race.");
+    if (!view.weatherOpenedByUser) section.open = false;
+  } else {
+    summary.textContent = i18n.t("Track {surface} · {wetness}", { surface: i18n.t(surface.word || "dry"), wetness: fixed(surface.wetness) });
+    if (!view.weatherWasRelevant && !view.weatherOpenedByUser) section.open = true;
+  }
+  view.weatherWasRelevant = !!picture.relevant;
+
+  byId("stratSurfaceWord").textContent = i18n.t(surface.word || "dry").toUpperCase();
+  byId("stratSurfaceValue").textContent = fixed(surface.wetness);
+  byId("stratSurfaceFill").style.width = `${Math.max(0, Math.min(100, Number(surface.wetness || 0) * 100))}%`;
+  const sources = surface.sources || {};
+  const parts = [[i18n.t("model"), sources.surface_model], [i18n.t("pace"), sources.lap_pace],
+    [i18n.t("sectors"), sources.sector_pace], [i18n.t("driver"), sources.driver]]
+    .filter(([, value]) => value !== null && value !== undefined)
+    .map(([name, value]) => `${name} ${fixed(value)}`);
+  const cars = Number(surface.field_cars || 0);
+  const trend = surface.trend && surface.trend !== "steady" ? i18n.t(surface.trend) : null;
+  const drop = surface.flags?.field_surface_temp_drop_c;
+  byId("stratSurfaceSources").textContent = [parts.join(" · "),
+    cars ? i18n.tp(cars, "{count} car", "{count} cars", { count: cars }) : null, trend,
+    Number.isFinite(Number(drop)) && drop !== null ? i18n.t("tyre surface {drop}° cooler than dry running", { drop: fixed(drop, 0) }) : null]
+    .filter(Boolean).join(" · ");
+
+  renderForecast(picture.forecast || []);
+  drawWetness(picture);
+  renderWeatherTyres(picture.tyres || []);
+  const confirmed = (call.confirmed_by || []).map(sourceLabel);
+  const confirmText = call.level >= 2 && confirmed.length
+    ? i18n.t("Confirmed by {sources}", { sources: confirmed.join(", ") })
+    : call.level >= 3 && call.confirmed === false ? i18n.t("Awaiting a measured confirmation") : "";
+  const margin = Number.isFinite(Number(call.shows_s)) && Number.isFinite(Number(call.needs_s)) && call.level >= 2
+    ? i18n.t("needs {needs} s, shows {shows} s", { needs: fixed(call.needs_s, 0), shows: fixed(call.shows_s, 0) }) : "";
+  byId("stratWeatherConfirm").textContent = [confirmText, margin].filter(Boolean).join(" · ");
+  byId("stratWeatherCalibration").hidden = picture.calibration !== "judgement";
+}
+
+function renderForecast(rows) {
+  const body = byId("stratForecastRows");
+  body.replaceChildren();
+  const shown = rows.filter((row) => Number(row.in_min) <= 30).slice(0, 6);
+  if (!shown.length) {
+    const row = document.createElement("tr"), cell = document.createElement("td");
+    cell.className = "empty";
+    cell.textContent = i18n.t("No forecast yet.");
+    row.appendChild(cell);
+    body.appendChild(row);
+    return;
+  }
+  const lines = [
+    ["", (r) => Number(r.in_min) === 0 ? i18n.t("now") : `+${r.in_min}`],
+    [i18n.t("sky"), (r) => r.sky ? i18n.t(r.sky) : "—"],
+    [i18n.t("game"), (r) => Number.isFinite(Number(r.chance_pct)) && r.chance_pct !== null ? `${r.chance_pct}%` : "—"],
+    [i18n.t("given the sky now"), (r) => Number.isFinite(Number(r.chance_given_now_pct)) && r.chance_given_now_pct !== null ? `${r.chance_given_now_pct}%` : "—"],
+    [i18n.t("track"), (r) => Number.isFinite(Number(r.track_temp_c)) && r.track_temp_c !== null ? `${r.track_temp_c}°` : "—"],
+  ];
+  for (const [label, value] of lines) {
+    const row = document.createElement("tr");
+    const head = document.createElement("th");
+    head.scope = "row";
+    head.textContent = label;
+    if (label === i18n.t("given the sky now")) {
+      head.title = i18n.t("The game's chance, adjusted for the rain falling or not falling right now.");
+    }
+    row.appendChild(head);
+    for (const item of shown) {
+      const cell = document.createElement(label ? "td" : "th");
+      if (!label) cell.scope = "col";
+      cell.textContent = value(item);
+      row.appendChild(cell);
+    }
+    body.appendChild(row);
+  }
+}
+
+function drawWetness(picture) {
+  const canvas = byId("stratWetness");
+  if (!canvas?.getContext) return;
+  const context = canvas.getContext("2d");
+  // Draw in CSS pixels, so the lap and crossover labels stay readable on a
+  // phone instead of shrinking with a 1400-pixel bitmap.
+  const scale = globalThis.devicePixelRatio || 1;
+  const width = canvas.clientWidth || canvas.width, height = canvas.clientHeight || canvas.height;
+  if (canvas.clientWidth) {
+    canvas.width = Math.round(width * scale);
+    canvas.height = Math.round(height * scale);
+    context.setTransform(scale, 0, 0, scale, 0, 0);
+  }
+  context.clearRect(0, 0, width, height);
+  const projection = picture.projection;
+  const mean = projection?.mean || [];
+  context.font = "12px Segoe UI, system-ui, sans-serif";
+  if (!mean.length) {
+    context.fillStyle = "#91a6b8";
+    context.fillText(i18n.t("The projection draws once the wet model runs."), 20, 34);
+    return;
+  }
+  const left = 36, right = 12, top = 10, bottom = 22;
+  const plotWidth = width - left - right, plotHeight = height - top - bottom;
+  const count = Math.max(2, mean.length);
+  const x = (index) => left + (index / (count - 1)) * plotWidth;
+  const y = (wetness) => top + (1 - Math.max(0, Math.min(1, wetness))) * plotHeight;
+  const band = [projection.wet_case || mean, projection.dry_case || mean];
+  context.fillStyle = "rgba(63,134,255,0.18)";
+  context.beginPath();
+  band[0].forEach((value, index) => (index ? context.lineTo(x(index), y(value)) : context.moveTo(x(index), y(value))));
+  for (let index = band[1].length - 1; index >= 0; index -= 1) context.lineTo(x(index), y(band[1][index]));
+  context.closePath();
+  context.fill();
+  const crossovers = picture.surface?.crossovers || {};
+  for (const [name, value] of [["S/I", crossovers.slick_inter], ["I/W", crossovers.inter_wet]]) {
+    if (!Number.isFinite(Number(value))) continue;
+    context.strokeStyle = "#ffc15c";
+    context.setLineDash([6, 6]);
+    context.beginPath();
+    context.moveTo(left, y(value));
+    context.lineTo(width - right, y(value));
+    context.stroke();
+    context.setLineDash([]);
+    context.fillStyle = "#ffc15c";
+    context.fillText(name, 8, y(value) + 5);
+  }
+  context.strokeStyle = "#3f86ff";
+  context.lineWidth = 3;
+  context.beginPath();
+  mean.forEach((value, index) => (index ? context.lineTo(x(index), y(value)) : context.moveTo(x(index), y(value))));
+  context.stroke();
+  context.lineWidth = 1;
+  const first = Number(projection.first_lap || 0);
+  const box = Number(picture.call?.box_lap);
+  if (Number.isInteger(box) && box >= first && box - first < count) {
+    context.strokeStyle = "#ff6969";
+    context.beginPath();
+    context.moveTo(x(box - first), top);
+    context.lineTo(x(box - first), height - bottom);
+    context.stroke();
+  }
+  context.fillStyle = "#91a6b8";
+  const step = Math.max(1, Math.round(count / 8));
+  for (let index = 0; index < count; index += step) {
+    context.fillText(String(first + index), x(index) - 8, height - 8);
+  }
+}
+
+function renderWeatherTyres(tyres) {
+  const body = byId("stratWeatherTyres");
+  body.replaceChildren();
+  if (!tyres.length) {
+    const row = document.createElement("tr"), cell = document.createElement("td");
+    cell.colSpan = 5;
+    cell.className = "empty";
+    cell.textContent = i18n.t("Tyre costs appear once the wet model runs.");
+    row.appendChild(cell);
+    body.appendChild(row);
+    return;
+  }
+  for (const tyre of tyres) {
+    const row = document.createElement("tr");
+    const net = tyre.net_vs_staying_s;
+    const cells = [
+      `${tyre.compound}${tyre.fitted ? " ●" : ""}`,
+      tyre.loss_now_s_per_lap === null || tyre.loss_now_s_per_lap === undefined ? "—" : `+${fixed(tyre.loss_now_s_per_lap, 1)} s/lap`,
+      `${fixed(tyre.cost_to_flag_s, 0)} s`,
+      tyre.stop_cost_s === undefined ? "—" : `${fixed(tyre.stop_cost_s, 1)} s`,
+      net === undefined ? "—" : `${signed(net, 0)} s${Number.isInteger(tyre.box_lap) ? ` ← ${i18n.t("box lap {lap}", { lap: tyre.box_lap })}` : ""}`,
+    ];
+    cells.forEach((text, index) => {
+      const cell = document.createElement("td");
+      cell.textContent = text;
+      if (index === 4 && Number.isFinite(Number(net))) cell.className = Number(net) < 0 ? "good" : "warn";
+      row.appendChild(cell);
+    });
+    body.appendChild(row);
+  }
+}
+
 /* ---- Where you come out ---------------------------------------------------- */
 
 function shortName(name) {
@@ -1041,6 +1273,7 @@ function renderAll(s) {
   renderPlans(s);
   drawTimeline(s);
   renderRejoinMap(s);
+  refreshWeather();
   renderRadio(s);
   refreshRivals(s);
 }
@@ -1065,6 +1298,7 @@ if (HAS_DOM) {
     post("/api/strategy/recompute").catch(() => {});
   });
   byId("stratWhatIfForm")?.addEventListener("submit", runWhatIf);
+  byId("stratWeather")?.querySelector("summary")?.addEventListener("click", () => { view.weatherOpenedByUser = true; });
   byId("stratTimeline")?.addEventListener("click", handleTimelineClick);
   byId("stratPlannerForm")?.addEventListener("submit", buildRacePlans);
   byId("stratAskSend")?.addEventListener("click", sendAsk);
@@ -1077,4 +1311,4 @@ if (HAS_DOM) {
   });
 }
 
-export { planKey, describeEvidence, renderCall, renderPlans, renderRejoinMap, loadDecisionLog, renderRadio, sendAsk, COMPOUND_COLORS };
+export { planKey, describeEvidence, renderCall, renderPlans, renderRejoinMap, renderWeather, loadDecisionLog, renderRadio, sendAsk, COMPOUND_COLORS };

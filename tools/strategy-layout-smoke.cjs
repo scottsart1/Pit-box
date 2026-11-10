@@ -11,7 +11,7 @@ const {chromium} = require('playwright');
 const root = path.resolve(__dirname, '..');
 const staticRoot = process.env.PITBOX_STATIC_ROOT || path.join(root, 'static');
 const baseline = process.argv.includes('--baseline');
-const sizes = [[390,844], [428,926], [844,390], [960,800], [961,800],
+const sizes = [[390,844], [428,926], [820,1180], [844,390], [960,800], [961,800],
   [1024,768], [1180,820], [1181,820], [1440,900], [1440,450]];
 
 (async () => {
@@ -61,6 +61,18 @@ const sizes = [[390,844], [428,926], [844,390], [960,800], [961,800],
             row('Car behind', () => '<td>ALB 2.1</td>'),
             row('Air', () => '<td class="is-clear">clear air</td>'),
           ].join('');
+          // Track conditions, open, with a full forecast and tyre table.
+          document.getElementById('stratWeather').open = true;
+          document.getElementById('stratWeatherPill').textContent = 'box';
+          const minutes = [0, 5, 10, 15, 20, 30];
+          const line = (label, cell) => `<tr><th scope="row">${label}</th>${minutes.map(cell).join('')}</tr>`;
+          document.getElementById('stratForecastRows').innerHTML = [
+            line('', (m) => `<th scope="col">${m ? '+' + m : 'now'}</th>`),
+            line('sky', () => '<td>Light rain</td>'), line('game', () => '<td>50%</td>'),
+            line('given the sky now', () => '<td>90%</td>'), line('track', () => '<td>24°</td>'),
+          ].join('');
+          document.getElementById('stratWeatherTyres').innerHTML = ['MEDIUM', 'INTER', 'WET'].map((tyre) =>
+            `<tr><td>${tyre}</td><td>+4.1 s/lap</td><td>118 s</td><td>24.5 s</td><td>−62 s ← box lap 13</td></tr>`).join('');
         });
         const layout = await page.evaluate(() => {
           const box = el => { const r = el.getBoundingClientRect(); return {top:r.top,bottom:r.bottom,left:r.left,right:r.right}; };
@@ -75,6 +87,9 @@ const sizes = [[390,844], [428,926], [844,390], [960,800], [961,800],
             scrollWidth:workspace.scrollWidth, clientWidth:workspace.clientWidth};
         });
         const label = `${width}x${height} ${populated ? 'populated' : 'empty'}`;
+        const pill = await page.locator('#stratWeatherPill').innerText();
+        assert.ok(['none', 'watch', 'ask', 'stand by', 'box'].includes(pill.trim().toLowerCase().split(' · ')[0]),
+          `${label}: the weather pill says one of the five levels (${pill})`);
         assert.ok(layout.scrollHeight > layout.clientHeight, `${label}: page must scroll`);
         assert.ok(layout.scrollWidth <= layout.clientWidth + 1, `${label}: no horizontal overflow`);
         if (width <= 1180) {
