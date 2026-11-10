@@ -45,13 +45,15 @@ async def test_explicit_lap_and_compound_are_used_when_the_text_names_neither(st
     assert unparsed["available"] is True
     assert (unparsed["box_lap"], unparsed["compound"]) == (12, "HARD")
 
-    chosen = await engine.what_if("boxen", lap=14, compound="SOFT")
+    # The stop is priced by the planner, so the tyre has to be one a set
+    # exists for: a medium spare is in the inventory, a soft is not.
+    chosen = await engine.what_if("boxen", lap=14, compound="MEDIUM")
     assert chosen["available"] is True
-    assert chosen["scenario"] == "Box lap 14 for SOFT"
-    assert (chosen["box_lap"], chosen["compound"]) == (14, "SOFT")
+    assert chosen["scenario"] == "Box lap 14 for MEDIUM"
+    assert (chosen["box_lap"], chosen["compound"]) == (14, "MEDIUM")
 
     # The same stop written as English text prices identically.
-    english = await engine.what_if("box lap 14 for softs")
+    english = await engine.what_if("box lap 14 for mediums")
     assert english["scenario"] == chosen["scenario"]
     for key in ("projected_time_s", "risk_adjusted_time_s", "delta_to_best_s",
                 "projected_finish_wear_pct", "feasible"):

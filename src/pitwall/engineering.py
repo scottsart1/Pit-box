@@ -626,7 +626,7 @@ def strategic_rivals(state: dict) -> dict:
     strategy = state.get("strategy") or {}
     plan = strategy.get("recommended") or {}
     player_time = number(plan.get("projected_time_s"))
-    if state.get("mode_profile") != "race" or player_time is None:
+    if state.get("mode_profile") not in {"race", "sprint"} or player_time is None:
         return {
             "available": False,
             "reason": "A race and a current finish projection are needed.",
@@ -668,9 +668,8 @@ def strategic_rivals(state: dict) -> dict:
     return {
         "available": bool(rivals),
         "rivals": rivals[:5],
-        "player_projected_position": plan.get(
-            "expected_position", plan.get("projected_position")
-        ),
+        "player_projected_position": plan.get("projected_finish_position"),
+        "player_expected_position": plan.get("expected_finish_position"),
         "player_stops_remaining": plan.get("stops_remaining"),
         "caveat": "Forecasts depend on the selected plan and estimated rival stops. Stops owed are estimates, not observed obligations; missing gaps lower confidence.",
     }

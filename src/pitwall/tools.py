@@ -2735,25 +2735,6 @@ class TelemetryTools:
             "sets": state.get("tyre_sets", []),
         }
 
-    @staticmethod
-    def _stint_time_s(plan: dict[str, Any]) -> float | None:
-        """A plan's conservative stint time plus pit and penalty time.
-
-        This is the quantity the strategy engine's what_if prices for a
-        hypothetical stop, so the two can be compared like for like.
-        """
-        stints = plan.get("stint_models") or []
-        try:
-            if not stints:
-                return None
-            return (
-                sum(float(stint["conservative_time_s"]) for stint in stints)
-                + float(plan.get("total_pit_cost_s") or 0.0)
-                + float(plan.get("pending_finish_penalty_s") or 0.0)
-            )
-        except (KeyError, TypeError, ValueError):
-            return None
-
     _WHAT_IF_COMPOUND_WORDS = ("soft", "medium", "hard", "inter", "wet")
 
     @classmethod
@@ -2784,15 +2765,12 @@ class TelemetryTools:
     async def what_if(self, scenario: str) -> dict[str, Any]:
         """Price one hypothetical stop, framed against the ranked plan.
 
-        The engine's what_if sums tyre-model stint time, pit loss and pending
-        penalties for a single stop. The ranked plans also price rejoin traffic
-        and rank on finishing position, so the engine's delta against the
-        recommended plan's risk-adjusted time compares two different
-        quantities; on the Hungaroring demo race it called boxing six laps early
-        4.6 s quicker while the ranking kept the later stop. The engineer gets
-        the same simulation with a like-for-like time comparison, the ranked
-        plan it matches when there is one, and the recommended plan it does not
-        replace.
+        The engine prices the stop with the same planner as the ranked plans
+        (weather, tyre sets, rejoin traffic, finishing position and the same
+        uncertainty draws), so its time and position deltas against the
+        recommended plan compare like with like. The engineer also gets the
+        ranked plan it matches when there is one, and the recommended plan it
+        does not replace: the ranking decides on finishing position first.
 
         The engine fills a missing lap or compound with a default, so "stay
         out", "go long" or "two-stop" came back priced as a stop nobody asked
@@ -2836,10 +2814,16 @@ class TelemetryTools:
         view: dict[str, Any] = {
             key: result[key]
             for key in ("available", "scenario", "box_lap", "compound", "feasible",
-                        "projected_finish_wear_pct", "pending_finish_penalty_s")
+                        "projected_finish_wear_pct", "pending_finish_penalty_s",
+                        "projected_finish_position", "projected_rejoin_position",
+                        "traffic_cost_s", "weather_priced")
             if key in result
         }
-        view["legal"] = rule.get("compliant") if rule else None
+        view["legal"] = result.get("legal", rule.get("compliant") if rule else None)
+        if "matches_recommended" in result:
+            view["is_recommended"] = bool(result["matches_recommended"])
+        if result.get("position_delta_to_best") is not None:
+            view["position_delta_vs_recommended"] = result["position_delta_to_best"]
         if assumed:
             view["assumed"] = assumed
         neutralisation = plan.get("neutralisation") or {}
@@ -2850,11 +2834,8 @@ class TelemetryTools:
             view["compound_rule"] = self._pick(
                 rule, ("compliant", "change_outstanding", "eligible_next_compounds")
             )
-        baseline = self._stint_time_s(recommended)
-        if baseline is not None and result.get("risk_adjusted_time_s") is not None:
-            view["time_delta_vs_recommended_s"] = round(
-                float(result["risk_adjusted_time_s"]) - baseline, 2
-            )
+        if result.get("delta_to_best_s") is not None:
+            view["time_delta_vs_recommended_s"] = round(float(result["delta_to_best_s"]), 2)
         target = (result.get("box_lap"), str(result.get("compound") or "").upper())
         ranked = [item for item in plan.get("plans") or [] if isinstance(item, dict)]
         match = None
@@ -2884,16 +2865,17 @@ class TelemetryTools:
                 "projected_finish_position", "projected_rejoin_position",
             ))
         view["basis"] = (
-            "Simplified single-stop simulation: tyre-model stint time, pit loss and "
-            "pending penalties only. It leaves out rejoin traffic and the finishing-"
-            "position ranking that choose the recommended plan, so it answers the "
-            "hypothetical but does not replace the recommended call. Among equal "
-            "finishing positions the ranking prefers the later stop, so time alone does "
-            "not change the call. time_delta_vs_recommended_s compares the same "
-            "tyre-time terms of both; positive is slower. ranked_equivalent is this "
-            "stop's entry in the ranked plans, with its traffic, finishing position and "
-            "risk-adjusted delta, when it is one of them. assumed lists any lap or "
-            "compound the scenario did not name."
+            "Priced by the same planner as the ranked plans: tyre model, weather, "
+            "tyre sets, pit loss, rejoin traffic and finishing position, on the same "
+            "uncertainty draws. It answers the hypothetical but does not replace the "
+            "recommended call, which is ranked on finishing position first. Among "
+            "equal finishing positions the ranking prefers the later stop, so time "
+            "alone does not change the call. time_delta_vs_recommended_s is this "
+            "stop's risk-adjusted race time minus the recommended plan's; positive is "
+            "slower. position_delta_vs_recommended is its projected finishing "
+            "position minus the recommended plan's; positive is further back. "
+            "ranked_equivalent is this stop's entry in the ranked plans when it is one "
+            "of them. assumed lists any lap or compound the scenario did not name."
         )
         return self._round_floats(view)
 

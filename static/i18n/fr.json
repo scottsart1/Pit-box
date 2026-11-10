@@ -2413,6 +2413,8 @@
  "{runs} automatic runs · {groups} saved lap groups. Choose your groups or compare the automatic runs.": "{runs} runs automatiques · {groups} groupes de tours enregistrés. Choisis tes groupes ou compare les runs automatiques.",
  "{scenario}: +{delta}s slower than the recommended plan (estimate).": "{scenario} : +{delta}s plus lent que le plan recommandé (estimation).",
  "{scenario}: level with the recommended plan (estimate).": "{scenario} : à égalité avec le plan recommandé (estimation).",
+ "{scenario}: that is the recommended plan.": "{scenario} : c'est le plan recommandé.",
+ "Finishes P{position}.": "Arrivée P{position}.",
  "{scenario}: {delta}s quicker than the recommended plan (estimate).": "{scenario} : {delta}s plus rapide que le plan recommandé (estimation).",
  "{seconds} s ago": "il y a {seconds} s",
  "{seconds}s ahead": "{seconds}s devant",

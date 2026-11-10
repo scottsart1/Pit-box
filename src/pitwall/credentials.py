@@ -109,6 +109,14 @@ PROVIDERS: dict[str, ProviderSpec] = {
 }
 
 
+def provider_label(spec: ProviderSpec) -> str:
+    """The name shown for a provider; the custom endpoint can be named in settings."""
+    if spec.id == "custom":
+        named = str(settings.custom_llm_label or "").strip()
+        return named or spec.label
+    return spec.label
+
+
 class CredentialError(ValueError):
     """The supplied key was rejected before anything was written."""
 
@@ -364,7 +372,7 @@ async def verify_key(key: str | None = None, provider: str = "openai") -> tuple[
             )
     except Exception as exc:  # noqa: BLE001 - surfaced to the user as text
         return False, _friendly_verification_error(exc, spec)
-    return True, f"Key accepted by {spec.label}."
+    return True, f"Key accepted by {provider_label(spec)}."
 
 
 def _friendly_verification_error(exc: BaseException, spec: ProviderSpec) -> str:
@@ -372,7 +380,7 @@ def _friendly_verification_error(exc: BaseException, spec: ProviderSpec) -> str:
     status = getattr(exc, "status_code", None)
     if status in (401, 403) or "Authentication" in name or "PermissionDenied" in name:
         return (
-            f"{spec.label} rejected that key. Check it was copied in full and "
+            f"{provider_label(spec)} rejected that key. Check it was copied in full and "
             "is active."
         )
     if status == 429 or "RateLimit" in name:
@@ -381,9 +389,9 @@ def _friendly_verification_error(exc: BaseException, spec: ProviderSpec) -> str:
             f"on {spec.console_name}."
         )
     if status is not None and 500 <= int(status) < 600:
-        return f"{spec.label} is unavailable right now. Try again shortly."
+        return f"{provider_label(spec)} is unavailable right now. Try again shortly."
     if "Connection" in name or "Timeout" in name:
-        return f"Could not reach {spec.label}. Check this PC's internet connection."
+        return f"Could not reach {provider_label(spec)}. Check this PC's internet connection."
     return "Could not verify the key. Check the connection and try again."
 
 
@@ -399,6 +407,7 @@ __all__ = [
     "current_status",
     "env_path",
     "mask_key",
+    "provider_label",
     "provider_spec",
     "save_key",
     "validate_key",

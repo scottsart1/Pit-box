@@ -2485,6 +2485,7 @@ class StrategyEngine:
         state: dict[str, Any],
         effective_pit_loss_s: float,
         samples: int,
+        risk_quantile: float = 0.75,
     ) -> dict[str, Any]:
         samples = max(80, min(1200, int(samples)))
         # Compare every candidate against the same race draws. A different
@@ -2558,6 +2559,11 @@ class StrategyEngine:
             "p50_s": round(float(np.quantile(outcomes, 0.50)), 2),
             "p75_s": round(float(np.quantile(outcomes, 0.75)), 2),
             "p90_s": round(float(np.quantile(outcomes, 0.90)), 2),
+            # The configured quantile the plan is ranked on.
+            "risk_quantile": round(min(0.95, max(0.5, float(risk_quantile))), 3),
+            "risk_s": round(
+                float(np.quantile(outcomes, min(0.95, max(0.5, float(risk_quantile))))), 2
+            ),
             "mean_s": round(float(np.mean(outcomes)), 2),
             "uncertainty_s": round(float(np.std(outcomes)), 2),
             "evidence_samples": evidence,
@@ -3831,6 +3837,7 @@ class StrategyEngine:
                 state,
                 effective_pit_loss,
                 settings.strategy_monte_carlo_samples,
+                settings.strategy_risk_quantile,
             )
             outcome_times = plan["monte_carlo"].pop("_outcome_times_s")
             plan.update(
@@ -3838,8 +3845,7 @@ class StrategyEngine:
                     plan, state, rival_projections, outcome_times
                 )
             )
-            risk_key = "p75_s" if settings.strategy_risk_quantile >= 0.70 else "p50_s"
-            plan["risk_adjusted_time_s"] = plan["monte_carlo"][risk_key]
+            plan["risk_adjusted_time_s"] = plan["monte_carlo"]["risk_s"]
         risk_appetite = str(
             state.get("strategy_risk_appetite")
             or state.get("driver_preferences", {}).get(
@@ -3915,7 +3921,9 @@ class StrategyEngine:
         override_match: dict[str, Any] | None = None
         override_warning = ""
         plan_tail: dict[str, Any] | None = None
-        if driver_override.get("enabled") and driver_override.get("locked") and not force_weather:
+        # A what-if is never replaced by the weather plan it is compared with.
+        honour_override = not force_weather or bool(state.get("_what_if"))
+        if driver_override.get("enabled") and driver_override.get("locked") and honour_override:
             full_plan = driver_override.get("plan") or {}
             if full_plan.get("compounds"):
                 # A whole-race plan constrains every stop that is left, not just
@@ -3959,7 +3967,7 @@ class StrategyEngine:
         if (
             driver_override.get("enabled")
             and driver_override.get("locked")
-            and not force_weather
+            and honour_override
             and plan_tail is None
         ):
             requested_lap = driver_override.get("next_box_lap")
@@ -3999,7 +4007,11 @@ class StrategyEngine:
             else:
                 override_warning = "No legal plan matches the driver override."
 
-        best = forced_weather_plan if force_weather else (override_match or automatic_best)
+        best = (
+            override_match if state.get("_what_if") and override_match is not None
+            else forced_weather_plan if force_weather
+            else (override_match or automatic_best)
+        )
         second = next((plan for plan in ranked if plan is not best), best)
         weather_override = None
         if force_weather and best is not automatic_best:
@@ -4937,6 +4949,13 @@ class StrategyEngine:
         ``lap`` and ``compound``, when given, are used as they are. Whichever
         is missing is read from ``scenario``, which understands English tyre
         names and the first one- or two-digit number as the stop lap.
+
+        The stop is priced by the same planner as the ranked plans, run on a
+        copy of the race with the stop as a driver constraint: the weather,
+        the physical tyre sets, rejoin traffic, the finishing position and the
+        uncertainty draws are then identical on both sides of the comparison.
+        A stand-alone stint sum priced an intermediate on a dry track and set
+        a deterministic total against the recommended plan's quantile.
         """
         state = await self.store.snapshot_analysis()
         historical = await self.database.tyre_history_model(
@@ -4956,87 +4975,78 @@ class StrategyEngine:
                 ),
                 None,
             )
+        current_lap = int(state.get("current_lap", 0) or 0)
+        total_laps = int(state.get("total_laps", 0) or 0)
         if lap is not None:
             requested_lap = int(lap)
         else:
             match = re.search(r"(?:lap\s*)?(\d{1,2})", text)
-            requested_lap = (
-                int(match.group(1)) if match else int(state.get("current_lap", 0)) + 1
-            )
-        requested_lap = max(int(state.get("current_lap", 0)), requested_lap)
+            requested_lap = int(match.group(1)) if match else current_lap + 1
+        # A stop is made at the end of a lap that is still to be completed.
+        requested_lap = max(current_lap, 1, requested_lap)
+        best = base.get("recommended", {}) or {}
         if compound is None:
-            compound = base.get("recommended", {}).get("fit_compound") or "HARD"
-        current_lap = int(state.get("current_lap", 0))
-        total_laps = int(state.get("total_laps", 0))
-        remaining = max(
-            0,
-            total_laps - current_lap + (1 if current_lap > 0 else 0),
-        )
-        first_laps = max(1, requested_lap - current_lap + 1)
-        if first_laps >= remaining:
+            compound = best.get("fit_compound") or "HARD"
+        scenario_name = f"Box lap {requested_lap} for {compound}"
+        if not base.get("available"):
             return {
-                "available": False,
+                "available": False, "scenario": scenario_name,
+                "reason": base.get("reason") or "No race strategy is available.",
+            }
+        if requested_lap >= total_laps:
+            return {
+                "available": False, "scenario": scenario_name,
                 "reason": "That stop is after the race distance.",
             }
-        style_factor, evidence = self._driver_wear_factor(state, historical)
-        base_lap = self._estimate_base_lap_s(state)
-        pre = self._simulate_stint(
-            state,
-            str(state["tyre"]["compound"]),
-            first_laps,
-            int(state["tyre"]["age_laps"]),
-            max(state["tyre"]["wear"] or [0]),
-            base_lap,
-            historical,
-            style_factor,
-            None,
+        query = deepcopy(state)
+        query["strategy_override"] = {
+            "enabled": True, "locked": True, "next_box_lap": requested_lap,
+            "next_compound": compound, "preferred_stops": 1,
+        }
+        query["_what_if"] = True
+        priced, _ = await self._compute_isolated(query, historical)
+        plan = priced.get("recommended", {}) or {}
+        compounds = [str(item).upper() for item in plan.get("compounds") or []]
+        if not (
+            (plan.get("box_laps") or [None])[0] == requested_lap
+            and len(compounds) == 2 and compounds[1] == compound
+        ):
+            warning = (plan.get("driver_override") or {}).get("warning")
+            return {
+                "available": False, "scenario": scenario_name,
+                "box_lap": requested_lap, "compound": compound,
+                "reason": (
+                    f"No {compound.lower()} set can be fitted at that stop."
+                    if compound not in self._available_sets(state)
+                    else warning or "No executable plan matches that stop."
+                ),
+            }
+        _, evidence = self._driver_wear_factor(state, historical)
+        delta = float(plan.get("risk_adjusted_time_s", 0.0)) - float(
+            best.get("risk_adjusted_time_s", plan.get("risk_adjusted_time_s", 0.0))
         )
-        post = self._simulate_stint(
-            state,
-            compound,
-            remaining - first_laps,
-            0,
-            0.0,
-            base_lap,
-            historical,
-            style_factor,
-            self._available_sets(state).get(compound),
-        )
-        neutral = self._neutralisation(state)
-        penalty = base.get("finish_penalty") or self._finish_penalty(state)
-        pending_penalty_s = float(penalty["pending_s"])
-        total = (
-            float(pre["expected_time_s"])
-            + float(neutral["effective_pit_loss_s"])
-            + float(post["expected_time_s"])
-            + pending_penalty_s
-        )
-        risk = (
-            float(pre["conservative_time_s"])
-            + float(neutral["effective_pit_loss_s"])
-            + float(post["conservative_time_s"])
-            + pending_penalty_s
-        )
-        best_time = float(base.get("recommended", {}).get("risk_adjusted_time_s", risk))
-        legality = self._compound_rule(state, [compound])
         return {
             "available": True,
-            "scenario": f"Box lap {requested_lap} for {compound}",
+            "scenario": scenario_name,
             # The same stop as values, so a screen can word it in its own language.
             "box_lap": requested_lap,
             "compound": compound,
-            "projected_time_s": round(total, 2),
-            "projected_time_before_penalties_s": round(total - pending_penalty_s, 2),
-            "pending_finish_penalty_s": pending_penalty_s,
-            "finish_penalty": penalty,
-            "risk_adjusted_time_s": round(risk, 2),
-            "delta_to_best_s": round(risk - best_time, 2),
-            "projected_finish_wear_pct": round(
-                float(post["projected_finish_wear_pct"]), 1
-            ),
-            "feasible": bool(
-                pre["feasible"] and post["feasible"] and legality["compliant"]
-            ),
-            "compound_rule": legality,
+            "projected_time_s": plan.get("projected_time_s"),
+            "projected_time_before_penalties_s": plan.get("projected_time_before_penalties_s"),
+            "pending_finish_penalty_s": plan.get("pending_finish_penalty_s"),
+            "finish_penalty": plan.get("finish_penalty"),
+            "risk_adjusted_time_s": plan.get("risk_adjusted_time_s"),
+            "delta_to_best_s": round(delta, 2),
+            "projected_finish_position": plan.get("projected_finish_position"),
+            "position_delta_to_best": int(plan.get("projected_finish_position", 0) or 0)
+            - int(best.get("projected_finish_position", 0) or 0),
+            "projected_rejoin_position": plan.get("projected_rejoin_position"),
+            "traffic_cost_s": plan.get("traffic_cost_s"),
+            "matches_recommended": self._radio_signature(plan) == self._radio_signature(best),
+            "projected_finish_wear_pct": plan.get("projected_finish_wear_pct"),
+            "feasible": bool(plan.get("feasible") and plan.get("legal")),
+            "legal": bool(plan.get("legal")),
+            "compound_rule": plan.get("compound_rule") or self._compound_rule(state, [compound]),
+            "weather_priced": bool(priced.get("weather_crossover")),
             "personal_wear_model": evidence,
         }

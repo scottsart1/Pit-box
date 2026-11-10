@@ -216,9 +216,6 @@ async def test_what_if_is_framed_against_the_ranked_plan_it_cannot_replace(stack
     await store.update(current_lap=55, total_laps=70, mode_profile="race", session_type="Race",
                        strategy={"available": True, "recommended": recommended, "plans": ranked,
                                  "confidence": "low"})
-    # Like-for-like baseline of the recommended plan: two stints and one stop.
-    baseline = 500.0 * 2 + 21.0
-
     async def engine_what_if(scenario, *, lap=None, compound=None):
         # Parses like StrategyEngine.what_if: an explicit lap wins, then the
         # first number in the text, then the next lap; never a past lap.
@@ -229,8 +226,9 @@ async def test_what_if_is_framed_against_the_ranked_plan_it_cannot_replace(stack
         return {
             "available": True, "scenario": f"Box lap {lap} for {compound}", "box_lap": lap,
             "compound": compound, "projected_time_s": 1015.123456, "risk_adjusted_time_s": 1016.0,
-            # Engine delta against the ranked plan's traffic-inclusive time.
-            "delta_to_best_s": -538.08, "projected_finish_wear_pct": 75.1, "feasible": True,
+            # The planner's delta against the recommended plan, like for like.
+            "delta_to_best_s": 4.2, "position_delta_to_best": 1, "matches_recommended": False,
+            "projected_finish_position": 8, "projected_finish_wear_pct": 75.1, "feasible": True,
             "pending_finish_penalty_s": 0.0,
             "finish_penalty": {"pending_s": 0.0, "basis": "x" * 120},
             "compound_rule": {"compliant": True, "change_outstanding": False,
@@ -243,7 +241,9 @@ async def test_what_if_is_framed_against_the_ranked_plan_it_cannot_replace(stack
     assert "delta_to_best_s" not in early
     # "This lap" is the current lap, as in the ranked plans, not the next one.
     assert early["box_lap"] == 55 and "assumed" not in early
-    assert early["time_delta_vs_recommended_s"] == round(1016.0 - baseline, 2)
+    assert early["time_delta_vs_recommended_s"] == 4.2
+    assert early["position_delta_vs_recommended"] == 1
+    assert early["is_recommended"] is False
     assert early["ranked_equivalent"] is None
     assert early["recommended_plan"]["instruction"] == "Box lap 62 for SOFT."
     assert "does not replace the recommended call" in early["basis"]
