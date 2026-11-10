@@ -469,9 +469,10 @@ async function refreshRivals() {
         const projection = { driver: String(rival.driver), position: String(rival.position), projected: String(rival.projected_position),
           gap: value(rival.projected_gap_s, " s"), compound: String(rival.compound), age: String(rival.tyre_age),
           stops: String(rival.estimated_stops_remaining), confidence: String(rival.confidence) };
-        output.append(node("p", rival.gap_assumed
+        const owed = rival.stop_owed ? " · " + i18n.t("second compound still owed") : "";
+        output.append(node("p", (rival.gap_assumed
           ? i18n.t("{driver} · now P{position} → projected P{projected} · {gap} at the finish · {compound}, age {age} · {stops} estimated stops · {confidence} confidence (gap assumed)", projection)
-          : i18n.t("{driver} · now P{position} → projected P{projected} · {gap} at the finish · {compound}, age {age} · {stops} estimated stops · {confidence} confidence", projection)));
+          : i18n.t("{driver} · now P{position} → projected P{projected} · {gap} at the finish · {compound}, age {age} · {stops} estimated stops · {confidence} confidence", projection)) + owed));
       }
       output.append(node("p", i18n.t("Projected gap is relative to your selected plan; negative means ahead of you.") + " " + i18n.t(result.caveat), "small muted"));
     }

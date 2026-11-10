@@ -134,7 +134,8 @@ def test_matched_rival_stop_resets_to_first_completed_fresh_lap(monkeypatch):
     driver["tyre_stints"][-1]["compound"] = "SOFT"
     result = project(driver, monkeypatch)
     assert result["likely_stop_offsets_laps"] == [1]
-    # Complete age17, pit22s, then finish fresh ages1,2,3,4.
-    expected = sum(90 + .1 * age for age in [17, 1, 2, 3, 4]) + 22
+    # Complete age17, pit22s, then finish fresh ages1,2,3,4 on a new soft,
+    # cold for its out-lap (1.1 s) and half the next, as the player's are.
+    expected = sum(90 + .1 * age for age in [17, 1, 2, 3, 4]) + 22 + 1.1 + 0.55
     assert result["finish_time_s"] == pytest.approx(expected)
-    assert result["lap_times_s"] == pytest.approx([91.7, 90.1, 90.2, 90.3, 90.4])
+    assert result["lap_times_s"] == pytest.approx([91.7, 91.2, 90.75, 90.3, 90.4])
