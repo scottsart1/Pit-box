@@ -30,6 +30,8 @@ const state = {
   sessionsRequest: 0,
   sessionId: "",
   analysis: null,
+  // The strategy review of the same session (calls, stops, hindsight), or null.
+  review: null,
   request: 0,
   focus: [],
   hideOutliers: true,
@@ -743,6 +745,67 @@ function renderStrategy() {
   bindChart(container, { kind: "marks" });
 }
 
+// The calls lane under the stint chart and the player's stops with the calls
+// behind them. Hidden when the session has no stored calls or stops.
+function renderReview() {
+  const lane = byId("analysisCallsLane");
+  const panel = byId("analysisReview");
+  if (!lane || !panel) return;
+  const review = state.review;
+  const hasCalls = Boolean(review?.available && (review.calls || []).length);
+  const hasStops = Boolean(review?.available && (review.stops || []).length);
+  lane.hidden = !hasCalls;
+  panel.hidden = !(hasCalls || hasStops);
+  if (hasCalls) {
+    const model = M.callsLaneModel(state.analysis, review, { width: widthOf(byId("analysisStrategyChart")) });
+    const svg = svgRoot(model.width, model.height, i18n.t("Calls: {said} said, {unsaid} not said. Arrow keys move between calls.", { said: model.said, unsaid: model.unsaid }), { interactive: true });
+    svg.append(svgElement("text", { class: "sa-label", x: model.left - 6, y: model.height / 2 + 4, "text-anchor": "end" }, i18n.t("Calls")));
+    model.marks.forEach((mark, index) => {
+      const g = svgElement("g", { tabindex: -1, role: "img", class: `sa-call sa-mark sa-call-${mark.tone}`, "data-key": mark.key, "data-row": 0, "data-col": index, "aria-label": mark.text, "data-tip": mark.text });
+      g.append(svgElement("circle", { cx: mark.x, cy: mark.y, r: mark.box ? 6 : 4 }));
+      if (mark.box) g.append(svgElement("text", { class: "sa-call-word", x: mark.x, y: mark.y - 9, "text-anchor": "middle" }, mark.word));
+      svg.append(g);
+    });
+    mount(lane, svg);
+    bindChart(lane, { kind: "marks" });
+  } else lane.replaceChildren();
+  const summary = byId("analysisReviewSummary");
+  if (summary) summary.textContent = M.reviewSummary(review);
+  const slot = byId("analysisReviewTable");
+  if (!slot) return;
+  const table = M.reviewStopsTable(review);
+  if (!table.rows.length) { slot.replaceChildren(); return; }
+  const wrap = element("div", "table-scroll");
+  const node = element("table", "table workspace-table sa-table");
+  const headRow = element("tr");
+  table.headers.forEach((h) => { const th = element("th", "", h); th.scope = "col"; headRow.append(th); });
+  const head = element("thead");
+  head.append(headRow);
+  const body = element("tbody");
+  table.rows.forEach((cells) => {
+    const tr = element("tr");
+    cells.forEach((cell, i) => {
+      if (i === 0) { const th = element("th", "", cell); th.scope = "row"; tr.append(th); } else tr.append(element("td", cell === i18n.t("on the money") ? "good" : "", cell));
+    });
+    body.append(tr);
+  });
+  node.append(element("caption", "sr-only", table.caption), head, body);
+  wrap.append(node);
+  slot.replaceChildren(wrap);
+}
+
+async function loadReview(id, request) {
+  try {
+    const review = await api(`/sessions/${encodeURIComponent(id)}/strategy-review`);
+    if (request !== state.request) return;
+    state.review = review;
+  } catch {
+    if (request !== state.request) return;
+    state.review = null;
+  }
+  safely(renderReview);
+}
+
 function renderLapTimes() {
   const container = byId("analysisLapTimesChart");
   if (!container) return;
@@ -1145,6 +1208,7 @@ function renderCharts() {
   if (!state.analysis) return;
   safely(renderPace);
   safely(renderStrategy);
+  safely(renderReview);
   safely(renderLapTimes);
   safely(renderHeatmap);
   safely(renderFastest);
@@ -1226,6 +1290,8 @@ function clearView({ loading = false } = {}) {
   if (raceNote) raceNote.hidden = true;
   const strategy = byId("analysisStrategyHeading");
   if (strategy) strategy.textContent = STRATEGY_HEADING;
+  state.review = null;
+  for (const id of ["analysisCallsLane", "analysisReview"]) { const node = byId(id); if (node) node.hidden = true; }
   state.focus = [];
   state.reference = "leader";
   state.heatDriver = null;
@@ -1318,8 +1384,10 @@ export async function openAnalysis(sessionId) {
     if (!keepFocus) { state.reference = "leader"; state.heatDriver = null; }
     // No frames without a race order (practice, or a single recorded car).
     resetLapse(M.timelapseFrames(analysis));
+    if (!keepFocus) state.review = null;
     populateSessions();
     renderAll();
+    if (analysis.session?.is_race) loadReview(id, request);
   } catch (error) {
     if (request !== state.request) return;
     state.analysis = null;

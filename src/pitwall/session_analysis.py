@@ -2158,6 +2158,14 @@ def build_session_analysis(
     }
 
 
+def _json_object(value: Any) -> dict[str, Any]:
+    try:
+        parsed = json.loads(value or "{}")
+    except (TypeError, ValueError):
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
 def _int_or_none(value: Any) -> int | None:
     try:
         number = int(value)
@@ -2267,6 +2275,30 @@ class SessionAnalysisService:
                 yield connection
 
     @staticmethod
+    def _recording_window(db: sqlite3.Connection, session_row: sqlite3.Row) -> tuple[int, float, float] | None:
+        """This recording's game session uid and the time it covers.
+
+        Restarts of a session share the uid, so the window runs from this
+        recording's start to the next restart's start, or a grace period
+        after this one ended.
+        """
+        legacy_uid = session_row["legacy_session_uid"]
+        start = _unix(session_row["started_at"])
+        if legacy_uid is None or start is None:
+            return None
+        following = db.execute(
+            "SELECT MIN(started_at) FROM recorded_sessions WHERE legacy_session_uid=? AND started_at>?",
+            (legacy_uid, session_row["started_at"]),
+        ).fetchone()[0]
+        ended = _unix(session_row["ended_at"])
+        # Older recordings can carry an end time equal to the start; that
+        # is no end at all, and would cut off every message after it.
+        if ended is not None and ended <= start:
+            ended = None
+        limits = [value for value in (_unix(following), ended + EVENT_GRACE_S if ended else None) if value]
+        return int(legacy_uid), start, (min(limits) if limits else math.inf)
+
+    @staticmethod
     def _session_record(db: sqlite3.Connection, session_row: sqlite3.Row) -> SessionRecord:
         """This recording's race-control messages, retirements, final
         classification and lap chart, and the first lap any session message
@@ -2277,22 +2309,14 @@ class SessionAnalysisService:
         restart's start (or a grace period after this one ended). A recording
         that began mid-race has messages only from the lap it began on.
         """
-        legacy_uid = session_row["legacy_session_uid"]
-        start = _unix(session_row["started_at"])
-        if legacy_uid is None or start is None:
-            return SessionRecord()
         try:
-            following = db.execute(
-                "SELECT MIN(started_at) FROM recorded_sessions WHERE legacy_session_uid=? AND started_at>?",
-                (legacy_uid, session_row["started_at"]),
-            ).fetchone()[0]
-            ended = _unix(session_row["ended_at"])
-            # Older recordings can carry an end time equal to the start; that
-            # is no end at all, and would cut off every message after it.
-            if ended is not None and ended <= start:
-                ended = None
-            limits = [value for value in (_unix(following), ended + EVENT_GRACE_S if ended else None) if value]
-            end = min(limits) if limits else math.inf
+            window = SessionAnalysisService._recording_window(db, session_row)
+        except sqlite3.OperationalError:
+            return SessionRecord()
+        if window is None:
+            return SessionRecord()
+        legacy_uid, start, end = window
+        try:
             rows = db.execute(
                 "SELECT event_type, lap_num, payload_json, created_at FROM session_events "
                 "WHERE session_uid=? AND created_at>=? AND created_at<? ORDER BY created_at, id",
@@ -2584,6 +2608,72 @@ class SessionAnalysisService:
 
     async def analysis(self, session_id: str, *, hide_outliers: bool = True) -> dict[str, Any]:
         return await asyncio.to_thread(self._analysis_sync, session_id, hide_outliers)
+
+    def _review_rows(self, session_id: str) -> dict[str, Any]:
+        """The plans, calls, driver turns and lap conditions stored for this recording."""
+        rows: dict[str, Any] = {"snapshots": [], "calls": [], "driver_turns": [], "conditions": {}}
+        with self._connect() as db:
+            session_row = db.execute("SELECT * FROM recorded_sessions WHERE id=?", (session_id,)).fetchone()
+            if session_row is None:
+                raise SessionNotFoundError(f"Saved session {session_id!r} was not found")
+            try:
+                window = self._recording_window(db, session_row)
+            except sqlite3.OperationalError:
+                window = None
+            if window is None:
+                return rows
+            uid, start, end = window
+            bounds = (uid, start - 5.0, end if math.isfinite(end) else 1e18)
+
+            def query(sql: str) -> list[sqlite3.Row]:
+                try:
+                    return db.execute(sql, bounds).fetchall()
+                except sqlite3.OperationalError:
+                    return []  # A table this database never had.
+
+            for row in query(
+                "SELECT lap_num, recommended_json, created_at FROM strategy_snapshots "
+                "WHERE session_uid=? AND created_at>=? AND created_at<? ORDER BY created_at, id"
+            ):
+                rows["snapshots"].append({"lap": row["lap_num"], "recommended": _json_object(row["recommended_json"]),
+                                          "at": row["created_at"]})
+            for row in query(
+                "SELECT lap_num, event_type, payload_json, text, delivered, outcome, queued_at, created_at "
+                "FROM proactive_calls WHERE session_uid=? AND created_at>=? AND created_at<? ORDER BY created_at, id"
+            ):
+                rows["calls"].append({
+                    "lap": row["lap_num"], "type": row["event_type"], "payload": _json_object(row["payload_json"]),
+                    "text": row["text"], "delivered": bool(row["delivered"]), "outcome": row["outcome"],
+                    "queued_at": row["queued_at"], "at": row["created_at"],
+                })
+            for row in query(
+                "SELECT lap_num, text, label, created_at FROM radio_messages "
+                "WHERE session_uid=? AND created_at>=? AND created_at<? AND role='driver' ORDER BY created_at, id"
+            ):
+                rows["driver_turns"].append({"lap": row["lap_num"], "text": row["text"], "label": row["label"],
+                                             "at": row["created_at"]})
+            for row in query(
+                "SELECT lap_num, weather, conditions_json FROM laps "
+                "WHERE session_uid=? AND created_at>=? AND created_at<? ORDER BY lap_num"
+            ):
+                rows["conditions"][int(row["lap_num"])] = {
+                    "weather": row["weather"], **_json_object(row["conditions_json"]),
+                }
+        return rows
+
+    def _strategy_review_sync(self, session_id: str) -> dict[str, Any]:
+        from .strategy_review import strategy_review
+
+        analysis = self._analysis_sync(session_id, True)
+        try:
+            stored = self._review_rows(session_id)
+        except sqlite3.DatabaseError as exc:
+            raise SessionAnalysisError("Saved sessions cannot be read right now; try again shortly.") from exc
+        return {"session_id": session_id, **strategy_review(analysis, **stored)}
+
+    async def strategy_review(self, session_id: str) -> dict[str, Any]:
+        """Every strategy call of the session, joined to the stops and what they cost."""
+        return await asyncio.to_thread(self._strategy_review_sync, session_id)
 
 
 __all__ = [

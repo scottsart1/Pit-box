@@ -2534,5 +2534,57 @@
  "Rain gains it {count} places.": {
   "one": "La lluvia le hace ganar {count} posición.",
   "other": "La lluvia le hace ganar {count} posiciones."
+ },
+ "Battery": "Batería",
+ "Best on known pace": "Mejor con el ritmo conocido",
+ "Box": "Box",
+ "Call": "Aviso",
+ "Called": "Avisado",
+ "Calls": "Avisos",
+ "Calls: {said} said, {unsaid} not said. Arrow keys move between calls.": "Avisos: {said} dichos, {unsaid} sin decir. Las flechas pasan de un aviso a otro.",
+ "Cancel": "Cancelar",
+ "Cost": "Coste",
+ "Damage": "Daños",
+ "Flag": "Bandera",
+ "Fuel": "Combustible",
+ "Heard": "Oído",
+ "Hindsight compares stop laps on the lap times that were set; a stop within 1.5 s of the best is on the money. It is not a claim about what could have been known at the time.": "La retrospectiva compara vueltas de parada con los tiempos que se marcaron; una parada a menos de 1,5 s de la mejor es exacta. No afirma lo que se podía saber en ese momento.",
+ "Lap {lap} · {word} · {outcome}: {text}": "Vuelta {lap} · {word} · {outcome}: {text}",
+ "Penalty": "Penalización",
+ "Places": "Posiciones",
+ "Rain": "Lluvia",
+ "Recommended": "Recomendado",
+ "Restart": "Reanudación",
+ "Rival": "Rival",
+ "Window": "Ventana",
+ "Your stops and the calls behind them": "Tus paradas y los avisos detrás de ellas",
+ "Your stops, the calls behind them and hindsight on the laps that were set": "Tus paradas, los avisos detrás de ellas y la retrospectiva sobre las vueltas marcadas",
+ "no": "no",
+ "not called": "sin avisar",
+ "not comparable": "no comparable",
+ "not said": "sin decir",
+ "on the money": "exacta",
+ "said": "dicho",
+ "yes": "sí",
+ "{seconds} s": "{seconds} s",
+ "lap {lap}, stopped {count} laps later": {
+  "one": "vuelta {lap}, parada {count} vuelta después",
+  "other": "vuelta {lap}, parada {count} vueltas después"
+ },
+ "rain spell {spell}: stopped {count} laps after the track crossed to inters": {
+  "one": "tramo de lluvia {spell}: parada {count} vuelta después del cruce a intermedios",
+  "other": "tramo de lluvia {spell}: parada {count} vueltas después del cruce a intermedios"
+ },
+ "{count} calls": {
+  "one": "{count} aviso",
+  "other": "{count} avisos"
+ },
+ "{count} calls declined or disputed": {
+  "one": "{count} aviso rechazado o discutido",
+  "other": "{count} avisos rechazados o discutidos"
+ },
+ "{count} never said": {
+  "one": "{count} nunca dicho",
+  "other": "{count} nunca dichos"
  }
 }

@@ -1229,6 +1229,111 @@ export function positionsTable(analysis) {
   };
 }
 
+// ------------------------------------------------------------- strategy review
+
+// One word per kind of call, for the calls lane.
+export function callWord(type) {
+  switch (type) {
+    case "strategy_change": return i18n.t("Plan");
+    case "weather_crossover": return i18n.t("Rain");
+    case "weather_box_reminder": return i18n.t("Box");
+    case "weather_stand_down": return i18n.t("Cancel");
+    case "rival_pitting":
+    case "rival_pace": return i18n.t("Rival");
+    case "pit_window_open": return i18n.t("Window");
+    case "race_control": return i18n.t("Flag");
+    case "sc_restart": return i18n.t("Restart");
+    case "progress_update": return i18n.t("Lap");
+    case "tyre_wear": return i18n.t("Tyres");
+    case "fuel_warning": return i18n.t("Fuel");
+    case "energy_low": return i18n.t("Battery");
+    case "damage": return i18n.t("Damage");
+    case "penalty": return i18n.t("Penalty");
+    default: return i18n.t("Call");
+  }
+}
+
+function callTone(call) {
+  if (call.delivered) return "said";
+  return /fail|cut short/i.test(String(call.outcome || "")) ? "failed" : "unsaid";
+}
+
+function boxCall(call) {
+  return call.type === "weather_box_reminder" || /^box\b/i.test(String(call.text || ""));
+}
+
+// The calls lane: one marker per call at its lap, on the stint chart's lap
+// axis, coloured by whether it was said. Box calls carry their word.
+export function callsLaneModel(analysis, review, { width = 1200, height = 34 } = {}) {
+  const total = Math.max(1, lastLap(analysis));
+  const margin = { l: 52, r: 12 };
+  const x = scale(0, total, margin.l, width - margin.r);
+  const outcomes = { said: i18n.t("said"), unsaid: i18n.t("not said"), failed: i18n.t("failed") };
+  const calls = review?.calls || [];
+  const lapOf = (call) => Math.max(1, Math.min(total, Number(call.lap) || 1));
+  const perLap = new Map();
+  for (const call of calls) perLap.set(lapOf(call), (perLap.get(lapOf(call)) || 0) + 1);
+  const seen = new Map();
+  const labelled = new Set();
+  const marks = calls.map((call, index) => {
+    const lap = lapOf(call);
+    const tone = callTone(call);
+    const word = callWord(call.type);
+    // Calls on one lap sit side by side inside it; the lap's first box call
+    // carries the word.
+    const count = perLap.get(lap), slot = seen.get(lap) || 0;
+    seen.set(lap, slot + 1);
+    const lapWidth = x(1) - x(0);
+    const step = count > 1 ? Math.min(9, (lapWidth - 4) / (count - 1)) : 0;
+    const box = boxCall(call) && !labelled.has(lap);
+    if (box) labelled.add(lap);
+    return {
+      key: `call-${index}`, x: x(lap - 0.5) + (slot - (count - 1) / 2) * step, y: height / 2, tone, word, box,
+      text: i18n.t("Lap {lap} · {word} · {outcome}: {text}", { lap: `${lap}`, word, outcome: call.delivered ? outcomes.said : `${outcomes[tone]} (${call.outcome})`, text: call.text || "" }),
+    };
+  });
+  return { width, height, left: margin.l, marks, said: marks.filter((m) => m.tone === "said").length, unsaid: marks.filter((m) => m.tone !== "said").length };
+}
+
+function secondsText(value) {
+  return isNumber(value) ? i18n.t("{seconds} s", { seconds: Number(value).toFixed(1) }) : "—";
+}
+
+// The player's stops: what was recommended, when it was called and heard,
+// and the best stop lap on the lap times that were set.
+export function reviewStopsTable(review) {
+  const threshold = Number(review?.on_the_money_s ?? 1.5);
+  return {
+    caption: i18n.t("Your stops, the calls behind them and hindsight on the laps that were set"),
+    headers: [i18n.t("Lap"), i18n.t("Tyres"), i18n.t("Recommended"), i18n.t("Called"), i18n.t("Heard"), i18n.t("Best on known pace"), i18n.t("Cost"), i18n.t("Places")],
+    rows: (review?.stops || []).map((stop) => [
+      String(stop.lap),
+      i18n.t("{from} to {to}", { from: compoundInfo(stop.from).label, to: compoundInfo(stop.to).label }) + (stop.phase && stop.phase !== "green" ? ` (${String(stop.phase).replaceAll("_", " ")})` : ""),
+      isNumber(stop.recommended_lap_at_the_time) ? i18n.t("lap {lap}", { lap: `${stop.recommended_lap_at_the_time}` }) : "—",
+      isNumber(stop.called_on_lap)
+        ? (stop.laps_after_call ? i18n.tp(Number(stop.laps_after_call), "lap {lap}, stopped {count} lap later", "lap {lap}, stopped {count} laps later", { lap: `${stop.called_on_lap}`, count: Number(stop.laps_after_call) }) : i18n.t("lap {lap}", { lap: `${stop.called_on_lap}` }))
+        : i18n.t("not called"),
+      stop.heard === true ? i18n.t("yes") : stop.heard === false ? i18n.t("no") : "—",
+      isNumber(stop.hindsight_best_lap) ? i18n.t("lap {lap}", { lap: `${stop.hindsight_best_lap}` }) : i18n.t("not comparable"),
+      isNumber(stop.cost_vs_hindsight_s) ? (Number(stop.cost_vs_hindsight_s) < threshold ? i18n.t("on the money") : secondsText(stop.cost_vs_hindsight_s)) : "—",
+      isNumber(stop.places) ? String(stop.places) : "—",
+    ]),
+  };
+}
+
+export function reviewSummary(review) {
+  if (!review?.available) return "";
+  const parts = [i18n.tp((review.calls || []).length, "{count} call", "{count} calls", { count: (review.calls || []).length })];
+  if (review.undelivered) parts.push(i18n.tp(Number(review.undelivered), "{count} never said", "{count} never said", { count: Number(review.undelivered) }));
+  for (const spell of review.weather || []) {
+    if (isNumber(spell.laps_late) && spell.laps_late > 0) {
+      parts.push(i18n.tp(Number(spell.laps_late), "rain spell {spell}: stopped {count} lap after the track crossed to inters", "rain spell {spell}: stopped {count} laps after the track crossed to inters", { spell: `${spell.spell}`, count: Number(spell.laps_late) }) + (isNumber(spell.cost_s) ? ` (${secondsText(spell.cost_s)})` : ""));
+    }
+  }
+  if ((review.overrides || []).length) parts.push(i18n.tp(review.overrides.length, "{count} call declined or disputed", "{count} calls declined or disputed", { count: review.overrides.length }));
+  return parts.join(" · ");
+}
+
 export function strategyTable(analysis) {
   const stints = new Map((analysis?.stints || []).map((row) => [row.car_index, row.stints || []]));
   return {
