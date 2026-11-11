@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -m pytest tests -q)",
+      "Bash(pip list *)",
+      "mcp__github__pull_request_read",
+      "mcp__github__get_job_logs",
+      "mcp__github__merge_pull_request",
+      "mcp__github__update_pull_request_branch"
+    ]
+  }
+}
