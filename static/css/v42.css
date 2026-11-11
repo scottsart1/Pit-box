@@ -570,10 +570,6 @@ button:disabled,
 
 @media (max-width: 700px) {
   .app { min-height: 0; height: 100svh; grid-template-rows: auto auto minmax(0, 1fr) auto; }
-  .top { min-height: 54px; flex-wrap: wrap; padding-block: 7px; }
-  .top .status { margin-left: 0; }
-  .tabs { position: sticky; top: 0; z-index: 20; min-height: 54px; gap: 2px; padding: 4px; overflow-x: hidden; }
-  .tab { flex: 1 1 0; min-width: 0; padding: 6px 4px; font-size: .66rem; line-height: 1.15; white-space: normal; }
   .page { min-height: 0; }
   .connection-shell { padding: 10px; gap: 10px; }
   .panel-surface { padding: 13px; }
@@ -589,10 +585,7 @@ button:disabled,
   .destination-grid,
   .setup-steps,
   .status-details,
-  .grid2,
-  .quad,
-  .pace-strip,
-  .latency-grid { grid-template-columns: 1fr; }
+  .grid2 { grid-template-columns: 1fr; }
   .form-grid,
   .forwarder-form,
   .credential-form { grid-template-columns: 1fr; }
@@ -1077,8 +1070,6 @@ button:disabled,
 }
 
 @media (max-width: 700px) {
-  .tabs { justify-content: flex-start; overflow-x: auto; scroll-snap-type: x proximity; }
-  .tab { flex: 0 0 auto; min-width: 92px; padding-inline: 8px; scroll-snap-align: start; }
   .workspace-shell,
   .lap-lab-shell { padding: 9px; gap: 9px; }
   .workspace-header { align-items: stretch; flex-direction: column; }
@@ -1554,4 +1545,201 @@ html[data-ui-language] .comparison-delta output { white-space: normal; }
 }
 @media (min-width: 1181px) {
   html[data-ui-language] .whatif-controls { grid-template-columns: 110px 130px minmax(0, 1fr) auto; }
+}
+
+/* Settings rows. Each setting is its text beside its control and the
+   control's source (default, saved, .env). */
+#settingsGroups .setting-row { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin: 10px 0; }
+#settingsGroups .setting-text { flex: 1; min-width: 0; }
+#settingsGroups .setting-control { text-align: right; }
+#settingsGroups .setting-control input[type="number"] { width: 110px; }
+#settingsGroups .setting-control input[type="text"] { width: 220px; max-width: 100%; }
+
+/* ---- Phone ----------------------------------------------------------------
+   DRIVE becomes one column at 1024px. Stacked in source order that column
+   opened on the whole 20-car tower and put the strategy call and the tyres
+   below every radio and provider setup card, several screens down. In one
+   column the cards are read in race order instead: lap and position, the
+   call, the car, the radio, the field, then the lap tools, driver control and
+   finally the setup cards. The three column wrappers step aside
+   (display: contents) so cards from all three are ordered together; cards in
+   the same group keep the order chosen under Dashboard. */
+@media (max-width: 1024px) {
+  .live-grid { display: flex; flex-direction: column; padding: 2px 12px 18px; }
+  .live-grid > .panel { display: contents; }
+  .live-grid > .panel > * { order: 6; }
+  .live-grid .drive-headline { order: 1; }
+  .live-grid #preRaceCard,
+  .live-grid #strategyCard { order: 2; }
+  .live-grid .drive-car > .label,
+  .live-grid #carCard,
+  .live-grid #fuelCard { order: 3; }
+  .live-grid #radio,
+  .live-grid .drive-ask,
+  .live-grid #error { order: 4; }
+  .live-grid .drive-tower > * { order: 5; }
+  .live-grid #driverControlCard,
+  .live-grid #wingCard { order: 7; }
+  .live-grid #latencyCard,
+  .live-grid #providerCard,
+  .live-grid #wakeCard,
+  .live-grid #pttCard,
+  .live-grid #proactiveCard { order: 8; }
+  .live-grid > .panel > .label { margin: 12px 2px 0; }
+  .live-grid .drive-headline { padding: 12px 2px 2px; align-items: flex-end; }
+  .live-grid .drive-headline .big { line-height: 1.05; }
+  .live-grid .drive-ask { margin: 2px 0 10px; }
+}
+
+/* The shell on a phone. The header is one row: the brand over the session
+   and track, with Dashboard and Quit as icon buttons; telemetry and radio
+   state stay on the status strip at the bottom, so the header does not
+   repeat them. The tabs are one strip that scrolls sideways at a readable
+   size, fading at the edge where more tabs wait. */
+@media (max-width: 700px), (max-height: 500px) and (orientation: landscape) {
+  .app { grid-template-rows: auto auto minmax(0, 1fr) auto; }
+  .top {
+    display: grid;
+    grid-template-columns: fit-content(62%) minmax(0, 1fr) 44px 44px;
+    grid-template-rows: auto auto;
+    align-content: center;
+    column-gap: 6px;
+    row-gap: 1px;
+    height: auto;
+    min-height: 52px;
+    padding: 4px 6px 4px 14px;
+  }
+  .top > span:nth-child(2),
+  .top > .status { display: none; }
+  .top > .brand { grid-column: 1 / 3; grid-row: 1; font-size: 13px; letter-spacing: .1em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .top > #session,
+  .top > #track { grid-row: 2; max-width: none; color: var(--muted); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .top > #session { grid-column: 1; }
+  .top > #track { grid-column: 2; }
+  .top > #track::before { content: "· "; }
+  .top > #dashConfig,
+  .top > #quitApp { grid-row: 1 / 3; display: inline-flex; align-items: center; justify-content: center; width: 44px; height: 44px; margin: 0 !important; padding: 0 !important; border-radius: 10px; font-size: 0; }
+  .top > #dashConfig { grid-column: 3; --icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round'%3E%3Cpath d='M4 7h9M19 7h1M4 17h3M13 17h7'/%3E%3Ccircle cx='16' cy='7' r='2.5'/%3E%3Ccircle cx='10' cy='17' r='2.5'/%3E%3C/svg%3E"); }
+  .top > #quitApp { grid-column: 4; --icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2.2' stroke-linecap='round'%3E%3Cpath d='M12 3.5v8'/%3E%3Cpath d='M6.7 6.9a7.5 7.5 0 1 0 10.6 0'/%3E%3C/svg%3E"); }
+  .top > #dashConfig::before,
+  .top > #quitApp::before { content: ""; width: 20px; height: 20px; background: currentColor; -webkit-mask: var(--icon) center / contain no-repeat; mask: var(--icon) center / contain no-repeat; }
+
+  .tabs {
+    height: 48px;
+    min-height: 48px;
+    gap: 2px;
+    padding: 2px 36px 2px 6px;
+    overflow-x: auto;
+    overflow-y: hidden;
+    scrollbar-width: none;
+    scroll-snap-type: x proximity;
+    scroll-padding-inline: 6px;
+    -webkit-mask-image: linear-gradient(90deg, #000 calc(100% - 40px), transparent);
+    mask-image: linear-gradient(90deg, #000 calc(100% - 40px), transparent);
+  }
+  .tabs::-webkit-scrollbar { display: none; }
+  .tab { flex: 0 0 auto; min-width: 0; min-height: 44px; padding: 0 13px; font-size: 12px; letter-spacing: .05em; line-height: 1; white-space: nowrap; scroll-snap-align: start; }
+
+  #dashPopover { top: 58px; left: 8px; right: 8px; max-height: calc(100svh - 120px); }
+  #dashPopover label { min-height: 44px; white-space: normal; }
+  #dashPopover .dash-nudge { min-width: 44px; }
+}
+
+/* A phone on its side has width to spare and little height, so the header
+   and the tabs share one row and the page keeps the rest. */
+@media (max-height: 500px) and (orientation: landscape) {
+  .app { grid-template-columns: auto minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr) auto; }
+  .top { grid-column: 1; grid-row: 1; min-height: 48px; padding-block: 2px; }
+  .tabs { grid-column: 2; grid-row: 1; }
+  .app > .page { grid-column: 1 / -1; grid-row: 2; }
+  .app > .bottom { grid-column: 1 / -1; grid-row: 3; }
+}
+
+@media (max-width: 700px) {
+  /* Inputs under 16px make iOS Safari zoom the page on focus. */
+  input:not([type="checkbox"]):not([type="radio"]):not([type="range"]),
+  select,
+  textarea { font-size: 16px; }
+
+  /* DRIVE cards */
+  .live-grid .drive-headline .big { font-size: 34px; }
+  #timing .timing { grid-template-columns: 38px minmax(0, 1fr) auto; gap: 8px; padding: 7px 6px; font-size: 14px; }
+  #timing .timing > span:first-of-type { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; min-width: 0; white-space: nowrap; overflow: hidden; }
+  #timing .timing > span:first-of-type > br { display: none; }
+  #timing .timing .muted { font-size: 12px; font-variant-numeric: tabular-nums; }
+  .quad,
+  .latency-grid,
+  .pace-strip { grid-template-columns: 1fr 1fr; }
+  .canvas.trace { aspect-ratio: 16 / 8; }
+  .diag { overflow-wrap: anywhere; }
+  .card > .row { flex-wrap: wrap; }
+  #fuelCard > .row { flex-wrap: nowrap; align-items: baseline; }
+  #fuelCard > .row > span { flex: 0 0 auto; }
+  #fuelCard > .row > b { min-width: 0; text-align: right; }
+
+  /* Rows of controls: text fields take the width, buttons size to their
+     label, and check boxes sit beside their label at a full-size target. */
+  .controls > label { flex: 0 0 auto; display: inline-flex; align-items: center; gap: 8px; min-height: 44px; }
+  .controls > .button { flex: 1 1 auto; }
+  .drive-ask > input,
+  #strategy .controls > input { flex: 1 1 160px; }
+  .drive-ask > .button,
+  #stratAskSend { flex: 0 0 auto; min-width: 92px; }
+  .override-row { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  #objectiveCard .controls { flex-wrap: nowrap; align-items: center; }
+  #objectiveCard .controls > * { flex: 0 0 auto; }
+  #objectiveCard .controls > .button { width: 44px; padding: 0; }
+  #objectiveCard .controls > b { min-width: 2ch; text-align: center; font-size: 17px; }
+  #proactiveCard > .row > div:first-child,
+  #proactiveCard > .row > .controls { flex: 1 1 100%; }
+  #proactiveCard .controls > .select { flex: 1 1 96px; }
+  .live-grid input[type="checkbox"],
+  #updateSettings > label > input,
+  #usageSettings > label > input { width: 20px; height: 20px; min-height: 20px; margin: 0; flex: 0 0 auto; accent-color: var(--blue); }
+  #wakeCard label.nowrap { display: inline-flex; align-items: center; gap: 8px; min-height: 44px; }
+  #updateSettings > label,
+  #usageSettings > label { display: flex; align-items: center; gap: 10px; min-height: 44px; }
+
+  /* STRATEGY: a decision's lap and context share a line above its text. */
+  .decision-entry { grid-template-columns: minmax(0, 1fr) auto; row-gap: 2px; }
+  .decision-entry > div { grid-column: 1 / -1; grid-row: 2; }
+  .table th,
+  .table td { padding: 7px 6px; }
+
+  /* ANALYSIS views are one sideways strip, like the tabs above them. */
+  .analysis-subnav {
+    flex-wrap: nowrap;
+    gap: 6px;
+    padding: 8px 36px 2px 10px;
+    overflow-x: auto;
+    scrollbar-width: none;
+    scroll-snap-type: x proximity;
+    -webkit-mask-image: linear-gradient(90deg, #000 calc(100% - 40px), transparent);
+    mask-image: linear-gradient(90deg, #000 calc(100% - 40px), transparent);
+  }
+  .analysis-subnav::-webkit-scrollbar { display: none; }
+  .analysis-subnav .field-tab { flex: 0 0 auto; font-size: 12px; white-space: nowrap; scroll-snap-align: start; }
+
+  /* LIBRARY: each saved session is a card, so its actions are on screen
+     instead of past the right edge of a seven-column table. */
+  .library-table { display: block; min-width: 0; }
+  .library-table thead { display: none; }
+  .library-table tbody,
+  .library-table tr { display: block; }
+  .library-table tbody tr { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 12px; padding: 12px 8px; border-bottom: 1px solid var(--line); }
+  .library-table td { display: block; padding: 0; border: 0; color: var(--muted); font-size: 13px; }
+  .library-table td:first-child,
+  .library-table td:last-child { flex: 1 1 100%; color: inherit; }
+  .library-table td:last-child { margin-top: 8px; }
+  .library-table td[data-label]::before { content: attr(data-label) " "; color: var(--muted); }
+  .library-table td.empty { flex: 1 1 100%; text-align: center; }
+  .library-table .table-actions { gap: 6px; }
+
+  /* SETTINGS: a choice or a value goes full width under its text; an on/off
+     setting keeps its switch beside the text. */
+  #settingsGroups .setting-row:not([data-kind="bool"]) { flex-direction: column; align-items: stretch; gap: 6px; }
+  #settingsGroups .setting-row:not([data-kind="bool"]) .setting-control { display: flex; align-items: center; gap: 10px; text-align: left; }
+  #settingsGroups .setting-row:not([data-kind="bool"]) .setting-control > :first-child { flex: 1 1 auto; width: auto; min-width: 0; }
+  #settingsGroups .setting-row[data-kind="bool"] { flex-wrap: nowrap; }
+  #settingsGroups .setting-row[data-kind="bool"] .setting-control { text-align: center; }
 }

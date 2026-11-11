@@ -439,8 +439,13 @@ function renderSessionRows() {
     row.append(element("td", "", formatDate(session.started_at)));
     row.append(element("td", "", session.session_type || i18n.t("Unavailable")));
     row.append(element("td", "", i18n.t("{drivers} drivers · {laps} laps", { drivers: session.drivers_observed ?? 0, laps: session.lap_count ?? 0 })));
-    row.append(element("td", "", session.quality_score == null ? i18n.t("Unavailable") : formatPercent(session.quality_score)));
-    row.append(element("td", "", formatBytes(session.size_bytes)));
+    // On a phone each row is a card without the header row, so the two
+    // cells whose values do not name themselves carry their column name.
+    const quality = element("td", "", session.quality_score == null ? i18n.t("Unavailable") : formatPercent(session.quality_score));
+    quality.dataset.label = i18n.t("Quality");
+    const storage = element("td", "", formatBytes(session.size_bytes));
+    storage.dataset.label = i18n.t("Storage");
+    row.append(quality, storage);
     const actions = element("td");
     const group = element("div", "table-actions");
     group.append(
