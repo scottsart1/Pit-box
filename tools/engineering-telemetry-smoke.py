@@ -57,6 +57,25 @@ def main():
         packet.weather = 0
         send(packet)
 
+    # A lap is stored by the analysis worker after its packets arrive, one
+    # lap at a time; until then it is known only from the history packet,
+    # without the telemetry a comparison matches on. Wait for every run's
+    # five laps to be stored with their telemetry, as the pit debrief is
+    # awaited, rather than for a fixed pause.
+    def stored_runs(ready, runs, laps=5):
+        waiting = {"missing_telemetry", "incomplete_lap_telemetry"}
+        deadline = time.monotonic() + 30
+        while True:
+            live = get("/api/v1/engineering/live")
+            complete = [
+                run for run in live.get("runs") or []
+                if run["summary"]["lap_count"] >= laps
+                and not any(waiting & set(lap.get("reasons") or []) for lap in run["summary"].get("excluded_laps") or [])
+            ]
+            if (ready(live) and len(complete) >= runs) or time.monotonic() > deadline:
+                return live
+            time.sleep(0.3)
+
     def setup(wing):
         packet = PacketCarSetupData()
         packet.header = replay.header(5, clock, frame)
@@ -159,7 +178,7 @@ def main():
                 clock += 1
                 lap_packet(0)
                 time.sleep(0.2)
-        report = get("/api/v1/engineering/live")
+        report = stored_runs(lambda live: True, runs=2)
         assert report["available"] and len(report["runs"]) >= 2, report
         candidates = [
             run for run in report["runs"] if run["summary"]["clean_lap_count"] >= 3
@@ -204,8 +223,7 @@ def main():
         lap_packet()
         time.sleep(0.2)
         send(replay.build_history(cars[0], clock, frame))
-        time.sleep(0.3)
-        cross_report = get("/api/v1/engineering/live")
+        cross_report = stored_runs(lambda live: live["session_id"] != report["session_id"], runs=1)
         assert cross_report["session_id"] != report["session_id"]
         cross_runs = [run for run in cross_report["runs"] if run["summary"]["clean_lap_count"] >= 3]
         assert cross_runs, cross_report
