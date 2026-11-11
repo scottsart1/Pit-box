@@ -450,6 +450,11 @@ python -m distribution.website.build_site
 cd distribution/website && wrangler pages deploy _site --project-name pitwall
 ```
 
+The site also deploys itself: `.github/workflows/deploy-website.yml` runs the
+website tests, builds and deploys to production whenever a change to
+`distribution/website/`, `docs/screenshots/` or `static/driver-dashboard/`
+merges to `main`, and can be run by hand from the Actions tab.
+
 The site is ready to share. A buyer can pay, receive a code, download the
 installer with it, and activate.
 

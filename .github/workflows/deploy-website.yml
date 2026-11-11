@@ -1,0 +1,53 @@
+name: Deploy website
+
+# Publishes yourpitbox.com (Cloudflare Pages project "pitwall") from main.
+# build_site assembles the site from distribution/website/, the screenshots in
+# docs/screenshots/ and the Driver Dashboard in static/driver-dashboard/, so a
+# change to any of them redeploys it, as does a change to this workflow.
+on:
+  push:
+    branches: [main]
+    paths:
+      - distribution/website/**
+      - docs/screenshots/**
+      - static/driver-dashboard/**
+      - .github/workflows/deploy-website.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# One production deployment at a time. A newer push waits for the one in
+# flight instead of racing it, so the latest merge is what stays live.
+concurrency:
+  group: website-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      # wrangler 4 needs Node 22.12 or later; the website tests also run
+      # download.js under Node.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Website tests
+        run: |
+          python -m pip install pytest
+          python -m pytest distribution/tests/test_website.py -q
+      - name: Build the site
+        run: python -m distribution.website.build_site
+      - name: Deploy to Cloudflare Pages
+        working-directory: distribution/website
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        # --branch main makes this the production deployment. Without it,
+        # Pages files the upload under the checked-out ref and it stays a
+        # preview that never reaches yourpitbox.com.
+        run: npx --yes wrangler@4.154.0 pages deploy _site --project-name pitwall --branch main
