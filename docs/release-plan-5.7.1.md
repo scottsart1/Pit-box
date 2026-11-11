@@ -1,15 +1,14 @@
 # 5.7.1 release plan
 
 Android only: **5.7.1**, Android revision **43**, versionName
-`5.7.1-android.43`, from `main`. Windows stays on 5.7.0. No release PC is
-needed: every step runs in GitHub Actions.
+`5.7.1-android.43`, from `main`. Windows stays on 5.7.0. After the one-time
+credential setup, the release steps run in GitHub Actions.
 
 ## One-time setup
 
-The `release` environment (Settings → Environments) holds the signing key and
-the update-notice token. The Cloudflare secrets `CLOUDFLARE_API_TOKEN` and
-`CLOUDFLARE_ACCOUNT_ID` are used as they are; the token needs Pages, Workers
-scripts and R2 edit permission.
+The `release` environment (Settings → Environments) is for `main` deployments.
+It holds the credentials below. The workflows share the repository's
+`CLOUDFLARE_ACCOUNT_ID`. The website workflow uses its existing Pages token.
 
 | Secret | Value |
 |---|---|
@@ -17,6 +16,7 @@ scripts and R2 edit permission.
 | `ANDROID_KEYSTORE_PASSWORD` | Its store password |
 | `ANDROID_KEY_PASSWORD` | The password of the `pitbox-release` key |
 | `RELEASE_PUBLISH_TOKEN` | The release-management token (`%LOCALAPPDATA%\YourPitBoxRelease\release-management\access-key.dpapi`) |
+| `CLOUDFLARE_RELEASE_API_TOKEN` | A Cloudflare token for this account with Workers Scripts Edit and Workers R2 Storage Edit permissions |
 
 Never create a new key. Android installs an update only over an app signed by
 the same key, and the workflow refuses any APK whose certificate SHA-256 is
