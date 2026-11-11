@@ -1,0 +1,63 @@
+name: Deploy download service
+
+# Deploys the Cloudflare Worker behind the download, update and report
+# endpoints (distribution/activation-server) when it changes on main. Its tests
+# run first, and the deploy is refused unless the APK worker.js serves is
+# already in the downloads bucket, so the Android download cannot point at a
+# file that is not there.
+on:
+  push:
+    branches: [main]
+    paths:
+      - distribution/activation-server/src/**
+      - distribution/activation-server/wrangler.toml
+      - .github/workflows/deploy-worker.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: worker-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      WRANGLER: npx --yes wrangler@4.154.0
+      API: https://pitwall-activation.sarthakvij123450.workers.dev
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Download service tests
+        run: node --test distribution/activation-server/tests/*.mjs
+      - name: Check the APK it serves is uploaded
+        id: android
+        run: |
+          key=$(sed -n 's/^const ANDROID_KEY = "\(.*\)";$/\1/p' distribution/activation-server/src/worker.js)
+          test -n "$key"
+          $WRANGLER r2 object get "pitwall-downloads/$key" --remote --pipe > /dev/null || {
+            echo "::error::$key is not in pitwall-downloads. Upload it (Release Android, stage upload) before pointing the Worker at it."
+            exit 1
+          }
+          echo "key=$key" >> "$GITHUB_OUTPUT"
+      - name: Deploy
+        working-directory: distribution/activation-server
+        run: $WRANGLER deploy
+      # HEAD reads the object's metadata and is not counted as a download.
+      - name: Confirm the Android download serves that APK
+        env:
+          KEY: ${{ steps.android.outputs.key }}
+        run: |
+          for _ in 1 2 3 4 5 6; do
+            headers=$(curl -sS --fail -I "$API/android") && grep -qi "filename=\"$KEY\"" <<< "$headers" && exit 0
+            sleep 10
+          done
+          echo "::error::$API/android does not serve $KEY."
+          exit 1
