@@ -1,0 +1,222 @@
+name: Release Android
+
+# Releases the Android app from main without the release PC, in two runs.
+#
+# stage "upload": builds the release APK at the version in main, signs it with
+#   the existing release key, refuses anything not signed by that key, and
+#   uploads it to the downloads bucket under its versioned name. Visitors still
+#   get the previous APK: the Worker serves only the file named in worker.js.
+#
+# Then a commit on main points worker.js and the website at the new file, with
+# the size and SHA-256 this run reports. Merging it deploys both
+# (deploy-worker.yml and deploy-website.yml).
+#
+# stage "notify": once that is live, announces the update inside the app. The
+#   publisher checks the public download and the website against the SHA-256
+#   given here before it publishes anything.
+on:
+  workflow_dispatch:
+    inputs:
+      stage:
+        description: upload builds, signs and uploads the APK; notify announces it once the download and the site serve it
+        type: choice
+        options: [upload, notify]
+        default: upload
+      sha256:
+        description: notify only - the SHA-256 the upload run reported
+        type: string
+        required: false
+      notes:
+        description: notify only - the update notes shown in the app (at most 4000 characters)
+        type: string
+        required: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: android-release
+  cancel-in-progress: false
+
+env:
+  WRANGLER: npx --yes wrangler@4.154.0
+  BUCKET: pitwall-downloads
+  API: https://pitwall-activation.sarthakvij123450.workers.dev
+  # The certificate every installed copy was signed with. Android installs an
+  # update only over an app signed by the same key, so any other signature is
+  # refused rather than published.
+  RELEASE_CERT_SHA256: 20c2751e5c0ede43a2442331336b990433e53d9e512f3f1bca3e8d5bee4c6983
+
+jobs:
+  upload:
+    if: inputs.stage == 'upload' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    environment: release
+    timeout-minutes: 60
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Name the release
+        id: release
+        run: |
+          version=$(sed -n 's/^__version__ = "\(.*\)"$/\1/p' src/pitwall/__init__.py)
+          revision=$(sed -n 's/^val androidRevision = \([0-9]*\)$/\1/p' android/app/build.gradle.kts)
+          test -n "$version" && test -n "$revision"
+          {
+            echo "version=$version"
+            echo "revision=$revision"
+            echo "name=YourPitBox-$version-android.$revision.apk"
+          } >> "$GITHUB_OUTPUT"
+
+      # Fail in a minute, not after a 15-minute build, if the token cannot
+      # reach the bucket or the APK was already published.
+      - name: Check the bucket and that this version is not uploaded yet
+        env:
+          NAME: ${{ steps.release.outputs.name }}
+        run: |
+          $WRANGLER r2 bucket list | grep -q "$BUCKET"
+          if $WRANGLER r2 object get "$BUCKET/$NAME" --remote --pipe > /dev/null 2>&1; then
+            echo "::error::$NAME is already in $BUCKET. A published APK is never replaced; raise the Android revision instead."
+            exit 1
+          fi
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools
+          log-accepted-android-sdk-licenses: false
+      - name: Install the Android build platform
+        run: sdkmanager 'platforms;android-36' 'build-tools;35.0.0'
+      - uses: actions/setup-python@v5
+        id: py312
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-python@v5
+        id: py313
+        with:
+          python-version: "3.13"
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android,x86_64-linux-android
+      - name: Install wheel tools
+        run: |
+          "${{ steps.py312.outputs.python-path }}" -m pip install --quiet cibuildwheel uv
+          "${{ steps.py313.outputs.python-path }}" -m pip install --quiet 'f1-packets>=2026.1.1,<2027'
+      - name: Restore cross-compiled wheels
+        uses: actions/cache@v4
+        with:
+          path: android/wheels
+          key: android-wheels-${{ hashFiles('android/build-wheels.sh', 'android/check-wheels.py', 'android/native-requirements.txt') }}-${{ runner.os }}
+      - name: Cross-compile and verify the native dependencies
+        env:
+          PITBOX_HOST_PYTHON: ${{ steps.py312.outputs.python-path }}
+        run: bash ./android/build-wheels.sh
+
+      - name: Build and sign the release APK
+        working-directory: android
+        env:
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          PITBOX_KEYSTORE_PATH: ${{ runner.temp }}/pitbox-release.keystore
+          PITBOX_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          PITBOX_KEY_ALIAS: pitbox-release
+          PITBOX_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          trap 'rm -f "$PITBOX_KEYSTORE_PATH"' EXIT
+          printf '%s' "$KEYSTORE_BASE64" | base64 --decode > "$PITBOX_KEYSTORE_PATH"
+          ./gradlew --no-daemon assembleRelease -Ppitbox.buildPython=${{ steps.py313.outputs.python-path }}
+
+      - name: Verify the signature, package and version
+        id: apk
+        env:
+          NAME: ${{ steps.release.outputs.name }}
+          VERSION: ${{ steps.release.outputs.version }}
+          REVISION: ${{ steps.release.outputs.revision }}
+        run: |
+          tools="$ANDROID_HOME/build-tools/35.0.0"
+          apk="$RUNNER_TEMP/$NAME"
+          cp android/app/build/outputs/apk/release/app-release.apk "$apk"
+          signature=$("$tools/apksigner" verify --verbose --print-certs "$apk")
+          grep -q 'Verified using v2 scheme (APK Signature Scheme v2): true' <<< "$signature"
+          grep -q 'Verified using v3 scheme (APK Signature Scheme v3): true' <<< "$signature"
+          certs=$(grep -c 'certificate SHA-256 digest:' <<< "$signature")
+          test "$certs" = 1
+          grep -qi "certificate SHA-256 digest: $RELEASE_CERT_SHA256" <<< "$signature" || {
+            echo "::error::The APK is not signed with the release key ($RELEASE_CERT_SHA256)."
+            exit 1
+          }
+          badging=$("$tools/aapt2" dump badging "$apk" | head -1)
+          grep -q "package: name='com.yourpitbox.app' versionCode='$REVISION' versionName='$VERSION-android.$REVISION'" <<< "$badging"
+          {
+            echo "path=$apk"
+            echo "size=$(stat -c %s "$apk")"
+            echo "sha256=$(sha256sum "$apk" | cut -d' ' -f1)"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Upload to the downloads bucket
+        env:
+          NAME: ${{ steps.release.outputs.name }}
+          APK: ${{ steps.apk.outputs.path }}
+        run: $WRANGLER r2 object put "$BUCKET/$NAME" --file "$APK" --content-type application/vnd.android.package-archive --remote
+
+      - name: Keep the signed APK with this run
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.release.outputs.name }}
+          path: ${{ steps.apk.outputs.path }}
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Report what to publish
+        env:
+          NAME: ${{ steps.release.outputs.name }}
+          SIZE: ${{ steps.apk.outputs.size }}
+          SHA256: ${{ steps.apk.outputs.sha256 }}
+        run: |
+          {
+            echo "### $NAME uploaded"
+            echo
+            echo "| Size (bytes) | SHA-256 |"
+            echo "|---|---|"
+            echo "| $SIZE | \`$SHA256\` |"
+            echo
+            echo "Next: on main, set ANDROID_KEY in distribution/activation-server/src/worker.js to $NAME and put this size and SHA-256 on the website's Android card. Merging that deploys both. Then run this workflow with stage notify."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  notify:
+    if: inputs.stage == 'notify' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    environment: release
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Fetch the APK the download serves
+        env:
+          EXPECTED: ${{ inputs.sha256 }}
+        run: |
+          [[ "$EXPECTED" =~ ^[a-f0-9]{64}$ ]] || { echo "::error::Give the SHA-256 the upload run reported."; exit 1; }
+          # A ranged request is not counted as a download.
+          curl -sS --fail -H 'Range: bytes=0-' -o "$RUNNER_TEMP/served.apk" "$API/android"
+          served=$(sha256sum "$RUNNER_TEMP/served.apk" | cut -d' ' -f1)
+          test "$served" = "$EXPECTED" || { echo "::error::The download serves $served, not $EXPECTED."; exit 1; }
+      - name: Announce the update in the app
+        env:
+          PITBOX_RELEASE_PUBLISH_TOKEN: ${{ secrets.RELEASE_PUBLISH_TOKEN }}
+          NOTES: ${{ inputs.notes }}
+        run: |
+          version=$(sed -n 's/^__version__ = "\(.*\)"$/\1/p' src/pitwall/__init__.py)
+          test -n "$NOTES" || { echo "::error::Give the update notes."; exit 1; }
+          printf '%s' "$NOTES" > "$RUNNER_TEMP/notes.txt"
+          python -m pip install --quiet httpx
+          python -m distribution.tools.publish_release --platform android --version "$version" --artifact "$RUNNER_TEMP/served.apk" --notes-file "$RUNNER_TEMP/notes.txt"

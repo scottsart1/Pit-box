@@ -30,6 +30,27 @@ EULA = (DIST / "website" / "eula.html").read_text(encoding="utf-8")
 DIAGNOSTICS = (DIST / "website" / "diagnostics.html").read_text(encoding="utf-8")
 DOWNLOAD_JS = (DIST / "website" / "download.js").read_text(encoding="utf-8")
 REVIEWS_JS = (DIST / "website" / "reviews.js").read_text(encoding="utf-8")
+WORKER_JS = (DIST / "activation-server" / "src" / "worker.js").read_text(encoding="utf-8")
+
+
+def _version(text: str) -> tuple[int, ...]:
+    return tuple(int(part) for part in text.split("."))
+
+
+def _served_android() -> tuple[str, str]:
+    """The Android version and revision the download serves.
+
+    The site advertises exactly the APK the Worker hands out. That can lag the
+    code: a release commit raises the version before its APK is built, signed
+    and uploaded, and the site changes with worker.js, in the commit that
+    switches the download.
+    """
+    match = re.search(r'const ANDROID_KEY = "YourPitBox-(\d+\.\d+\.\d+)-android\.(\d+)\.apk";', WORKER_JS)
+    return match.group(1), match.group(2)
+
+
+def _windows_on_site() -> str:
+    return re.search(r'Windows (\d+\.\d+\.\d+) · unsigned installer', INDEX).group(1)
 
 REAL_ENDPOINT = "https://activation.pitwall.app"
 
@@ -700,7 +721,9 @@ def test_beta_transmission_is_distinct_from_reception_and_history_copy():
 
 def test_unsigned_windows_notice_remains_without_removed_installation_wording():
     from pitwall import __version__
-    assert f'Windows {__version__} · unsigned installer' in INDEX
+    # Windows is released on its own schedule, so the installer the site
+    # offers may be older than the code, never newer.
+    assert _version(_windows_on_site()) <= _version(__version__)
     assert 'The current Windows installer is unsigned.' in GUIDE
     for page in (INDEX, GUIDE):
         assert 'unknown publisher' in page or 'unknown-publisher' in page
@@ -721,8 +744,12 @@ def test_current_release_leads_with_session_analysis_and_keeps_its_disclosures()
     assert 'Realtime radio in Settings' in release and 'off by default' in release and 'API costs' in release
     assert 'nothing installs automatically' in release
     assert 'penalties included' in release and 'unknown instead of guessing' in release
-    assert f'Windows {__version__} and Android {__version__} (revision {revision}).' in release
-    assert f'{__version__}-android.{revision}.apk' in INDEX
+    android, served_revision = _served_android()
+    assert _version(android) <= _version(__version__)
+    assert int(served_revision) <= int(revision)
+    assert f'Windows {_windows_on_site()} and Android {android} (revision {served_revision}).' in release
+    assert f'{android}-android.{served_revision}.apk' in INDEX
+    assert f'Android {android} · signed APK' in INDEX
     assert 'Install this update manually once' in INDEX
     assert 'setup step 2 open' in GUIDE
     assert 'Every step is skippable' in GUIDE
@@ -747,10 +774,9 @@ def test_engineering_guide_explains_group_selection_and_evidence_limits():
 
 
 def test_unresolved_android_bluetooth_condition_stays_disclosed_for_current_release():
-    from pitwall import __version__
-
+    android, _ = _served_android()
     note = GUIDE.split('id="android-wireless-note"', 1)[1].split('</p>', 1)[0]
-    assert f'version {__version__} does not yet resolve this observed condition' in note
+    assert f'version {android} does not yet resolve this observed condition' in note
     assert 'combined Wi-Fi/Bluetooth disconnect' in note
     assert 'tablet speakers does not verify your Bluetooth headset' in note
 
