@@ -71,7 +71,7 @@ async function harness(overrides = {}) {
   };
   // Use the real tab selectors; do not execute the live telemetry bootstrap.
   w.eval("const ANALYSIS_VIEWS=['test-engineer','library','session-analysis','session-review','lap-lab','field','review']; function loadTracks(){} function loadHistory(){} function loadAppSettings(){}\n" +
-    ['selectPage', 'selectAnalysisView'].map(name => html.match(new RegExp(`^function ${name}\\([^\\n]+`, 'm'))[0]).join('\n'));
+    ['revealTab', 'selectPage', 'selectAnalysisView'].map(name => html.match(new RegExp(`^function ${name}\\([^\\n]+`, 'm'))[0]).join('\n'));
   w.document.querySelectorAll('.tab').forEach(button => { button.onclick = () => w.selectPage(button.dataset.page); });
   w.document.querySelectorAll('.analysis-subnav .field-tab').forEach(button => { button.onclick = () => w.selectAnalysisView(button.dataset.page); });
   w.eval(fs.readFileSync(path.join(root, 'static/js/i18n.js'), 'utf8'));

@@ -8,8 +8,8 @@
    `export` keywords are dropped and `__test` is exposed on window. Nothing
    else in the source is rewritten, so the shipped code is what runs. The
    screen-language runtime (static/js/i18n.js) and the inline router
-   (ANALYSIS_VIEWS, selectPage, selectAnalysisView, taken from index.html)
-   run before the module, as they do in the app.
+   (ANALYSIS_VIEWS, revealTab, selectPage, selectAnalysisView, taken from
+   index.html) run before the module, as they do in the app.
    Timers and animation frames are fakes the tests drive by hand. */
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -44,7 +44,7 @@ const MODULE = bundle();
 const ROUTER = [
   html.match(/^const ANALYSIS_VIEWS=\[[^\]]*\];/m)[0],
   'function loadTracks(){} function loadHistory(){} function loadAppSettings(){}',
-  ...['selectAnalysisView', 'selectPage'].map((name) => html.match(new RegExp(`^function ${name}\\([^\\n]+`, 'm'))[0]),
+  ...['revealTab', 'selectAnalysisView', 'selectPage'].map((name) => html.match(new RegExp(`^function ${name}\\([^\\n]+`, 'm'))[0]),
 ].join('\n');
 
 const practice = (() => {
