@@ -38,11 +38,12 @@ def test_only_the_existing_release_key_is_accepted() -> None:
 
 
 def test_upload_checks_before_it_builds_and_verifies_before_it_uploads() -> None:
-    existing = RELEASE.index('r2 object get "$BUCKET/$NAME"')
+    existing = RELEASE.index('--data-urlencode "prefix=$NAME"')
     build = RELEASE.index("./gradlew --no-daemon assembleRelease")
     verify = RELEASE.index("apksigner\" verify --verbose --print-certs")
     upload = RELEASE.index('r2 object put "$BUCKET/$NAME"')
     assert existing < build < verify < upload
+    assert '.success == true and (.result | type == "array" and length == 0)' in RELEASE
     assert 'echo "name=YourPitBox-$version-android.$revision.apk"' in RELEASE
     assert "versionCode='$REVISION' versionName='$VERSION-android.$REVISION'" in RELEASE
 
@@ -56,6 +57,9 @@ def test_the_update_is_announced_only_for_the_apk_the_download_serves() -> None:
 def test_the_download_service_deploys_from_main_after_its_tests_and_upload_check() -> None:
     triggers = _triggers(WORKER)
     assert "branches: [main]" in triggers and "pull_request" not in triggers
+    assert ".github/workflows/deploy-worker.yml" not in triggers
+    assert "if: github.ref == 'refs/heads/main'" in WORKER
+    assert "environment: release" in WORKER
     for path in ("distribution/activation-server/src/**", "distribution/activation-server/wrangler.toml"):
         assert path in triggers
     tests = WORKER.index("node --test distribution/activation-server/tests/*.mjs")
@@ -63,3 +67,9 @@ def test_the_download_service_deploys_from_main_after_its_tests_and_upload_check
     deploy = WORKER.index("run: $WRANGLER deploy")
     served = WORKER.index('curl -sS --fail -I "$API/android"')
     assert tests < uploaded < deploy < served
+
+
+def test_android_and_worker_use_the_release_environment_cloudflare_token() -> None:
+    for workflow in (RELEASE, WORKER):
+        assert "secrets.CLOUDFLARE_RELEASE_API_TOKEN" in workflow
+        assert "secrets.CLOUDFLARE_API_TOKEN" not in workflow

@@ -54,7 +54,6 @@ jobs:
     environment: release
     timeout-minutes: 60
     env:
-      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
       CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
     steps:
       - uses: actions/checkout@v4
@@ -74,15 +73,30 @@ jobs:
             echo "name=YourPitBox-$version-android.$revision.apk"
           } >> "$GITHUB_OUTPUT"
 
-      # Fail in a minute, not after a 15-minute build, if the token cannot
-      # reach the bucket or the APK was already published.
-      - name: Check the bucket and that this version is not uploaded yet
+      - name: Check signing and storage prerequisites
         env:
           NAME: ${{ steps.release.outputs.name }}
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_RELEASE_API_TOKEN }}
         run: |
-          $WRANGLER r2 bucket list | grep -q "$BUCKET"
-          if $WRANGLER r2 object get "$BUCKET/$NAME" --remote --pipe > /dev/null 2>&1; then
-            echo "::error::$NAME is already in $BUCKET. A published APK is never replaced; raise the Android revision instead."
+          if [[ -z "$KEYSTORE_BASE64" || -z "$KEYSTORE_PASSWORD" || -z "$KEY_PASSWORD" ]]; then
+            echo "::error::Add the three Android signing secrets to the release environment."
+            exit 1
+          fi
+          if [[ -z "$CLOUDFLARE_API_TOKEN" || -z "$CLOUDFLARE_ACCOUNT_ID" ]]; then
+            echo "::error::Configure CLOUDFLARE_RELEASE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID before uploading."
+            exit 1
+          fi
+          # A successful, empty prefix listing distinguishes an unused key
+          # from an authentication, bucket or network failure.
+          objects=$(curl --silent --show-error --fail --get \
+            --header "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+            --data-urlencode "prefix=$NAME" \
+            "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/r2/buckets/$BUCKET/objects")
+          if ! jq -e '.success == true and (.result | type == "array" and length == 0)' <<< "$objects" > /dev/null; then
+            echo "::error::Could not confirm that $NAME is unused in $BUCKET. Check the bucket before retrying."
             exit 1
           fi
 
@@ -165,6 +179,7 @@ jobs:
         env:
           NAME: ${{ steps.release.outputs.name }}
           APK: ${{ steps.apk.outputs.path }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_RELEASE_API_TOKEN }}
         run: $WRANGLER r2 object put "$BUCKET/$NAME" --file "$APK" --content-type application/vnd.android.package-archive --remote
 
       - name: Keep the signed APK with this run

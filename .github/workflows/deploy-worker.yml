@@ -11,7 +11,6 @@ on:
     paths:
       - distribution/activation-server/src/**
       - distribution/activation-server/wrangler.toml
-      - .github/workflows/deploy-worker.yml
   workflow_dispatch:
 
 permissions:
@@ -23,12 +22,13 @@ concurrency:
 
 jobs:
   deploy:
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
+    environment: release
     timeout-minutes: 15
     env:
       WRANGLER: npx --yes wrangler@4.154.0
       API: https://pitwall-activation.sarthakvij123450.workers.dev
-      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
       CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
     steps:
       - uses: actions/checkout@v4
@@ -39,6 +39,8 @@ jobs:
         run: node --test distribution/activation-server/tests/*.mjs
       - name: Check the APK it serves is uploaded
         id: android
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_RELEASE_API_TOKEN }}
         run: |
           key=$(sed -n 's/^const ANDROID_KEY = "\(.*\)";$/\1/p' distribution/activation-server/src/worker.js)
           test -n "$key"
@@ -49,6 +51,8 @@ jobs:
           echo "key=$key" >> "$GITHUB_OUTPUT"
       - name: Deploy
         working-directory: distribution/activation-server
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_RELEASE_API_TOKEN }}
         run: $WRANGLER deploy
       # HEAD reads the object's metadata and is not counted as a download.
       - name: Confirm the Android download serves that APK
