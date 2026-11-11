@@ -1,8 +1,8 @@
-# Your Pit Box 5.6.0 — AI race engineer and driver dashboard
+# Your Pit Box 5.7.0 — AI race engineer and driver dashboard
 
 [Download Windows or Android](https://yourpitbox.com/#download),
 [try the Driver Dashboard](https://your-pit-box-driver-dashboard.sarthakvij123450.chatgpt.site/),
-or read the [release notes](docs/release-notes-5.6.0.md).
+or read the [release notes](docs/release-notes-5.7.0.md).
 
 Your Pit Box receives **F1 26** telemetry (UDP format **2026**) from a PS5, runs deterministic
 strategy/corner/setup analysis locally, keeps persistent SQLite history, answers spoken questions,
@@ -105,6 +105,42 @@ Only enable `PITWALL_WEB_LAN_ACCESS=true` when a phone/tablet needs the
 dashboard. Bind the web host to `0.0.0.0`, set a long
 `PITWALL_WEB_ACCESS_TOKEN`, and keep it on a trusted LAN. Your Pit Box never opens a
 router or firewall to the public internet automatically.
+
+## What changed in 5.7.0
+
+**Rain.** The stop for inters is called on the rain that is falling, within
+about a lap, and committed once something measured agrees with the sky; until
+then the call is to stand by. Each weather call is said once per change:
+watch, ask, stand by, box, a "Box, box" reminder before the pit entry, and a
+stand-down if the engine withdraws the stop. STRATEGY shows the track
+conditions (surface, forecast, the surface to the flag and every tyre's
+cost), and the engineer answers weather questions from the same picture.
+
+**Rivals.** A rival that still owes its second dry compound is projected to
+stop for it, and rivals box for inters when the surface says so. A rival's
+stop is called as it enters the lane, only for a car that matters, with the
+arithmetic to cover it: "Sainz is in the pits, 2.1 behind. Box next lap and
+you stay ahead by 0.8."
+
+**Plans.** A stop's rejoin is judged on the lap it is made ("Where you come
+out" on STRATEGY), a what-if is priced by the full planner, and every plan is
+judged against races with and without a safety car or rain, with its chance
+of a win, a podium and points. Once a lap the engine prepares what it would
+do under a safety car: "If a safety car comes out this lap: box for hards,
+about 11 s better." Each finished race teaches the circuit its pit loss, tyre
+wear and safety-car rate.
+
+**After the race.** Session Analysis lays every strategy call beside your
+stops: the lap recommended, the lap called and whether you heard it, and the
+best stop lap on the lap times you set.
+
+**For operators.** On first start the database is backed up and upgraded to
+schema 5700; 5.6.0 cannot open it, and a history transfer needs both devices
+on 5.7.0. See the [release notes](docs/release-notes-5.7.0.md) for settings,
+endpoints and developer tools.
+
+Windows remains an explicitly unsigned direct-download installer, and Android
+keeps the existing signing identity.
 
 ## What changed in 5.6.0
 
