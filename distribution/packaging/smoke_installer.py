@@ -5,8 +5,10 @@ Run only on a disposable GitHub-hosted Windows runner::
     python -m distribution.packaging.smoke_installer --installer <exe> --version <v>
 
 The optional welcome dialog is skipped by seeding its ordinary per-data-dir
-marker. The frozen entry point, integrity check, splash, HTTP server, real UDP
-receiver, persistence, dashboard shutdown and silent uninstaller still run.
+marker. The driver-profile screen is used through the same HTTP calls its page
+makes: a PIN profile is created on the first launch and opened with its PIN on
+the second. The frozen entry point, integrity check, splash, HTTP server, real
+UDP receiver, persistence, dashboard shutdown and silent uninstaller still run.
 This is not a visual test of the first-run dialog, browser or audio hardware.
 Nothing is recursively deleted; the unique test data remains for diagnostics.
 """
@@ -91,6 +93,8 @@ def isolated_environment(data_dir: Path, web_port: int, udp_port: int) -> dict[s
         "PITWALL_WAKE_ENABLED": "false",
         "PITWALL_PROACTIVE_ENABLED": "false",
         "PITWALL_RAW_CAPTURE": "full",
+        # Sign-ins from this disposable runner stay queued on it.
+        "PITWALL_PROFILE_REPORT_ENDPOINT": "http://127.0.0.1:9/account/",
         "NO_PROXY": "127.0.0.1,localhost",
         "PYTHONNOUSERSITE": "1",
     })
@@ -224,11 +228,65 @@ def wait_for_health(process, port: int, version: str, data_dir: Path, timeout: f
             last_error = str(exc)
             time.sleep(0.25)
             continue
+        if health.get("profile_screen") is True:
+            # The driver-profile screen is still handing over to the backend.
+            last_error = "driver-profile screen still open"
+            time.sleep(0.25)
+            continue
         # A different server is not a transient startup failure. In particular,
         # never POST /api/shutdown to it during cleanup.
         assert_health(health, version, data_dir)
         return health
     raise SmokeFailure(f"Installed app did not become ready within {timeout}s: {last_error}")
+
+
+SMOKE_DRIVER = ("Smoke Driver", "2468")
+
+
+def open_driver_profile(process, port: int, data_dir: Path, timeout: float, *, first: bool) -> dict:
+    """Use the driver-profile screen as its page does: create, or open by PIN."""
+    deadline = time.monotonic() + timeout
+    while True:
+        if process.poll() is not None:
+            raise SmokeFailure(f"Installed app exited before the driver-profile screen: {process.returncode}")
+        try:
+            health = request_json(port, "/api/health")
+            if health.get("profile_screen") is True:
+                break
+        except (OSError, ValueError):
+            pass
+        if time.monotonic() > deadline:
+            raise SmokeFailure("Installed app did not show the driver-profile screen")
+        time.sleep(0.25)
+    state = request_json(port, "/gate/state")
+    name, pin = SMOKE_DRIVER
+    if first:
+        if state.get("profiles") != []:
+            raise SmokeFailure(f"A fresh data folder already lists driver profiles: {state}")
+        # The seeded data folder counts as an installation used before profiles.
+        if state.get("existing_data") is not True:
+            raise SmokeFailure("The driver-profile screen did not offer to attach existing data")
+        opened = request_json(port, "/gate/create", method="POST", body={"name": name, "method": "pin", "pin": pin})
+    else:
+        listed = state.get("profiles") or []
+        if [item.get("name") for item in listed] != [name]:
+            raise SmokeFailure(f"The driver-profile screen lists the wrong drivers: {listed}")
+        opened = request_json(port, "/gate/unlock", method="POST", body={"id": listed[0]["id"], "pin": pin})
+    if opened.get("ok") is not True:
+        raise SmokeFailure(f"The driver profile did not open: {opened}")
+    index = data_dir / "driver-profiles" / "profiles.json"
+    if pin in index.read_text(encoding="utf-8"):
+        raise SmokeFailure("The driver-profile list stores the PIN itself")
+    return state
+
+
+def verify_sign_ins(data_dir: Path, expected: int) -> None:
+    """Each opening is queued for reporting; this runner's endpoint keeps them queued."""
+    journal = json.loads((data_dir / "driver-profiles" / "sign-ins.json").read_text(encoding="utf-8"))
+    if len(journal) != expected:
+        raise SmokeFailure(f"Expected {expected} queued sign-ins, found {len(journal)}")
+    if any(set(event) != {"profile", "event_id", "occurred_at", "version"} for event in journal):
+        raise SmokeFailure("A queued sign-in carries more than its profile, event, time and version")
 
 
 def telemetry_packets(frame: int) -> list[bytes]:
@@ -617,6 +675,8 @@ def run_smoke(
         udp_reservation.close()
         # Crucially: not `python -m pitwall.main`, and not cwd=the checkout.
         process = subprocess.Popen([str(executable)], cwd=install_dir, env=env)
+        open_driver_profile(process, web_port, data_dir, timeout, first=True)
+        summary["checks"].append("driver_profile_created_and_attached_to_existing_data")
         health = wait_for_health(process, web_port, version, data_dir, timeout)
         save_json(diagnostics / "health.json", health)
         summary["checks"].append("frozen_startup_and_isolated_health")
@@ -651,7 +711,10 @@ def run_smoke(
         # Reload through the installed product's API, not just a direct SQLite
         # query. Do not transmit anything on this second launch.
         process = subprocess.Popen([str(executable)], cwd=install_dir, env=env)
+        open_driver_profile(process, web_port, data_dir, timeout, first=False)
         wait_for_health(process, web_port, version, data_dir, timeout)
+        verify_sign_ins(data_dir, 2)
+        summary["checks"].append("driver_profile_reopened_by_pin")
         transfer = exercise_transfers(web_port, transfer.get("certificate_sha256"))
         summary["transfer_after_restart"] = transfer
         save_json(diagnostics / "transfer-after-restart-summary.json", transfer)

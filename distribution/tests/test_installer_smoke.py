@@ -17,6 +17,7 @@ from f1 import packets
 
 from distribution.launcher import WELCOME_MARKER
 from distribution.packaging import smoke_installer as smoke
+from pitwall.desktop import ProfileGate
 
 
 def healthy(data: Path, version: str = "4.9.7") -> dict:
@@ -142,12 +143,23 @@ def lifecycle(tmp_path, monkeypatch):
         assert (data / "license" / WELCOME_MARKER).read_text() == "shown\n"
         populate_database(data)
         (data / "pitwall.log").write_text("fake app diagnostics\n")
+        # Each launch opens on the real driver-profile screen logic.
+        context["gate"] = ProfileGate(data, version="4.9.7-windows")
         process = FakeProcess()
         processes.append(process)
         return process
 
-    def request(port, route, *, method="GET"):
+    def request(port, route, *, method="GET", body=None):
         events.append((method, route))
+        gate = context["gate"]
+        if route == "/api/health" and not gate.opened.is_set():
+            return {"ok": True, "profile_screen": True, "version": "4.9.7"}
+        if route == "/gate/state":
+            return gate.state()[1]
+        if route in {"/gate/create", "/gate/unlock"}:
+            status, reply = (gate.create if route == "/gate/create" else gate.unlock)(body)
+            assert status == 200, reply
+            return reply
         if route == "/api/health":
             data = tmp_path / "somebody-elses-data" if context["wrong_server"] else context["data"]
             return healthy(data)
@@ -261,6 +273,12 @@ def test_lifecycle_installs_exact_file_launches_frozen_reopens_and_preserves_dat
     assert events[0][1][0] == str(installer)
     assert "/VERYSILENT" in events[0][1] and "/NOICONS" in events[0][1]
     assert "relaunch_and_read_recorded_session" in summary["checks"]
+    # The first launch creates a PIN profile that inherits the existing data;
+    # the second opens it with the PIN. Neither leaves the runner.
+    assert "driver_profile_created_and_attached_to_existing_data" in summary["checks"]
+    assert "driver_profile_reopened_by_pin" in summary["checks"]
+    assert ("POST", "/gate/create") in events and ("POST", "/gate/unlock") in events
+    assert launches[0][2]["env"]["PITWALL_PROFILE_REPORT_ENDPOINT"].startswith("http://127.0.0.1:")
     assert [event for event in events if event[0] == "transfer"] == [
         ("transfer", None), ("transfer", "a" * 64),
     ]
