@@ -496,6 +496,152 @@ def prove_sqlite_lifecycle(package: str, label: str):
     assert not leaked, "APK abandoned SQLite handles to garbage collection; see logcat"
 
 
+# ----- Driver profiles -------------------------------------------------------
+# Every launch opens on the native driver-profile screen. The smoke test uses
+# it exactly as a driver would: no Intent extra or debug route can open a
+# profile, so these helpers read its controls from the accessibility tree.
+FIRST_DRIVER = ("Smoke Driver", "2468")
+SECOND_DRIVER = ("Second Driver", "second.driver@example.test")
+
+
+def gate_node(tree: ET.Element, name: str) -> ET.Element | None:
+    """A visible control on the native profile screen, by its resource id."""
+    for node in tree.iter("node"):
+        if node.get("resource-id", "").endswith(f":id/{name}") and node_bounds(node):
+            return node
+    return None
+
+
+def text_node(tree: ET.Element, text: str) -> ET.Element | None:
+    """A driver row: its name as text, or its spoken label "Name. Opens with…"."""
+    for node in tree.iter("node"):
+        if node_bounds(node) and (node.get("text", "") == text
+                                  or node.get("content-desc", "").startswith(text + ". ")):
+            return node
+    return None
+
+
+def await_gate(label: str, *, timeout: float = 45) -> ET.Element:
+    """Wait for the opening animation to uncover the profile screen."""
+    deadline = time.monotonic() + timeout
+    attempt = 0
+    while True:
+        attempt += 1
+        try:
+            tree = ui_tree(f"{label}-gate-{attempt}", allow_empty=True)
+        except UiProviderUnavailable:
+            # The opening animation can briefly leave no idle hierarchy.
+            assert time.monotonic() < deadline, f"Driver-profile screen did not appear; see {label}-gate-*-dump.txt"
+            time.sleep(1)
+            continue
+        if any(gate_node(tree, name) is not None for name in ("gate_submit", "gate_new_driver", "gate_retry")):
+            assert gate_node(tree, "gate_retry") is None, f"Encrypted profile storage failed; see {label}-gate-{attempt}-ui.xml"
+            return tree
+        assert time.monotonic() < deadline, f"Driver-profile screen did not appear; see {label}-gate-*-ui.xml"
+        time.sleep(1)
+
+
+def gate_tap(label: str, tree: ET.Element, name: str) -> ET.Element:
+    node = gate_node(tree, name)
+    assert node is not None, f"Profile screen has no visible {name}; see {label}-ui.xml"
+    tap_node(node)
+    return ui_tree(f"{label}-after-{name}")
+
+
+def gate_type(label: str, tree: ET.Element, name: str, value: str) -> ET.Element:
+    """Focus a field, type into it, and return the re-laid-out screen."""
+    tree = gate_tap(label, tree, name)
+    adb("shell", "input", "text", value.replace(" ", "%s"))
+    time.sleep(0.5)
+    return ui_tree(f"{label}-typed-{name}")
+
+
+def gate_submit(label: str):
+    """The keyboard's Done key on the last field opens the profile."""
+    adb("shell", "input", "keyevent", "KEYCODE_ENTER")
+    deadline = time.monotonic() + 30
+    attempt = 0
+    while time.monotonic() < deadline:
+        attempt += 1
+        tree = ui_tree(f"{label}-opening-{attempt}", allow_empty=True)
+        if gate_node(tree, "gate_submit") is None and gate_node(tree, "gate_new_driver") is None:
+            return
+        notice = gate_node(tree, "gate_notice")
+        message = (notice.get("text", "") if notice is not None else "").strip()
+        assert not message or message.endswith("…"), f"Profile did not open: {message!r}"
+        time.sleep(1)
+    raise AssertionError(f"Profile screen stayed open after submitting; see {label}-opening-*-ui.xml")
+
+
+def create_pin_profile(label: str, name: str, pin: str, *, first: bool):
+    tree = await_gate(label)
+    if not first:
+        if gate_node(tree, "gate_new_driver") is None:
+            tree = gate_tap(label, tree, "gate_other_driver")
+        tree = gate_tap(label, tree, "gate_new_driver")
+    assert gate_node(tree, "gate_name") is not None, f"Setup form did not open; see {label}-ui.xml"
+    tree = gate_type(label, tree, "gate_name", name)
+    tree = gate_type(label, tree, "gate_credential", pin)
+    gate_type(label, tree, "gate_confirm", pin)
+    gate_submit(label)
+
+
+def create_email_profile(label: str, name: str, email: str):
+    tree = await_gate(label)
+    if gate_node(tree, "gate_new_driver") is None:
+        tree = gate_tap(label, tree, "gate_other_driver")
+    tree = gate_tap(label, tree, "gate_new_driver")
+    tree = gate_type(label, tree, "gate_name", name)
+    tree = gate_tap(label, tree, "gate_method_email")
+    assert gate_node(tree, "gate_confirm") is None, "Email profiles must not ask for a PIN"
+    gate_type(label, tree, "gate_credential", email)
+    gate_submit(label)
+
+
+def unlock_profile(label: str, name: str, secret: str):
+    """Open an existing profile: directly when it is the only one, else by name."""
+    tree = await_gate(label)
+    if gate_node(tree, "gate_new_driver") is not None:
+        row = text_node(tree, name)
+        assert row is not None, f"Driver {name!r} is not listed; see {label}-ui.xml"
+        tap_node(row)
+        tree = ui_tree(f"{label}-chosen")
+    welcome = [node.get("text", "") for node in tree.iter("node") if name in node.get("text", "")]
+    assert welcome, f"Unlock form is not for {name!r}; see {label}-ui.xml"
+    gate_type(label, tree, "gate_credential", secret)
+    gate_submit(label)
+
+
+def launch(package: str):
+    adb("shell", "am", "start", "-W", "-n", f"{package}/com.yourpitbox.app.MainActivity")
+
+
+def prove_profile_isolation(package: str, first_database: str, first_pin: str):
+    """A second driver gets separate storage; the first driver's comes back intact."""
+    adb("shell", "am", "force-stop", package)
+    launch(package)
+    create_email_profile("second-driver", *SECOND_DRIVER)
+    health = await_health()
+    second_database = str(health["database"])
+    assert "/profiles/" in second_database and second_database != first_database, \
+        "Second driver did not get a separate database"
+    second_pin = prove_transfer_service("second-driver")
+    assert second_pin != first_pin, "Second driver shares the first driver's transfer identity"
+
+    adb("shell", "am", "force-stop", package)
+    launch(package)
+    unlock_profile("first-driver-again", *FIRST_DRIVER)
+    health = await_health()
+    assert str(health["database"]) == first_database, "First driver did not reopen its own database"
+    prove_transfer_service("first-driver-again", first_pin)
+    (OUTPUT / "profile-isolation.json").write_text(json.dumps({
+        "first_profile_inherits_installation_storage": "/profiles/" not in first_database,
+        "second_profile_separate_database": True,
+        "second_profile_separate_transfer_identity": True,
+        "first_profile_restored_after_switch": True,
+    }, indent=2))
+
+
 def capture(package: str):
     # Preserve management diagnostics even if the live-state request failed.
     # These endpoints contain neither pairing invitations nor credentials.
@@ -542,13 +688,22 @@ def main():
     assert b"KO" not in redir.stdout, redir.stdout.decode(errors="replace")
     try:
         transfer_pin = None
+        first_database = None
         for attempt in (1, 2):
             if attempt == 2:
                 adb("shell", "am", "force-stop", args.package)
-            adb("shell", "am", "start", "-W", "-n", f"{args.package}/com.yourpitbox.app.MainActivity")
+            launch(args.package)
+            if attempt == 1:
+                create_pin_profile("launch-1", *FIRST_DRIVER, first=True)
+            else:
+                unlock_profile("launch-2", *FIRST_DRIVER)
             health = await_health()
             assert health["version"] == expected_version, health
             assert health["udp_listener"], health
+            if first_database is None:
+                first_database = str(health["database"])
+                assert "/profiles/" not in first_database, "The first driver must keep the installation's storage"
+            assert str(health["database"]) == first_database, "The same driver reopened a different database"
             (OUTPUT / f"launch-{attempt}-health.json").write_text(json.dumps(health, indent=2))
             transfer_pin = prove_transfer_service(f"launch-{attempt}", transfer_pin)
             prove_udp(f"launch-{attempt}", attempt * 100)
@@ -566,6 +721,8 @@ def main():
         native_spec.loader.exec_module(native_qa)
         native_qa.run(sys.modules[__name__], args.package, expected_version)
         prove_sqlite_lifecycle(args.package, "final")
+        prove_profile_isolation(args.package, first_database, transfer_pin)
+        print("PASS: Driver profiles: first PIN profile keeps installation storage, reopens with its PIN, a second email driver gets a separate database and transfer identity, and the first driver reopens intact.")
         print("PASS: APK startup, exact engine version, UDP parsing/background reception, stationary trace stability, transfer TLS/QR management, and identity across listener/process restart.")
         print("PASS: Status/navigation bars hidden after launch, process restart and foreground return; edge swipe reveals transient bars which hide again.")
         if ui_passed:
