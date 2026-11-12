@@ -50,6 +50,7 @@ public class MainActivity extends Activity {
     private AccountGate accountGate;
     private boolean accountRequired;
     private boolean gateVisible;
+    private boolean switchingProfiles;
     private boolean stoppedAfterUnlock;
     private boolean authorizedStartPending;
     private TextView status;
@@ -214,7 +215,7 @@ public class MainActivity extends Activity {
     }
 
     private void showAccountGate() {
-        if (gateVisible || isDestroyed() || isFinishing()) return;
+        if (gateVisible || switchingProfiles || isDestroyed() || isFinishing()) return;
         gateVisible = true;
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_SECURE);
         accountGate = new AccountGate(this, () -> {
@@ -230,18 +231,32 @@ public class MainActivity extends Activity {
     }
 
     private void requestProfileSwitch() {
+        if (switchingProfiles) return;
         new android.app.AlertDialog.Builder(this).setTitle("Switch driver?")
             .setMessage("This ends the current session and closes the app after saving. Reopen Your Pit Box to choose or add a driver.")
             .setNegativeButton("Keep racing", null)
             .setPositiveButton("Save and close", (dialog, which) -> {
+                switchingProfiles = true;
                 web.setVisibility(View.INVISIBLE);
-                if (startedAt > 0 && PitBoxService.getFailure() == null)
+                if (accountGate != null) { root.removeView(accountGate); accountGate = null; }
+                status.setText("Saving your session. Reopen Your Pit Box after it closes to choose a driver.");
+                startupContainer.setVisibility(View.VISIBLE);
+                // A recreated Activity can have startedAt == 0 while its
+                // foreground service still owns an active race. Wait for the
+                // actual backend thread rather than relying on Activity state.
+                if (PitBoxService.hasActiveBackend())
                     startService(new Intent(this, PitBoxService.class).setAction(PitBoxService.ACTION_STOP));
-                else { finishAndRemoveTask(); android.os.Process.killProcess(android.os.Process.myPid()); }
+                handler.post(new Runnable() {
+                    public void run() {
+                        if (PitBoxService.hasActiveBackend()) { handler.postDelayed(this, 200); return; }
+                        finishAndRemoveTask(); android.os.Process.killProcess(android.os.Process.myPid());
+                    }
+                });
             }).show();
     }
 
     private void beginAuthorizedStart() {
+        if (switchingProfiles) return;
         if (!resumed) { authorizedStartPending = true; return; }
         authorizedStartPending = false;
         stoppedAfterUnlock = false;
@@ -396,7 +411,7 @@ public class MainActivity extends Activity {
     }
 
     private void startBackend() {
-        if (!AccountSession.isUnlocked() || startedAt != 0) return;
+        if (switchingProfiles || !AccountSession.isUnlocked() || startedAt != 0) return;
         if (BuildConfig.DEBUG) {
             // adb run-as is available only for debuggable packages. This lets
             // emulator tests authenticate without a production bypass route.
@@ -450,7 +465,7 @@ public class MainActivity extends Activity {
 
     /** Loads the dashboard the moment the backend answers its health check. */
     private void pollUntilReady() {
-        if (loaded || isDestroyed() || isFinishing()) return;
+        if (loaded || switchingProfiles || isDestroyed() || isFinishing()) return;
         String failure = PitBoxService.getFailure();
         if (failure != null) {
             status.setText(getString(R.string.start_failed) + "\n\n" + failure
@@ -464,7 +479,7 @@ public class MainActivity extends Activity {
             new Thread(() -> {
                 boolean ready = healthy(healthUrl);
                 handler.post(() -> {
-                    if (isDestroyed() || isFinishing()) return;
+                    if (switchingProfiles || isDestroyed() || isFinishing()) return;
                     if (ready && !loaded) {
                         loaded = true;
                         // Hide the entire overlay: an empty visible ScrollView

@@ -14,6 +14,11 @@ public final class ProfilePaths {
         validate(id);
         return legacy ? files : new File(files, "profiles/" + id);
     }
+    public static String preferenceFile(String id, boolean legacy) {
+        if (id == null) return "driver_dashboard";
+        validate(id);
+        return legacy ? "driver_dashboard" : "driver_dashboard_" + id;
+    }
     public static String providerName(String id, boolean legacy, String name) {
         if (id == null) return name;
         validate(id);

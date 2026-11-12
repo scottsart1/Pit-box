@@ -47,6 +47,9 @@ public final class ProfileStoreCheck {
         check(ProfilePaths.providerName(a,true,"OPENAI_API_KEY").equals("OPENAI_API_KEY"));
         check(!ProfilePaths.providerName(b,false,"OPENAI_API_KEY").equals("OPENAI_API_KEY"));
         check(!ProfilePaths.providerName(b,false,"OPENAI_API_KEY").equals(ProfilePaths.providerName(email.getString("id"),false,"OPENAI_API_KEY")));
+        check(ProfilePaths.preferenceFile(a,true).equals("driver_dashboard"));
+        check(!ProfilePaths.preferenceFile(b,false).equals("driver_dashboard"));
+        check(!ProfilePaths.preferenceFile(b,false).equals(ProfilePaths.preferenceFile(email.getString("id"),false)));
         rejected(() -> ProfilePaths.directory(root,"../../another",false));
         ProfileEvents.Journal journal = new ProfileEvents.Journal(memory);
         journal.enqueue(first); journal.enqueue(email);
