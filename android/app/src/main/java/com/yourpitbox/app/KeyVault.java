@@ -69,4 +69,16 @@ public final class KeyVault {
         }
         if (!edit.commit()) throw new IllegalStateException("Encrypted vault write failed");
     }
+    /**
+     * Recovery after the Keystore key is lost or invalidated, when nothing in
+     * the vault can be decrypted any more. Removes the profile index, queued
+     * sign-ins and provider keys, and the key itself so a fresh one is made.
+     * Files under the app's storage (race history, settings) are untouched.
+     */
+    public synchronized void reset() throws Exception {
+        if (!preferences.edit().clear().commit()) throw new IllegalStateException("Encrypted vault reset failed");
+        KeyStore store = KeyStore.getInstance("AndroidKeyStore");
+        store.load(null);
+        if (store.containsAlias(ALIAS)) store.deleteEntry(ALIAS);
+    }
 }

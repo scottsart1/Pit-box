@@ -14,12 +14,16 @@ public final class PitLaneIntro extends View {
     public static final long DURATION_MS = 2600;
     private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private ValueAnimator animator;
+    private final String tagline;
     private float progress;
     public PitLaneIntro(Context context) {
         super(context);
         setBackgroundColor(Color.rgb(7, 11, 15));
-        setContentDescription("Your Pit Box. Preparing your race engineer.");
+        tagline = context.getString(R.string.intro_tagline);
+        setContentDescription(context.getString(R.string.intro_description));
         setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_YES);
+        // A cover, not a control: touches never reach the screen beneath it.
+        setClickable(true);
     }
     @Override protected void onAttachedToWindow() {
         super.onAttachedToWindow();
@@ -54,7 +58,7 @@ public final class PitLaneIntro extends View {
         paint.setColor(Color.rgb(239, 246, 250)); canvas.drawText("YOUR PIT BOX", cx, cy, paint);
         paint.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
         paint.setTextSize(11 * d); paint.setColor(Color.rgb(158, 178, 194));
-        canvas.drawText("YOUR RACE. YOUR ENGINEER.", cx, cy + 27 * d, paint);
+        canvas.drawText(tagline, cx, cy + 27 * d, paint);
         paint.setColor(Color.rgb(73, 209, 125));
         canvas.drawRect(cx - width / 2, cy + 59 * d, cx - width / 2 + width * progress, cy + 61 * d, paint);
     }

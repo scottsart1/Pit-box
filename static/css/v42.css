@@ -163,6 +163,12 @@ button:disabled,
   grid-column: 1 / -1;
 }
 
+/* Android only: the open driver profile, shown by the native app. */
+.profile-panel { grid-column: 1 / -1; }
+.profile-panel .section-heading { flex-wrap: wrap; }
+.profile-actions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-3); }
+.profile-actions .button { display: inline-flex; align-items: center; justify-content: center; text-decoration: none; }
+
 .connection-heading-row,
 .section-heading,
 .copy-row,

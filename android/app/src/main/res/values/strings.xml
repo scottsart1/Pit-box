@@ -23,4 +23,69 @@
     <string name="no_file_picker">No file picker is available.</string>
     <string name="report_saved">Session report saved.</string>
     <string name="report_save_failed">Could not save the report. Please try exporting again.</string>
+    <!-- Opening animation. -->
+    <string name="intro_tagline">YOUR RACE. YOUR ENGINEER.</string>
+    <string name="intro_description">Your Pit Box. Preparing your race engineer.</string>
+    <!-- Driver profiles: each driver on the device has their own history,
+         settings and API keys, opened with an email address or a PIN. -->
+    <string name="gate_loading">Opening driver profiles…</string>
+    <string name="gate_choose_title">Choose your driver</string>
+    <string name="gate_choose_body">Each driver has their own history, settings and API keys on this device.</string>
+    <string name="gate_opens_with_pin">Opens with PIN</string>
+    <string name="gate_opens_with_email">Opens with email</string>
+    <string name="gate_new_driver">+ New driver</string>
+    <string name="gate_setup_title">Set up your driver profile</string>
+    <string name="gate_add_title">Add a driver</string>
+    <string name="gate_upgrade_body">Your Pit Box now keeps a separate profile for each driver on this device.</string>
+    <string name="gate_upgrade_callout">Everything already on this device, including your race history, settings and API keys, will be attached to this profile.</string>
+    <string name="gate_first_body">Each driver gets their own history, settings and API keys on this device.</string>
+    <string name="gate_new_body">A new driver starts with empty history and settings, and adds their own API keys.</string>
+    <string name="gate_name_hint">Driver name</string>
+    <string name="gate_method_label">Email OR PIN</string>
+    <string name="gate_method_help">Choose either an email address or a 4-digit PIN to open this profile.</string>
+    <string name="gate_method_pin">4-digit PIN</string>
+    <string name="gate_method_email">Email</string>
+    <string name="gate_email_hint">Email address</string>
+    <string name="gate_pin_hint">4-digit PIN</string>
+    <string name="gate_confirm_hint">Confirm PIN</string>
+    <string name="gate_email_note">No verification email is sent. Anyone who knows this address can open this profile. Choose a PIN to lock it.</string>
+    <string name="gate_pin_note">Keep your PIN safe: a forgotten PIN cannot be reset.</string>
+    <string name="gate_local_note">Your email and PIN stay on this device.</string>
+    <string name="gate_create">Create profile and open</string>
+    <!-- %1$s is the driver's name. -->
+    <string name="gate_welcome">Welcome back, %1$s</string>
+    <string name="gate_unlock_pin">Enter your 4-digit PIN.</string>
+    <string name="gate_unlock_email">Enter the email address for this profile.</string>
+    <string name="gate_open">Open my pit box</string>
+    <string name="gate_other_driver">Choose another driver</string>
+    <string name="gate_opening">Opening your profile…</string>
+    <string name="gate_error_email">Enter a valid email address.</string>
+    <string name="gate_error_digits">Enter exactly four digits.</string>
+    <string name="gate_error_mismatch">The PINs do not match.</string>
+    <string name="gate_error_name">Enter a driver name.</string>
+    <string name="gate_error_wrong_email">That email does not match this profile.</string>
+    <string name="gate_error_wrong_pin">Incorrect PIN.</string>
+    <string name="gate_error_locked">Too many PIN attempts. Try again in 15 minutes.</string>
+    <string name="gate_error_locked_day">Too many PIN attempts today. Try again tomorrow.</string>
+    <string name="gate_error_name_taken">That driver name is already in use.</string>
+    <string name="gate_error_email_taken">This email already opens another driver. Choose that driver instead.</string>
+    <string name="gate_error_limit">This device already has 20 driver profiles.</string>
+    <string name="gate_error_open">Could not open the profile. Please try again.</string>
+    <!-- Android's secure storage (Keystore) could not decrypt the profiles. -->
+    <string name="gate_vault_title">Profiles could not be opened</string>
+    <string name="gate_vault_body">Android\'s secure storage did not respond. Your race history has not been changed.</string>
+    <string name="gate_retry">Try again</string>
+    <string name="gate_reset">Reset sign-in data</string>
+    <string name="gate_reset_title">Reset sign-in data?</string>
+    <string name="gate_reset_body">This removes the driver list, PINs and saved API keys from this device\'s secure storage. The first driver\'s race history and settings stay and are attached to the next profile you create. Other drivers\' history stays stored but can no longer be opened.</string>
+    <string name="gate_reset_confirm">Reset</string>
+    <string name="gate_reset_failed">Sign-in data could not be reset. Restart the device and try again.</string>
+    <string name="cancel">Cancel</string>
+    <!-- Switching driver from CONNECTION. -->
+    <string name="switch_title">Switch driver?</string>
+    <string name="switch_body">This saves your session and closes the app. Reopen Your Pit Box to choose or add a driver.</string>
+    <string name="switch_keep">Keep racing</string>
+    <string name="switch_confirm">Save and close</string>
+    <string name="switch_saving">Saving your session. Reopen Your Pit Box after it closes to choose a driver.</string>
+    <string name="secure_dashboard_failed">Could not open the secure dashboard. Restart the app.</string>
 </resources>
