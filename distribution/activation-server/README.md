@@ -3,8 +3,8 @@
 A single Cloudflare Worker + D1 database + private R2 bucket. Since the free
 edition (4.9) its everyday job is to stream the installer to anyone who asks
 and to record optional release-news signups. It also still claims activation
-codes for installs made under the paid model. It holds no private key and
-signs nothing.
+codes for installs made under the paid model. Legacy activation holds no entitlement-signing private key. Staged account
+unlock uses a separate server-secret HMAC for email/PIN/device verifiers.
 
 ## Deploy (free tier)
 
@@ -47,8 +47,8 @@ No email automation or email-provider configuration is included.
 historical file requests, newsletter subscribers, opted-in activity, feature use,
 app versions and exact-day retention. Collection continues independently of the
 page. The page refreshes every minute while visible/unlocked and locks after
-15 minutes without interaction or 5 minutes hidden. There is no new app tracking,
-website visitor tracking or app release; 4.10.4 and its privacy choice are unchanged.
+15 minutes without interaction or 5 minutes hidden. The separate staged account-start report below does not change the existing
+anonymous-usage privacy choice or join those records to newsletter emails.
 
 The owner headline and platform breakdown also include recovered history as
 explicitly mixed-method recorded activity. Original historical reads and live
@@ -230,3 +230,18 @@ At hobby volume this stays inside Cloudflare's free tier (Workers: 100k
 requests/day; D1: millions of reads, 100k writes/day; R2: 10 GB stored and
 10 GB egress a month, which is roughly 300 installer downloads). Each signup
 is one write.
+
+
+### Staged Android account unlock
+
+See [Android secure startup](../../docs/android-secure-start.md) for the additive
+`0009_app_accounts.sql` migration, required Email Sending bindings, account PIN
+limits, device enrollment/recovery, owner reporting, and release gates. Account
+routes fail closed until the server bindings are configured. App account rollout
+is disabled by default. Do not enable it until actual verification/recovery mail
+and the native account-enabled flow have passed acceptance.
+
+`GET /owner/accounts` uses the existing owner token and reports only consented
+account starts under random account IDs. It cannot read provider API keys,
+PINs or raw account email addresses. Existing anonymous usage and newsletters
+remain separate. Starts expire after 180 days; authentication metadata persists.
