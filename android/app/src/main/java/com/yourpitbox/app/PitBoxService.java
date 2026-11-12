@@ -57,6 +57,10 @@ public class PitBoxService extends Service {
     private PowerManager.WakeLock wakeLock;
 
     public static boolean isRunning() { return running; }
+    public static boolean hasActiveBackend() {
+        PitBoxService service = instance;
+        return service != null && service.backend != null && service.backend.isAlive();
+    }
     public static String getDashboardUrl() { return dashboardUrl; }
     public static String getFailure() { return failure; }
 

@@ -27,7 +27,7 @@ final class DashboardPreferencesBridge {
                 || expected.getUserInfo() != null || expected.getPort() < 1
                 || !WebViewFeature.isFeatureSupported(WebViewFeature.WEB_MESSAGE_LISTENER)) return;
         String origin = "http://127.0.0.1:" + expected.getPort();
-        SharedPreferences prefs = context.getSharedPreferences("driver_dashboard", Context.MODE_PRIVATE);
+        SharedPreferences prefs = context.getSharedPreferences(ProfilePaths.preferenceFile(AccountSession.profileId(), AccountSession.legacyProfile()), Context.MODE_PRIVATE);
         // The object is injected only into the backend's exact origin, including
         // its local dashboard iframe. External pages/iframes never receive it.
         WebViewCompat.addWebMessageListener(web, "PitBoxDashboardPreferences",

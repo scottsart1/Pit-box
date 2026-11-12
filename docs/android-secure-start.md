@@ -27,6 +27,7 @@ The first profile owns the existing private `files/` workspace, preserving the
 existing `.env`, settings, race history and key migration. Later profiles use
 `files/profiles/<random-local-id>/`, each with its own `.env`, `PitWallData`, SQLite
 history, setups, logs, captures, pairing credentials and dashboard assets.
+Dashboard layouts and onboarding flags use profile-specific native preferences.
 Provider secrets have a separate vault namespace for each additional profile;
 the first retains the existing encrypted entries. Names and email addresses are
 stored only in the encrypted local index. Android backup remains disabled.
