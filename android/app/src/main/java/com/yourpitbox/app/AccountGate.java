@@ -390,6 +390,10 @@ public final class AccountGate extends ScrollView {
      * order and Done on the last opens the profile. Android's own focus
      * search would stop on the method buttons between the name and the PIN
      * once a hardware key has taken the screen out of touch mode.
+     *
+     * A hardware Enter acts on key-up: the field that took the key-down then
+     * also takes the key-up. Moving focus on key-down handed the key-up to
+     * the next field, whose own Enter handling moved focus a second time.
      */
     private void chain(EditText... fields) {
         for (int i = 0; i < fields.length; i++) {
@@ -397,13 +401,14 @@ public final class AccountGate extends ScrollView {
             EditText following = null;
             for (int j = i + 1; j < fields.length && following == null; j++) following = fields[j];
             EditText next = following;
+            Runnable advance = () -> { if (next != null) next.requestFocus(); else submit(); };
             fields[i].setImeOptions((next == null ? EditorInfo.IME_ACTION_DONE : EditorInfo.IME_ACTION_NEXT)
                 | EditorInfo.IME_FLAG_NO_EXTRACT_UI);
             fields[i].setOnEditorActionListener((view, action, event) -> {
-                boolean enter = event != null && event.getKeyCode() == KeyEvent.KEYCODE_ENTER;
-                if (action == EditorInfo.IME_NULL && !enter) return false;
-                if (event != null && event.getAction() != KeyEvent.ACTION_DOWN) return true;
-                if (next != null) next.requestFocus(); else submit();
+                if (event == null) { advance.run(); return true; }   // The soft keyboard's Next or Done.
+                int key = event.getKeyCode();
+                if (key != KeyEvent.KEYCODE_ENTER && key != KeyEvent.KEYCODE_NUMPAD_ENTER) return false;
+                if (event.getAction() == KeyEvent.ACTION_UP) advance.run();
                 return true;
             });
         }
