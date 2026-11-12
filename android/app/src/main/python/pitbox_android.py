@@ -50,6 +50,24 @@ def configure(files_dir: str, static_dir: str, microphone: bool = False) -> None
     # with a microphone the app is allowed to open.
     os.environ["PITWALL_WAKE_ENABLED"] = "true" if microphone else "false"
     os.chdir(str(files))
+    # Native unlock must precede importing settings or constructing AI clients.
+    from java import jclass
+    session = jclass("com.yourpitbox.app.AccountSession")
+    if not session.isUnlocked():
+        raise RuntimeError("Unlock Your Pit Box before starting the backend")
+    os.environ["PITWALL_NATIVE_TOKEN"] = str(session.localToken())
+    from pitwall import secret_storage
+    vault = jclass("com.yourpitbox.app.KeyVault").getInstance()
+
+    class AndroidStore:
+        def get(self, name):
+            value = vault.readProvider(name)
+            return str(value) if value is not None else None
+
+        def put(self, name, value):
+            vault.writeProvider(name, value)
+
+    secret_storage.initialize(AndroidStore(), files / ".env")
     from pitwall.networking import register_interface_source
 
     register_interface_source(android_ipv4_interfaces)

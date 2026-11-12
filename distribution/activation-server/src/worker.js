@@ -821,6 +821,10 @@ async function handleOwner(request, env, path) {
       return ownerJson(request, {code: "unauthorized"}, 401);
     }
     const params = new URL(request.url).searchParams;
+    if (path === "/owner/accounts") {
+      if ([...params].length) return ownerJson(request, {code: "invalid_query"}, 400);
+      return ownerJson(request, await readAccountReport(env));
+    }
     if (path === "/owner/overview") {
       if ([...params].length) return ownerJson(request, {code: "invalid_query"}, 400);
       const [downloadResponse, usageResponse, subscribers] = await Promise.all([
@@ -926,12 +930,127 @@ async function handleReleasePublish(request, env) {
   } catch { console.warn("Release operation unavailable"); return reply({code: "unavailable"}, 503); }
 }
 
+
+// Profile sign-ins are separate from optional anonymous usage. The native app
+// never sends email addresses, PINs, profile names or provider keys.
+const ACCOUNT_RETENTION_DAYS = 180;
+const accountNow = () => Math.floor(Date.now() / 1000);
+const accountUUID = value => typeof value === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
+function accountResponse(body, status = 200) {
+  return new Response(JSON.stringify(body), {status, headers: {
+    "content-type": "application/json", "cache-control": "private, no-store",
+    "x-content-type-options": "nosniff", "referrer-policy": "no-referrer",
+    ...(status === 429 ? {"retry-after": "900"} : {}),
+  }});
+}
+async function accountDigest(env, text) {
+  const key = await crypto.subtle.importKey("raw", new TextEncoder().encode(env.ACCOUNT_PEPPER),
+    {name: "HMAC", hash: "SHA-256"}, false, ["sign"]);
+  return [...new Uint8Array(await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(text)))]
+    .map(n => n.toString(16).padStart(2, "0")).join("");
+}
+function accountEqual(a, b) {
+  if (typeof a !== "string" || typeof b !== "string" || a.length !== b.length) return false;
+  let diff = 0; for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  return diff === 0;
+}
+// Atomic reservations happen BEFORE credential checks, including unknown accounts.
+// D1 rather than edge-local counters enforces the global guessing budget.
+async function accountBudget(env, key, limit, seconds) {
+  const bucket = Math.floor(accountNow() / seconds), expires = (bucket + 1) * seconds;
+  const row = await env.DB.prepare(`INSERT INTO account_limits (id, count, expires_at) VALUES (?, 1, ?)
+    ON CONFLICT(id) DO UPDATE SET count = count + 1 WHERE count < ? RETURNING count`)
+    .bind(`${key}:${bucket}`, expires, limit).first();
+  return !!row;
+}
+async function readAccountReport(env) {
+  const cutoff = accountNow() - ACCOUNT_RETENTION_DAYS * 86400;
+  const month = accountNow() - 30 * 86400;
+  const result = await env.DB.batch([
+    env.DB.prepare(`SELECT COUNT(DISTINCT account_id) AS accounts, COUNT(*) AS starts
+      FROM profile_sign_ins WHERE occurred_at >= ?`).bind(month),
+    env.DB.prepare(`SELECT account_id, COUNT(*) AS starts, MIN(occurred_at) AS first_start,
+      MAX(occurred_at) AS last_start, COUNT(DISTINCT date(occurred_at, 'unixepoch')) AS active_days
+      FROM profile_sign_ins WHERE occurred_at >= ? GROUP BY account_id ORDER BY last_start DESC LIMIT 200`).bind(cutoff),
+    env.DB.prepare(`SELECT date(occurred_at, 'unixepoch') AS day, COUNT(*) AS starts,
+      COUNT(DISTINCT account_id) AS accounts FROM profile_sign_ins WHERE occurred_at >= ?
+      GROUP BY day ORDER BY day DESC`).bind(month),
+  ]);
+  if (result.some(r => !r.success)) throw new Error("Profile report unavailable");
+  return {metric: "profile_sign_ins", retention_days: ACCOUNT_RETENTION_DAYS,
+    summary: result[0].results[0], accounts: result[1].results, daily: result[2].results,
+    account_limit: 200};
+}
+async function handleAccount(request, env, path) {
+  if (request.method !== "POST") return accountResponse({code: "method_not_allowed"}, 405);
+  if (request.headers.has("origin")) return accountResponse({code: "native_client_required"}, 403);
+  if (!env.ACCOUNT_PEPPER || env.ACCOUNT_PEPPER.length < 32) return accountResponse({code: "unavailable"}, 503);
+  if (!["/account/profile", "/account/sign-in"].includes(path)) return accountResponse({code: "not_found"}, 404);
+  try {
+    if (new URL(request.url).search || !request.headers.get("content-type")?.startsWith("application/json"))
+      return accountResponse({code: "invalid_request"}, 400);
+    const reader = request.body?.getReader();
+    if (!reader) return accountResponse({code: "invalid_request"}, 400);
+    let size = 0; const chunks = [];
+    for (;;) { const {done, value} = await reader.read(); if (done) break;
+      size += value.length; if (size > 2048) { await reader.cancel(); return accountResponse({code: "invalid_request"}, 400); }
+      chunks.push(value); }
+    const bytes = new Uint8Array(size); let offset = 0;
+    for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.length; }
+    let data;
+    try { data = JSON.parse(new TextDecoder().decode(bytes)); } catch { return accountResponse({code: "invalid_request"}, 400); }
+    const registering = path === "/account/profile";
+    const allowed = new Set(registering ? ["account_id", "device_secret"]
+      : ["account_id", "device_secret", "event_id", "occurred_at", "version"]);
+    if (!data || typeof data !== "object" || Array.isArray(data) || Object.keys(data).some(k => !allowed.has(k))
+        || !accountUUID(data.account_id) || typeof data.device_secret !== "string" || !/^[0-9a-f]{64}$/.test(data.device_secret))
+      return accountResponse({code: "invalid_request"}, 400);
+    if (!registering && (!accountUUID(data.event_id) || !Number.isSafeInteger(data.occurred_at) || data.occurred_at < 0
+        || data.occurred_at > accountNow() + 300 || typeof data.version !== "string" || !/^[0-9A-Za-z.+_-]{1,64}$/.test(data.version)))
+      return accountResponse({code: "invalid_request"}, 400);
+    const ip = await accountDigest(env, `ip:${request.headers.get("cf-connecting-ip") || "unknown"}`);
+    if (!await accountBudget(env, `profile-ip:${ip}`, 300, 900)) return accountResponse({code: "rate_limited"}, 429);
+    const device = await accountDigest(env, `profile-device:${data.device_secret}`);
+    let profile = await env.DB.prepare("SELECT device_hash FROM driver_profiles WHERE id = ?").bind(data.account_id).first();
+    if (registering && !profile) {
+      if (!await accountBudget(env, `profile-create:${ip}`, 20, 86400)) return accountResponse({code: "rate_limited"}, 429);
+      // Idempotent registration cannot overwrite another profile's credential.
+      await env.DB.prepare("INSERT OR IGNORE INTO driver_profiles (id, device_hash, created_at) VALUES (?, ?, ?)")
+        .bind(data.account_id, device, accountNow()).run();
+      profile = await env.DB.prepare("SELECT device_hash FROM driver_profiles WHERE id = ?").bind(data.account_id).first();
+    }
+    if (!profile || !accountEqual(profile.device_hash, device)) return accountResponse({code: "invalid_credentials"}, 401);
+    if (registering) return accountResponse({ok: true});
+    // Acknowledge stale queued records explicitly so one old event cannot block
+    // subsequent sign-ins. Reports retain 180 days, using local event time.
+    if (data.occurred_at < accountNow() - ACCOUNT_RETENTION_DAYS * 86400) return accountResponse({ok: true, expired: true});
+    const result = await env.DB.prepare(`INSERT OR IGNORE INTO profile_sign_ins
+      (event_id, account_id, occurred_at, received_at, version) VALUES (?, ?, ?, ?, ?)`)
+      .bind(data.event_id, data.account_id, data.occurred_at, accountNow(), data.version).run();
+    if (!result.success) throw new Error("Profile sign-in storage unavailable");
+    const saved = await env.DB.prepare("SELECT account_id FROM profile_sign_ins WHERE event_id = ?").bind(data.event_id).first();
+    if (saved?.account_id !== data.account_id) return accountResponse({code: "event_conflict"}, 409);
+    return accountResponse({ok: true});
+  } catch { return accountResponse({code: "unavailable"}, 503); }
+}
+async function pruneAccounts(env) {
+  const now = accountNow();
+  await env.DB.batch([
+    env.DB.prepare("DELETE FROM account_limits WHERE expires_at < ?").bind(now),
+    env.DB.prepare("DELETE FROM account_challenges WHERE expires_at < ?").bind(now),
+    env.DB.prepare("DELETE FROM account_starts WHERE started_at < ?").bind(now - ACCOUNT_RETENTION_DAYS * 86400),
+    env.DB.prepare("DELETE FROM profile_sign_ins WHERE occurred_at < ?").bind(now - ACCOUNT_RETENTION_DAYS * 86400),
+  ]);
+}
+
 export default {
   async scheduled(controller, env, ctx) {
     ctx.waitUntil(purgeUsage(env));
+    if (env.ACCOUNT_PEPPER) ctx.waitUntil(pruneAccounts(env));
   },
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
+    if (url.pathname.startsWith("/account/")) return handleAccount(request, env, url.pathname);
 
     if (url.pathname === "/releases") return handleReleaseManifest(request, env);
     if (url.pathname === "/release-admin/publish") return handleReleasePublish(request, env);

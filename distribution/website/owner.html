@@ -21,7 +21,7 @@
   <p id="ownerStatus" role="status" aria-live="polite">Locked. No private data is loaded.</p>
   <div id="ownerData" hidden>
     <div class="owner-title"><div><div class="eyebrow">Product overview</div><h1>From downloads to race day.</h1><p id="ownerUpdated">—</p></div><div class="owner-actions"><label><input id="ownerAuto" type="checkbox" checked> Auto-refresh every minute</label><button id="ownerRefresh" class="button ghost" type="button">Refresh now</button></div></div>
-    <nav class="owner-nav" aria-label="Dashboard sections"><a href="#downloadSection">Downloads</a><a href="#emailSection">Emails</a><a href="#usageSection">App use &amp; retention</a></nav>
+    <nav class="owner-nav" aria-label="Dashboard sections"><a href="#downloadSection">Downloads</a><a href="#emailSection">Emails</a><a href="#usageSection">App use &amp; retention</a><a href="#accountSection">Profile sign-ins</a></nav>
     <div class="owner-metrics">
       <article><h2>Recorded download activity</h2><p id="metricRecorded">—</p><span id="metricRecordedSources">History + live · different counting methods</span></article>
       <article><h2>Starts · last 30 days</h2><p id="metricRecentDownloads">—</p><span id="metricPlatformSplit">Windows / Android</span></article>
@@ -43,6 +43,11 @@
       <div id="emailCopyFallback" hidden><label for="emailCopyText">Clipboard unavailable. Select and copy these addresses manually.</label><textarea id="emailCopyText" rows="6" readonly spellcheck="false"></textarea><button id="selectEmails" class="button ghost" type="button">Select all addresses</button></div>
       <details><summary>Where signups come from</summary><div class="table-scroll" tabindex="0"><table><caption>Subscriber totals by signup source</caption><thead><tr><th>Source</th><th>Subscribers</th></tr></thead><tbody id="signupSourceRows"></tbody></table></div></details>
       <p class="owner-note">Copy all includes every address in a fresh, paginated snapshot, not only the visible rows. Treat this list as private and use it for the release updates people requested.</p>
+    </section>
+    <section id="accountSection" class="owner-section"><div class="owner-section-title"><h2>Returning driver profiles</h2><span>Successful local sign-ins</span></div>
+      <p id="accountStatus">Account reporting has not loaded.</p>
+      <div class="table-scroll" tabindex="0"><table><caption>Most recent 200 profiles, up to 180 days</caption><thead><tr><th>Profile ID</th><th>Sign-ins</th><th>Active days</th><th>First start (UTC)</th><th>Last start (UTC)</th></tr></thead><tbody id="accountRows"></tbody></table></div>
+      <p class="owner-note">Each local profile has a random ID. Every successful sign-in is queued, including offline sign-ins; retries are deduplicated. Reinstalls and profiles on another device have separate IDs. Times come from the device clock. Counts do not prove unique people or gameplay. These records are separate from optional usage and newsletter subscribers. Email addresses, PINs, driver names and API keys are not included.</p>
     </section>
     <section id="usageSection" class="owner-section"><div class="owner-section-title"><h2>App use &amp; retention</h2><span>Opted-in installations only</span></div><p id="usageAvailability"></p>
       <div class="table-scroll" tabindex="0"><table><caption>Product-use signals in the last 30 calendar days</caption><thead><tr><th>Signal</th><th>Windows</th><th>Android</th><th>All</th></tr></thead><tbody id="usageSignalRows"></tbody></table></div>

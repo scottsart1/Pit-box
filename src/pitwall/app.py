@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import sys
 import tempfile
 import time as _time
@@ -103,7 +104,7 @@ from .ui_i18n import render_page
 from .update_service import UpdateService
 from .usage_reporting import UsageReporting
 from .voice import NativeVoiceController
-from .web_security import LanAccessMiddleware, is_loopback_host
+from .web_security import LanAccessMiddleware, NativeAccessMiddleware, is_loopback_host
 
 log = logging.getLogger(__name__)
 
@@ -803,6 +804,7 @@ async def lifespan(app: FastAPI):
 # app.version, and a hand-copied literal here shipped a 4.9.3 build whose
 # health endpoint still answered 4.9.2.
 app = FastAPI(title="Your Pit Box", version=__version__, lifespan=lifespan)
+app.add_middleware(NativeAccessMiddleware, token=os.environ.get("PITWALL_NATIVE_TOKEN"))
 app.add_middleware(
     LanAccessMiddleware,
     enabled=settings.web_lan_access,

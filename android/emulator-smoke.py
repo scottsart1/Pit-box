@@ -43,8 +43,16 @@ def adb(*args: str, check: bool = True) -> subprocess.CompletedProcess:
     return subprocess.run(["adb", *target, *args], check=check, capture_output=True, timeout=45)
 
 
+def native_headers():
+    # Debug builds expose this only in app-private storage. adb run-as cannot
+    # read production app data; the public API has no test bypass.
+    result = adb("exec-out", "run-as", "com.yourpitbox.app.debug", "cat", "files/native-test-token", check=False)
+    token = result.stdout.decode().strip()
+    return {"X-Pitbox-Native": token} if re.fullmatch(r"[0-9a-f]{64}", token) else {}
+
+
 def get(path: str, *, timeout: float = 5):
-    with urlopen(BASE + path, timeout=timeout) as response:
+    with urlopen(Request(BASE + path, headers=native_headers()), timeout=timeout) as response:
         return json.load(response)
 
 
@@ -52,7 +60,7 @@ def post(path: str, body: dict | None = None):
     request = Request(
         BASE + path,
         data=json.dumps(body or {}).encode(),
-        headers={"Content-Type": "application/json"},
+        headers={"Content-Type": "application/json", **native_headers()},
         method="POST",
     )
     with urlopen(request, timeout=20) as response:

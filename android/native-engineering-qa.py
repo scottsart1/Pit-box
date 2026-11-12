@@ -9,6 +9,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import os
 import re
 import shutil
 import subprocess
@@ -17,7 +18,7 @@ import time
 import zipfile
 from pathlib import Path
 from urllib.parse import quote
-from urllib.request import urlopen
+from urllib.request import Request, urlopen
 
 
 def labels(node):
@@ -461,7 +462,7 @@ def prove_export(ui, endpoint, group_name, note, session_id):
                          "-t", "text/plain").stdout.decode()
     if "documentsui" not in resolved.lower():
         return {"status": "not_tested", "reason_code": "documents_provider_unavailable", "resolver": resolved.strip()}
-    with urlopen(smoke.BASE + endpoint + "/export?format=text", timeout=20) as response:
+    with urlopen(Request(smoke.BASE + endpoint + "/export?format=text", headers=smoke.native_headers()), timeout=20) as response:
         expected = response.read()
     ui.tap("export-report", resource_id="engineeringExportText")
     tree = await_documents_ui(ui)
@@ -495,7 +496,8 @@ def run(smoke, package, version):
         fixture_path = smoke.OUTPUT / "native-engineering-fixture.json"
         process = subprocess.run([sys.executable, str(smoke.ROOT / "tools/engineering-telemetry-smoke.py"),
                                   "--base", smoke.BASE, "--host", "127.0.0.1", "--port", "20777",
-                                  "--output", str(fixture_path)], capture_output=True, timeout=150)
+                                  "--output", str(fixture_path)], capture_output=True, timeout=150,
+                                  env={**os.environ, "PITBOX_QA_NATIVE_TOKEN": smoke.native_headers().get("X-Pitbox-Native", "")})
         (smoke.OUTPUT / "native-fixture-process.txt").write_bytes(process.stdout + process.stderr)
         assert process.returncode == 0, "Isolated engineering UDP fixture failed; see native-fixture-process.txt"
         fixture = json.loads(fixture_path.read_text(encoding="utf-8"))

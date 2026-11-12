@@ -57,6 +57,10 @@ public class PitBoxService extends Service {
     private PowerManager.WakeLock wakeLock;
 
     public static boolean isRunning() { return running; }
+    public static boolean hasActiveBackend() {
+        PitBoxService service = instance;
+        return service != null && service.backend != null && service.backend.isAlive();
+    }
     public static String getDashboardUrl() { return dashboardUrl; }
     public static String getFailure() { return failure; }
 
@@ -111,6 +115,12 @@ public class PitBoxService extends Service {
             stopSelf();
             return START_NOT_STICKY;
         }
+        // Android may recreate a killed foreground service. Never import the
+        // backend or decrypt keys before a fresh native unlock in this process.
+        if (!AccountSession.isUnlocked()) {
+            stopSelf();
+            return START_NOT_STICKY;
+        }
         try {
             startInForeground();
         } catch (RuntimeException error) {
@@ -134,7 +144,10 @@ public class PitBoxService extends Service {
 
     private void runBackend() {
         try {
-            File files = getFilesDir();
+            if (!Python.isStarted()) {
+                Python.start(new com.chaquo.python.android.AndroidPlatform(getApplicationContext()));
+            }
+            File files = ProfileStore.directory(this);
             File staticDir = installDashboard(files);
             PyObject entry = Python.getInstance().getModule("pitbox_android");
             entry.callAttr("configure", files.getAbsolutePath(), staticDir.getAbsolutePath(), microphoneGranted());
@@ -172,7 +185,7 @@ public class PitBoxService extends Service {
 
     private void recordFailure(String text) {
         try {
-            File data = new File(getFilesDir(), "PitWallData");
+            File data = new File(ProfileStore.directory(this), "PitWallData");
             //noinspection ResultOfMethodCallIgnored
             data.mkdirs();
             try (FileOutputStream out = new FileOutputStream(new File(data, "android-start-error.txt"))) {
@@ -184,6 +197,7 @@ public class PitBoxService extends Service {
     }
 
     private void stopBackend() {
+        if (!Python.isStarted()) return;
         try {
             Python.getInstance().getModule("pitbox_android").callAttr("stop");
         } catch (Throwable error) {

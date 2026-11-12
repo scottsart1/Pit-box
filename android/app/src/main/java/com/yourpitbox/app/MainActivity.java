@@ -45,6 +45,14 @@ import org.json.JSONObject;
  */
 public class MainActivity extends Activity {
     private WebView web;
+    private FrameLayout root;
+    private PitLaneIntro intro;
+    private AccountGate accountGate;
+    private boolean accountRequired;
+    private boolean gateVisible;
+    private boolean switchingProfiles;
+    private boolean stoppedAfterUnlock;
+    private boolean authorizedStartPending;
     private TextView status;
     private ScrollView startupContainer;
     private final Handler handler = new Handler(Looper.getMainLooper());
@@ -80,7 +88,7 @@ public class MainActivity extends Activity {
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
         WindowCompat.setDecorFitsSystemWindows(getWindow(), false);
 
-        FrameLayout root = new FrameLayout(this);
+        root = new FrameLayout(this);
         root.setBackgroundColor(ContextCompat.getColor(this, R.color.pitbox_bg));
         // Transient system bars overlay the dashboard without moving it.
         // Keep controls clear of cutouts, desktop-window captions and the
@@ -129,6 +137,10 @@ public class MainActivity extends Activity {
             @Override
             public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
                 Uri target = request.getUrl();
+                if ("pitbox".equals(target.getScheme()) && "profiles".equals(target.getHost())) {
+                    if (accountRequired && request.isForMainFrame() && request.hasGesture() && isTrustedDashboard(view.getUrl())) requestProfileSwitch();
+                    return true;
+                }
                 if (isTrustedDashboard(target.toString())) return false;
                 // An external link opens in a browser; pairing invitations are
                 // never injected into a page outside the embedded dashboard.
@@ -150,6 +162,7 @@ public class MainActivity extends Activity {
             public void onPageFinished(WebView view, String url) {
                 pageReady = isTrustedDashboard(url);
                 deliverPairingInvitation();
+                if (pageReady && accountRequired) view.evaluateJavascript("document.getElementById('android-profile-switch')?.removeAttribute('hidden')", null);
             }
         });
         root.addView(web, new FrameLayout.LayoutParams(
@@ -171,10 +184,83 @@ public class MainActivity extends Activity {
         root.addView(startupContainer, new FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
 
+        intro = new PitLaneIntro(this);
+        root.addView(intro, new FrameLayout.LayoutParams(-1, -1));
         setContentView(root);
         hideSystemBars();
         ViewCompat.requestApplyInsets(root);
         capturePairingInvitation(getIntent());
+        KeyVault vault = KeyVault.initialize(this);
+        new Thread(() -> {
+            try {
+                accountRequired = BuildConfig.ACCOUNT_GATE_ENABLED || vault.read("profiles.index") != null || vault.read("account.id") != null;
+                handler.post(() -> {
+                    if (isDestroyed() || isFinishing()) return;
+                    // Overlap ordinary startup with the mask. Account-enabled
+                    // devices keep the service stopped until local profile unlock.
+                    if (!accountRequired) { AccountSession.unlock(); beginAuthorizedStart(); }
+                    handler.postDelayed(() -> {
+                        if (isDestroyed() || isFinishing()) return;
+                        if (accountRequired) showAccountGate();
+                        root.removeView(intro); intro = null;
+                    }, PitLaneIntro.DURATION_MS);
+                });
+            } catch (Exception error) {
+                handler.post(() -> {
+                    root.removeView(intro); intro = null;
+                    status.setText("The encrypted key vault is unavailable. Your keys have not been changed.");
+                });
+            }
+        }, "pitbox-start-gate").start();
+    }
+
+    private void showAccountGate() {
+        if (gateVisible || switchingProfiles || isDestroyed() || isFinishing()) return;
+        gateVisible = true;
+        getWindow().addFlags(WindowManager.LayoutParams.FLAG_SECURE);
+        accountGate = new AccountGate(this, () -> {
+            root.removeView(accountGate); accountGate = null; gateVisible = false;
+            getWindow().clearFlags(WindowManager.LayoutParams.FLAG_SECURE);
+            if (!loaded) {
+                android.webkit.WebStorage.getInstance().deleteAllData();
+                web.clearCache(true); web.clearHistory();
+                android.webkit.CookieManager.getInstance().removeAllCookies(ignored -> beginAuthorizedStart());
+            } else beginAuthorizedStart();
+        }, this::requestProfileSwitch);
+        root.addView(accountGate, new FrameLayout.LayoutParams(-1, -1));
+    }
+
+    private void requestProfileSwitch() {
+        if (switchingProfiles) return;
+        new android.app.AlertDialog.Builder(this).setTitle("Switch driver?")
+            .setMessage("This ends the current session and closes the app after saving. Reopen Your Pit Box to choose or add a driver.")
+            .setNegativeButton("Keep racing", null)
+            .setPositiveButton("Save and close", (dialog, which) -> {
+                switchingProfiles = true;
+                web.setVisibility(View.INVISIBLE);
+                if (accountGate != null) { root.removeView(accountGate); accountGate = null; }
+                status.setText("Saving your session. Reopen Your Pit Box after it closes to choose a driver.");
+                startupContainer.setVisibility(View.VISIBLE);
+                // A recreated Activity can have startedAt == 0 while its
+                // foreground service still owns an active race. Wait for the
+                // actual backend thread rather than relying on Activity state.
+                if (PitBoxService.hasActiveBackend())
+                    startService(new Intent(this, PitBoxService.class).setAction(PitBoxService.ACTION_STOP));
+                handler.post(new Runnable() {
+                    public void run() {
+                        if (PitBoxService.hasActiveBackend()) { handler.postDelayed(this, 200); return; }
+                        finishAndRemoveTask(); android.os.Process.killProcess(android.os.Process.myPid());
+                    }
+                });
+            }).show();
+    }
+
+    private void beginAuthorizedStart() {
+        if (switchingProfiles) return;
+        if (!resumed) { authorizedStartPending = true; return; }
+        authorizedStartPending = false;
+        stoppedAfterUnlock = false;
+        if (loaded) return;
         if (!requestPermissionsFirst()) startBackend();
     }
 
@@ -242,6 +328,7 @@ public class MainActivity extends Activity {
             String message;
             try {
                 connection = (HttpURLConnection) new URL(source).openConnection();
+                connection.setRequestProperty("X-Pitbox-Native", AccountSession.localToken());
                 connection.setConnectTimeout(10000);
                 connection.setReadTimeout(30000);
                 connection.setInstanceFollowRedirects(false);
@@ -320,10 +407,18 @@ public class MainActivity extends Activity {
     @Override
     public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] grantResults) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults);
-        if (requestCode == 1 && startedAt == 0) startBackend();
+        if (requestCode == 1 && startedAt == 0 && AccountSession.isUnlocked()) startBackend();
     }
 
     private void startBackend() {
+        if (switchingProfiles || !AccountSession.isUnlocked() || startedAt != 0) return;
+        if (BuildConfig.DEBUG) {
+            // adb run-as is available only for debuggable packages. This lets
+            // emulator tests authenticate without a production bypass route.
+            try (java.io.FileOutputStream out = openFileOutput("native-test-token", MODE_PRIVATE)) {
+                out.write(AccountSession.localToken().getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            } catch (java.io.IOException error) { /* test setup will report failure */ }
+        }
         Intent service = new Intent(this, PitBoxService.class);
         ContextCompat.startForegroundService(this, service);
         startedAt = System.currentTimeMillis();
@@ -354,7 +449,7 @@ public class MainActivity extends Activity {
     }
 
     private String logTail() {
-        java.io.File log = new java.io.File(getFilesDir(), "PitWallData/pitwall.log");
+        java.io.File log = new java.io.File(ProfileStore.directory(this), "PitWallData/pitwall.log");
         if (!log.isFile()) return getString(R.string.log_missing);
         try (java.io.RandomAccessFile file = new java.io.RandomAccessFile(log, "r")) {
             long length = file.length();
@@ -370,7 +465,7 @@ public class MainActivity extends Activity {
 
     /** Loads the dashboard the moment the backend answers its health check. */
     private void pollUntilReady() {
-        if (loaded || isDestroyed() || isFinishing()) return;
+        if (loaded || switchingProfiles || isDestroyed() || isFinishing()) return;
         String failure = PitBoxService.getFailure();
         if (failure != null) {
             status.setText(getString(R.string.start_failed) + "\n\n" + failure
@@ -384,7 +479,7 @@ public class MainActivity extends Activity {
             new Thread(() -> {
                 boolean ready = healthy(healthUrl);
                 handler.post(() -> {
-                    if (isDestroyed() || isFinishing()) return;
+                    if (switchingProfiles || isDestroyed() || isFinishing()) return;
                     if (ready && !loaded) {
                         loaded = true;
                         // Hide the entire overlay: an empty visible ScrollView
@@ -392,7 +487,10 @@ public class MainActivity extends Activity {
                         startupContainer.setVisibility(View.GONE);
                         web.setVisibility(View.VISIBLE);
                         DashboardPreferencesBridge.install(this, web, url);
-                        web.loadUrl(join(url, ""));
+                        android.webkit.CookieManager.getInstance().setCookie(url,
+                            "pitbox_native=" + AccountSession.localToken() + "; Path=/; HttpOnly; SameSite=Strict",
+                            accepted -> { if (Boolean.TRUE.equals(accepted)) web.loadUrl(join(url, ""));
+                                else { startupContainer.setVisibility(View.VISIBLE); status.setText("Could not open the secure dashboard. Restart the app."); } });
                     } else {
                         handler.postDelayed(this::pollUntilReady, 400);
                     }
@@ -407,6 +505,7 @@ public class MainActivity extends Activity {
     private static boolean healthy(String healthUrl) {
         try {
             HttpURLConnection connection = (HttpURLConnection) new URL(healthUrl).openConnection();
+            connection.setRequestProperty("X-Pitbox-Native", AccountSession.localToken());
             connection.setConnectTimeout(500);
             connection.setReadTimeout(500);
             int code = connection.getResponseCode();
@@ -427,6 +526,8 @@ public class MainActivity extends Activity {
     protected void onResume() {
         super.onResume();
         resumed = true;
+        if (stoppedAfterUnlock && accountRequired) showAccountGate();
+        else if (authorizedStartPending) beginAuthorizedStart();
         hideSystemBars();
         if (loaded && !PitBoxService.isRunning() && PitBoxService.getFailure() == null) {
             finishAndRemoveTask();
@@ -501,6 +602,17 @@ public class MainActivity extends Activity {
                 break;
         }
         return super.dispatchTouchEvent(event);
+    }
+
+    @Override
+    protected void onStop() {
+        super.onStop();
+        if (accountRequired && AccountSession.isUnlocked() && !gateVisible) {
+            stoppedAfterUnlock = true;
+            // Cover immediately, including the task preview. The ongoing race
+            // service continues; returning to its controls requires the PIN.
+            showAccountGate();
+        }
     }
 
     @Override

@@ -3,8 +3,9 @@
 A single Cloudflare Worker + D1 database + private R2 bucket. Since the free
 edition (4.9) its everyday job is to stream the installer to anyone who asks
 and to record optional release-news signups. It also still claims activation
-codes for installs made under the paid model. It holds no private key and
-signs nothing.
+codes for installs made under the paid model. Legacy activation holds no entitlement-signing private key. Staged profile
+sign-in reporting uses a separate server-secret HMAC for random device credentials.
+Email addresses and PINs never reach these endpoints.
 
 ## Deploy (free tier)
 
@@ -47,8 +48,8 @@ No email automation or email-provider configuration is included.
 historical file requests, newsletter subscribers, opted-in activity, feature use,
 app versions and exact-day retention. Collection continues independently of the
 page. The page refreshes every minute while visible/unlocked and locks after
-15 minutes without interaction or 5 minutes hidden. There is no new app tracking,
-website visitor tracking or app release; 4.10.4 and its privacy choice are unchanged.
+15 minutes without interaction or 5 minutes hidden. The separate staged account-start report below does not change the existing
+anonymous-usage privacy choice or join those records to newsletter emails.
 
 The owner headline and platform breakdown also include recovered history as
 explicitly mixed-method recorded activity. Original historical reads and live
@@ -230,3 +231,19 @@ At hobby volume this stays inside Cloudflare's free tier (Workers: 100k
 requests/day; D1: millions of reads, 100k writes/day; R2: 10 GB stored and
 10 GB egress a month, which is roughly 300 installer downloads). Each signup
 is one write.
+
+
+### Staged Android driver profiles
+
+See [Android profiles and secure startup](../../docs/android-secure-start.md).
+Apply `0009_app_accounts.sql` and `0010_driver_profiles.sql`, provision the stable
+`ACCOUNT_PEPPER` secret, and deploy the tested Worker before enabling the native
+profile rollout. No email verification, sender, or email-service binding is used.
+
+`POST /account/profile` registers an opaque profile ID with a random credential.
+`POST /account/sign-in` records successful local sign-ins with durable retry and
+UUID deduplication. Both endpoints reject email, PIN, driver name and API key fields.
+`GET /owner/accounts` requires the existing owner token and returns pseudonymous
+profile totals and dates. Driver data and provider keys remain on-device in
+separate local profile stores. Existing optional anonymous usage and newsletters
+are unchanged. This is not cloud history backup or cross-device account matching.
