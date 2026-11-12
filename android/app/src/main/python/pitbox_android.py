@@ -61,11 +61,11 @@ def configure(files_dir: str, static_dir: str, microphone: bool = False) -> None
 
     class AndroidStore:
         def get(self, name):
-            value = vault.read(name)
+            value = vault.readProvider(name)
             return str(value) if value is not None else None
 
         def put(self, name, value):
-            vault.write(name, value)
+            vault.writeProvider(name, value)
 
     secret_storage.initialize(AndroidStore(), files / ".env")
     from pitwall.networking import register_interface_source

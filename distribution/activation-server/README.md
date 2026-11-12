@@ -3,8 +3,9 @@
 A single Cloudflare Worker + D1 database + private R2 bucket. Since the free
 edition (4.9) its everyday job is to stream the installer to anyone who asks
 and to record optional release-news signups. It also still claims activation
-codes for installs made under the paid model. Legacy activation holds no entitlement-signing private key. Staged account
-unlock uses a separate server-secret HMAC for email/PIN/device verifiers.
+codes for installs made under the paid model. Legacy activation holds no entitlement-signing private key. Staged profile
+sign-in reporting uses a separate server-secret HMAC for random device credentials.
+Email addresses and PINs never reach these endpoints.
 
 ## Deploy (free tier)
 
@@ -232,16 +233,17 @@ requests/day; D1: millions of reads, 100k writes/day; R2: 10 GB stored and
 is one write.
 
 
-### Staged Android account unlock
+### Staged Android driver profiles
 
-See [Android secure startup](../../docs/android-secure-start.md) for the additive
-`0009_app_accounts.sql` migration, required Email Sending bindings, account PIN
-limits, device enrollment/recovery, owner reporting, and release gates. Account
-routes fail closed until the server bindings are configured. App account rollout
-is disabled by default. Do not enable it until actual verification/recovery mail
-and the native account-enabled flow have passed acceptance.
+See [Android profiles and secure startup](../../docs/android-secure-start.md).
+Apply `0009_app_accounts.sql` and `0010_driver_profiles.sql`, provision the stable
+`ACCOUNT_PEPPER` secret, and deploy the tested Worker before enabling the native
+profile rollout. No email verification, sender, or email-service binding is used.
 
-`GET /owner/accounts` uses the existing owner token and reports only consented
-account starts under random account IDs. It cannot read provider API keys,
-PINs or raw account email addresses. Existing anonymous usage and newsletters
-remain separate. Starts expire after 180 days; authentication metadata persists.
+`POST /account/profile` registers an opaque profile ID with a random credential.
+`POST /account/sign-in` records successful local sign-ins with durable retry and
+UUID deduplication. Both endpoints reject email, PIN, driver name and API key fields.
+`GET /owner/accounts` requires the existing owner token and returns pseudonymous
+profile totals and dates. Driver data and provider keys remain on-device in
+separate local profile stores. Existing optional anonymous usage and newsletters
+are unchanged. This is not cloud history backup or cross-device account matching.

@@ -238,7 +238,7 @@
     try {
       const data = await api("/owner/accounts", current);
       if (current !== generation) return;
-      if (data.metric !== "consented_account_starts" || !count(data.summary?.accounts) || !count(data.summary?.starts)) throw new Error("Invalid account report.");
+      if (data.metric !== "profile_sign_ins" || !count(data.summary?.accounts) || !count(data.summary?.starts)) throw new Error("Invalid account report.");
       const rows = array(data.accounts, 200);
       for (const item of rows) {
         if (!/^[0-9a-f-]{36}$/.test(item.account_id) || !count(item.starts) || !count(item.active_days)
@@ -248,11 +248,11 @@
       for (const item of rows) row("accountRows", [item.account_id, number(item.starts), number(item.active_days),
         new Date(item.first_start * 1000).toISOString().slice(0, 19).replace("T", " "),
         new Date(item.last_start * 1000).toISOString().slice(0, 19).replace("T", " ")]);
-      text("accountStatus", `${number(data.summary.accounts)} accounts / ${number(data.summary.starts)} starts in the last 30 days. Only accounts that enabled sharing are included.`);
+      text("accountStatus", `${number(data.summary.accounts)} profiles / ${number(data.summary.starts)} sign-ins in the last 30 days. Offline records appear after reconnecting.`);
     } catch (error) {
       if (current !== generation) return;
       el("accountRows").replaceChildren();
-      text("accountStatus", "Account reporting unavailable. This does not mean zero starts.");
+      text("accountStatus", "Account reporting unavailable. This does not mean zero sign-ins.");
     }
   }
   async function refresh() {

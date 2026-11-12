@@ -170,7 +170,7 @@ jobs:
 
       - name: Build the isolated debug APK
         working-directory: android
-        run: ./gradlew --no-daemon assembleDebug -Ppitbox.buildPython=${{ steps.py313.outputs.python-path }}
+        run: ./gradlew --no-daemon testDebugUnitTest assembleDebug -Ppitbox.buildPython=${{ steps.py313.outputs.python-path }}
 
       - name: Prepare non-debug release APK for offline signing
         if: github.event_name == 'workflow_dispatch' && inputs.prepare_release_apk

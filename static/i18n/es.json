@@ -2586,5 +2586,7 @@
  "{count} never said": {
   "one": "{count} nunca dicho",
   "other": "{count} nunca dichos"
- }
+ },
+ "Switch driver profile": "Cambiar perfil de piloto",
+ "Save and close, then reopen to choose another driver.": "Guarda y cierra; luego vuelve a abrir para elegir otro piloto."
 }

@@ -143,7 +143,7 @@ public class PitBoxService extends Service {
             if (!Python.isStarted()) {
                 Python.start(new com.chaquo.python.android.AndroidPlatform(getApplicationContext()));
             }
-            File files = getFilesDir();
+            File files = ProfileStore.directory(this);
             File staticDir = installDashboard(files);
             PyObject entry = Python.getInstance().getModule("pitbox_android");
             entry.callAttr("configure", files.getAbsolutePath(), staticDir.getAbsolutePath(), microphoneGranted());
@@ -181,7 +181,7 @@ public class PitBoxService extends Service {
 
     private void recordFailure(String text) {
         try {
-            File data = new File(getFilesDir(), "PitWallData");
+            File data = new File(ProfileStore.directory(this), "PitWallData");
             //noinspection ResultOfMethodCallIgnored
             data.mkdirs();
             try (FileOutputStream out = new FileOutputStream(new File(data, "android-start-error.txt"))) {

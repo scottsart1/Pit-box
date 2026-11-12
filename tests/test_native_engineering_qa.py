@@ -506,11 +506,13 @@ def test_report_read_retains_final_mismatch_or_file_error(tmp_path, monkeypatch,
 ])
 def test_native_runner_retains_honest_stage_outcomes(tmp_path, monkeypatch, outcome, expected):
     runtime = SimpleNamespace(ROOT=ROOT, OUTPUT=tmp_path, BASE="http://127.0.0.1:18000",
+                              native_headers=lambda: {"X-Pitbox-Native": "test-native-token"},
                               UiProviderUnavailable=smoke.UiProviderUnavailable)
     monkeypatch.setattr(qa, "validate_target", lambda *args: {"package": "com.yourpitbox.app.debug"})
     monkeypatch.setattr(qa, "prepare_window_dump", lambda *args: None)
 
     def fixture(command, **options):
+        assert options["env"]["PITBOX_QA_NATIVE_TOKEN"] == "test-native-token"
         Path(command[-1]).write_text(json.dumps({"session_id": "fixture-native"}))
         return SimpleNamespace(returncode=0, stdout=b"fixture passed", stderr=b"")
 

@@ -44,8 +44,8 @@ android {
     defaultConfig {
         applicationId = if (qaPackage) "com.yourpitbox.app.qa" else "com.yourpitbox.app"
         manifestPlaceholders["pitboxAppLabel"] = if (qaPackage) "Your Pit Box QA" else "Your Pit Box"
-        // Enable only after ACCOUNT_EMAIL, ACCOUNT_FROM and ACCOUNT_PEPPER
-        // are provisioned and real verification/recovery delivery is checked.
+        // Enable after profile isolation, upgrade preservation and sign-in
+        // reporting pass native acceptance. No email verification is used.
         buildConfigField("boolean", "ACCOUNT_GATE_ENABLED", providers.gradleProperty("pitbox.accountGate").map { (it == "true").toString() }.getOrElse("false"))
         minSdk = 24
         targetSdk = 36
@@ -93,6 +93,7 @@ android {
     // and is copied to the app's files directory on first start, because the
     // backend serves it with StaticFiles, which needs a real directory.
     sourceSets {
+        getByName("test") { java.srcDir("../../distribution/tests/java") }
         getByName("main") {
             assets.srcDirs(layout.buildDirectory.dir("generated/pitbox-assets"))
         }
@@ -172,6 +173,8 @@ chaquopy {
 }
 
 dependencies {
+    testImplementation("junit:junit:4.13.2")
+    testImplementation("org.json:json:20240303")
     implementation("androidx.core:core:1.13.1")
     implementation("androidx.webkit:webkit:1.12.1")
 }

@@ -5,122 +5,106 @@ import {randomUUID} from 'node:crypto';
 import test from 'node:test';
 const source = await readFile(new URL('../src/worker.js', import.meta.url), 'utf8');
 const {default: worker} = await import('data:text/javascript;base64,' + Buffer.from(source).toString('base64'));
-const schema = await readFile(new URL('../migrations/0009_app_accounts.sql', import.meta.url), 'utf8');
+const schema = (await Promise.all(['0009_app_accounts.sql','0010_driver_profiles.sql'].map(f => readFile(new URL('../migrations/'+f, import.meta.url), 'utf8')))).join('\n');
 function fixture() {
   const db = new DatabaseSync(':memory:'); db.exec('PRAGMA foreign_keys = ON'); db.exec(schema);
-  const sent = [];
-  function execute(item) {
-    const s = db.prepare(item.sql);
-    return s.columns().length ? {success:true, results:s.all(...item.values)} : {success:true, results:[], meta:s.run(...item.values)};
-  }
-  const env = {ACCOUNT_PEPPER:'test-pepper-with-more-than-32-bytes-of-entropy', ACCOUNT_FROM:'verify@example.test',
-    ACCOUNT_EMAIL:{send: async message => { sent.push(message); return {messageId:randomUUID()}; }},
+  function execute(item) { const s = db.prepare(item.sql); return s.columns().length ? {success:true,results:s.all(...item.values)} : {success:true,results:[],meta:s.run(...item.values)}; }
+  const env = {ACCOUNT_PEPPER:'test-pepper-with-more-than-32-bytes-of-entropy',
     OWNER_DASHBOARD_TOKEN:'owner-key-test-with-at-least-32-characters', DOWNLOAD_REPORT_TOKEN:'different-report-key-with-32-characters',
     OWNER_RATE_LIMITER:{limit:async()=>({success:true})}, DB:{
       prepare(sql) {return {sql,values:[],bind(...values){this.values=values;return this;},async first(){return execute(this).results[0] ?? null;},async run(){return execute(this);}};},
       async batch(items){db.exec('BEGIN');try {const results=items.map(execute);db.exec('COMMIT');return results;}catch(e){db.exec('ROLLBACK');throw e;}}
     }};
-  return {db,env,sent};
+  return {db,env};
 }
-const base = () => ({email:'driver@example.test', device_secret:'a'.repeat(64), pin:'0427', launch_id:randomUUID(), version:'5.7.1-android.44', share_starts:true});
+const identity = () => ({account_id:randomUUID(),device_secret:'a'.repeat(64)});
+const event = auth => ({...auth,event_id:randomUUID(),occurred_at:Math.floor(Date.now()/1000),version:'5.7.1-android.44'});
 const send = (env,path,body,headers={}) => worker.fetch(new Request('https://local.test/account/'+path, {method:'POST',headers:{'content-type':'application/json',...headers},body:JSON.stringify(body)}),env);
-async function enroll(f,data=base()) {
-  const challenge=await send(f.env,'challenge',{email:data.email,device_secret:data.device_secret});
-  assert.equal(challenge.status,200); const {challenge_id}=await challenge.json();
-  const code=f.sent.at(-1).text.match(/code is (\d{6})/)[1];
-  const body={...data,challenge_id,code}; const response=await send(f.env,'verify',body);
-  assert.equal(response.status,200); return {data,body,account:(await response.json()).account_id};
-}
-test('verified account and device unlock; raw email, PIN, code and device secret are not stored',async()=>{
-  const f=fixture(); const {data,account}=await enroll(f);
-  assert.equal((await send(f.env,'unlock',data)).status,200);
-  const stored=JSON.stringify(f.db.prepare('SELECT * FROM app_accounts').all());
-  for(const secret of [data.email,data.pin,data.device_secret]) assert.ok(!stored.includes(secret));
-  assert.equal(f.db.prepare('SELECT COUNT(*) n FROM account_challenges').get().n,0);
-  assert.equal(f.db.prepare('SELECT COUNT(*) n FROM account_starts').get().n,1,'retry deduplicates launch');
-  assert.equal((await send(f.env,'unlock',{...data,launch_id:randomUUID()})).status,200);
-  assert.equal(f.db.prepare('SELECT COUNT(*) n FROM account_starts WHERE account_id=?').get(account).n,2);
+const report = (f, token=f.env.OWNER_DASHBOARD_TOKEN) => worker.fetch(new Request('https://local.test/owner/accounts',{headers:{authorization:'Bearer '+token}}),f.env);
+async function register(f,auth=identity()) {assert.equal((await send(f.env,'profile',auth)).status,200);return auth;}
+test('new profiles need neither email nor PIN; credentials never enter stored sign-ins',async()=>{
+  const f=fixture(),auth=await register(f),data=event(auth);
+  assert.equal((await send(f.env,'sign-in',data)).status,200);
+  const stored=JSON.stringify(f.db.prepare('SELECT * FROM driver_profiles').all());
+  assert.ok(!stored.includes(auth.device_secret));
+  const row=f.db.prepare('SELECT * FROM profile_sign_ins').get();
+  assert.deepEqual(Object.keys(row).sort(),['account_id','event_id','occurred_at','received_at','version']);
+  assert.equal(row.account_id,auth.account_id);f.db.close();
+});
+test('all successful sign-ins are recorded, retry IDs are deduplicated, and profiles aggregate separately',async()=>{
+  const f=fixture(),a=await register(f),b=await register(f),data=event(a);
+  for(let i=0;i<3;i++) assert.equal((await send(f.env,'sign-in',data)).status,200);
+  assert.equal((await send(f.env,'sign-in',event(a))).status,200);
+  assert.equal((await send(f.env,'sign-in',event(b))).status,200);
+  const result=await (await report(f)).json();assert.equal(result.metric,'profile_sign_ins');
+  assert.deepEqual(result.summary,{accounts:2,starts:3});
+  assert.equal(result.accounts.find(p=>p.account_id===a.account_id).starts,2);f.db.close();
+});
+test('registration is idempotent and cannot replace another profile credential',async()=>{
+  const f=fixture(),auth=await register(f),other={...auth,device_secret:'b'.repeat(64)};
+  assert.equal((await send(f.env,'profile',auth)).status,200);
+  assert.equal((await send(f.env,'profile',other)).status,401);
+  assert.equal((await send(f.env,'sign-in',event(other))).status,401);
+  assert.equal((await send(f.env,'sign-in',event(auth))).status,200);f.db.close();
+});
+test('random profile ID alone cannot report sign-ins; unknown profiles cannot report',async()=>{
+  const f=fixture(),auth=identity();
+  assert.equal((await send(f.env,'sign-in',event(auth))).status,401);
+  await register(f,auth);const data=event(auth);delete data.device_secret;
+  assert.equal((await send(f.env,'sign-in',data)).status,400);f.db.close();
+});
+test('both endpoints explicitly reject email, PIN, names and API keys',async()=>{
+  const f=fixture(),auth=await register(f);
+  for(const key of ['email','pin','name','api_key','share_starts']) for(const route of ['profile','sign-in'])
+    assert.equal((await send(f.env,route,{...(route==='profile'?auth:event(auth)),[key]:'never-send'})).status,400);
   f.db.close();
 });
-test('unknown/unverified devices cannot unlock even with correct PIN',async()=>{
-  const f=fixture(),{data}=await enroll(f);
-  assert.equal((await send(f.env,'unlock',{...data,device_secret:'b'.repeat(64)})).status,401);
-  assert.equal((await send(f.env,'unlock',{...data,email:'nobody@example.test'})).status,401);
-  f.db.close();
+test('offline events retain event time; stale events are acknowledged but not retained',async()=>{
+  const f=fixture(),auth=await register(f),old=event(auth);old.occurred_at-=7*86400;
+  assert.equal((await send(f.env,'sign-in',old)).status,200);
+  assert.equal(f.db.prepare('SELECT occurred_at FROM profile_sign_ins').get().occurred_at,old.occurred_at);
+  const expired={...event(auth),occurred_at:0};const response=await send(f.env,'sign-in',expired);
+  assert.equal(response.status,200);assert.equal((await response.json()).expired,true);
+  assert.equal(f.db.prepare('SELECT COUNT(*) n FROM profile_sign_ins').get().n,1);f.db.close();
 });
-test('parallel bad PIN requests share atomic account budget and successful starts do not exhaust it',async()=>{
-  const f=fixture(),{data}=await enroll(f);
-  for(let i=0;i<8;i++) assert.equal((await send(f.env,'unlock',{...data,launch_id:randomUUID()})).status,200);
-  const responses=await Promise.all(Array.from({length:12},()=>send(f.env,'unlock',{...data,pin:'1234'})));
-  assert.equal(responses.filter(r=>r.status===401).length,5);
-  assert.equal(responses.filter(r=>r.status===429).length,7);
-  assert.equal((await send(f.env,'unlock',data)).status,429); f.db.close();
+test('outage returns retryable error instead of acknowledging missing records',async()=>{
+  const f=fixture(),auth=await register(f);f.db.exec('DROP TABLE profile_sign_ins');
+  assert.equal((await send(f.env,'sign-in',event(auth))).status,503);
+  assert.equal((await report(f)).status,503);f.db.close();
 });
-test('email challenge is device-bound, expires, permits five guesses, and cannot be replayed',async()=>{
-  const f=fixture(),{body}=await enroll(f);
-  assert.equal((await send(f.env,'verify',body)).status,401);
-  const data=base(); const c=await (await send(f.env,'challenge',{email:data.email,device_secret:data.device_secret})).json();
-  const code=f.sent.at(-1).text.match(/code is (\d{6})/)[1];
-  const valid={...data,challenge_id:c.challenge_id,code};
-  assert.equal((await send(f.env,'verify',{...valid,device_secret:'b'.repeat(64)})).status,401);
-  for(let i=0;i<5;i++) assert.equal((await send(f.env,'verify',{...valid,code:code==='000000'?'000001':'000000'})).status,401);
-  assert.equal((await send(f.env,'verify',valid)).status,401);
-  f.db.prepare('UPDATE account_challenges SET attempts=0, expires_at=0').run();
-  assert.equal((await send(f.env,'verify',valid)).status,401);f.db.close();
+test('owner report excludes download-report key and never returns device credentials',async()=>{
+  const f=fixture(),auth=await register(f);await send(f.env,'sign-in',event(auth));
+  assert.equal((await report(f,f.env.DOWNLOAD_REPORT_TOKEN)).status,401);
+  const response=await report(f);assert.equal(response.status,200);
+  const body=await response.text();assert.ok(!body.includes('device_hash'));assert.ok(!body.includes(auth.device_secret));f.db.close();
 });
-test('recovery preserves account identity and revokes previously registered devices',async()=>{
-  const f=fixture(),first=await enroll(f);
-  const second=await enroll(f,{...first.data,device_secret:'b'.repeat(64),pin:'9081',launch_id:randomUUID()});
-  assert.equal(first.account,second.account);
-  assert.equal((await send(f.env,'unlock',{...first.data,pin:'9081'})).status,401);
-  assert.equal((await send(f.env,'unlock',second.data)).status,200); f.db.close();
+test('types, sizes, origins, future timestamps and removed verification routes fail closed',async()=>{
+  const f=fixture(),auth=await register(f),data=event(auth);
+  for(const mutation of [{device_secret:[auth.device_secret]},{occurred_at:'123'},{occurred_at:Date.now()},{version:1},{event_id:'../driver'}])
+    assert.equal((await send(f.env,'sign-in',{...data,...mutation})).status,400);
+  assert.equal((await send(f.env,'profile',auth,{origin:'https://evil.example'})).status,403);
+  assert.equal((await send(f.env,'profile',{...auth,extra:'x'.repeat(3000)})).status,400);
+  for(const route of ['challenge','verify','unlock']) assert.equal((await send(f.env,route,auth)).status,404);
+  assert.equal((await send({...f.env,ACCOUNT_PEPPER:''},'profile',auth)).status,503);f.db.close();
 });
-test('declining account analytics does not prevent unlock or create starts; owner-only report is separate',async()=>{
-  const f=fixture(),{data}=await enroll(f,{...base(),share_starts:false});
-  assert.equal((await send(f.env,'unlock',data)).status,200);
-  assert.equal(f.db.prepare('SELECT COUNT(*) n FROM account_starts').get().n,0);
-  const report=token=>worker.fetch(new Request('https://local.test/owner/accounts',{headers:{authorization:'Bearer '+token}}),f.env);
-  assert.equal((await report(f.env.DOWNLOAD_REPORT_TOKEN)).status,401);
-  const result=await report(f.env.OWNER_DASHBOARD_TOKEN);assert.equal(result.status,200);
-  assert.equal((await result.json()).summary.starts,0);f.db.close();
+test('concurrent duplicate sign-ins cannot inflate totals or cross profile ownership',async()=>{
+  const f=fixture(),a=await register(f),b=await register(f),data=event(a);
+  const responses=await Promise.all(Array.from({length:12},()=>send(f.env,'sign-in',data)));
+  assert.ok(responses.every(r=>r.status===200));
+  assert.equal((await send(f.env,'sign-in',{...data,...b})).status,409);
+  assert.equal(f.db.prepare('SELECT COUNT(*) n FROM profile_sign_ins').get().n,1);f.db.close();
 });
-test('missing service config and send failures fail closed; unexpected fields and browser origins rejected',async()=>{
-  const f=fixture(),data=base();
-  assert.equal((await send({...f.env,ACCOUNT_PEPPER:''},'unlock',data)).status,503);
-  assert.equal((await send(f.env,'unlock',{...data,api_key:'should-never-be-sent'})).status,400);
-  assert.equal((await send(f.env,'unlock',data,{origin:'https://evil.example'})).status,403);
-  assert.equal((await send(f.env,'unlock',{...data,pin:'１２３４'})).status,400);
-  f.env.ACCOUNT_EMAIL.send=async()=>{throw new Error('sender unavailable');};
-  assert.equal((await send(f.env,'challenge',{email:data.email,device_secret:data.device_secret})).status,503);
-  assert.equal(f.db.prepare('SELECT COUNT(*) n FROM account_challenges').get().n,0);f.db.close();
+test('registration has an atomic per-IP budget without limiting idempotent retries',async()=>{
+  const f=fixture(),auth=await register(f);
+  for(let i=0;i<19;i++) await register(f);
+  assert.equal((await send(f.env,'profile',identity())).status,429);
+  assert.equal((await send(f.env,'profile',auth)).status,200);f.db.close();
 });
-test('scheduled cleanup removes expired security counters and starts beyond 180 days',async()=>{
-  const f=fixture();await enroll(f);
-  f.db.exec("UPDATE account_starts SET started_at=0; INSERT INTO account_limits VALUES ('expired',1,0);");
-  // Existing anonymous cleanup needs its existing tables, kept separate.
+test('scheduled retention prunes old sign-ins and expired rate limits',async()=>{
+  const f=fixture(),auth=await register(f);await send(f.env,'sign-in',event(auth));
+  f.db.exec("UPDATE profile_sign_ins SET occurred_at=0; INSERT INTO account_limits VALUES ('expired',1,0)");
   f.db.exec(await readFile(new URL('../migrations/0007_optional_usage.sql',import.meta.url),'utf8'));
   const work=[];await worker.scheduled({},f.env,{waitUntil:p=>work.push(p)});await Promise.all(work);
-  assert.equal(f.db.prepare('SELECT COUNT(*) n FROM account_starts').get().n,0);
+  assert.equal(f.db.prepare('SELECT COUNT(*) n FROM profile_sign_ins').get().n,0);
   assert.equal(f.db.prepare("SELECT COUNT(*) n FROM account_limits WHERE id='expired'").get().n,0);f.db.close();
-});
-
-test('adding a device with the same PIN preserves both devices and links launches to one account',async()=>{
-  const f=fixture(),first=await enroll(f);
-  const second=await enroll(f,{...first.data,device_secret:'b'.repeat(64),launch_id:randomUUID()});
-  assert.equal(first.account,second.account);
-  assert.equal((await send(f.env,'unlock',first.data)).status,200);
-  assert.equal((await send(f.env,'unlock',second.data)).status,200);
-  assert.equal(f.db.prepare('SELECT COUNT(DISTINCT account_id) n FROM account_starts').get().n,1);f.db.close();
-});
-
-test('optional analytics outages cannot block a valid unlock',async()=>{
-  const f=fixture(),{data}=await enroll(f);
-  f.db.exec('DROP TABLE account_starts');
-  assert.equal((await send(f.env,'unlock',data)).status,200);f.db.close();
-});
-test('credential fields reject type coercion and do not accept numeric PINs',async()=>{
-  const f=fixture(),data=base();
-  for(const mutation of [{pin:1234},{device_secret:[data.device_secret]},{version:123}]) {
-    assert.equal((await send(f.env,'unlock',{...data,...mutation})).status,400);
-  }f.db.close();
 });
