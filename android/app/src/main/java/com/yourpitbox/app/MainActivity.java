@@ -136,6 +136,10 @@ public class MainActivity extends Activity {
             @Override
             public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
                 Uri target = request.getUrl();
+                if ("pitbox".equals(target.getScheme()) && "profiles".equals(target.getHost())) {
+                    if (accountRequired && request.isForMainFrame() && request.hasGesture() && isTrustedDashboard(view.getUrl())) requestProfileSwitch();
+                    return true;
+                }
                 if (isTrustedDashboard(target.toString())) return false;
                 // An external link opens in a browser; pairing invitations are
                 // never injected into a page outside the embedded dashboard.
@@ -157,6 +161,7 @@ public class MainActivity extends Activity {
             public void onPageFinished(WebView view, String url) {
                 pageReady = isTrustedDashboard(url);
                 deliverPairingInvitation();
+                if (pageReady && accountRequired) view.evaluateJavascript("document.getElementById('android-profile-switch')?.removeAttribute('hidden')", null);
             }
         });
         root.addView(web, new FrameLayout.LayoutParams(
@@ -187,11 +192,11 @@ public class MainActivity extends Activity {
         KeyVault vault = KeyVault.initialize(this);
         new Thread(() -> {
             try {
-                accountRequired = BuildConfig.ACCOUNT_GATE_ENABLED || vault.read("account.id") != null;
+                accountRequired = BuildConfig.ACCOUNT_GATE_ENABLED || vault.read("profiles.index") != null || vault.read("account.id") != null;
                 handler.post(() -> {
                     if (isDestroyed() || isFinishing()) return;
                     // Overlap ordinary startup with the mask. Account-enabled
-                    // devices keep the service stopped until verification.
+                    // devices keep the service stopped until local profile unlock.
                     if (!accountRequired) { AccountSession.unlock(); beginAuthorizedStart(); }
                     handler.postDelayed(() -> {
                         if (isDestroyed() || isFinishing()) return;
@@ -215,9 +220,25 @@ public class MainActivity extends Activity {
         accountGate = new AccountGate(this, () -> {
             root.removeView(accountGate); accountGate = null; gateVisible = false;
             getWindow().clearFlags(WindowManager.LayoutParams.FLAG_SECURE);
-            beginAuthorizedStart();
-        });
+            if (!loaded) {
+                android.webkit.WebStorage.getInstance().deleteAllData();
+                web.clearCache(true); web.clearHistory();
+                android.webkit.CookieManager.getInstance().removeAllCookies(ignored -> beginAuthorizedStart());
+            } else beginAuthorizedStart();
+        }, this::requestProfileSwitch);
         root.addView(accountGate, new FrameLayout.LayoutParams(-1, -1));
+    }
+
+    private void requestProfileSwitch() {
+        new android.app.AlertDialog.Builder(this).setTitle("Switch driver?")
+            .setMessage("This ends the current session and closes the app after saving. Reopen Your Pit Box to choose or add a driver.")
+            .setNegativeButton("Keep racing", null)
+            .setPositiveButton("Save and close", (dialog, which) -> {
+                web.setVisibility(View.INVISIBLE);
+                if (startedAt > 0 && PitBoxService.getFailure() == null)
+                    startService(new Intent(this, PitBoxService.class).setAction(PitBoxService.ACTION_STOP));
+                else { finishAndRemoveTask(); android.os.Process.killProcess(android.os.Process.myPid()); }
+            }).show();
     }
 
     private void beginAuthorizedStart() {
@@ -413,7 +434,7 @@ public class MainActivity extends Activity {
     }
 
     private String logTail() {
-        java.io.File log = new java.io.File(getFilesDir(), "PitWallData/pitwall.log");
+        java.io.File log = new java.io.File(ProfileStore.directory(this), "PitWallData/pitwall.log");
         if (!log.isFile()) return getString(R.string.log_missing);
         try (java.io.RandomAccessFile file = new java.io.RandomAccessFile(log, "r")) {
             long length = file.length();

@@ -2617,5 +2617,7 @@
   "one": "{count} jamais dit",
   "other": "{count} jamais dits",
   "many": "{count} jamais dits"
- }
+ },
+ "Switch driver profile": "Changer de profil pilote",
+ "Save and close, then reopen to choose another driver.": "Enregistrez et fermez, puis rouvrez pour choisir un autre pilote."
 }

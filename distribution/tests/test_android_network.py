@@ -97,7 +97,7 @@ def android_entry(monkeypatch, tmp_path):
     monkeypatch.setattr(os, "environ", os.environ.copy())
     from pitwall import secret_storage
     monkeypatch.setattr(secret_storage, "_store", None)
-    vault = types.SimpleNamespace(read=lambda name: None, write=lambda name, value: None)
+    vault = types.SimpleNamespace(readProvider=lambda name: None, writeProvider=lambda name, value: None)
     nics: list[_Nic] = []
     fake_java = types.ModuleType("java")
     classes = {

@@ -41,6 +41,12 @@ public final class KeyVault {
         }
         return (SecretKey) store.getKey(ALIAS, null);
     }
+    private String providerName(String name) {
+        if (!AccountSession.isUnlocked()) throw new IllegalStateException("Profile is locked");
+        return ProfilePaths.providerName(AccountSession.profileId(), AccountSession.legacyProfile(), name);
+    }
+    public synchronized String readProvider(String name) throws Exception { return read(providerName(name)); }
+    public synchronized void writeProvider(String name, String value) throws Exception { write(providerName(name), value); }
     public synchronized String read(String name) throws Exception {
         String stored = preferences.getString(name, null);
         if (stored == null) return null;

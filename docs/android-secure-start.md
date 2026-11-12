@@ -1,143 +1,139 @@
-# Android opening animation and account unlock
+# Android driver profiles and secure startup
 
-Android revision 44 adds a native 2.6-second pit-light introduction, followed by
-an email/four-digit PIN gate when account rollout is enabled. The interpreter now
-starts on the service thread after native authorization so first-run Python
-unpacking cannot block the opening animation. Slow-start diagnostics remain
-available underneath the mask. Reduced-motion devices get a static title.
+The native opening masks the old startup screen with five pit lights, the Your
+Pit Box wordmark and a progress line for 2.6 seconds. Reduced-motion users get a
+static version. Python initialization stays off the UI thread.
 
-An interactive visual reference is in `docs/previews/android-opening.html`. It
-mirrors the native drawing and unlock layout; it is not Android runtime evidence.
+## Driver setup and access
 
-## Rollout status
+On first opening a profile-enabled build, the driver chooses a display name and
+**either email or a four-digit PIN**. Email has no verification or outbound mail.
+Returning drivers select their profile and enter its email or PIN. Additional
+drivers use **New driver**. Email addresses and PINs never leave the device.
 
-**The account gate is staged, not enabled in public builds. Do not enable or
-publish account-required APKs until email verification/recovery and physical
-Android vault/lifecycle acceptance pass.** The default Gradle property
-`pitbox.accountGate=false` preserves access for existing users. An already
-enrolled installation always requires its account even in a gate-disabled build.
-The animation, encrypted local key storage and authenticated loopback dashboard
-are active independently of the rollout flag.
+Email is only a local identifier: anyone who knows the address can open that
+profile. The app says this explicitly. It does not verify identity or ownership
+of the address. PIN-only profiles provide an additional app lock with five
+attempts per 15 minutes and twenty failures per day. The verifier uses salted
+PBKDF2-HMAC-SHA256 (120,000 iterations; Android 7 uses PBKDF2-HMAC-SHA1 with 600,000 iterations
+and records the algorithm so OS upgrades preserve access), inside the Keystore-encrypted profile
+index. PINs are never encryption keys. There is no forgotten-PIN recovery or
+cross-device email account matching. A new profile does not unlock another
+profile's data. Twenty local profiles are supported.
 
-The connected Cloudflare account currently rejects Email Sending access. The
-account routes fail closed with 503 unless all three bindings below are present.
-No live verification email has been sent or delivery validated. Cloud account
-rows are not imported from newsletter signups or old anonymous usage.
+## Separate local data
 
-## Cloudflare preparation
+The first profile owns the existing private `files/` workspace, preserving the
+existing `.env`, settings, race history and key migration. Later profiles use
+`files/profiles/<random-local-id>/`, each with its own `.env`, `PitWallData`, SQLite
+history, setups, logs, captures, pairing credentials and dashboard assets.
+Provider secrets have a separate vault namespace for each additional profile;
+the first retains the existing encrypted entries. Names and email addresses are
+stored only in the encrypted local index. Android backup remains disabled.
 
-Use the existing `distribution/activation-server` Wrangler project:
+A process can authorize only one profile. Returning from the background requires
+that profile's credentials while telemetry may keep running. The CONNECTION
+page's **Switch driver profile** action stops the backend normally so its session
+can save, then closes the process. Reopen to choose another driver. Selecting
+another driver from the lock screen also requires this shutdown. The process
+never hot-swaps Python's database/configuration singletons. Browser caches,
+cookies and local storage are cleared before the first dashboard load in a new
+process, preventing the prior driver's browser state from carrying across.
 
-1. Apply `migrations/0009_app_accounts.sql` to `pitwall-licenses` before deployment.
-   This is additive and can safely run more than once.
-2. Provision `ACCOUNT_PEPPER` as a cryptographically random secret (at least 32
-   random bytes); keep it stable. Rotating it without a migration invalidates
-   account lookup, registered devices and PIN hashes. Never commit its value.
-3. Authorize a transactional sending domain and a restricted `ACCOUNT_EMAIL`
-   Email Sending binding. Set `ACCOUNT_FROM` to its verified sender. Example
-   configuration after that sender is validated:
+This provides separate local backend stores, not cloud history storage. Explicit
+Wi-Fi transfers still copy only the active profile's history. A reinstall loses
+local credentials and creates a new reporting identity; matching the same email
+on another device does not link or recover local data.
 
-   ```toml
-   [vars]
-   ACCOUNT_FROM = "verify@accounts.yourpitbox.com"
+## Key storage and dashboard boundary
 
-   [[send_email]]
-   name = "ACCOUNT_EMAIL"
-   allowed_sender_addresses = ["verify@accounts.yourpitbox.com"]
-   ```
+Provider keys migrate from private `.env` into AES-256-GCM entries using a
+non-exportable Android Keystore key. Migration verifies encrypted writes before
+removing plaintext assignments; errors stop startup. Desktop behavior remains
+unchanged. All Android localhost HTTP and WebSocket routes, including health and
+static assets, require a random process token. The native WebView gets an HttpOnly
+cookie. The debug-only private QA token is never written in release builds.
 
-   This example is not proof that this sender exists. Keep the existing Worker
-   bindings, secrets, download routes and cron schedule intact.
-4. Deploy the tested Worker and website. `/owner/accounts` is authenticated by
-   the existing **owner** key, never the download-report key.
-5. Test real delivery to an owner-controlled mailbox, wrong-code handling, PIN
-   recovery, second-device enrollment and rate limiting. Do not use customer
-   addresses for fixtures.
-6. Build an isolated candidate with `-Ppitbox.accountGate=true`. Verify the
-   native flows below, then enable the flag in the signed release workflow.
-   Do not simply flip the default while existing build/release jobs are untested.
+Keys stay on the device except calls to the chosen AI provider. This is not a
+promise against rooted devices, malicious app-process code, or someone who knows
+an email-only profile's address. An active engineer needs decrypted keys in
+memory. PIN fields are not autofilled or saved in activity state; the lock screen
+blocks screenshots and task previews.
 
-## Account contract
+## Sign-in records
 
-Only native HTTPS POSTs without a browser Origin are accepted. Bodies are
-bounded to 2 KiB and fields are allowlisted.
+Every successful local credential acceptance queues one record before opening.
+The app briefly discloses that sign-in records use a random profile ID, time and
+app version, and explicitly states that email and PIN are not sent. This includes
+successful authentication whose screen is subsequently interrupted. Wrong
+credentials are not sign-ins and do not create a success record.
 
-- `/account/challenge`: email + 256-bit install secret; sends a six-digit,
-  ten-minute code. At most three sends per 15 minutes and ten per day/address.
-- `/account/verify`: verifies that email code for this install, sets a four-digit
-  PIN on a new account, or registers another device with the same existing PIN.
-  Choosing a different PIN is a verified-email reset that revokes older devices.
-  Codes allow five guesses and are consumed atomically once.
-- `/account/unlock`: email + PIN + registered install secret. Global atomic D1
-  counters allow five failed attempts per 15 minutes, twenty per day/address,
-  plus an IP budget. Ordinary successful starts release their PIN reservation.
-- Successful verification/unlock returns only the random account ID. There is
-  no persistent cloud bearer token or cached PIN. Network failures keep the
-  gate closed. Internet is required to open an account-enabled app.
+The encrypted durable queue retries every minute while its process is alive and
+after the next successful opening. Network outages do not prevent local access.
+Records are removed only after the server acknowledges them. No email, PIN,
+driver name, key, voice, telemetry or gameplay data enters the payload. The
+registration credential is a random 256-bit value, not derived from credentials.
 
-D1 stores HMAC email lookups, peppered salted PIN verifiers and hashed random
-install secrets. The email itself is used transiently for delivery. The pepper
-must remain separate from D1. A four-digit PIN is not a strong password by
-itself; the registered-device secret, email verification and server limits are
-part of this design.
+The server hashes that random credential with a separately stored HMAC secret.
+An event UUID prevents retries from increasing counts. Reports use device event
+time, keep server receipt time separately, reject timestamps over five minutes
+in the future, and retain 180 days. Older queued events are acknowledged as
+expired so they cannot block later events. Clearing app storage before upload
+loses that queue. These are client-reported sign-ins, not verified unique people
+or evidence of gameplay. The service cannot attest local authentication on a
+modified or compromised app.
 
-## Key storage and local access
+`/owner/accounts` requires the existing owner key. It shows 30-day aggregate
+profiles/sign-ins and the latest 200 profiles with first/last sign-in, active days
+and counts over the retained period. Newsletter data and optional anonymous
+product usage stay separate. Reinstalls and profiles on another device have
+separate reporting IDs.
 
-All five provider key types, including Moonshot/custom aliases, migrate from the
-Android private `.env` into AES-256-GCM entries under a non-exportable Android
-Keystore key. Each entry authenticates its setting name as additional data.
-Migration verifies encrypted writes before atomically removing assignments;
-no plaintext backup is made and vault errors stop startup. Other `.env`
-settings/comments and all race history stay intact. Credential changes use the
-vault thereafter; desktop `.env` behavior is unchanged.
+## Cloudflare contract and rollout
 
-The service refuses cold starts without in-process authorization. A fresh
-process requires unlock again; a running race may continue in the background
-while returning to the UI requires a new PIN. Gate inputs are not instance-state
-saved or autofilled, and the account screen prevents screenshots/task previews.
+Native HTTPS POSTs only; no browser Origin, no query string, bounded 2-KiB JSON
+bodies and strict field allowlists:
 
-Android's localhost HTTP and WebSocket routes require a random process token,
-including health and static files. The native WebView gets an HttpOnly cookie;
-native health/export requests get a header. Same-origin checks remain enforced.
-The debug package writes a test token in its private directory for `adb run-as`
-QA. Production builds compile out that write and have no public bypass.
+- `/account/profile`: `account_id`, `device_secret`. Idempotent registration;
+  cannot replace an existing credential. Twenty new profiles per IP per day.
+- `/account/sign-in`: the same credential plus `event_id`, `occurred_at`, `version`.
+  A missing/incorrect credential cannot write another profile's sign-ins.
+- Both routes explicitly reject email, PIN, names and API keys. Combined requests
+  have a 300-per-IP/15-minute budget. Rate-limited events remain queued.
 
-This protects stored key files and ordinary app/API access. It does not promise
-protection against a rooted device, malicious code in the app process, an
-unlocked race session, or an OS-level compromise. Keys must exist in memory
-while the engineer calls providers. The PIN is not used as an encryption key,
-and API keys never go to the account service.
+Apply additive migrations `0009_app_accounts.sql` and `0010_driver_profiles.sql`
+to `pitwall-licenses`. Both migrations have been applied during staging; the
+0009 account/challenge tables are unused by the current local-profile flow. Keep
+them for additive rollout. The stable `ACCOUNT_PEPPER` Worker secret has been
+provisioned with 32 random bytes. Deploy the Worker plus owner page after review. No email
+sending configuration is required. Preserve all existing download, subscriber,
+usage, owner and release credentials and cron configuration.
 
-## Account analytics
-
-A separate unchecked opt-in shares successful starts using a random account ID,
-a launch UUID, Android version and server time. Requests retrying the same launch
-UUID cannot inflate counts. No API key, PIN, raw email, telemetry, voice or
-newsletter membership enters the starts table. Turning sharing off stops future
-start reporting; existing starts expire after 180 days. Account authentication
-metadata persists independently of that analytics retention.
-
-The private owner page shows 30-day totals and up to 200 recent accounts with
-starts, active days, first and last start in the retained interval. This is not
-an all-customer or lifetime metric. Existing anonymous-installation reports and
-newsletter lists remain separate.
+**Release hold: profiles are staged behind `pitbox.accountGate=false`. Do not
+merge or publish a profile-required APK until the enabled native flow, data
+isolation, upgrade preservation and sign-in delivery pass acceptance.** Existing
+profile indexes always require the profile gate even in a flag-disabled build.
+The introduction, encrypted provider storage and localhost boundary operate
+independently. Enable an isolated candidate with `-Ppitbox.accountGate=true`.
 
 ## Acceptance and rollback
 
-Local automated coverage includes real SQLite execution of the Worker account
-SQL, concurrent guessing, code expiry/replay/device binding, recovery and device
-revocation, opt-out, duplicate launches, report authorization and retention;
-Python coverage checks migration preservation/failure and HTTP/WebSocket gates.
+Before release, check first setup with email and PIN; wrong/leading-zero PINs;
+lockout surviving restart; duplicate names/emails; two drivers with distinct
+keys/settings/history; end/save/switch; explicit history transfer isolation;
+background/resume, rotation, permissions, process death; offline sign-in, durable
+retry and deduplication; first-profile upgrade ownership; provider save/delete;
+phone/tablet/folded layouts, reduced motion and Keystore loss. Check all profile
+IDs in the owner report without email, PIN or name exposure.
 
-Before release, verify on Android: first install; upgrading with existing keys;
-all provider save/delete flows; wrong PIN; offline startup; interrupted enrollment;
-background/resume with an active race; permission/file-picker round trips;
-rotation and process death; reduced motion; phone/tablet/folded layouts; and
-Keystore loss. Existing emulator backend tests exercise the rollout-disabled
-path, not real email delivery or the full account-enabled path.
+The HTML preview at `docs/previews/android-opening.html` illustrates the flow;
+it is not proof of native lifecycle behavior. Existing emulator backend checks
+exercise the rollout-disabled path. Do not roll enrolled profiles back to an APK
+that predates profile isolation or encrypted storage.
 
-Do not roll enrolled users back to an APK that predates encrypted storage: it
-cannot read their saved keys. A safe rollback retains the vault/native gate and
-only changes the animation or rollout to new installations. If access must be
-recovered, preserve race history and require verified-email recovery; never
-silently bypass enrolled-account authentication.
+Local validation: 3,651 app tests passed (4 skipped), 101 Worker/website tests
+passed, and 62 Android packaging/network checks passed (2 JDK-dependent checks
+skipped). The new native classes compile against Android 36 APIs; the JVM profile
+harness covers credentials, persistent lockouts, namespace separation, queue
+acknowledgements and the process boundary. APK/emulator and enabled-device
+acceptance remain separate release gates.
