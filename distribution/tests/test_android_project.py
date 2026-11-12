@@ -347,15 +347,18 @@ def test_emulator_checks_sqlite_warnings_for_current_process(tmp_path, monkeypat
 class _FakeProfileScreen:
     """The native driver-profile screen as the emulator smoke reads it.
 
-    Screens and controls mirror AccountGate: resource ids, a driver list that
-    appears only with two or more drivers, PIN confirmation on setup, and the
-    keyboard's Enter key submitting the last field.
+    Mirrors AccountGate: resource ids and focus, a driver list that appears
+    only with two or more drivers, the single driver's PIN field focused on
+    arrival, PIN confirmation on setup, the keyboard's Enter key moving to the
+    next field and submitting from the last, and fields hidden behind the
+    keyboard reporting no bounds.
     """
 
     PREFIX = "com.yourpitbox.app:id/"
 
     def __init__(self):
         self.profiles = []          # (name, method, secret)
+        self.hidden = set()         # fields currently behind the keyboard
         self.launch()
 
     def launch(self):
@@ -374,7 +377,8 @@ class _FakeProfileScreen:
         self.screen, self.values, self.focus, self.notice, self.method = "setup", {}, None, "", "pin"
 
     def _unlock(self, profile):
-        self.screen, self.selected, self.values, self.focus, self.notice = "unlock", profile, {}, None, ""
+        self.screen, self.selected, self.values, self.notice = "unlock", profile, {}, ""
+        self.focus = "gate_credential"
 
     def nodes(self):
         if self.screen == "intro":
@@ -406,17 +410,21 @@ class _FakeProfileScreen:
             self._uncover()
         body = "".join(
             f'<node resource-id="{self.PREFIX + rid if rid else ""}" text="{text}" content-desc="{desc}" '
-            f'enabled="true" bounds="[0,{i * 100}][800,{i * 100 + 80}]" />'
+            f'enabled="true" focused="{str(rid == self.focus).lower()}" '
+            f'bounds="{"[0,0][0,0]" if rid in self.hidden else f"[0,{i * 100}][800,{i * 100 + 80}]"}" />'
             for i, (rid, text, desc) in enumerate(self.nodes()))
         return ET.fromstring(f"<hierarchy>{body}</hierarchy>")
 
     def adb(self, *args, check=True):
         if args[:3] == ("shell", "input", "tap"):
             rid, text, desc = self.nodes()[int(args[4]) // 100]
+            assert rid not in self.hidden, "Tapped a field behind the keyboard"
             if rid in {"gate_name", "gate_credential", "gate_confirm"}:
                 self.focus = rid
             elif rid == "gate_method_email":
-                self.method = "email"
+                name = self.values.get("gate_name", "")
+                self.method, self.values = "email", {"gate_name": name}
+                self.focus = "gate_credential" if name.strip() else None
             elif rid == "gate_other_driver":
                 self.screen = "picker"
             elif rid == "gate_new_driver":
@@ -431,6 +439,12 @@ class _FakeProfileScreen:
         return SimpleNamespace(stdout=b"", stderr=b"", returncode=0)
 
     def _enter(self):
+        if self.screen == "setup" and self.focus == "gate_name":
+            self.focus = "gate_credential"
+            return
+        if self.screen == "setup" and self.focus == "gate_credential" and self.method == "pin":
+            self.focus = "gate_confirm"
+            return
         secret = self.values.get("gate_credential", "")
         if self.screen == "setup":
             if self.method == "pin" and secret != self.values.get("gate_confirm"):
@@ -458,6 +472,9 @@ def _smoke_with_fake_profiles(monkeypatch):
 
 def test_emulator_creates_reopens_and_switches_driver_profiles(monkeypatch):
     module, screen = _smoke_with_fake_profiles(monkeypatch)
+    # On a landscape tablet the keyboard covers the PIN fields; the smoke
+    # reaches them with the Next key, never by tapping where they were.
+    screen.hidden = {"gate_credential", "gate_confirm"}
     # Fresh install: the first driver is created with a confirmed PIN.
     module.create_pin_profile("launch-1", *module.FIRST_DRIVER, first=True)
     assert screen.profiles == [("Smoke Driver", "pin", "2468")] and screen.screen == "opened"
@@ -466,6 +483,7 @@ def test_emulator_creates_reopens_and_switches_driver_profiles(monkeypatch):
     module.unlock_profile("launch-2", *module.FIRST_DRIVER)
     assert screen.screen == "opened"
     # A second driver is added with an email and no PIN confirmation.
+    screen.hidden = {"gate_confirm"}
     screen.launch()
     module.create_email_profile("second-driver", *module.SECOND_DRIVER)
     assert screen.profiles[1] == ("Second Driver", "email", "second.driver@example.test")

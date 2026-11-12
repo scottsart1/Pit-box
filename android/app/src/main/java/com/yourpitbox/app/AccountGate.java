@@ -122,7 +122,7 @@ public final class AccountGate extends ScrollView {
             text(getContext().getString(first ? R.string.gate_first_body : R.string.gate_new_body), 15, R.color.pitbox_muted);
         }
         name = field(R.string.gate_name_hint, InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_CAP_WORDS,
-            ProfileStore.MAX_NAME, R.id.gate_name, EditorInfo.IME_ACTION_NEXT);
+            ProfileStore.MAX_NAME, R.id.gate_name);
         name.setText(draftName);
         TextView method = text(getContext().getString(R.string.gate_method_label), 17, R.color.pitbox_text);
         method.setTypeface(null, Typeface.BOLD);
@@ -130,6 +130,7 @@ public final class AccountGate extends ScrollView {
         text(getContext().getString(R.string.gate_method_help), 14, R.color.pitbox_muted);
         methodChoice();
         credentialFields(true);
+        chain(name, credential, confirmation);
         spacer(4);
         submit = button(R.string.gate_create, true, R.id.gate_submit, this::submit);
         if (!first) button(R.string.gate_other_driver, false, R.id.gate_other_driver, this::picker);
@@ -143,6 +144,7 @@ public final class AccountGate extends ScrollView {
         title.setTypeface(null, Typeface.BOLD); heading(title);
         text(getContext().getString(emailMode ? R.string.gate_unlock_email : R.string.gate_unlock_pin), 15, R.color.pitbox_muted);
         credentialFields(false);
+        chain(credential);
         submit = button(R.string.gate_open, true, R.id.gate_submit, this::submit);
         button(R.string.gate_other_driver, false, R.id.gate_other_driver, this::picker);
         if (getVisibility() == VISIBLE) focusCredential();
@@ -283,9 +285,9 @@ public final class AccountGate extends ScrollView {
         credential = field(emailMode ? R.string.gate_email_hint : R.string.gate_pin_hint,
             emailMode ? InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_EMAIL_ADDRESS
                 : InputType.TYPE_CLASS_NUMBER | InputType.TYPE_NUMBER_VARIATION_PASSWORD,
-            emailMode ? 254 : 4, R.id.gate_credential, confirm ? EditorInfo.IME_ACTION_NEXT : EditorInfo.IME_ACTION_DONE);
+            emailMode ? 254 : 4, R.id.gate_credential);
         confirmation = confirm ? field(R.string.gate_confirm_hint,
-            InputType.TYPE_CLASS_NUMBER | InputType.TYPE_NUMBER_VARIATION_PASSWORD, 4, R.id.gate_confirm, EditorInfo.IME_ACTION_DONE) : null;
+            InputType.TYPE_CLASS_NUMBER | InputType.TYPE_NUMBER_VARIATION_PASSWORD, 4, R.id.gate_confirm) : null;
         if (creating) text(getContext().getString(emailMode ? R.string.gate_email_note : R.string.gate_pin_note), 13, R.color.pitbox_muted);
         text(getContext().getString(R.string.gate_local_note), 13, R.color.pitbox_muted);
         notice = text("", 14, R.color.pitbox_red);
@@ -371,23 +373,40 @@ public final class AccountGate extends ScrollView {
         b.setOnClickListener(v -> { if (!busy) action.run(); }); return b;
     }
 
-    private EditText field(int hint, int type, int max, int id, int imeAction) {
+    private EditText field(int hint, int type, int max, int id) {
         EditText input = new EditText(activity); input.setId(id); input.setHint(hint);
         input.setInputType(type); input.setSingleLine(true); input.setTextColor(color(R.color.pitbox_text));
         input.setHintTextColor(color(R.color.pitbox_muted)); input.setTextSize(17); input.setMinHeight(dp(52));
         input.setFilters(new InputFilter[]{new InputFilter.LengthFilter(max)});
-        input.setImeOptions(imeAction | EditorInfo.IME_FLAG_NO_EXTRACT_UI);
         input.setBackgroundTintList(ColorStateList.valueOf(color(R.color.pitbox_muted)));
         if (Build.VERSION.SDK_INT >= 26) input.setImportantForAutofill(View.IMPORTANT_FOR_AUTOFILL_NO);
         // Never restore a typed PIN or address from saved instance state.
         input.setSaveEnabled(false);
-        if (imeAction == EditorInfo.IME_ACTION_DONE) input.setOnEditorActionListener((view, action, event) -> {
-            boolean enter = event != null && event.getKeyCode() == KeyEvent.KEYCODE_ENTER;
-            if (action != EditorInfo.IME_ACTION_DONE && !enter) return false;
-            if (event == null || event.getAction() == KeyEvent.ACTION_DOWN) submit();
-            return true;
-        });
         card.addView(input, new LinearLayout.LayoutParams(-1, -2)); return input;
+    }
+
+    /**
+     * Next (or Enter on a hardware keyboard) moves through these fields in
+     * order and Done on the last opens the profile. Android's own focus
+     * search would stop on the method buttons between the name and the PIN
+     * once a hardware key has taken the screen out of touch mode.
+     */
+    private void chain(EditText... fields) {
+        for (int i = 0; i < fields.length; i++) {
+            if (fields[i] == null) continue;
+            EditText following = null;
+            for (int j = i + 1; j < fields.length && following == null; j++) following = fields[j];
+            EditText next = following;
+            fields[i].setImeOptions((next == null ? EditorInfo.IME_ACTION_DONE : EditorInfo.IME_ACTION_NEXT)
+                | EditorInfo.IME_FLAG_NO_EXTRACT_UI);
+            fields[i].setOnEditorActionListener((view, action, event) -> {
+                boolean enter = event != null && event.getKeyCode() == KeyEvent.KEYCODE_ENTER;
+                if (action == EditorInfo.IME_NULL && !enter) return false;
+                if (event != null && event.getAction() != KeyEvent.ACTION_DOWN) return true;
+                if (next != null) next.requestFocus(); else submit();
+                return true;
+            });
+        }
     }
 
     private void error(int message) {

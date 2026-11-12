@@ -548,12 +548,24 @@ def gate_tap(label: str, tree: ET.Element, name: str) -> ET.Element:
     return ui_tree(f"{label}-after-{name}")
 
 
-def gate_type(label: str, tree: ET.Element, name: str, value: str) -> ET.Element:
-    """Focus a field, type into it, and return the re-laid-out screen."""
-    tree = gate_tap(label, tree, name)
+def gate_fill(label: str, tree: ET.Element, name: str, value: str) -> ET.Element:
+    """Type into a field: as it is when already focused, otherwise tap it first."""
+    node = next((node for node in tree.iter("node")
+                 if node.get("resource-id", "").endswith(f":id/{name}")), None)
+    assert node is not None, f"Profile screen has no {name}; see {label}-ui.xml"
+    if node.get("focused") != "true":
+        assert node_bounds(node) is not None, f"Profile screen's {name} is not visible; see {label}-ui.xml"
+        tap_node(node)
     adb("shell", "input", "text", value.replace(" ", "%s"))
     time.sleep(0.5)
     return ui_tree(f"{label}-typed-{name}")
+
+
+def gate_next(label: str) -> ET.Element:
+    """The keyboard's Next key focuses, and scrolls to, the following field."""
+    adb("shell", "input", "keyevent", "KEYCODE_ENTER")
+    time.sleep(0.5)
+    return ui_tree(f"{label}-next")
 
 
 def gate_submit(label: str):
@@ -573,28 +585,33 @@ def gate_submit(label: str):
     raise AssertionError(f"Profile screen stayed open after submitting; see {label}-opening-*-ui.xml")
 
 
+def open_setup(label: str, tree: ET.Element) -> ET.Element:
+    """From one driver's PIN screen or the driver list, to + New driver."""
+    if gate_node(tree, "gate_new_driver") is None:
+        tree = gate_tap(label, tree, "gate_other_driver")
+    tree = gate_tap(label, tree, "gate_new_driver")
+    assert gate_node(tree, "gate_name") is not None, f"Setup form did not open; see {label}-ui.xml"
+    return tree
+
+
 def create_pin_profile(label: str, name: str, pin: str, *, first: bool):
     tree = await_gate(label)
     if not first:
-        if gate_node(tree, "gate_new_driver") is None:
-            tree = gate_tap(label, tree, "gate_other_driver")
-        tree = gate_tap(label, tree, "gate_new_driver")
+        tree = open_setup(label, tree)
     assert gate_node(tree, "gate_name") is not None, f"Setup form did not open; see {label}-ui.xml"
-    tree = gate_type(label, tree, "gate_name", name)
-    tree = gate_type(label, tree, "gate_credential", pin)
-    gate_type(label, tree, "gate_confirm", pin)
+    tree = gate_fill(label, tree, "gate_name", name)
+    tree = gate_fill(label, gate_next(label), "gate_credential", pin)
+    gate_fill(label, gate_next(label), "gate_confirm", pin)
     gate_submit(label)
 
 
 def create_email_profile(label: str, name: str, email: str):
-    tree = await_gate(label)
-    if gate_node(tree, "gate_new_driver") is None:
-        tree = gate_tap(label, tree, "gate_other_driver")
-    tree = gate_tap(label, tree, "gate_new_driver")
-    tree = gate_type(label, tree, "gate_name", name)
+    tree = open_setup(label, await_gate(label))
+    # Choose the method first, while the top of the form is on screen.
     tree = gate_tap(label, tree, "gate_method_email")
     assert gate_node(tree, "gate_confirm") is None, "Email profiles must not ask for a PIN"
-    gate_type(label, tree, "gate_credential", email)
+    tree = gate_fill(label, tree, "gate_name", name)
+    gate_fill(label, gate_next(label), "gate_credential", email)
     gate_submit(label)
 
 
@@ -608,7 +625,7 @@ def unlock_profile(label: str, name: str, secret: str):
         tree = ui_tree(f"{label}-chosen")
     welcome = [node.get("text", "") for node in tree.iter("node") if name in node.get("text", "")]
     assert welcome, f"Unlock form is not for {name!r}; see {label}-ui.xml"
-    gate_type(label, tree, "gate_credential", secret)
+    gate_fill(label, tree, "gate_credential", secret)
     gate_submit(label)
 
 
