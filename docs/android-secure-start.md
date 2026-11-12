@@ -1,141 +1,185 @@
 # Android driver profiles and secure startup
 
-The native opening masks the old startup screen with five pit lights, the Your
-Pit Box wordmark and a progress line for 2.6 seconds. Reduced-motion users get a
-static version. Python initialization stays off the UI thread.
+Every Android launch opens on a native driver-profile screen. Each driver on a
+device has their own race history, settings, dashboard layout and API keys,
+opened with either an email address or a 4-digit PIN. A profile stays open
+until the app closes; switching drivers saves the session and closes the app.
 
-## Driver setup and access
+## Opening
 
-On first opening a profile-enabled build, the driver chooses a display name and
-**either email or a four-digit PIN**. Email has no verification or outbound mail.
-Returning drivers select their profile and enter its email or PIN. Additional
-drivers use **New driver**. Email addresses and PINs never leave the device.
+A 2.6-second native opening (five pit lights, the wordmark and a progress
+line) covers the profile screen while its encrypted index loads. Reduced-motion
+users get a static version. The intro and the profile screen use no WebView and
+no Python; the interpreter starts on the backend thread once a profile is open.
 
-Email is only a local identifier: anyone who knows the address can open that
-profile. The app says this explicitly. It does not verify identity or ownership
-of the address. PIN-only profiles provide an additional app lock with five
-attempts per 15 minutes and twenty failures per day. The verifier uses salted
-PBKDF2-HMAC-SHA256 (120,000 iterations; Android 7 uses PBKDF2-HMAC-SHA1 with 600,000 iterations
-and records the algorithm so OS upgrades preserve access), inside the Keystore-encrypted profile
-index. PINs are never encryption keys. There is no forgotten-PIN recovery or
-cross-device email account matching. A new profile does not unlock another
-profile's data. Twenty local profiles are supported.
+## Profile screen
+
+- **No profiles yet** (fresh install, or the first launch after updating from a
+  build without profiles): *Set up your driver profile*. When the installation
+  already has history, settings or keys, the screen says that everything
+  already on the device will be attached to this profile. The driver enters a
+  name and chooses **Email OR PIN**; a PIN is typed twice.
+- **One profile**: *Welcome back, Name* opens straight to that driver's email
+  or PIN field, with the keyboard up.
+- **Two or more**: *Choose your driver* lists each driver with how it opens,
+  plus **+ New driver**.
+
+The keyboard's Done key submits. Strings are localized (English, German,
+Spanish, French). Controls carry resource ids (`gate_name`, `gate_credential`,
+`gate_confirm`, `gate_submit`, `gate_method_pin`, `gate_method_email`,
+`gate_other_driver`, `gate_new_driver`, `gate_notice`, `gate_retry`,
+`gate_reset`) for accessibility tools and the emulator acceptance check.
+
+Email has no verification and no outbound mail. It is an identifier, not proof
+of ownership: anyone who knows the address can open that profile, and the setup
+screen says so. A PIN is an app lock: five wrong PINs lock the profile for 15
+minutes, twenty in a day lock it until the next day, and the counters survive
+restarts because each attempt is reserved before it is checked. The verifier
+is salted PBKDF2-HMAC-SHA256 (120,000 iterations; Android 7 uses
+PBKDF2-HMAC-SHA1 with 600,000 iterations and records the algorithm so OS
+upgrades preserve access) inside the Keystore-encrypted profile index. PINs are
+never encryption keys. A forgotten PIN cannot be reset. Names are unique per
+device (case-insensitive), an email can open only one profile, and a device
+holds up to 20 profiles.
 
 ## Separate local data
 
-The first profile owns the existing private `files/` workspace, preserving the
-existing `.env`, settings, race history and key migration. Later profiles use
-`files/profiles/<random-local-id>/`, each with its own `.env`, `PitWallData`, SQLite
-history, setups, logs, captures, pairing credentials and dashboard assets.
-Dashboard layouts and onboarding flags use profile-specific native preferences.
-Provider secrets have a separate vault namespace for each additional profile;
-the first retains the existing encrypted entries. Names and email addresses are
-stored only in the encrypted local index. Android backup remains disabled.
+The first profile owns the existing private `files/` workspace, so an update
+keeps the existing `.env`, settings, race history, transfer identity and
+pairings. Later profiles use `files/profiles/<random-id>/`, each with its own
+`.env`, `PitWallData`, SQLite history, setups, logs, captures, pairing
+credentials and dashboard assets. Dashboard and onboarding preferences use
+per-profile native preference files. Provider keys use a separate vault
+namespace per additional profile; the first keeps the existing entries. Names
+and email addresses are stored only in the encrypted index. Android backup
+remains disabled.
 
-A process can authorize only one profile. Returning from the background requires
-that profile's credentials while telemetry may keep running. The CONNECTION
-page's **Switch driver profile** action stops the backend normally so its session
-can save, then closes the process. Reopen to choose another driver. Selecting
-another driver from the lock screen also requires this shutdown. The process
-never hot-swaps Python's database/configuration singletons. Browser caches,
-cookies and local storage are cleared before the first dashboard load in a new
-process, preventing the prior driver's browser state from carrying across.
+The dashboard's WebView is created only after a profile opens. On Android 9 and
+later each additional driver gets its own WebView data directory (local
+storage, cookies, cache); the first profile keeps the existing one, so its DRIVE
+card layout, app-tour state and other browser-side preferences survive the
+update. On Android 7 and 8 the platform offers no per-process WebView data
+directory, so those browser-side preferences are shared between drivers; they
+hold layout and UI state only, never history or keys.
 
-This provides separate local backend stores, not cloud history storage. Explicit
-Wi-Fi transfers still copy only the active profile's history. A reinstall loses
-local credentials and creates a new reporting identity; matching the same email
-on another device does not link or recover local data.
+A process opens exactly one profile and never hot-swaps Python's database and
+configuration singletons. **Switch driver** on CONNECTION (shown only in the
+Android app, beside the open driver's name) stops the backend normally so its
+session is saved, then closes the process; reopening shows the profile screen.
+Leaving the app, turning the screen off or rotating it does not ask for the
+profile again; if Android recreates the activity while the process lives, the
+open profile continues without a second opening animation or sign-in.
 
-## Key storage and dashboard boundary
+Wi-Fi history transfers copy only the open profile's history. A reinstall
+loses local credentials and creates new reporting identities; using the same
+email on another device does not link or recover local data.
 
-Provider keys migrate from private `.env` into AES-256-GCM entries using a
-non-exportable Android Keystore key. Migration verifies encrypted writes before
-removing plaintext assignments; errors stop startup. Desktop behavior remains
-unchanged. All Android localhost HTTP and WebSocket routes, including health and
-static assets, require a random process token. The native WebView gets an HttpOnly
-cookie. The debug-only private QA token is never written in release builds.
+## Key storage and the dashboard boundary
 
-Keys stay on the device except calls to the chosen AI provider. This is not a
-promise against rooted devices, malicious app-process code, or someone who knows
-an email-only profile's address. An active engineer needs decrypted keys in
-memory. PIN fields are not autofilled or saved in activity state; the lock screen
-blocks screenshots and task previews.
+Provider keys migrate from the profile's private `.env` into AES-256-GCM
+entries under a non-exportable Android Keystore key. Migration verifies each
+encrypted write before removing plaintext assignments; errors stop startup and
+leave the file untouched. Desktop behavior is unchanged.
+
+All Android localhost HTTP and WebSocket routes, including health and static
+assets, require a random per-process token: the WebView gets it as an HttpOnly,
+SameSite=Strict cookie and native requests send `X-Pitbox-Native`. Debug builds
+also write it to app-private storage for the emulator checks (readable only
+through `adb run-as` on the debug package). The peer-transfer listener is a
+separate TLS server and is unaffected.
+
+The profile screen sets `FLAG_SECURE` (no screenshots or task-switcher
+preview), never autofills or restores typed values, and clears a half-typed
+PIN when it leaves the screen.
+
+### When secure storage fails
+
+If the encrypted index cannot be read (for example the Keystore key was lost or
+invalidated), the profile screen says so and offers **Try again** and **Reset
+sign-in data**. Reset, after a confirmation, deletes the vault entries (profile
+index, queued sign-ins, provider keys) and the Keystore key. Files are not
+touched: the first profile's history and settings attach to the next profile
+created; additional drivers' folders remain on the device but can no longer be
+opened. Provider keys must be entered again.
 
 ## Sign-in records
 
-Sign-in reporting is standard, with no opt-in checkbox. Every successful local
-credential acceptance queues one record before opening.
-The app briefly discloses that sign-in records use a random profile ID, time and
-app version, and explicitly states that email and PIN are not sent. This includes
-successful authentication whose screen is subsequently interrupted. Wrong
-credentials are not sign-ins and do not create a success record.
+Every successful opening queues one record in the encrypted vault before the
+profile opens: the profile's random account ID, a random event UUID, the device
+time and the app version. No email, PIN, driver name, key, voice, telemetry or
+gameplay data is included. The device credential is a random 256-bit value,
+not derived from the email or PIN. Records are sent in the background as soon
+as the profile opens and then every minute while the app runs; network
+failures never delay opening. Debug builds (development and the CI emulator)
+queue records but never send them, so the report counts only releases and QA
+builds.
 
-The encrypted durable queue retries every minute while its process is alive and
-after the next successful opening. Network outages do not prevent local access.
-Records are removed only after the server acknowledges them. No email, PIN,
-driver name, key, voice, telemetry or gameplay data enters the payload. The
-registration credential is a random 256-bit value, not derived from credentials.
+Delivery rules:
 
-The server hashes that random credential with a separately stored HMAC secret.
-An event UUID prevents retries from increasing counts. Reports use device event
-time, keep server receipt time separately, reject timestamps over five minutes
-in the future, and retain 180 days. Older queued events are acknowledged as
-expired so they cannot block later events. Clearing app storage before upload
-loses that queue. These are client-reported sign-ins, not verified unique people
-or evidence of gameplay. The service cannot attest local authentication on a
-modified or compromised app.
+- `200` acknowledges the event (including duplicates and events older than the
+  retention window, which the server acknowledges as expired).
+- `429`, `408`, `5xx` and network errors keep the event queued and end that
+  attempt, so an outage costs one request per minute.
+- Other `4xx` answers would repeat on every retry, so the event is dropped
+  rather than blocking later ones. Events whose profile no longer exists, and
+  malformed entries, are dropped too.
+- At most 500 events wait on a device; the oldest are dropped first.
 
-`/owner/accounts` requires the existing owner key. It shows 30-day aggregate
-profiles/sign-ins and the latest 200 profiles with first/last sign-in, active days
-and counts over the retained period. Newsletter data and optional anonymous
-product usage stay separate. Reinstalls and profiles on another device have
-separate reporting IDs.
+The server hashes the device credential with a separately stored HMAC secret,
+deduplicates by event UUID, keeps device event time and receipt time
+separately, rejects timestamps more than five minutes in the future and keeps
+records for 180 days. These are client-reported sign-ins, not verified unique
+people or evidence of gameplay.
 
-## Cloudflare contract and rollout
+`/owner/accounts` requires the owner key. It shows 30-day aggregate profiles
+and sign-ins, a daily breakdown, and the latest 200 profiles with first and
+last sign-in, active days and counts. Newsletter data and the optional
+anonymous usage report stay separate and are not joined.
 
-Native HTTPS POSTs only; no browser Origin, no query string, bounded 2-KiB JSON
-bodies and strict field allowlists:
+## Cloudflare contract
 
-- `/account/profile`: `account_id`, `device_secret`. Idempotent registration;
-  cannot replace an existing credential. Twenty new profiles per IP per day.
-- `/account/sign-in`: the same credential plus `event_id`, `occurred_at`, `version`.
-  A missing/incorrect credential cannot write another profile's sign-ins.
-- Both routes explicitly reject email, PIN, names and API keys. Combined requests
-  have a 300-per-IP/15-minute budget. Rate-limited events remain queued.
+Native HTTPS POSTs only: no browser Origin, no query string, bounded 2-KiB JSON
+bodies and strict field allowlists.
 
-Apply additive migrations `0009_app_accounts.sql` and `0010_driver_profiles.sql`
-to `pitwall-licenses`. Both migrations have been applied during staging; the
-0009 account/challenge tables are unused by the current local-profile flow. Keep
-them for additive rollout. The stable `ACCOUNT_PEPPER` Worker secret has been
-provisioned with 32 random bytes. Deploy the Worker plus owner page after review. No email
-sending configuration is required. Preserve all existing download, subscriber,
-usage, owner and release credentials and cron configuration.
+- `/account/profile`: `account_id`, `device_secret`. Idempotent registration
+  that cannot replace an existing credential; twenty new profiles per IP per day.
+- `/account/sign-in`: the same credential plus `event_id`, `occurred_at`,
+  `version`. A missing or wrong credential cannot write another profile's
+  sign-ins.
+- Both routes reject email, PIN, name and API-key fields. Combined requests
+  have a 300-per-IP per 15-minute budget.
 
-**Release hold: profiles are staged behind `pitbox.accountGate=false`. Do not
-merge or publish a profile-required APK until the enabled native flow, data
-isolation, upgrade preservation and sign-in delivery pass acceptance.** Existing
-profile indexes always require the profile gate even in a flag-disabled build.
-The introduction, encrypted provider storage and localhost boundary operate
-independently. Enable an isolated candidate with `-Ppitbox.accountGate=true`.
+Migrations `0009_app_accounts.sql` and `0010_driver_profiles.sql` are applied to
+`pitwall-licenses`; the 0009 tables other than `account_limits` are unused and
+kept so the migration history stays additive. The `ACCOUNT_PEPPER` Worker secret
+holds 32 random bytes. Without it the endpoints answer 503 and events stay
+queued on devices. Deploy the Worker and owner page with the app release.
 
-## Acceptance and rollback
+## Acceptance
 
-Before release, check first setup with email and PIN; wrong/leading-zero PINs;
-lockout surviving restart; duplicate names/emails; two drivers with distinct
-keys/settings/history; end/save/switch; explicit history transfer isolation;
-background/resume, rotation, permissions, process death; offline sign-in, durable
-retry and deduplication; first-profile upgrade ownership; provider save/delete;
-phone/tablet/folded layouts, reduced motion and Keystore loss. Check all profile
-IDs in the owner report without email, PIN or name exposure.
+The emulator smoke (`android/emulator-smoke.py`, run by the Android workflow)
+drives the real profile screen through the accessibility tree:
 
-The HTML preview at `docs/previews/android-profile-opening.html` illustrates the flow;
-it is not proof of native lifecycle behavior. Existing emulator backend checks
-exercise the rollout-disabled path. Do not roll enrolled profiles back to an APK
-that predates profile isolation or encrypted storage.
+1. Fresh install: create a PIN profile; the backend opens the installation's
+   own storage (`files/`, not `files/profiles/`).
+2. Restart: the single profile opens straight to its PIN; same database and
+   transfer identity.
+3. Background and foreground return without the profile screen.
+4. Add an email driver: a separate database under `files/profiles/` and a new
+   transfer identity.
+5. Restart with two drivers: choose the first by name and enter its PIN; its
+   database and transfer identity return unchanged.
 
-Local validation: 3,651 app tests passed (4 skipped), 101 Worker/website tests
-passed, and 62 Android packaging/network checks passed (2 JDK-dependent checks
-skipped). The new native classes compile against Android 36 APIs; the JVM profile
-harness covers credentials, persistent lockouts, namespace separation, queue
-acknowledgements and the process boundary. APK/emulator and enabled-device
-acceptance remain separate release gates.
+`distribution/tests/java/ProfileStoreCheck.java` runs on the JVM with the APK
+build (`testDebugUnitTest`): credentials, persistent lockouts, duplicate
+names and emails, the profile limit, namespaces, WebView data directories,
+upgrade detection, the bounded queue, delivery outcomes and the one-profile-
+per-process boundary.
+
+Still checked on a physical device before release: updating an installed
+release with history and keys (callout shown, everything attached), rotation
+and folded layouts during setup, Android 7/8, TalkBack on the profile screen,
+and offline sign-in delivery after reconnecting.
+
+Do not roll a device with profiles back to an APK without profile isolation or
+encrypted key storage: the older build cannot read the encrypted keys.
