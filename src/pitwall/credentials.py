@@ -27,6 +27,7 @@ from pathlib import Path
 
 from pydantic import SecretStr
 
+from . import secret_storage
 from .config import settings
 
 ENV_VAR = "OPENAI_API_KEY"
@@ -202,7 +203,7 @@ def current_status(provider: str = "openai") -> CredentialStatus:
         )
     # An environment variable set outside .env wins in pydantic-settings, and
     # the user needs to know that editing here will not change what is used.
-    source = "environment" if os.environ.get(spec.env_var) else "env_file"
+    source = "encrypted_vault" if secret_storage.active() else ("environment" if os.environ.get(spec.env_var) else "env_file")
     return CredentialStatus(
         configured=True, masked=mask_key(key), source=source, provider=spec.id
     )
@@ -269,7 +270,8 @@ def save_key(
     """Validate, persist, and apply a key. Returns the masked status."""
     spec = provider_spec(provider)
     cleaned = validate_key(key)
-    _write_env(cleaned, spec.env_var)
+    if not secret_storage.persist(spec.env_var, cleaned):
+        _write_env(cleaned, spec.env_var)
     apply_to_runtime(cleaned, spec.id)
     if on_change is not None:
         on_change()
@@ -283,7 +285,8 @@ def clear_key(
 ) -> CredentialStatus:
     """Remove the stored key and drop the live clients that used it."""
     spec = provider_spec(provider)
-    _write_env(None, spec.env_var)
+    if not secret_storage.persist(spec.env_var, None):
+        _write_env(None, spec.env_var)
     apply_to_runtime(None, spec.id)
     if on_change is not None:
         on_change()

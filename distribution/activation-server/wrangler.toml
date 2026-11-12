@@ -40,3 +40,9 @@ bucket_name = "pitwall-downloads"
 # additionally permits newsletter email reads; never reuse DOWNLOAD_REPORT_TOKEN.
 # RELEASE_PUBLISH_TOKEN is separate and publishes verified update metadata only.
 # No email provider, email sender, or email schedule is used.
+
+# Staged account unlock: see docs/android-secure-start.md before enabling.
+# ACCOUNT_PEPPER is a stable, random secret stored separately from D1.
+# ACCOUNT_EMAIL (Email Sending) and ACCOUNT_FROM (verified sender) must be
+# provisioned and tested before building with -Ppitbox.accountGate=true.
+# Without them /account/* fails closed; existing download/usage routes remain.
