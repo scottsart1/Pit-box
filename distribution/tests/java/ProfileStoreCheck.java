@@ -100,10 +100,10 @@ public final class ProfileStoreCheck {
         check(!ProfilePaths.hasExistingData(fresh));
         new File(fresh, "PitWallData").mkdirs();
         check(!ProfilePaths.hasExistingData(fresh)); // An empty data folder holds nothing to inherit.
-        Files.writeString(new File(fresh, "PitWallData/pitwall.db").toPath(), "x");
+        Files.write(new File(fresh, "PitWallData/pitwall.db").toPath(), new byte[]{1});
         check(ProfilePaths.hasExistingData(fresh));
         File keysOnly=Files.createTempDirectory("pitbox-keys").toFile();
-        Files.writeString(new File(keysOnly, ".env").toPath(), "OPENAI_API_KEY=x\n");
+        Files.write(new File(keysOnly, ".env").toPath(), "OPENAI_API_KEY=x\n".getBytes(java.nio.charset.StandardCharsets.UTF_8));
         check(ProfilePaths.hasExistingData(keysOnly));
     }
 
