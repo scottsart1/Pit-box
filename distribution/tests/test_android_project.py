@@ -356,9 +356,12 @@ class _FakeProfileScreen:
 
     PREFIX = "com.yourpitbox.app:id/"
 
+    HINTS = {"gate_name": "Driver name", "gate_confirm": "Confirm PIN"}
+
     def __init__(self):
         self.profiles = []          # (name, method, secret)
         self.hidden = set()         # fields currently behind the keyboard
+        self.swallow = 0            # typed values the starting keyboard drops
         self.launch()
 
     def launch(self):
@@ -388,21 +391,38 @@ class _FakeProfileScreen:
                     for name, method, _ in self.profiles]
             return rows + [("gate_new_driver", "+ New driver", "")]
         if self.screen == "setup":
-            items = [("gate_name", self.values.get("gate_name", ""), ""),
+            items = [("gate_name", self.shown("gate_name"), ""),
                      ("gate_method_pin", "4-digit PIN", ""), ("gate_method_email", "Email", ""),
-                     ("gate_credential", self.values.get("gate_credential", ""), "")]
+                     ("gate_credential", self.shown("gate_credential"), "")]
             if self.method == "pin":
-                items.append(("gate_confirm", self.values.get("gate_confirm", ""), ""))
+                items.append(("gate_confirm", self.shown("gate_confirm"), ""))
             items += [("gate_notice", self.notice, ""), ("gate_submit", "Create profile and open", "")]
             if self.profiles:
                 items.append(("gate_other_driver", "Choose another driver", ""))
             return items
         if self.screen == "unlock":
             return [("", f"Welcome back, {self.selected[0]}", ""),
-                    ("gate_credential", self.values.get("gate_credential", ""), ""),
+                    ("gate_credential", self.shown("gate_credential"), ""),
                     ("gate_notice", self.notice, ""), ("gate_submit", "Open my pit box", ""),
                     ("gate_other_driver", "Choose another driver", "")]
         return [("", "Starting your pit box…", "")]
+
+    def shown(self, field):
+        """An empty field reports its hint as its text, as Android does."""
+        value = self.values.get(field, "")
+        if value:
+            return value
+        if field == "gate_credential":
+            email = self.method == "email" if self.screen == "setup" else (self.selected or ("", "pin"))[1] == "email"
+            return "Email address" if email else "4-digit PIN"
+        return self.HINTS.get(field, "")
+
+    def password(self, field):
+        if field == "gate_confirm":
+            return True
+        if field != "gate_credential":
+            return False
+        return (self.method if self.screen == "setup" else (self.selected or ("", "pin"))[1]) == "pin"
 
     def tree(self, label, allow_empty=False):
         self.dumps += 1
@@ -410,7 +430,7 @@ class _FakeProfileScreen:
             self._uncover()
         body = "".join(
             f'<node resource-id="{self.PREFIX + rid if rid else ""}" text="{text}" content-desc="{desc}" '
-            f'enabled="true" focused="{str(rid == self.focus).lower()}" '
+            f'enabled="true" focused="{str(rid == self.focus).lower()}" password="{str(self.password(rid)).lower()}" '
             f'bounds="{"[0,0][0,0]" if rid in self.hidden else f"[0,{i * 100}][800,{i * 100 + 80}]"}" />'
             for i, (rid, text, desc) in enumerate(self.nodes()))
         return ET.fromstring(f"<hierarchy>{body}</hierarchy>")
@@ -433,9 +453,18 @@ class _FakeProfileScreen:
                 self._unlock(next(p for p in self.profiles if p[0] == text))
         elif args[:3] == ("shell", "input", "text"):
             assert self.focus, "Typed with no focused field"
-            self.values[self.focus] = self.values.get(self.focus, "") + args[3].replace("%s", " ")
+            if self.swallow:
+                self.swallow -= 1
+            else:
+                self.values[self.focus] = self.values.get(self.focus, "") + args[3].replace("%s", " ")
         elif args[:3] == ("shell", "input", "keyevent") and args[3] == "KEYCODE_ENTER":
             self._enter()
+        elif args[:3] == ("shell", "input", "keyevent"):
+            for key in args[3:]:
+                if key == "KEYCODE_DEL" and self.focus:
+                    self.values[self.focus] = self.values.get(self.focus, "")[:-1]
+        elif args[:3] == ("shell", "dumpsys", "input_method"):
+            return SimpleNamespace(stdout=b"mInputShown=true", stderr=b"", returncode=0)
         return SimpleNamespace(stdout=b"", stderr=b"", returncode=0)
 
     def _enter(self):
@@ -520,3 +549,11 @@ def test_each_launch_opens_one_driver_profile_and_keeps_its_dashboard_storage():
     # The JVM profile harness runs with the APK build.
     assert "testDebugUnitTest" in WORKFLOW
     assert 'java.srcDir("../../distribution/tests/java")' in GRADLE
+
+
+def test_emulator_retypes_what_a_starting_keyboard_swallowed(monkeypatch):
+    module, screen = _smoke_with_fake_profiles(monkeypatch)
+    # On a fresh emulator the first text typed while the keyboard starts was lost.
+    screen.swallow = 1
+    module.create_pin_profile("launch-1", *module.FIRST_DRIVER, first=True)
+    assert screen.profiles == [("Smoke Driver", "pin", "2468")]

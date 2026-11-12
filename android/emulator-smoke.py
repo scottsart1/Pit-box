@@ -548,17 +548,57 @@ def gate_tap(label: str, tree: ET.Element, name: str) -> ET.Element:
     return ui_tree(f"{label}-after-{name}")
 
 
-def gate_fill(label: str, tree: ET.Element, name: str, value: str) -> ET.Element:
-    """Type into a field: as it is when already focused, otherwise tap it first."""
-    node = next((node for node in tree.iter("node")
+def gate_field(tree: ET.Element, name: str) -> ET.Element | None:
+    """A profile-screen field by resource id, visible or scrolled away."""
+    return next((node for node in tree.iter("node")
                  if node.get("resource-id", "").endswith(f":id/{name}")), None)
+
+
+def await_keyboard(timeout: float = 8) -> None:
+    """Wait for the soft keyboard; while it first starts it can swallow keys."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        state = adb("shell", "dumpsys", "input_method", check=False).stdout.decode(errors="replace")
+        if "mInputShown=true" in state or "isInputViewShown=true" in state:
+            time.sleep(0.5)
+            return
+        time.sleep(0.25)
+
+
+def field_holds(node: ET.Element | None, value: str) -> bool:
+    if node is None:
+        return False
+    text = node.get("text", "")
+    # A password field may report its characters or mask them.
+    return text == value or (node.get("password") == "true" and len(text) == len(value))
+
+
+def gate_fill(label: str, tree: ET.Element, name: str, value: str) -> ET.Element:
+    """Type into a field (tapping it first unless focused) and check it holds the value.
+
+    An empty field reports its hint as text, so a field is checked for the
+    exact value. If the keyboard swallowed the keys, the field is emptied and
+    the value typed again.
+    """
+    node = gate_field(tree, name)
     assert node is not None, f"Profile screen has no {name}; see {label}-ui.xml"
     if node.get("focused") != "true":
         assert node_bounds(node) is not None, f"Profile screen's {name} is not visible; see {label}-ui.xml"
         tap_node(node)
-    adb("shell", "input", "text", value.replace(" ", "%s"))
-    time.sleep(0.5)
-    return ui_tree(f"{label}-typed-{name}")
+    await_keyboard()
+    for attempt in range(1, 4):
+        adb("shell", "input", "text", value.replace(" ", "%s"))
+        time.sleep(0.5)
+        tree = ui_tree(f"{label}-typed-{name}-{attempt}")
+        node = gate_field(tree, name)
+        if field_holds(node, value):
+            return tree
+        assert node is not None and node.get("focused") == "true", \
+            f"Profile screen's {name} lost focus while typing; see {label}-typed-{name}-{attempt}-ui.xml"
+        current = node.get("text", "")
+        adb("shell", "input", "keyevent", "KEYCODE_MOVE_END", *(["KEYCODE_DEL"] * (len(current) + len(value))))
+        time.sleep(1)
+    raise AssertionError(f"Profile screen's {name} did not take the typed value; see {label}-typed-{name}-*-ui.xml")
 
 
 def gate_next(label: str) -> ET.Element:
