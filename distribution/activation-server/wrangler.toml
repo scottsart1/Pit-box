@@ -41,7 +41,7 @@ bucket_name = "pitwall-downloads"
 # RELEASE_PUBLISH_TOKEN is separate and publishes verified update metadata only.
 # No email provider, email sender, or email schedule is used.
 
-# Staged local profiles: see docs/android-secure-start.md before enabling.
+# Android driver profiles: see docs/android-secure-start.md.
 # ACCOUNT_PEPPER is a stable, random secret stored separately from D1.
 # Apply migrations 0009 and 0010 before deploying the sign-in report endpoints.
 # Email and PIN stay on-device; no email sender or verification binding is used.
