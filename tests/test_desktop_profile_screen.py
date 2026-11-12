@@ -11,6 +11,7 @@ import http.client
 import json
 import os
 import threading
+import time
 from pathlib import Path
 
 import pytest
@@ -121,15 +122,38 @@ def test_the_screen_refuses_other_hosts_origins_and_bodies(served):
     assert (status, reply) == (200, {"ok": True}) and gate.opened.is_set()
 
 
-def test_the_screen_hands_its_tab_to_the_dashboard(served):
+def test_the_screen_tells_its_tab_where_the_dashboard_will_be(served):
     gate, port = served
     assert request(port, "GET", "/gate/next")[1] == {"pending": True}
-    threading.Timer(0.05, lambda: setattr(gate, "next_url", "http://127.0.0.1:8123")).start()
-    for _ in range(100):
-        reply = request(port, "GET", "/gate/next")[1]
-        if "url" in reply:
-            break
-    assert reply == {"url": "http://127.0.0.1:8123"} and gate.next_delivered.is_set()
+    assert not gate.next_delivered.is_set()
+    gate.next_url = "http://127.0.0.1:8123"
+    assert request(port, "GET", "/gate/next")[1] == {"url": "http://127.0.0.1:8123"}
+    assert gate.next_delivered.is_set()
+
+
+def test_hand_over_waits_for_the_tab_then_frees_the_address(gate):
+    server = desktop.serve(gate, 0)
+    port = server.server_address[1]
+    fetched = []
+
+    def page() -> None:
+        # The page polls until it learns the dashboard's address.
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            reply = request(port, "GET", "/gate/next")[1]
+            if "url" in reply:
+                fetched.append(reply["url"])
+                return
+            time.sleep(0.01)
+
+    tab = threading.Thread(target=page)
+    tab.start()
+    desktop.hand_over(gate, server, "http://127.0.0.1:8123", wait_s=5)
+    tab.join(5)
+    assert fetched == ["http://127.0.0.1:8123"]
+    # The address is free for the dashboard's own server.
+    with pytest.raises(OSError):
+        request(port, "GET", "/api/health")
 
 
 def test_opening_a_profile_points_this_process_at_its_folder(tmp_path, monkeypatch):
