@@ -6,6 +6,9 @@ starts on the service thread after native authorization so first-run Python
 unpacking cannot block the opening animation. Slow-start diagnostics remain
 available underneath the mask. Reduced-motion devices get a static title.
 
+An interactive visual reference is in `docs/previews/android-opening.html`. It
+mirrors the native drawing and unlock layout; it is not Android runtime evidence.
+
 ## Rollout status
 
 **The account gate is staged, not enabled in public builds. Do not enable or

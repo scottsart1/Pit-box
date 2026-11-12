@@ -965,9 +965,12 @@ async function accountBudget(env, key, limit, seconds) {
 }
 async function accountStart(env, account, data) {
   if (!data.share_starts) return;
-  await env.DB.prepare(`INSERT OR IGNORE INTO account_starts
-    (launch_id, account_id, started_at, platform, version, consent_version) VALUES (?, ?, ?, 'android', ?, 1)`)
-    .bind(data.launch_id, account, accountNow(), data.version).run();
+  try {
+    await env.DB.prepare(`INSERT OR IGNORE INTO account_starts
+      (launch_id, account_id, started_at, platform, version, consent_version) VALUES (?, ?, ?, 'android', ?, 1)`)
+      .bind(data.launch_id, account, accountNow(), data.version).run();
+  } catch { console.warn("Account start report unavailable"); }
+  // Optional analytics availability must not turn valid credentials into a lockout.
 }
 async function readAccountReport(env) {
   const cutoff = accountNow() - ACCOUNT_RETENTION_DAYS * 86400;
@@ -1010,7 +1013,7 @@ async function handleAccount(request, env, path) {
       return accountResponse({code: "invalid_request"}, 400);
     const email = typeof data.email === "string" ? data.email.trim().toLowerCase() : "";
     if (email.length > 254 || !/^[a-z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-z0-9.-]+\.[a-z]{2,63}$/.test(email)
-        || !/^[0-9a-f]{64}$/.test(data.device_secret || ""))
+        || typeof data.device_secret !== "string" || !/^[0-9a-f]{64}$/.test(data.device_secret))
       return accountResponse({code: "invalid_request"}, 400);
     const identity = await accountDigest(env, `email:${email}`);
     const device = await accountDigest(env, `device:${data.device_secret}`);
@@ -1036,11 +1039,11 @@ async function handleAccount(request, env, path) {
         return accountResponse({code: "unavailable"}, 503); }
       return accountResponse({challenge_id: id});
     }
-    if (!/^[0-9]{4}$/.test(data.pin || "") || !accountUUID(data.launch_id)
-        || typeof data.share_starts !== "boolean" || !/^[0-9A-Za-z.+_-]{1,64}$/.test(data.version || ""))
+    if (typeof data.pin !== "string" || !/^[0-9]{4}$/.test(data.pin) || !accountUUID(data.launch_id)
+        || typeof data.share_starts !== "boolean" || typeof data.version !== "string" || !/^[0-9A-Za-z.+_-]{1,64}$/.test(data.version))
       return accountResponse({code: "invalid_request"}, 400);
     if (path === "/account/verify") {
-      if (!accountUUID(data.challenge_id) || !/^[0-9]{6}$/.test(data.code || ""))
+      if (!accountUUID(data.challenge_id) || typeof data.code !== "string" || !/^[0-9]{6}$/.test(data.code))
         return accountResponse({code: "invalid_request"}, 400);
       const challenge = await env.DB.prepare(`UPDATE account_challenges SET attempts = attempts + 1
         WHERE id = ? AND email_hash = ? AND device_hash = ? AND expires_at > ? AND attempts < 5

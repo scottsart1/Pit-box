@@ -35,6 +35,7 @@ public final class AccountGate extends ScrollView {
     private final EditText email, pin, code;
     private final CheckBox sharing;
     private final TextView notice, heading;
+    private LinearLayout card;
     private final Button open, verify;
     private final String launchId = UUID.randomUUID().toString();
     private String challengeId, deviceSecret, boundAccount;
@@ -49,7 +50,7 @@ public final class AccountGate extends ScrollView {
         outer.setGravity(Gravity.CENTER); outer.setOrientation(LinearLayout.VERTICAL);
         outer.setPadding(dp(24), dp(40), dp(24), dp(40));
         addView(outer, new ScrollView.LayoutParams(-1, -1));
-        LinearLayout card = new LinearLayout(activity);
+        card = new LinearLayout(activity);
         card.setOrientation(LinearLayout.VERTICAL); card.setPadding(dp(24), dp(24), dp(24), dp(24));
         GradientDrawable background = new GradientDrawable(); background.setColor(Color.rgb(18, 27, 36));
         background.setCornerRadius(dp(16)); background.setStroke(dp(1), Color.rgb(38, 53, 66)); card.setBackground(background);
@@ -80,6 +81,14 @@ public final class AccountGate extends ScrollView {
                 });
             } catch (Exception failure) { handler.post(() -> notice.setText("The encrypted vault could not be opened. Your keys have not been changed.")); }
         }, "pitbox-vault").start();
+    }
+    @Override protected void onSizeChanged(int width, int height, int oldWidth, int oldHeight) {
+        super.onSizeChanged(width, height, oldWidth, oldHeight);
+        if (card != null && width > 0) {
+            LinearLayout.LayoutParams layout = (LinearLayout.LayoutParams) card.getLayoutParams();
+            layout.width = Math.min(Math.max(1, width - dp(48)), dp(440));
+            card.setLayoutParams(layout);
+        }
     }
     private int dp(int value) { return Math.round(value * getResources().getDisplayMetrics().density); }
     private TextView label(String value, int size) {

@@ -112,3 +112,15 @@ test('adding a device with the same PIN preserves both devices and links launche
   assert.equal((await send(f.env,'unlock',second.data)).status,200);
   assert.equal(f.db.prepare('SELECT COUNT(DISTINCT account_id) n FROM account_starts').get().n,1);f.db.close();
 });
+
+test('optional analytics outages cannot block a valid unlock',async()=>{
+  const f=fixture(),{data}=await enroll(f);
+  f.db.exec('DROP TABLE account_starts');
+  assert.equal((await send(f.env,'unlock',data)).status,200);f.db.close();
+});
+test('credential fields reject type coercion and do not accept numeric PINs',async()=>{
+  const f=fixture(),data=base();
+  for(const mutation of [{pin:1234},{device_secret:[data.device_secret]},{version:123}]) {
+    assert.equal((await send(f.env,'unlock',{...data,...mutation})).status,400);
+  }f.db.close();
+});

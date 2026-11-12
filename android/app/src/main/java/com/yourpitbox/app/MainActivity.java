@@ -188,12 +188,17 @@ public class MainActivity extends Activity {
         new Thread(() -> {
             try {
                 accountRequired = BuildConfig.ACCOUNT_GATE_ENABLED || vault.read("account.id") != null;
-                handler.postDelayed(() -> {
+                handler.post(() -> {
                     if (isDestroyed() || isFinishing()) return;
-                    if (accountRequired) showAccountGate();
-                    else { AccountSession.unlock(); beginAuthorizedStart(); }
-                    root.removeView(intro); intro = null;
-                }, PitLaneIntro.DURATION_MS);
+                    // Overlap ordinary startup with the mask. Account-enabled
+                    // devices keep the service stopped until verification.
+                    if (!accountRequired) { AccountSession.unlock(); beginAuthorizedStart(); }
+                    handler.postDelayed(() -> {
+                        if (isDestroyed() || isFinishing()) return;
+                        if (accountRequired) showAccountGate();
+                        root.removeView(intro); intro = null;
+                    }, PitLaneIntro.DURATION_MS);
+                });
             } catch (Exception error) {
                 handler.post(() -> {
                     root.removeView(intro); intro = null;
