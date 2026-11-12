@@ -105,9 +105,12 @@ public final class AccountGate extends ScrollView {
     private void form() {
         generation++; header(creating ? "Set up your driver" : "Welcome back, " + selected.optString("name"));
         text("Your API keys stay encrypted on this device.", 14);
+        TextView methodLabel = text("Email OR PIN", 18);
+        methodLabel.setTypeface(null, Typeface.BOLD);
+        methodLabel.setTextColor(Color.rgb(238, 244, 248));
         if (creating) {
             name = field("Driver name", InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_CAP_WORDS, 40);
-            text("Choose one way to open your profile.", 14);
+            text("Choose either email or a 4-digit PIN.", 14);
             button(emailMode ? "Use a PIN instead" : "Use email instead", false, () -> { emailMode = !emailMode; form(); });
         }
         credential = field(emailMode ? "Email address" : "4-digit PIN", emailMode

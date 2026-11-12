@@ -63,7 +63,8 @@ blocks screenshots and task previews.
 
 ## Sign-in records
 
-Every successful local credential acceptance queues one record before opening.
+Sign-in reporting is standard, with no opt-in checkbox. Every successful local
+credential acceptance queues one record before opening.
 The app briefly discloses that sign-in records use a random profile ID, time and
 app version, and explicitly states that email and PIN are not sent. This includes
 successful authentication whose screen is subsequently interrupted. Wrong
@@ -127,7 +128,7 @@ retry and deduplication; first-profile upgrade ownership; provider save/delete;
 phone/tablet/folded layouts, reduced motion and Keystore loss. Check all profile
 IDs in the owner report without email, PIN or name exposure.
 
-The HTML preview at `docs/previews/android-opening.html` illustrates the flow;
+The HTML preview at `docs/previews/android-profile-opening.html` illustrates the flow;
 it is not proof of native lifecycle behavior. Existing emulator backend checks
 exercise the rollout-disabled path. Do not roll enrolled profiles back to an APK
 that predates profile isolation or encrypted storage.
