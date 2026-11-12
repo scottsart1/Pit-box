@@ -95,9 +95,14 @@ def android_entry(monkeypatch, tmp_path):
     # configure() changes the embedded process environment; isolate this fake
     # Android process from desktop tests collected in the same pytest run.
     monkeypatch.setattr(os, "environ", os.environ.copy())
+    from pitwall import secret_storage
+    monkeypatch.setattr(secret_storage, "_store", None)
+    vault = types.SimpleNamespace(read=lambda name: None, write=lambda name, value: None)
     nics: list[_Nic] = []
     fake_java = types.ModuleType("java")
     classes = {
+        "com.yourpitbox.app.AccountSession": types.SimpleNamespace(isUnlocked=lambda: True, localToken=lambda: "test-native-token"),
+        "com.yourpitbox.app.KeyVault": types.SimpleNamespace(getInstance=lambda: vault),
         "java.net.NetworkInterface": types.SimpleNamespace(
             getNetworkInterfaces=lambda: _Enumeration(nics)
         ),

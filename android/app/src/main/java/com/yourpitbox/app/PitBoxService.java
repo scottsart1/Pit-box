@@ -111,6 +111,12 @@ public class PitBoxService extends Service {
             stopSelf();
             return START_NOT_STICKY;
         }
+        // Android may recreate a killed foreground service. Never import the
+        // backend or decrypt keys before a fresh native unlock in this process.
+        if (!AccountSession.isUnlocked()) {
+            stopSelf();
+            return START_NOT_STICKY;
+        }
         try {
             startInForeground();
         } catch (RuntimeException error) {
@@ -134,6 +140,9 @@ public class PitBoxService extends Service {
 
     private void runBackend() {
         try {
+            if (!Python.isStarted()) {
+                Python.start(new com.chaquo.python.android.AndroidPlatform(getApplicationContext()));
+            }
             File files = getFilesDir();
             File staticDir = installDashboard(files);
             PyObject entry = Python.getInstance().getModule("pitbox_android");
@@ -184,6 +193,7 @@ public class PitBoxService extends Service {
     }
 
     private void stopBackend() {
+        if (!Python.isStarted()) return;
         try {
             Python.getInstance().getModule("pitbox_android").callAttr("stop");
         } catch (Throwable error) {

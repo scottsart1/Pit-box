@@ -821,6 +821,10 @@ async function handleOwner(request, env, path) {
       return ownerJson(request, {code: "unauthorized"}, 401);
     }
     const params = new URL(request.url).searchParams;
+    if (path === "/owner/accounts") {
+      if ([...params].length) return ownerJson(request, {code: "invalid_query"}, 400);
+      return ownerJson(request, await readAccountReport(env));
+    }
     if (path === "/owner/overview") {
       if ([...params].length) return ownerJson(request, {code: "invalid_query"}, 400);
       const [downloadResponse, usageResponse, subscribers] = await Promise.all([
@@ -926,12 +930,178 @@ async function handleReleasePublish(request, env) {
   } catch { console.warn("Release operation unavailable"); return reply({code: "unavailable"}, 503); }
 }
 
+
+// Account unlock is distinct from optional anonymous usage. Email is an HMAC
+// lookup only; provider keys, PINs and email codes are never stored or logged.
+const ACCOUNT_RETENTION_DAYS = 180;
+const accountNow = () => Math.floor(Date.now() / 1000);
+const accountUUID = value => typeof value === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
+function accountResponse(body, status = 200) {
+  return new Response(JSON.stringify(body), {status, headers: {
+    "content-type": "application/json", "cache-control": "private, no-store",
+    "x-content-type-options": "nosniff", "referrer-policy": "no-referrer",
+    ...(status === 429 ? {"retry-after": "900"} : {}),
+  }});
+}
+async function accountDigest(env, text) {
+  const key = await crypto.subtle.importKey("raw", new TextEncoder().encode(env.ACCOUNT_PEPPER),
+    {name: "HMAC", hash: "SHA-256"}, false, ["sign"]);
+  return [...new Uint8Array(await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(text)))]
+    .map(n => n.toString(16).padStart(2, "0")).join("");
+}
+function accountEqual(a, b) {
+  if (typeof a !== "string" || typeof b !== "string" || a.length !== b.length) return false;
+  let diff = 0; for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  return diff === 0;
+}
+// Atomic reservations happen BEFORE credential checks, including unknown accounts.
+// D1 rather than edge-local counters enforces the global guessing budget.
+async function accountBudget(env, key, limit, seconds) {
+  const bucket = Math.floor(accountNow() / seconds), expires = (bucket + 1) * seconds;
+  const row = await env.DB.prepare(`INSERT INTO account_limits (id, count, expires_at) VALUES (?, 1, ?)
+    ON CONFLICT(id) DO UPDATE SET count = count + 1 WHERE count < ? RETURNING count`)
+    .bind(`${key}:${bucket}`, expires, limit).first();
+  return !!row;
+}
+async function accountStart(env, account, data) {
+  if (!data.share_starts) return;
+  await env.DB.prepare(`INSERT OR IGNORE INTO account_starts
+    (launch_id, account_id, started_at, platform, version, consent_version) VALUES (?, ?, ?, 'android', ?, 1)`)
+    .bind(data.launch_id, account, accountNow(), data.version).run();
+}
+async function readAccountReport(env) {
+  const cutoff = accountNow() - ACCOUNT_RETENTION_DAYS * 86400;
+  const month = accountNow() - 30 * 86400;
+  const result = await env.DB.batch([
+    env.DB.prepare(`SELECT COUNT(DISTINCT account_id) AS accounts, COUNT(*) AS starts
+      FROM account_starts WHERE started_at >= ?`).bind(month),
+    env.DB.prepare(`SELECT account_id, COUNT(*) AS starts, MIN(started_at) AS first_start,
+      MAX(started_at) AS last_start, COUNT(DISTINCT date(started_at, 'unixepoch')) AS active_days
+      FROM account_starts WHERE started_at >= ? GROUP BY account_id ORDER BY last_start DESC LIMIT 200`).bind(cutoff),
+    env.DB.prepare(`SELECT date(started_at, 'unixepoch') AS day, COUNT(*) AS starts,
+      COUNT(DISTINCT account_id) AS accounts FROM account_starts WHERE started_at >= ?
+      GROUP BY day ORDER BY day DESC`).bind(month),
+  ]);
+  return {metric: "consented_account_starts", retention_days: ACCOUNT_RETENTION_DAYS,
+    summary: result[0].results[0], accounts: result[1].results, daily: result[2].results,
+    account_limit: 200};
+}
+async function handleAccount(request, env, path) {
+  if (request.method !== "POST") return accountResponse({code: "method_not_allowed"}, 405);
+  if (request.headers.has("origin")) return accountResponse({code: "native_client_required"}, 403);
+  if (!env.ACCOUNT_PEPPER || env.ACCOUNT_PEPPER.length < 32 || !env.ACCOUNT_EMAIL || !env.ACCOUNT_FROM)
+    return accountResponse({code: "unavailable"}, 503);
+  try {
+    if (!request.headers.get("content-type")?.startsWith("application/json"))
+      return accountResponse({code: "invalid_request"}, 400);
+    // Consume a bounded stream; Content-Length alone is not trustworthy.
+    const reader = request.body?.getReader();
+    if (!reader) return accountResponse({code: "invalid_request"}, 400);
+    let size = 0; const chunks = [];
+    for (;;) { const {done, value} = await reader.read(); if (done) break;
+      size += value.length; if (size > 2048) { await reader.cancel(); return accountResponse({code: "invalid_request"}, 400); }
+      chunks.push(value); }
+    const bytes = new Uint8Array(size); let offset = 0;
+    for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.length; }
+    let data;
+    try { data = JSON.parse(new TextDecoder().decode(bytes)); } catch { return accountResponse({code: "invalid_request"}, 400); }
+    const allowed = new Set(["email", "pin", "device_secret", "launch_id", "version", "share_starts", "challenge_id", "code"]);
+    if (!data || Array.isArray(data) || Object.keys(data).some(k => !allowed.has(k)))
+      return accountResponse({code: "invalid_request"}, 400);
+    const email = typeof data.email === "string" ? data.email.trim().toLowerCase() : "";
+    if (email.length > 254 || !/^[a-z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-z0-9.-]+\.[a-z]{2,63}$/.test(email)
+        || !/^[0-9a-f]{64}$/.test(data.device_secret || ""))
+      return accountResponse({code: "invalid_request"}, 400);
+    const identity = await accountDigest(env, `email:${email}`);
+    const device = await accountDigest(env, `device:${data.device_secret}`);
+    const ip = await accountDigest(env, `ip:${request.headers.get("cf-connecting-ip") || "unknown"}`);
+    if (!await accountBudget(env, `ip:${ip}`, 60, 900)) return accountResponse({code: "rate_limited"}, 429);
+    if (path === "/account/challenge") {
+      if (!await accountBudget(env, `mail:${identity}`, 3, 900)
+          || !await accountBudget(env, `mailday:${identity}`, 10, 86400))
+        return accountResponse({code: "rate_limited"}, 429);
+      const id = crypto.randomUUID();
+      // Uniform six-digit code, with rejection sampling to avoid modulo bias.
+      const random = new Uint32Array(1); do { crypto.getRandomValues(random); } while (random[0] >= 4294000000);
+      const code = String(random[0] % 1000000).padStart(6, "0");
+      const digest = await accountDigest(env, `code:${id}:${code}`);
+      await env.DB.prepare(`INSERT INTO account_challenges (id, email_hash, device_hash, code_hash, expires_at)
+        VALUES (?, ?, ?, ?, ?)`).bind(id, identity, device, digest, accountNow() + 600).run();
+      try {
+        await env.ACCOUNT_EMAIL.send({from: env.ACCOUNT_FROM, to: email,
+          subject: "Your Pit Box verification code",
+          text: `Your verification code is ${code}. It expires in 10 minutes. Use it to set or reset your four-digit Your Pit Box PIN and authorize this device. If you did not request this, ignore this email.`,
+          html: `<p>Your verification code is <strong>${code}</strong>.</p><p>It expires in 10 minutes. Use it to set or reset your four-digit Your Pit Box PIN and authorize this device. If you did not request this, ignore this email.</p>`});
+      } catch { await env.DB.prepare("DELETE FROM account_challenges WHERE id = ?").bind(id).run();
+        return accountResponse({code: "unavailable"}, 503); }
+      return accountResponse({challenge_id: id});
+    }
+    if (!/^[0-9]{4}$/.test(data.pin || "") || !accountUUID(data.launch_id)
+        || typeof data.share_starts !== "boolean" || !/^[0-9A-Za-z.+_-]{1,64}$/.test(data.version || ""))
+      return accountResponse({code: "invalid_request"}, 400);
+    if (path === "/account/verify") {
+      if (!accountUUID(data.challenge_id) || !/^[0-9]{6}$/.test(data.code || ""))
+        return accountResponse({code: "invalid_request"}, 400);
+      const challenge = await env.DB.prepare(`UPDATE account_challenges SET attempts = attempts + 1
+        WHERE id = ? AND email_hash = ? AND device_hash = ? AND expires_at > ? AND attempts < 5
+        RETURNING code_hash`).bind(data.challenge_id, identity, device, accountNow()).first();
+      const digest = await accountDigest(env, `code:${data.challenge_id}:${data.code}`);
+      if (!challenge || !accountEqual(challenge.code_hash, digest)) return accountResponse({code: "invalid_credentials"}, 401);
+      // Atomic one-time consumption: concurrent/replayed verification cannot reset again.
+      const claimed = await env.DB.prepare("DELETE FROM account_challenges WHERE id = ? RETURNING id")
+        .bind(data.challenge_id).first();
+      if (!claimed) return accountResponse({code: "invalid_credentials"}, 401);
+      const existing = await env.DB.prepare("SELECT pin_salt, pin_hash FROM app_accounts WHERE email_hash = ?").bind(identity).first();
+      const matches = existing && accountEqual(existing.pin_hash, await accountDigest(env, `pin:${identity}:${existing.pin_salt}:${data.pin}`));
+      const salt = matches ? existing.pin_salt : crypto.randomUUID();
+      const pin = await accountDigest(env, `pin:${identity}:${salt}:${data.pin}`);
+      const result = await env.DB.batch([
+        env.DB.prepare(`INSERT INTO app_accounts (id, email_hash, pin_hash, pin_salt, created_at)
+          VALUES (?, ?, ?, ?, ?) ON CONFLICT(email_hash) DO UPDATE SET pin_hash = excluded.pin_hash,
+          pin_salt = excluded.pin_salt, generation = generation + CASE WHEN pin_hash = excluded.pin_hash THEN 0 ELSE 1 END`).bind(crypto.randomUUID(), identity, pin, salt, accountNow()),
+        env.DB.prepare(`INSERT INTO account_devices (account_id, device_hash, generation)
+          SELECT id, ?, generation FROM app_accounts WHERE email_hash = ?
+          ON CONFLICT(account_id, device_hash) DO UPDATE SET generation = excluded.generation`).bind(device, identity),
+        env.DB.prepare("SELECT id FROM app_accounts WHERE email_hash = ?").bind(identity),
+      ]);
+      const account = result[2].results[0].id;
+      await accountStart(env, account, data);
+      return accountResponse({account_id: account});
+    }
+    if (path !== "/account/unlock") return accountResponse({code: "not_found"}, 404);
+    if (!await accountBudget(env, `pin:${identity}`, 5, 900)
+        || !await accountBudget(env, `pinday:${identity}`, 20, 86400))
+      return accountResponse({code: "rate_limited"}, 429);
+    const account = await env.DB.prepare(`SELECT a.* FROM app_accounts a JOIN account_devices d
+      ON d.account_id = a.id AND d.generation = a.generation WHERE a.email_hash = ? AND d.device_hash = ?`)
+      .bind(identity, device).first();
+    const expected = await accountDigest(env, `pin:${identity}:${account?.pin_salt || "missing"}:${data.pin}`);
+    if (!account || !accountEqual(expected, account.pin_hash)) return accountResponse({code: "invalid_credentials"}, 401);
+    // Count failures, not ordinary successful starts. Limits are keyed by the
+    // current window, and successful authentication frees its reservation.
+    await env.DB.batch([900, 86400].map(seconds => env.DB.prepare("UPDATE account_limits SET count = MAX(0, count - 1) WHERE id = ?")
+      .bind(`${seconds === 900 ? "pin" : "pinday"}:${identity}:${Math.floor(accountNow() / seconds)}`)));
+    await accountStart(env, account.id, data);
+    return accountResponse({account_id: account.id});
+  } catch { return accountResponse({code: "unavailable"}, 503); }
+}
+async function pruneAccounts(env) {
+  const now = accountNow();
+  await env.DB.batch([
+    env.DB.prepare("DELETE FROM account_limits WHERE expires_at < ?").bind(now),
+    env.DB.prepare("DELETE FROM account_challenges WHERE expires_at < ?").bind(now),
+    env.DB.prepare("DELETE FROM account_starts WHERE started_at < ?").bind(now - ACCOUNT_RETENTION_DAYS * 86400),
+  ]);
+}
+
 export default {
   async scheduled(controller, env, ctx) {
     ctx.waitUntil(purgeUsage(env));
+    if (env.ACCOUNT_PEPPER) ctx.waitUntil(pruneAccounts(env));
   },
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
+    if (url.pathname.startsWith("/account/")) return handleAccount(request, env, url.pathname);
 
     if (url.pathname === "/releases") return handleReleaseManifest(request, env);
     if (url.pathname === "/release-admin/publish") return handleReleasePublish(request, env);

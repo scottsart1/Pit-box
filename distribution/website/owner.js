@@ -6,7 +6,7 @@
   const count = value => Number.isSafeInteger(value) && value >= 0;
   const platforms = ["windows", "android"];
   const titles = {app_started: "Opened the app", app_used: "Actively used the app", racing: "Qualifying driving telemetry", engineer: "Engineer replies", voice: "Voice commands", analysis: "Lap comparisons", transfer: "History-transfer starts"};
-  const tableIds = ["downloadPlatformRows", "downloadDailyRows", "historyDailyRows", "emailRows", "signupSourceRows", "usageSignalRows", "retentionRows", "versionRows"];
+  const tableIds = ["downloadPlatformRows", "downloadDailyRows", "historyDailyRows", "emailRows", "signupSourceRows", "usageSignalRows", "retentionRows", "versionRows", "accountRows"];
   const metricIds = ["metricRecorded", "metricDownloads", "metricRecentDownloads", "metricEmails", "metricActive", "metricRacing", "metricRetention"];
   const requests = new Set();
   let key = "", generation = 0, busy = false, copying = false;
@@ -18,7 +18,7 @@
   function clearData() {
     for (const id of tableIds) el(id).replaceChildren();
     for (const id of metricIds) text(id, "—");
-    for (const id of ["ownerUpdated", "metricRecordedSources", "metricPlatformSplit", "metricNewEmails", "historyOverview", "historyCoverage", "downloadAvailability", "usageAvailability", "emailStatus"]) text(id, "");
+    for (const id of ["ownerUpdated", "metricRecordedSources", "metricPlatformSplit", "metricNewEmails", "historyOverview", "historyCoverage", "downloadAvailability", "usageAvailability", "emailStatus", "accountStatus"]) text(id, "");
     el("historyDetails").hidden = true;
     el("emailCopyText").value = "";
     el("emailCopyFallback").hidden = true;
@@ -234,6 +234,27 @@
     el("loadMoreEmails").hidden = emailNext === null;
     el("copyAllEmails").disabled = data.total === 0;
   }
+  async function loadAccounts(current) {
+    try {
+      const data = await api("/owner/accounts", current);
+      if (current !== generation) return;
+      if (data.metric !== "consented_account_starts" || !count(data.summary?.accounts) || !count(data.summary?.starts)) throw new Error("Invalid account report.");
+      const rows = array(data.accounts, 200);
+      for (const item of rows) {
+        if (!/^[0-9a-f-]{36}$/.test(item.account_id) || !count(item.starts) || !count(item.active_days)
+            || !count(item.first_start) || !count(item.last_start)) throw new Error("Invalid account report.");
+      }
+      el("accountRows").replaceChildren();
+      for (const item of rows) row("accountRows", [item.account_id, number(item.starts), number(item.active_days),
+        new Date(item.first_start * 1000).toISOString().slice(0, 19).replace("T", " "),
+        new Date(item.last_start * 1000).toISOString().slice(0, 19).replace("T", " ")]);
+      text("accountStatus", `${number(data.summary.accounts)} accounts / ${number(data.summary.starts)} starts in the last 30 days. Only accounts that enabled sharing are included.`);
+    } catch (error) {
+      if (current !== generation) return;
+      el("accountRows").replaceChildren();
+      text("accountStatus", "Account reporting unavailable. This does not mean zero starts.");
+    }
+  }
   async function refresh() {
     if (!key || busy || copying) return;
     if (expired()) { lock("Session locked after inactivity. Enter your key again."); return; }
@@ -244,6 +265,7 @@
       if (current !== generation) return;
       renderOverview(data);
       el("ownerLoginPanel").hidden = true; el("ownerData").hidden = el("ownerLock").hidden = false;
+      await loadAccounts(current);
       try { await loadEmails(current); }
       catch (error) {
         if (current !== generation) return;

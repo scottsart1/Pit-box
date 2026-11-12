@@ -5,7 +5,7 @@ from __future__ import annotations
 import hmac
 import ipaddress
 import json
-from http.cookies import SimpleCookie
+from http.cookies import CookieError, SimpleCookie
 from urllib.parse import parse_qs, urlsplit
 
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
@@ -223,3 +223,35 @@ class LanAccessMiddleware:
 
 
 __all__ = ["LanAccessMiddleware", "is_loopback_host"]
+
+
+class NativeAccessMiddleware:
+    """Android also authenticates loopback: other apps share the same host.
+
+    The native process injects an HttpOnly cookie into its private WebView.
+    No public health, static, HTTP or websocket route bypasses this boundary.
+    """
+
+    def __init__(self, app: ASGIApp, *, token: str | None = None) -> None:
+        self.app = app
+        self.token = token or ""
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if not self.token or scope["type"] not in {"http", "websocket"}:
+            await self.app(scope, receive, send)
+            return
+        headers = _headers(scope)
+        cookie = SimpleCookie()
+        try:
+            cookie.load(headers.get("cookie", ""))
+        except CookieError:
+            cookie = SimpleCookie()
+        item = cookie.get("pitbox_native")
+        supplied = headers.get("x-pitbox-native", "") or (item.value if item else "")
+        if not supplied or not hmac.compare_digest(supplied, self.token):
+            await LanAccessMiddleware._reject(scope, send, 401, "Native app unlock required")
+            return
+        if not _same_origin(headers, scope) or headers.get("sec-fetch-site") == "cross-site":
+            await LanAccessMiddleware._reject(scope, send, 403, "Same-origin request required")
+            return
+        await self.app(scope, receive, send)

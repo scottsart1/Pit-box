@@ -172,3 +172,18 @@ test('versions render newest first across platforms and stay sorted after refres
   h.elements.ownerLock.listeners.click();
   assert.deepEqual(rows(), []);
 });
+
+test('account starts render separately and clear on lock; unavailable never becomes zero', async () => {
+  const accounts = {metric:'consented_account_starts', summary:{accounts:1,starts:3}, accounts:[{
+    account_id:'12345678-1234-4123-8123-123456789abc', starts:3, active_days:2, first_start:1700000000, last_start:1700086400
+  }]};
+  const h = harness(async url => response(url.includes('/overview') ? overview : url.includes('/accounts') ? accounts : emails));
+  await h.login();
+  assert.equal(h.elements.accountRows.children.length,1);
+  assert.match(h.elements.accountStatus.textContent,/1 accounts \/ 3 starts/);
+  h.elements.ownerLock.listeners.click();
+  assert.equal(h.elements.accountRows.children.length,0);
+  assert.equal(h.elements.accountStatus.textContent,'');
+  const missing = harness(); await missing.login();
+  assert.match(missing.elements.accountStatus.textContent,/unavailable/);
+});

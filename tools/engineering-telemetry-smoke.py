@@ -2,6 +2,7 @@
 
 import argparse
 import json
+import os
 import socket
 import sys
 import time
@@ -22,8 +23,11 @@ def main():
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
 
+    token = os.environ.get("PITBOX_QA_NATIVE_TOKEN", "")
+    native_headers = {"X-Pitbox-Native": token} if token else {}
+
     def get(path):
-        return json.load(urllib.request.urlopen(args.base + path, timeout=20))
+        return json.load(urllib.request.urlopen(urllib.request.Request(args.base + path, headers=native_headers), timeout=20))
 
     health = get("/api/health")
     data_path = health.get("database", "")
@@ -192,7 +196,7 @@ def main():
         request = urllib.request.Request(
             args.base + f"/api/v1/sessions/{report['session_id']}/engineering/compare",
             data=body,
-            headers={"Content-Type": "application/json"},
+            headers={"Content-Type": "application/json", **native_headers},
         )
         comparison = json.load(urllib.request.urlopen(request, timeout=20))
         assert comparison["enough_evidence"], comparison
@@ -231,7 +235,7 @@ def main():
             args.base + f"/api/v1/sessions/{report['session_id']}/engineering/compare",
             data=json.dumps({"a": candidates[0]["id"], "b": cross_runs[0]["id"],
                              "b_session_id": cross_report["session_id"]}).encode(),
-            headers={"Content-Type": "application/json"},
+            headers={"Content-Type": "application/json", **native_headers},
         )
         cross_comparison = json.load(urllib.request.urlopen(request, timeout=20))
         assert cross_comparison["enough_evidence"], cross_comparison
