@@ -163,7 +163,7 @@ button:disabled,
   grid-column: 1 / -1;
 }
 
-/* Android only: the open driver profile, shown by the native app. */
+/* The open driver profile, when the app was opened from the driver list. */
 .profile-panel { grid-column: 1 / -1; }
 .profile-panel .section-heading { flex-wrap: wrap; }
 .profile-actions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-3); }

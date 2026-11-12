@@ -236,21 +236,28 @@ def test_the_entry_point_imports_resolve_standalone():
 
 
 def test_the_launcher_calls_a_function_the_app_actually_has():
-    """The packaged entry point hands over to pitwall.main at the very end.
+    """The packaged entry point hands over to the app at the very end.
 
     A wrong name here survives every unit test and only shows up after a
     successful activation, in a windowed build with no console — the app
     simply disappears. It is the last line of the happy path and the easiest
-    to get wrong, because renaming it in the app breaks nothing else.
+    to get wrong, because renaming it in the app breaks nothing else. The
+    entry point goes through pitwall.desktop (the driver-profile screen),
+    which hands over to pitwall.main's server.
     """
+    import pitwall.desktop
     import pitwall.main
 
     source = (DIST / "main.py").read_text(encoding="utf-8")
-    called = re.findall(r"from pitwall\.main import (\w+)", source)
-    assert called, "the entry point no longer imports from pitwall.main"
+    called = re.findall(r"from pitwall\.desktop import (\w+)", source)
+    assert "run" in called, "the entry point no longer starts through pitwall.desktop"
     for name in called:
-        assert hasattr(pitwall.main, name), f"pitwall.main has no {name!r}"
-        assert callable(getattr(pitwall.main, name))
+        assert callable(getattr(pitwall.desktop, name, None)), f"pitwall.desktop has no {name!r}"
+    desktop = (DIST.parent / "src/pitwall/desktop.py").read_text(encoding="utf-8")
+    handed = re.findall(r"from \.main import (\w+)", desktop)
+    assert "run" in handed, "pitwall.desktop no longer starts pitwall.main's server"
+    for name in handed:
+        assert callable(getattr(pitwall.main, name, None)), f"pitwall.main has no {name!r}"
 
 
 def test_the_release_steps_name_every_mac_only_command():

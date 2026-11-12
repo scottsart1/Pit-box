@@ -5,5 +5,5 @@ if not exist ".venv\Scripts\python.exe" (
   pause
   exit /b 1
 )
-".venv\Scripts\python.exe" -m pitwall.main
+".venv\Scripts\python.exe" -m pitwall.desktop
 pause

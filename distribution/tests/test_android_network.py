@@ -101,7 +101,7 @@ def android_entry(monkeypatch, tmp_path):
     nics: list[_Nic] = []
     fake_java = types.ModuleType("java")
     classes = {
-        "com.yourpitbox.app.AccountSession": types.SimpleNamespace(isUnlocked=lambda: True, localToken=lambda: "test-native-token"),
+        "com.yourpitbox.app.AccountSession": types.SimpleNamespace(isUnlocked=lambda: True, localToken=lambda: "test-native-token", profileName=lambda: "Test Driver"),
         "com.yourpitbox.app.KeyVault": types.SimpleNamespace(getInstance=lambda: vault),
         "java.net.NetworkInterface": types.SimpleNamespace(
             getNetworkInterfaces=lambda: _Enumeration(nics)

@@ -1,0 +1,294 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<title>Your Pit Box</title>
+<script src="/static/js/i18n.js?v=5.7.1"></script>
+<style>
+:root{--bg:#070b0f;--panel:#121b24;--line:#263542;--text:#eef4f8;--muted:#9eb2c2;--green:#49d17d;--red:#ff6969;--focus:#3f86ff}
+*{box-sizing:border-box}
+html,body{margin:0;min-height:100%;background:var(--bg);color:var(--text);font-family:"Segoe UI",system-ui,-apple-system,Roboto,sans-serif}
+main{min-height:100vh;display:grid;place-items:center;padding:32px 16px}
+.card{width:min(440px,100%);background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:24px}
+.lights{display:flex;gap:12px;margin:0 0 18px}.lights span{width:10px;height:10px;border-radius:50%;background:var(--green)}
+.brand{margin:0;color:var(--green);font-size:11px;font-weight:800;letter-spacing:.12em;text-transform:uppercase}
+h1{margin:10px 0 6px;font-size:28px;line-height:1.15;font-weight:900}
+p{margin:6px 0;color:var(--muted);font-size:15px;line-height:1.5}
+.small{font-size:13px}
+.callout{color:var(--text);border:1px solid var(--green);border-radius:10px;padding:12px 14px;background:var(--bg);margin:12px 0}
+label{display:block;margin:16px 0 6px;font-size:11px;font-weight:800;letter-spacing:.12em;text-transform:uppercase;color:var(--muted)}
+input{width:100%;min-height:48px;padding:10px 12px;border:1px solid var(--line);border-radius:8px;background:var(--bg);color:var(--text);font:inherit;font-size:17px}
+.method{margin:18px 0 0;font-size:17px;font-weight:800;color:var(--text)}
+.choice{display:flex;gap:8px;margin:12px 0 0}
+.choice button{flex:1;min-height:48px;border:1px solid var(--line);border-radius:8px;background:var(--bg);color:var(--muted);font:inherit;font-size:15px;cursor:pointer}
+.choice button[aria-pressed=true]{border-color:var(--green);color:var(--green);background:var(--panel)}
+button.primary,button.secondary{display:block;width:100%;min-height:48px;margin-top:10px;border-radius:8px;font:inherit;font-size:16px;cursor:pointer}
+button.primary{border:0;background:var(--green);color:var(--bg);font-weight:800}
+button.secondary{border:0;background:transparent;color:var(--text)}
+button:disabled{opacity:.55;cursor:progress}
+.driver{display:flex;align-items:center;gap:16px;width:100%;min-height:64px;margin-top:10px;padding:12px 16px;border:1px solid var(--line);border-radius:10px;background:var(--bg);color:var(--text);font:inherit;text-align:left;cursor:pointer}
+.avatar{flex:0 0 40px;height:40px;border:1px solid var(--line);border-radius:50%;display:grid;place-items:center;color:var(--green);font-weight:800}
+.driver b{display:block;font-size:17px}.driver small{display:block;color:var(--muted);font-size:13px;margin-top:2px}
+.notice{min-height:1.5em;margin-top:10px;font-size:14px;color:var(--red)}.notice.progress{color:var(--muted)}
+:focus-visible{outline:3px solid var(--focus);outline-offset:2px}
+@media (prefers-reduced-motion:no-preference){.lights span{animation:light .5s ease-out both}.lights span:nth-child(2){animation-delay:.1s}.lights span:nth-child(3){animation-delay:.2s}.lights span:nth-child(4){animation-delay:.3s}.lights span:nth-child(5){animation-delay:.4s}@keyframes light{from{background:var(--red)}}}
+</style>
+</head>
+<body>
+<main>
+  <section class="card" id="card" aria-live="polite">
+    <div class="lights" aria-hidden="true"><span></span><span></span><span></span><span></span><span></span></div>
+    <p class="brand" translate="no">YOUR PIT BOX</p>
+    <h1 id="title">Opening driver profiles…</h1>
+    <noscript><p>Turn on JavaScript in this browser to choose your driver.</p></noscript>
+  </section>
+</main>
+<script>
+(function () {
+  'use strict';
+  const i18n = window.i18n;
+  const card = document.getElementById('card');
+  const REASONS = {
+    name: () => i18n.t('Enter a driver name.'),
+    name_taken: () => i18n.t('That driver name is already in use.'),
+    email_taken: () => i18n.t('This email already opens another driver. Choose that driver instead.'),
+    limit: () => i18n.t('This computer already has 20 driver profiles.'),
+    email_format: () => i18n.t('Enter a valid email address.'),
+    pin_format: () => i18n.t('Enter exactly four digits.'),
+    mismatch: () => i18n.t('The PINs do not match.'),
+    wrong_email: () => i18n.t('That email does not match this profile.'),
+    wrong_pin: () => i18n.t('Incorrect PIN.'),
+    locked: () => i18n.t('Too many PIN attempts. Try again in 15 minutes.'),
+    locked_day: () => i18n.t('Too many PIN attempts today. Try again tomorrow.'),
+  };
+  let state = { profiles: [], existing_data: false };
+  let busy = false;
+
+  function el(tag, attributes, text) {
+    const node = document.createElement(tag);
+    for (const [name, value] of Object.entries(attributes || {})) {
+      if (name === 'onclick') node.addEventListener('click', value);
+      else node.setAttribute(name, value);
+    }
+    if (text != null) node.textContent = text;
+    return node;
+  }
+
+  function screen(title) {
+    card.replaceChildren(card.querySelector('.lights'), card.querySelector('.brand'));
+    card.append(el('h1', { id: 'title' }, title));
+  }
+
+  function notice() {
+    const node = el('p', { id: 'notice', class: 'notice', role: 'status' });
+    card.append(node);
+    return node;
+  }
+
+  function say(node, text, progress) {
+    node.classList.toggle('progress', !!progress);
+    node.textContent = text;
+  }
+
+  async function call(path, body) {
+    const response = await fetch(path, {
+      method: body === undefined ? 'GET' : 'POST',
+      headers: body === undefined ? {} : { 'Content-Type': 'application/json' },
+      body: body === undefined ? undefined : JSON.stringify(body),
+      cache: 'no-store',
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      const error = new Error(data.reason || 'unavailable');
+      error.reason = data.reason;
+      throw error;
+    }
+    return data;
+  }
+
+  async function load() {
+    screen(i18n.t('Opening driver profiles…'));
+    try {
+      state = await call('/gate/state');
+    } catch {
+      return failed(i18n.t('Your Pit Box is not answering. Close this tab and open Your Pit Box again.'), false);
+    }
+    if (state.opening) return opening();
+    if (state.unavailable) return failed(i18n.t('The driver list could not be read. Your race history has not been changed.'), true);
+    if (!state.profiles.length) return setup('pin', '');
+    if (state.profiles.length === 1) return unlock(state.profiles[0]);
+    return picker();
+  }
+
+  function picker() {
+    screen(i18n.t('Choose your driver'));
+    card.append(el('p', {}, i18n.t('Each driver has their own history, settings and API keys on this computer.')));
+    for (const profile of state.profiles) {
+      const detail = profile.method === 'email' ? i18n.t('Opens with email') : i18n.t('Opens with PIN');
+      const row = el('button', { type: 'button', class: 'driver', 'data-profile': profile.id, onclick: () => unlock(profile) });
+      const label = el('span');
+      label.append(el('b', {}, profile.name), el('small', {}, detail));
+      row.append(el('span', { class: 'avatar', 'aria-hidden': 'true' }, Array.from(profile.name)[0]?.toUpperCase() || '?'), label);
+      card.append(row);
+    }
+    card.append(el('button', { type: 'button', class: 'primary', id: 'newDriver', onclick: () => setup('pin', '') }, i18n.t('+ New driver')));
+  }
+
+  function setup(method, draftName) {
+    const first = !state.profiles.length;
+    screen(first ? i18n.t('Set up your driver profile') : i18n.t('Add a driver'));
+    if (first && state.existing_data) {
+      card.append(el('p', {}, i18n.t('Your Pit Box now keeps a separate profile for each driver on this computer.')));
+      card.append(el('p', { class: 'callout', id: 'inheritNotice' }, i18n.t('Everything already on this computer, including your race history, settings and API keys, will be attached to this profile.')));
+    } else {
+      card.append(el('p', {}, first
+        ? i18n.t('Each driver gets their own history, settings and API keys on this computer.')
+        : i18n.t('A new driver starts with empty history and settings, and adds their own API keys.')));
+    }
+    const form = el('form', { novalidate: '' });
+    form.append(el('label', { for: 'driverName' }, i18n.t('Driver name')));
+    const name = el('input', { id: 'driverName', name: 'name', maxlength: '40', autocomplete: 'off', autocapitalize: 'words', spellcheck: 'false' });
+    name.value = draftName;
+    form.append(name);
+    form.append(el('p', { class: 'method' }, i18n.t('Email OR PIN')));
+    form.append(el('p', { class: 'small' }, i18n.t('Choose either an email address or a 4-digit PIN to open this profile.')));
+    const choice = el('div', { class: 'choice', role: 'group', 'aria-label': i18n.t('Email OR PIN') });
+    for (const [value, label] of [['pin', i18n.t('4-digit PIN')], ['email', i18n.t('Email')]]) {
+      choice.append(el('button', { type: 'button', id: value === 'pin' ? 'methodPin' : 'methodEmail', 'aria-pressed': String(method === value),
+        onclick: () => { if (!busy && method !== value) setup(value, name.value); } }, label));
+    }
+    form.append(choice);
+    const fields = credentialFields(form, method, true);
+    form.append(el('p', { class: 'small' }, method === 'email'
+      ? i18n.t('No verification email is sent. Anyone who knows this address can open this profile. Choose a PIN to lock it.')
+      : i18n.t('Keep your PIN safe: a forgotten PIN cannot be reset.')));
+    form.append(el('p', { class: 'small' }, i18n.t('Your email and PIN stay on this computer.')));
+    const status = notice();
+    form.append(status);
+    const submit = el('button', { type: 'submit', class: 'primary', id: 'submit' }, i18n.t('Create profile and open'));
+    form.append(submit);
+    card.append(form);
+    if (!first) card.append(el('button', { type: 'button', class: 'secondary', id: 'otherDriver', onclick: () => { if (!busy) picker(); } }, i18n.t('Choose another driver')));
+    form.addEventListener('submit', async event => {
+      event.preventDefault();
+      if (busy) return;
+      const label = name.value.trim();
+      if (!label) { say(status, REASONS.name()); name.focus(); return; }
+      const body = { name: label, method };
+      if (method === 'email') body.email = fields.credential.value.trim();
+      else {
+        if (!/^[0-9]{4}$/.test(fields.credential.value)) { say(status, REASONS.pin_format()); fields.credential.focus(); return; }
+        if (fields.credential.value !== fields.confirm.value) { say(status, REASONS.mismatch()); fields.confirm.value = ''; fields.confirm.focus(); return; }
+        body.pin = fields.credential.value;
+      }
+      await submitTo('/gate/create', body, status, submit, fields);
+    });
+    (draftName ? fields.credential : name).focus();
+  }
+
+  function unlock(profile) {
+    const email = profile.method === 'email';
+    screen(i18n.t('Welcome back, {name}', { name: profile.name }));
+    card.append(el('p', {}, email ? i18n.t('Enter the email address for this profile.') : i18n.t('Enter your 4-digit PIN.')));
+    const form = el('form', { novalidate: '' });
+    const fields = credentialFields(form, profile.method, false);
+    form.append(el('p', { class: 'small' }, i18n.t('Your email and PIN stay on this computer.')));
+    const status = notice();
+    form.append(status);
+    const submit = el('button', { type: 'submit', class: 'primary', id: 'submit' }, i18n.t('Open my pit box'));
+    form.append(submit);
+    card.append(form);
+    card.append(el('button', { type: 'button', class: 'secondary', id: 'otherDriver', onclick: () => { if (!busy) picker(); } }, i18n.t('Choose another driver')));
+    form.addEventListener('submit', async event => {
+      event.preventDefault();
+      if (busy) return;
+      const value = fields.credential.value.trim();
+      if (!email && !/^[0-9]{4}$/.test(value)) { say(status, REASONS.pin_format()); fields.credential.focus(); return; }
+      await submitTo('/gate/unlock', email ? { id: profile.id, email: value } : { id: profile.id, pin: value }, status, submit, fields);
+    });
+    fields.credential.focus();
+  }
+
+  function credentialFields(form, method, creating) {
+    const email = method === 'email';
+    form.append(el('label', { for: 'credential' }, email ? i18n.t('Email address') : i18n.t('4-digit PIN')));
+    const credential = el('input', email
+      ? { id: 'credential', type: 'email', maxlength: '254', autocomplete: 'off', spellcheck: 'false', inputmode: 'email' }
+      : { id: 'credential', type: 'password', maxlength: '4', autocomplete: 'off', inputmode: 'numeric', pattern: '[0-9]*' });
+    form.append(credential);
+    let confirm = null;
+    if (creating && !email) {
+      form.append(el('label', { for: 'confirmPin' }, i18n.t('Confirm PIN')));
+      confirm = el('input', { id: 'confirmPin', type: 'password', maxlength: '4', autocomplete: 'off', inputmode: 'numeric', pattern: '[0-9]*' });
+      form.append(confirm);
+    }
+    return { credential, confirm };
+  }
+
+  async function submitTo(path, body, status, submit, fields) {
+    busy = true; submit.disabled = true;
+    say(status, i18n.t('Opening your profile…'), true);
+    try {
+      await call(path, body);
+      opening();
+    } catch (error) {
+      busy = false; submit.disabled = false;
+      const reason = REASONS[error.reason];
+      say(status, reason ? reason() : i18n.t('Could not open the profile. Please try again.'));
+      fields.credential.value = '';
+      if (fields.confirm) fields.confirm.value = '';
+      fields.credential.focus();
+    }
+  }
+
+  async function opening() {
+    busy = true;
+    screen(i18n.t('Opening your profile…'));
+    const status = notice();
+    say(status, i18n.t('Starting your pit box…'), true);
+    let target = null;
+    for (let attempt = 0; attempt < 600 && !target; attempt++) {
+      try {
+        const next = await call('/gate/next');
+        if (next.url) target = next.url;
+      } catch {
+        target = location.origin;   // The profile screen has handed over this address.
+      }
+      if (!target) await new Promise(resolve => setTimeout(resolve, 500));
+    }
+    const sameOrigin = new URL(target).origin === location.origin;
+    for (let attempt = 0; attempt < 600; attempt++) {
+      try {
+        if (sameOrigin) {
+          const health = await fetch('/api/health', { cache: 'no-store' }).then(r => r.ok ? r.json() : null);
+          if (health && health.ok && !health.profile_screen) { location.replace('/'); return; }
+        } else {
+          await fetch(new URL('/api/health', target), { mode: 'no-cors', cache: 'no-store' });
+          location.replace(target); return;
+        }
+      } catch { /* Still starting. */ }
+      await new Promise(resolve => setTimeout(resolve, 500));
+    }
+    say(status, i18n.t('Your Pit Box is taking longer than usual to start. Keep this tab open; it continues automatically.'));
+  }
+
+  function failed(message, canReset) {
+    screen(i18n.t('Profiles could not be opened'));
+    card.append(el('p', {}, message));
+    const status = notice();
+    card.append(el('button', { type: 'button', class: 'primary', id: 'retry', onclick: load }, i18n.t('Try again')));
+    if (!canReset) return;
+    card.append(el('button', { type: 'button', class: 'secondary', id: 'reset', onclick: async () => {
+      if (!window.confirm(i18n.t('Reset sign-in data? The driver list is set aside so profiles can be created again. The first driver’s race history and settings are attached to the next profile you create. Other drivers’ history stays on this computer but can no longer be opened.'))) return;
+      try { await call('/gate/reset', {}); load(); }
+      catch { say(status, i18n.t('Sign-in data could not be reset. Restart the computer and try again.')); }
+    } }, i18n.t('Reset sign-in data')));
+  }
+
+  load();
+})();
+</script>
+</body>
+</html>
