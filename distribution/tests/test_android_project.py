@@ -92,7 +92,7 @@ def test_the_backend_is_a_source_root_not_a_copy():
 def test_candidate_targets_android_16_and_ci_tests_that_platform():
     assert "compileSdk = 36" in GRADLE and "targetSdk = 36" in GRADLE
     assert "platforms;android-36" in WORKFLOW and "api-level: 36" in WORKFLOW
-    assert "val androidRevision = 44" in GRADLE
+    assert "val androidRevision = 43" in GRADLE
 
 
 def test_isolated_release_qa_package_cannot_replace_existing_apps():
@@ -342,3 +342,163 @@ def test_emulator_checks_sqlite_warnings_for_current_process(tmp_path, monkeypat
         module.prove_sqlite_lifecycle("com.yourpitbox.app.debug", "test")
     assert calls[-1] == ("logcat", "-d", "--pid=1234")
     assert (tmp_path / "test-sqlite-lifecycle.json").is_file()
+
+
+class _FakeProfileScreen:
+    """The native driver-profile screen as the emulator smoke reads it.
+
+    Screens and controls mirror AccountGate: resource ids, a driver list that
+    appears only with two or more drivers, PIN confirmation on setup, and the
+    keyboard's Enter key submitting the last field.
+    """
+
+    PREFIX = "com.yourpitbox.app:id/"
+
+    def __init__(self):
+        self.profiles = []          # (name, method, secret)
+        self.launch()
+
+    def launch(self):
+        self.screen, self.dumps, self.focus, self.values, self.notice = "intro", 0, None, {}, ""
+        self.selected, self.method = None, "pin"
+
+    def _uncover(self):
+        if not self.profiles:
+            self._setup()
+        elif len(self.profiles) == 1:
+            self._unlock(self.profiles[0])
+        else:
+            self.screen = "picker"
+
+    def _setup(self):
+        self.screen, self.values, self.focus, self.notice, self.method = "setup", {}, None, "", "pin"
+
+    def _unlock(self, profile):
+        self.screen, self.selected, self.values, self.focus, self.notice = "unlock", profile, {}, None, ""
+
+    def nodes(self):
+        if self.screen == "intro":
+            return [("", "", "Your Pit Box. Preparing your race engineer.")]
+        if self.screen == "picker":
+            rows = [("", name, f"{name}. Opens with {'email' if method == 'email' else 'PIN'}")
+                    for name, method, _ in self.profiles]
+            return rows + [("gate_new_driver", "+ New driver", "")]
+        if self.screen == "setup":
+            items = [("gate_name", self.values.get("gate_name", ""), ""),
+                     ("gate_method_pin", "4-digit PIN", ""), ("gate_method_email", "Email", ""),
+                     ("gate_credential", self.values.get("gate_credential", ""), "")]
+            if self.method == "pin":
+                items.append(("gate_confirm", self.values.get("gate_confirm", ""), ""))
+            items += [("gate_notice", self.notice, ""), ("gate_submit", "Create profile and open", "")]
+            if self.profiles:
+                items.append(("gate_other_driver", "Choose another driver", ""))
+            return items
+        if self.screen == "unlock":
+            return [("", f"Welcome back, {self.selected[0]}", ""),
+                    ("gate_credential", self.values.get("gate_credential", ""), ""),
+                    ("gate_notice", self.notice, ""), ("gate_submit", "Open my pit box", ""),
+                    ("gate_other_driver", "Choose another driver", "")]
+        return [("", "Starting your pit box…", "")]
+
+    def tree(self, label, allow_empty=False):
+        self.dumps += 1
+        if self.screen == "intro" and self.dumps > 1:
+            self._uncover()
+        body = "".join(
+            f'<node resource-id="{self.PREFIX + rid if rid else ""}" text="{text}" content-desc="{desc}" '
+            f'enabled="true" bounds="[0,{i * 100}][800,{i * 100 + 80}]" />'
+            for i, (rid, text, desc) in enumerate(self.nodes()))
+        return ET.fromstring(f"<hierarchy>{body}</hierarchy>")
+
+    def adb(self, *args, check=True):
+        if args[:3] == ("shell", "input", "tap"):
+            rid, text, desc = self.nodes()[int(args[4]) // 100]
+            if rid in {"gate_name", "gate_credential", "gate_confirm"}:
+                self.focus = rid
+            elif rid == "gate_method_email":
+                self.method = "email"
+            elif rid == "gate_other_driver":
+                self.screen = "picker"
+            elif rid == "gate_new_driver":
+                self._setup()
+            elif self.screen == "picker" and text:
+                self._unlock(next(p for p in self.profiles if p[0] == text))
+        elif args[:3] == ("shell", "input", "text"):
+            assert self.focus, "Typed with no focused field"
+            self.values[self.focus] = self.values.get(self.focus, "") + args[3].replace("%s", " ")
+        elif args[:3] == ("shell", "input", "keyevent") and args[3] == "KEYCODE_ENTER":
+            self._enter()
+        return SimpleNamespace(stdout=b"", stderr=b"", returncode=0)
+
+    def _enter(self):
+        secret = self.values.get("gate_credential", "")
+        if self.screen == "setup":
+            if self.method == "pin" and secret != self.values.get("gate_confirm"):
+                self.notice = "The PINs do not match."
+                return
+            self.profiles.append((self.values["gate_name"], self.method, secret))
+            self.screen = "opened"
+        elif self.screen == "unlock":
+            if secret == self.selected[2]:
+                self.screen = "opened"
+            else:
+                self.notice, self.values = "Incorrect PIN.", {}
+
+
+def _smoke_with_fake_profiles(monkeypatch):
+    spec = importlib.util.spec_from_file_location("emulator_smoke", ROOT / "android/emulator-smoke.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    screen = _FakeProfileScreen()
+    monkeypatch.setattr(module, "ui_tree", screen.tree)
+    monkeypatch.setattr(module, "adb", screen.adb)
+    monkeypatch.setattr(module.time, "sleep", lambda seconds: None)
+    return module, screen
+
+
+def test_emulator_creates_reopens_and_switches_driver_profiles(monkeypatch):
+    module, screen = _smoke_with_fake_profiles(monkeypatch)
+    # Fresh install: the first driver is created with a confirmed PIN.
+    module.create_pin_profile("launch-1", *module.FIRST_DRIVER, first=True)
+    assert screen.profiles == [("Smoke Driver", "pin", "2468")] and screen.screen == "opened"
+    # One driver: the screen opens straight to that driver's PIN.
+    screen.launch()
+    module.unlock_profile("launch-2", *module.FIRST_DRIVER)
+    assert screen.screen == "opened"
+    # A second driver is added with an email and no PIN confirmation.
+    screen.launch()
+    module.create_email_profile("second-driver", *module.SECOND_DRIVER)
+    assert screen.profiles[1] == ("Second Driver", "email", "second.driver@example.test")
+    # Two drivers: the first is chosen from the list by name.
+    screen.launch()
+    module.unlock_profile("first-driver-again", *module.FIRST_DRIVER)
+    assert screen.screen == "opened" and screen.selected[0] == "Smoke Driver"
+
+
+def test_emulator_reports_a_profile_that_refuses_to_open(monkeypatch):
+    module, screen = _smoke_with_fake_profiles(monkeypatch)
+    screen.profiles.append(("Smoke Driver", "pin", "2468"))
+    with pytest.raises(AssertionError, match="Incorrect PIN"):
+        module.unlock_profile("wrong", "Smoke Driver", "1111")
+    screen.launch()
+    with pytest.raises(AssertionError, match="is not listed"):
+        screen.profiles.append(("Other", "pin", "1234"))
+        module.unlock_profile("missing", "Nobody", "1111")
+
+
+def test_each_launch_opens_one_driver_profile_and_keeps_its_dashboard_storage():
+    java = ROOT / "android/app/src/main/java/com/yourpitbox/app"
+    activity = (java / "MainActivity.java").read_text(encoding="utf-8")
+    # Profiles are part of every build: no flag can ship an APK without them.
+    assert "pitbox.accountGate" not in GRADLE and "ACCOUNT_GATE" not in activity
+    # Clearing WebView storage at launch would reset the DRIVE layout, the app
+    # tour and other dashboard state on every start. Each driver gets a WebView
+    # data directory instead, created only after the profile is open.
+    assert "deleteAllData" not in activity and "removeAllCookies" not in activity
+    assert "setDataDirectorySuffix" in activity
+    # The profile stays open until the app closes; going to the background
+    # during a race never asks for the PIN again.
+    assert "onStop" not in activity
+    # The JVM profile harness runs with the APK build.
+    assert "testDebugUnitTest" in WORKFLOW
+    assert 'java.srcDir("../../distribution/tests/java")' in GRADLE
