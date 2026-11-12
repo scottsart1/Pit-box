@@ -33,12 +33,11 @@ def stubbed_screen(monkeypatch):
     def fake_message(message: str, *, title: str = "") -> None:
         calls["messages"].append(message)
 
-    # `pitwall.main` pulls in the whole server; the wrapper only needs the
-    # splash closer, so a stand-in module keeps the test cheap and offline.
-    fake_pitwall_main = types.SimpleNamespace(
-        close_startup_splash=lambda: calls["splash_closed"].append(True)
-    )
-    monkeypatch.setitem(sys.modules, "pitwall.main", fake_pitwall_main)
+    # The wrappers close the splash through pitwall.desktop, which loads no
+    # settings: they run before a driver profile is chosen.
+    import pitwall.desktop
+
+    monkeypatch.setattr(pitwall.desktop, "close_splash", lambda: calls["splash_closed"].append(True))
     monkeypatch.setattr(first_run, "prompt_first_run", fake_prompt)
     monkeypatch.setattr(first_run, "show_message", fake_message)
     return calls
@@ -90,3 +89,40 @@ def test_the_paid_form_gets_the_retry_reason(tmp_path, stubbed_screen):
     )
     assert result.outcome is launcher.LaunchOutcome.CANCELLED
     assert stubbed_screen["prompts"] == [""]
+
+
+def test_the_welcome_key_waits_for_the_open_profile(monkeypatch, stubbed_screen):
+    """Saving at the welcome screen would load settings before a profile is chosen."""
+    import pitwall.credentials
+
+    saved: list[str] = []
+    monkeypatch.setattr(packaged, "_pending_api_key", [])
+    monkeypatch.setattr(pitwall.credentials, "save_key", saved.append)
+    packaged._save_api_key("sk-test")
+    assert saved == []
+    packaged._store_pending_api_key()
+    assert saved == ["sk-test"]
+    packaged._store_pending_api_key()
+    assert saved == ["sk-test"]
+
+
+def test_a_welcome_key_that_cannot_be_saved_is_reported_not_fatal(monkeypatch, stubbed_screen):
+    import pitwall.credentials
+
+    def refuse(key: str) -> None:
+        raise OSError("read-only folder")
+
+    monkeypatch.setattr(packaged, "_pending_api_key", ["sk-test"])
+    monkeypatch.setattr(pitwall.credentials, "save_key", refuse)
+    packaged._store_pending_api_key()
+    assert "read-only folder" in stubbed_screen["messages"][0]
+
+
+def test_the_packaged_app_starts_through_the_driver_profile_screen(monkeypatch, tmp_path):
+    import pitwall.desktop
+
+    calls: list[tuple] = []
+    monkeypatch.setenv("PITWALL_DATA_DIR", str(tmp_path))
+    monkeypatch.setattr(pitwall.desktop, "run", lambda root, before_run=None: calls.append((root, before_run)))
+    packaged._start_app()
+    assert calls == [(tmp_path, packaged._store_pending_api_key)]

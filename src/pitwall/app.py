@@ -31,7 +31,7 @@ from fastapi.responses import (
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import __version__, circuit_model
+from . import __version__, circuit_model, driver_profiles
 from .analysis import AnalysisEngine
 from .analysis_jobs import AnalysisJobService
 from .api.analysis import create_analysis_router
@@ -1915,6 +1915,34 @@ async def shutdown_pitwall(request: Request) -> dict[str, object]:
             503, "Your Pit Box is not running under its own server and cannot stop itself."
         )
     log.info("Shutdown requested from the dashboard")
+    server.should_exit = True
+    return {"stopping": True}
+
+
+@app.get("/api/v1/driver-profile")
+async def get_driver_profile() -> dict[str, object]:
+    """The open driver profile, for CONNECTION's Driver profile panel."""
+    return driver_profiles.active()
+
+
+@app.post("/api/v1/driver-profile/switch")
+async def switch_driver_profile(request: Request) -> dict[str, object]:
+    """Save the session and restart on the driver list (desktop).
+
+    The same graceful stop as Quit, so the capture is finalized; the desktop
+    launcher then starts the app again, which opens the profile screen. Only
+    the computer running Your Pit Box may ask, as for Quit.
+    """
+    client = request.client
+    if not is_loopback_host(client.host if client else ""):
+        raise HTTPException(403, "Drivers can only be switched on the computer running Your Pit Box.")
+    if driver_profiles.active().get("switch") != "restart":
+        raise HTTPException(409, "This copy of Your Pit Box was not opened from the driver list.")
+    server = getattr(request.app.state, "server", None)
+    if server is None:
+        raise HTTPException(503, "Your Pit Box is not running under its own server and cannot restart itself.")
+    log.info("Driver switch requested from the dashboard")
+    driver_profiles.request_switch()
     server.should_exit = True
     return {"stopping": True}
 

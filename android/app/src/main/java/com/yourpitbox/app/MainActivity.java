@@ -222,7 +222,6 @@ public class MainActivity extends Activity {
             public void onPageFinished(WebView view, String url) {
                 pageReady = isTrustedDashboard(url);
                 deliverPairingInvitation();
-                if (pageReady) showDriverProfile(view);
             }
         });
         // Beneath the start screen, which stays on top until the page loads.
@@ -376,14 +375,6 @@ public class MainActivity extends Activity {
         return "http".equals(actual.getScheme()) && "127.0.0.1".equals(actual.getHost())
                 && actual.getHost().equals(expected.getHost()) && actual.getPort() == expected.getPort()
                 && actual.getUserInfo() == null;
-    }
-
-    /** Names the open driver on CONNECTION, beside the Switch driver action. */
-    private void showDriverProfile(WebView view) {
-        String script = "(function(){var p=document.getElementById('androidProfilePanel');if(!p)return;"
-                + "var n=document.getElementById('androidProfileName');if(n)n.textContent="
-                + JSONObject.quote(AccountSession.profileName()) + ";p.hidden=false;})()";
-        view.evaluateJavascript(script, null);
     }
 
     private void deliverPairingInvitation() {

@@ -101,23 +101,50 @@ def config_dir() -> Path:
     return root / "license"
 
 
-def _save_api_key(key: str) -> None:
-    """Persist the first-run key through the app's own credential store."""
-    from pitwall import credentials
+_pending_api_key: list[str] = []
 
-    credentials.save_key(key)
+
+def _data_root() -> Path:
+    """The installation's data folder (``config_dir`` is its licence folder)."""
+    return config_dir().parent
+
+
+def _save_api_key(key: str) -> None:
+    """Hold the welcome screen's key until a driver profile is open.
+
+    Saving it here would read the app's settings before the profile screen,
+    and the key belongs in the settings of the profile the driver opens.
+    """
+    _pending_api_key.append(key)
+
+
+def _store_pending_api_key() -> None:
+    """Persist the welcome screen's key into the open profile's settings."""
+    if not _pending_api_key:
+        return
+    key = _pending_api_key.pop()
+    try:
+        from pitwall import credentials
+
+        credentials.save_key(key)
+    except Exception as exc:  # noqa: BLE001 - never block a launch on a settings write
+        _show_error(
+            "Your Pit Box will start, but the API key could not be saved: "
+            f"{exc}. Add it from the Connection tab."
+        )
 
 
 def _start_app() -> None:
-    """Hand over to the ordinary Your Pit Box server.
+    """Open a driver profile, then hand over to the ordinary Your Pit Box server.
 
-    `run` configures logging, opens the dashboard in the default browser, and
-    serves until the process is closed — so from the buyer's side, launching
-    the app is the whole of it.
+    The profile screen opens in the default browser; once a driver opens a
+    profile the server starts in that profile's folder and the same tab shows
+    the dashboard. It serves until the app is closed, and Switch driver
+    restarts the app on the profile screen.
     """
-    from pitwall.main import run
+    from pitwall.desktop import run
 
-    run()
+    run(_data_root(), before_run=_store_pending_api_key)
 
 
 def _prompt_first_run(message: str = ""):  # type: ignore[no-untyped-def]
@@ -128,16 +155,16 @@ def _prompt_first_run(message: str = ""):  # type: ignore[no-untyped-def]
     version that took no arguments raised ``TypeError`` on every first launch
     of the packaged build, before the welcome screen could appear.
     """
-    from pitwall.main import close_startup_splash
+    from pitwall.desktop import close_splash
 
-    close_startup_splash()
+    close_splash()
     return first_run.prompt_first_run(message)
 
 
 def _show_error(*args, **kwargs):  # type: ignore[no-untyped-def]
-    from pitwall.main import close_startup_splash
+    from pitwall.desktop import close_splash
 
-    close_startup_splash()
+    close_splash()
     return first_run.show_message(*args, **kwargs)
 
 

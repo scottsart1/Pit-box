@@ -120,13 +120,14 @@
     <details class="transfer-help"><summary>How pairing and history transfers work</summary><p>Keep both apps open on the same home network during a transfer. The connection is encrypted and paired to the invitation. No account is needed. If a device’s network address changes, pair it again to update its address.</p><p>Live race reception is separate: the game sends telemetry to the device address at the top of this page. Pairing copies completed history, not the current live race. Removing a pairing stops future access; copies already transferred stay on each device.</p><p>If a transfer fails, retry it while both devices are connected. Do not close the apps during the import step. If your firewall asks about Pit Wall, allow access on your private home network.</p></details>
   </section>
 
-  <section id="androidProfilePanel" class="panel-surface profile-panel" aria-labelledby="androidProfileHeading" hidden>
+  <section id="driverProfilePanel" class="panel-surface profile-panel" aria-labelledby="driverProfileHeading" hidden>
     <div class="section-heading">
-      <div><div class="eyebrow">This device</div><h2 id="androidProfileHeading">Driver profile</h2></div>
-      <span id="androidProfileName" class="state-chip" data-state="healthy" translate="no"></span>
+      <div><div class="eyebrow">This device</div><h2 id="driverProfileHeading">Driver profile</h2></div>
+      <span id="driverProfileName" class="state-chip" data-state="healthy" translate="no"></span>
     </div>
     <p class="muted small">History, settings and API keys on these pages belong to this driver. Each driver on this device has their own.</p>
-    <div class="profile-actions"><a class="button ghost" href="pitbox://profiles">Switch driver</a><span class="field-help">Saves the session and closes the app. Reopen Your Pit Box to choose or add a driver.</span></div>
+    <div class="profile-actions"><a id="driverProfileSwitch" class="button ghost" href="pitbox://profiles">Switch driver</a><span id="driverProfileCloseHelp" class="field-help" hidden>Saves the session and closes the app. Reopen Your Pit Box to choose or add a driver.</span><span id="driverProfileRestartHelp" class="field-help" hidden>Saves the session and restarts Your Pit Box on the driver list.</span></div>
+    <p id="driverProfileStatus" class="field-help" role="status" aria-live="polite"></p>
   </section>
 
   <section class="panel-surface credential-panel" aria-labelledby="credentialHeading">
@@ -1433,6 +1434,7 @@ $('rivalCompare').ontoggle=()=>{lastRivalKey='';loadRivals()};$('objectiveDown')
 <script type="module" src="/static/js/strategy.js?v=5.7.1"></script>
 <script src="/static/js/usage.js?v=5.7.1" defer></script>
 <script src="/static/js/updates.js?v=5.7.1" defer></script>
+<script src="/static/js/driver-profile.js?v=5.7.1" defer></script>
 <script src="/static/js/onboarding.js?v=5.7.1" defer></script>
 <script src="/static/js/app-tour.js?v=5.7.1" defer></script>
 <script src="/static/js/driver-dashboard.js?v=5.7.1" defer></script>

@@ -56,6 +56,9 @@ def configure(files_dir: str, static_dir: str, microphone: bool = False) -> None
     if not session.isUnlocked():
         raise RuntimeError("Unlock Your Pit Box before starting the backend")
     os.environ["PITWALL_NATIVE_TOKEN"] = str(session.localToken())
+    # CONNECTION names the open driver; the app's own screen handles switching.
+    os.environ["PITWALL_PROFILE_NAME"] = str(session.profileName())
+    os.environ["PITWALL_PROFILE_SWITCH"] = "native"
     from pitwall import secret_storage
     vault = jclass("com.yourpitbox.app.KeyVault").getInstance()
 

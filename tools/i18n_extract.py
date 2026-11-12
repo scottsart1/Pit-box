@@ -38,7 +38,7 @@ CATALOGS = {
     # catalog name -> (catalog directory, markup files, script files)
     "app": (
         STATIC / "i18n",
-        (STATIC / "index.html", STATIC / "overlay.html"),
+        (STATIC / "index.html", STATIC / "overlay.html", STATIC / "profiles.html"),
         tuple(
             path for path in sorted((STATIC / "js").glob("*"))
             if path.suffix in {".js", ".mjs"} and path.name != "i18n.js"
