@@ -56,7 +56,7 @@ public final class AccountGate extends ScrollView {
         background.setCornerRadius(dp(16)); background.setStroke(dp(1), Color.rgb(38, 53, 66)); card.setBackground(background);
         outer.addView(card, new LinearLayout.LayoutParams(Math.min(getResources().getDisplayMetrics().widthPixels - dp(48), dp(440)), -2));
         TextView brand = label("YOUR PIT BOX", 12); brand.setLetterSpacing(.16f); brand.setTextColor(Color.rgb(73, 209, 125)); card.addView(brand);
-        heading = label("Unlock your pit box", 28); heading.setTypeface(null, Typeface.BOLD); card.addView(heading);
+        heading = label("Unlock your pit box", 28); heading.setTypeface(null, Typeface.BOLD); heading.setTextColor(Color.rgb(238, 244, 248)); card.addView(heading);
         card.addView(label("Your API keys stay encrypted on this device.", 14));
         email = field(card, "Email address", InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_EMAIL_ADDRESS, 254);
         pin = field(card, "4-digit PIN", InputType.TYPE_CLASS_NUMBER | InputType.TYPE_NUMBER_VARIATION_PASSWORD, 4);
@@ -66,6 +66,13 @@ public final class AccountGate extends ScrollView {
         card.addView(label("Optional: share launch time and app version under a random account ID, so we can measure returning users across devices. Kept for 180 days. No API keys, driving data or newsletter signup.", 12));
         notice = label("Internet is required to unlock. Your email verifies account ownership and recovery.", 13); card.addView(notice);
         open = button(card, "Unlock"); verify = button(card, "Set up account / reset PIN");
+        open.setBackgroundTintList(android.content.res.ColorStateList.valueOf(Color.rgb(73, 209, 125)));
+        open.setTextColor(Color.rgb(7, 16, 10));
+        verify.setBackgroundTintList(android.content.res.ColorStateList.valueOf(Color.TRANSPARENT));
+        verify.setTextColor(Color.rgb(238, 244, 248));
+        sharing.setButtonTintList(new android.content.res.ColorStateList(
+            new int[][]{new int[]{android.R.attr.state_checked}, new int[]{}},
+            new int[]{Color.rgb(73, 209, 125), Color.rgb(158, 178, 194)}));
         open.setOnClickListener(v -> unlock()); verify.setOnClickListener(v -> challenge());
         // Keystore and preference IO run away from the UI thread.
         new Thread(() -> {
