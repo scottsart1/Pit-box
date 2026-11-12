@@ -16,7 +16,7 @@ val nativeConstraints = rootProject.layout.projectDirectory.file("native-require
 // engine than the source which Chaquopy actually packages.
 val backendVersion = Regex("__version__ = \"([^\"]+)\"")
     .find(rootProject.file("../src/pitwall/__init__.py").readText())!!.groupValues[1]
-val androidRevision = 44
+val androidRevision = 43
 val signingPath = providers.environmentVariable("PITBOX_KEYSTORE_PATH").orNull
 val signingVariables = listOf("PITBOX_KEYSTORE_PATH", "PITBOX_KEYSTORE_PASSWORD",
     "PITBOX_KEY_ALIAS", "PITBOX_KEY_PASSWORD")
@@ -39,14 +39,13 @@ check(!qaPackage || prepareUnsignedRelease) {
 android {
     namespace = "com.yourpitbox.app"
     compileSdk = 36
+    // BuildConfig carries DEBUG (the emulator-only access token) and the
+    // version reported with each driver-profile sign-in.
     buildFeatures { buildConfig = true }
 
     defaultConfig {
         applicationId = if (qaPackage) "com.yourpitbox.app.qa" else "com.yourpitbox.app"
         manifestPlaceholders["pitboxAppLabel"] = if (qaPackage) "Your Pit Box QA" else "Your Pit Box"
-        // Enable after profile isolation, upgrade preservation and sign-in
-        // reporting pass native acceptance. No email verification is used.
-        buildConfigField("boolean", "ACCOUNT_GATE_ENABLED", providers.gradleProperty("pitbox.accountGate").map { (it == "true").toString() }.getOrElse("false"))
         minSdk = 24
         targetSdk = 36
         versionCode = androidRevision

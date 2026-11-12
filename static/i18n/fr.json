@@ -2618,6 +2618,8 @@
   "other": "{count} jamais dits",
   "many": "{count} jamais dits"
  },
- "Switch driver profile": "Changer de profil pilote",
- "Save and close, then reopen to choose another driver.": "Enregistrez et fermez, puis rouvrez pour choisir un autre pilote."
+ "Driver profile": "Profil pilote",
+ "History, settings and API keys on these pages belong to this driver. Each driver on this device has their own.": "L'historique, les réglages et les clés API de ces pages appartiennent à ce pilote. Chaque pilote de cet appareil a les siens.",
+ "Switch driver": "Changer de pilote",
+ "Saves the session and closes the app. Reopen Your Pit Box to choose or add a driver.": "Enregistre la session et ferme l'app. Rouvre Your Pit Box pour choisir ou ajouter un pilote."
 }

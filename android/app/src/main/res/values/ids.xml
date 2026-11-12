@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Stable handles for the native driver-profile screen, read by
+         accessibility services and the emulator acceptance check. -->
+    <item type="id" name="gate_name" />
+    <item type="id" name="gate_method_pin" />
+    <item type="id" name="gate_method_email" />
+    <item type="id" name="gate_credential" />
+    <item type="id" name="gate_confirm" />
+    <item type="id" name="gate_submit" />
+    <item type="id" name="gate_notice" />
+    <item type="id" name="gate_other_driver" />
+    <item type="id" name="gate_new_driver" />
+    <item type="id" name="gate_retry" />
+    <item type="id" name="gate_reset" />
+</resources>

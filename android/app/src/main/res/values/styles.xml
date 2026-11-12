@@ -7,5 +7,8 @@
         <item name="android:statusBarColor">@color/pitbox_bg</item>
         <item name="android:navigationBarColor">@color/pitbox_bg</item>
         <item name="android:windowLightStatusBar">false</item>
+        <!-- Native fields, dialogs and the driver-profile screen use the
+             dashboard's green rather than the platform's teal. -->
+        <item name="android:colorAccent">@color/pitbox_green</item>
     </style>
 </resources>
