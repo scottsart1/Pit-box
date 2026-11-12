@@ -235,12 +235,13 @@ requests/day; D1: millions of reads, 100k writes/day; R2: 10 GB stored and
 is one write.
 
 
-### Android driver profiles
+### Driver profiles (Android and desktop)
 
-See [Android driver profiles and secure startup](../../docs/android-secure-start.md).
+See [Driver profiles](../../docs/driver-profiles.md).
 Apply `0009_app_accounts.sql` and `0010_driver_profiles.sql`, provision the stable
-`ACCOUNT_PEPPER` secret, and deploy the Worker with the Android release that
-introduces profiles. Until then devices keep their sign-ins queued. No email
+`ACCOUNT_PEPPER` secret, and deploy the Worker with the Android and Windows
+releases that introduce profiles. Until then devices keep their sign-ins queued.
+The reported version names the platform (`5.7.1-android.43`, `5.7.1-windows`). No email
 verification, sender, or email-service binding is used.
 
 `POST /account/profile` registers an opaque profile ID with a random credential.

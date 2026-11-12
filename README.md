@@ -1300,6 +1300,11 @@ Set-ExecutionPolicy -Scope Process Bypass
 
 Your existing L3/UDP Action 1 binding is reused automatically.
 
+The browser opens on the driver-profile screen first. On the first start after
+updating, set up your profile there: your existing history, settings and keys
+are attached to it. Each further driver gets a separate profile (see
+[Driver profiles](docs/driver-profiles.md)).
+
 ## Driver controls
 
 The Live dashboard now exposes **Session mode** and **Strategy override** controls.
@@ -1410,6 +1415,9 @@ Runtime data remains under:
 ```text
 %USERPROFILE%\PitWallData
 ```
+
+That folder belongs to the first driver profile. Each further driver's data,
+including their own `.env`, is under `PitWallData\driver-profiles\<id>`.
 
 Your Pit Box sends compact situation summaries and selected tool results to the
 configured AI provider only for questions that require model judgement. Those
