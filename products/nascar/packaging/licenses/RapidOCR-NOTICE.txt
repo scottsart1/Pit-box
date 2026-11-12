@@ -1,0 +1,22 @@
+RapidOCR 3.9.2 and bundled OCR models
+
+RapidOCR source code: Copyright RapidOCR Authors.
+https://github.com/RapidAI/RapidOCR
+
+The bundled model weights are derived from PaddleOCR, copyright Baidu and/or
+the respective PaddleOCR rights holders. The source and converted model files
+are distributed under the Apache License, Version 2.0. See RapidOCR-LICENSE.txt.
+https://github.com/PaddlePaddle/PaddleOCR
+
+Unmodified models bundled by the RapidOCR 3.9.2 Python wheel:
+PP-OCRv6_det_small.onnx
+  SHA256 090f04abcd9d9a7498bc4ebf677e4cb9bdce1fe4197ddb7e529f1ef44e1ff94f
+ch_ppocr_mobile_v2.0_cls_mobile.onnx
+  SHA256 e47acedf663230f8863ff1ab0e64dd2d82b838fceb5957146dab185a89d6215c
+PP-OCRv6_rec_small.onnx
+  SHA256 6f327246b50388f3c176ae304bd95767ea6dc0c9ae92153ef8cbe210b3c14884
+
+YourPitBox uses recognition of explicitly selected single-line crops. The
+detector and orientation models are included because RapidOCR initializes them;
+full-frame detection and orientation inference are disabled during HUD reading.
+Model score thresholds are rejection criteria, not probabilities of accuracy.
