@@ -12,10 +12,12 @@ import hashlib
 import shutil
 from pathlib import Path
 from urllib.request import urlopen
+from zipfile import ZipFile
 
 
 HERE = Path(__file__).resolve().parent
 WHEELS = HERE / "wheels"
+JNI_LIBS = HERE / "app" / "src" / "main" / "jniLibs"
 SOURCES = (
     (
         "numpy-2.4.6-1-cp313-cp313-android_24_arm64_v8a.whl",
@@ -64,6 +66,25 @@ def main() -> None:
         finally:
             pending.unlink(missing_ok=True)
         print(f"Downloaded and verified {name}")
+
+    # Chaquopy installs the wheel's Python files but doesn't put its opt/lib
+    # runtime on Android's native linker path. NumPy 2 needs this C++ runtime
+    # before its first import, so package the verified copy as an app library.
+    for name, _, _ in SOURCES:
+        if not name.startswith("flet_libcpp_shared-"):
+            continue
+        abi = "arm64-v8a" if "arm64_v8a.whl" in name else "x86_64"
+        target_dir = JNI_LIBS / abi
+        target_dir.mkdir(parents=True, exist_ok=True)
+        target = target_dir / "libc++_shared.so"
+        with ZipFile(WHEELS / name) as wheel:
+            payload = wheel.read("opt/lib/libc++_shared.so")
+        if not payload.startswith(b"\x7fELF"):
+            raise RuntimeError(f"Invalid native runtime in {name}")
+        pending = target.with_suffix(".download")
+        pending.write_bytes(payload)
+        pending.replace(target)
+        print(f"Packaged {abi} C++ runtime for Android")
 
 
 if __name__ == "__main__":
