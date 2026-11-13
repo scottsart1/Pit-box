@@ -641,18 +641,29 @@ def gate_next(label: str) -> ET.Element:
 
 
 def gate_submit(label: str):
-    """The keyboard's Done key on the last field opens the profile."""
+    """Open the profile, falling back to its button if IME Done only hides keys."""
     adb("shell", "input", "keyevent", "KEYCODE_ENTER")
     deadline = time.monotonic() + 30
     attempt = 0
+    tapped_button = False
     while time.monotonic() < deadline:
         attempt += 1
         tree = ui_tree(f"{label}-opening-{attempt}", allow_empty=True)
-        if gate_node(tree, "gate_submit") is None and gate_node(tree, "gate_new_driver") is None:
+        if any(node.get("class") == "android.webkit.WebView" and node_bounds(node)
+               for node in tree.iter("node")) and gate_node(tree, "gate_submit") is None:
             return
         notice = gate_node(tree, "gate_notice")
         message = (notice.get("text", "") if notice is not None else "").strip()
         assert not message or message.endswith("…"), f"Profile did not open: {message!r}"
+        if attempt >= 3 and not tapped_button and gate_node(tree, "gate_submit") is not None:
+            # A keyboard-only accessibility snapshot is transient. Once the
+            # form is visible again, explicitly use its submit control.
+            adb("shell", "input", "keyevent", "KEYCODE_BACK")
+            tree = ui_tree(f"{label}-submit-button")
+            button = gate_node(tree, "gate_submit")
+            if button is not None:
+                tap_node(button)
+                tapped_button = True
         time.sleep(1)
     raise AssertionError(f"Profile screen stayed open after submitting; see {label}-opening-*-ui.xml")
 
