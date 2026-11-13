@@ -10,6 +10,10 @@
 #   Set-ExecutionPolicy -Scope Process Bypass
 #   .\release_windows.ps1
 #
+# No Windows PC to hand? The "Release Windows" GitHub Actions workflow
+# (.github/workflows/release-windows.yml) builds, tests, uploads and announces
+# the same unsigned installer from main.
+#
 # Every step stops the release on failure and says which step died. A full
 # transcript is written next to this script as release_log.txt (gitignored).
 

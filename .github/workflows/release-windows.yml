@@ -1,0 +1,213 @@
+name: Release Windows
+
+# Releases the Windows app from main without the release PC, in two runs. It
+# is release_windows.ps1 in GitHub Actions, using the same stages and order as
+# Release Android.
+#
+# stage "upload": builds the installer through windows-installer.yml (full
+#   test suite, installer build, installed-artifact smoke and counted UDP
+#   checks), then uploads it as PitWall-Setup.exe and confirms the public
+#   download serves exactly those bytes. Windows has a single download name,
+#   so visitors get the new installer as soon as this stage succeeds. The
+#   website still describes the previous build until the next commit.
+#
+# Then a commit on main puts the version, size and SHA-256 this run reports
+# on the website's Windows card. Merging it deploys the site
+# (deploy-website.yml).
+#
+# stage "notify": once the site shows that release, announces the update
+#   inside the app. The publisher checks the public download and the website
+#   against the SHA-256 given here before it publishes anything. Published
+#   metadata is immutable, so a retry must use identical notes.
+#
+# The installer is an explicitly unsigned direct download, as releases cut
+# with release_windows.ps1 -AllowUnsignedRelease are; no signing key is needed.
+#
+# Unlike release_windows.ps1 it runs no D1 statements: the migrations that
+# script re-applies (0002, 0003, 0008) and installer_needs_code = 0 are
+# already in production. Apply a new migration by hand before the release
+# that needs it. The Worker and the site deploy from main on their own
+# (deploy-worker.yml, deploy-website.yml).
+on:
+  workflow_dispatch:
+    inputs:
+      stage:
+        description: upload builds, tests and publishes the installer; notify announces it once the site shows it
+        type: choice
+        options: [upload, notify]
+        default: upload
+      sha256:
+        description: notify only - the SHA-256 the upload run reported
+        type: string
+        required: false
+      notes:
+        description: notify only - the update notes shown in the app (at most 4000 characters)
+        type: string
+        required: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-release
+  cancel-in-progress: false
+
+env:
+  WRANGLER: npx --yes wrangler@4.154.0
+  BUCKET: pitwall-downloads
+  KEY: PitWall-Setup.exe
+  API: https://pitwall-activation.sarthakvij123450.workers.dev
+
+jobs:
+  # Fail in seconds, not after a 40-minute build, when a secret is missing or
+  # this version has already been announced.
+  preflight:
+    if: inputs.stage == 'upload' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    environment: release
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check storage credentials and the version
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_RELEASE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          if [[ -z "$CLOUDFLARE_API_TOKEN" || -z "$CLOUDFLARE_ACCOUNT_ID" ]]; then
+            echo "::error::Configure CLOUDFLARE_RELEASE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID in the release environment."
+            exit 1
+          fi
+          curl -sS --fail --get \
+            --header "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+            --data-urlencode "prefix=$KEY" \
+            "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/r2/buckets/$BUCKET/objects" \
+            | jq -e '.success == true' > /dev/null || {
+              echo "::error::Could not list $BUCKET with CLOUDFLARE_RELEASE_API_TOKEN. Check the token's R2 access."
+              exit 1
+            }
+          version=$(sed -n 's/^__version__ = "\(.*\)"$/\1/p' src/pitwall/__init__.py)
+          test -n "$version"
+          live=$(curl -sS --fail "$API/releases?platform=windows" | jq -r '.release.version // empty')
+          if [[ "$live" == "$version" ]]; then
+            echo "::error::Windows $version is already announced in the app. Bump the version on main before releasing a new installer."
+            exit 1
+          fi
+
+  build:
+    needs: preflight
+    uses: ./.github/workflows/windows-installer.yml
+    # windows-installer.yml asks for contents: write so a manual run can attach
+    # a GitHub Release; a called workflow cannot hold more than its caller
+    # grants. This call never attaches one.
+    permissions:
+      contents: write
+
+  upload:
+    needs: build
+    runs-on: ubuntu-24.04
+    environment: release
+    timeout-minutes: 20
+    env:
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+    steps:
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ needs.build.outputs.artifact }}
+          path: ${{ runner.temp }}/installer
+
+      - name: Check the artifact is the installer the build tested
+        id: installer
+        env:
+          SIZE: ${{ needs.build.outputs.size }}
+          SHA256: ${{ needs.build.outputs.sha256 }}
+        run: |
+          file="$RUNNER_TEMP/installer/$KEY"
+          test -f "$file" || { echo "::error::The build artifact holds no $KEY."; exit 1; }
+          size=$(stat -c %s "$file")
+          sha=$(sha256sum "$file" | cut -d' ' -f1)
+          # Get-FileHash on the runner reports upper case.
+          if [[ "$size" != "$SIZE" || "$sha" != "${SHA256,,}" ]]; then
+            echo "::error::The downloaded artifact ($size bytes, $sha) is not the build that was tested ($SIZE bytes, $SHA256)."
+            exit 1
+          fi
+          {
+            echo "path=$file"
+            echo "size=$size"
+            echo "sha256=$sha"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Upload to the downloads bucket
+        env:
+          INSTALLER: ${{ steps.installer.outputs.path }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_RELEASE_API_TOKEN }}
+        run: $WRANGLER r2 object put "$BUCKET/$KEY" --file "$INSTALLER" --content-type application/vnd.microsoft.portable-executable --remote
+
+      # The check a visitor makes: fetch the download and hash it. wrangler
+      # read-backs have served stale objects before (distribution/HANDOVER.md).
+      # A ranged request is not counted as a download.
+      - name: Confirm the public download serves this build
+        env:
+          SIZE: ${{ steps.installer.outputs.size }}
+          SHA256: ${{ steps.installer.outputs.sha256 }}
+        run: |
+          for _ in 1 2 3 4 5 6; do
+            if curl -sS --fail -H 'Range: bytes=0-' -o "$RUNNER_TEMP/served.exe" "$API/installer"; then
+              served=$(sha256sum "$RUNNER_TEMP/served.exe" | cut -d' ' -f1)
+              [[ "$served" == "$SHA256" && "$(stat -c %s "$RUNNER_TEMP/served.exe")" == "$SIZE" ]] && exit 0
+            fi
+            sleep 10
+          done
+          echo "::error::$API/installer does not serve the installer just uploaded (last SHA-256 ${served:-none}). See distribution/HANDOVER.md for the causes seen so far."
+          exit 1
+
+      - name: Report what to publish
+        env:
+          VERSION: ${{ needs.build.outputs.version }}
+          SIZE: ${{ steps.installer.outputs.size }}
+          SHA256: ${{ steps.installer.outputs.sha256 }}
+        run: |
+          mb=$(awk "BEGIN { printf \"%.1f\", $SIZE / 1048576 }")
+          {
+            echo "### Windows $VERSION is the live download"
+            echo
+            echo "| Size (bytes) | Size | SHA-256 |"
+            echo "|---|---|---|"
+            echo "| $SIZE | $mb MB | \`$SHA256\` |"
+            echo
+            echo "Next: on main, put Windows $VERSION, $mb MB and this SHA-256 on the website's Windows card (distribution/website/index.html, #windows-release). Merging that deploys the site. Then run this workflow with stage notify and this SHA-256."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  notify:
+    if: inputs.stage == 'notify' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    environment: release
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Fetch the installer the download serves
+        env:
+          EXPECTED: ${{ inputs.sha256 }}
+        run: |
+          expected="${EXPECTED,,}"
+          [[ "$expected" =~ ^[a-f0-9]{64}$ ]] || { echo "::error::Give the SHA-256 the upload run reported."; exit 1; }
+          curl -sS --fail -H 'Range: bytes=0-' -o "$RUNNER_TEMP/served.exe" "$API/installer"
+          served=$(sha256sum "$RUNNER_TEMP/served.exe" | cut -d' ' -f1)
+          test "$served" = "$expected" || { echo "::error::The download serves $served, not $expected."; exit 1; }
+      - name: Announce the update in the app
+        env:
+          PITBOX_RELEASE_PUBLISH_TOKEN: ${{ secrets.RELEASE_PUBLISH_TOKEN }}
+          NOTES: ${{ inputs.notes }}
+        run: |
+          version=$(sed -n 's/^__version__ = "\(.*\)"$/\1/p' src/pitwall/__init__.py)
+          test -n "$NOTES" || { echo "::error::Give the update notes."; exit 1; }
+          test -n "$PITBOX_RELEASE_PUBLISH_TOKEN" || { echo "::error::Add RELEASE_PUBLISH_TOKEN to the release environment."; exit 1; }
+          printf '%s' "$NOTES" > "$RUNNER_TEMP/notes.txt"
+          python -m pip install --quiet httpx
+          python -m distribution.tools.publish_release --platform windows --version "$version" --artifact "$RUNNER_TEMP/served.exe" --notes-file "$RUNNER_TEMP/notes.txt"
