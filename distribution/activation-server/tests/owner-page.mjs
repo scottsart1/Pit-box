@@ -203,8 +203,8 @@ test('profile sign-ins show each profile with platform, 30- and 180-day counts a
   assert.equal(h.elements.metricProfiles.textContent, '2'); assert.equal(h.elements.metricSignIns.textContent, '5');
   assert.equal(h.elements.metricReturning.textContent, '1'); assert.equal(h.elements.metricNewProfiles.textContent, '1');
   assert.deepEqual(h.elements.accountRows.children.map(tr => tr.children.slice(0, 8).map(td => td.textContent)), [
-    [profile, 'Android', '4', '6', '3', '2023-11-14 22:13', '2023-11-16 22:13', '5.7.1-android.43'],
-    [other, 'Windows', '1', '1', '1', '2023-11-15 22:13', '2023-11-15 22:13', '5.7.1-windows'],
+    [profile, 'Android', '4', '6', '3', '2023-11-14 17:13', '2023-11-16 17:13', '5.7.1-android.43'],
+    [other, 'Windows', '1', '1', '1', '2023-11-15 17:13', '2023-11-15 17:13', '5.7.1-windows'],
   ]);
   assert.deepEqual(cellsOf(h.elements.accountPlatformRows), [['Android', '1', '4'], ['Windows', '1', '1']]);
   assert.deepEqual(cellsOf(h.elements.accountDailyRows), [['2023-11-16', '1', '2'], ['2023-11-15', '2', '3']]);
@@ -224,11 +224,11 @@ test('one profile\'s sign-ins open newest first, follow refreshes, and clear on 
   assert.equal(h.elements.accountHistory.hidden, false);
   assert.equal(h.elements.accountHistoryTitle.textContent, `Profile ${profile}`);
   assert.deepEqual(cellsOf(h.elements.accountHistoryRows), [
-    ['2023-11-16 22:13:20', '2023-11-16 22:14:20', 'Android', '5.7.1-android.43'],
-    ['2023-11-14 22:15:00', '2023-11-15 23:13:20', 'Android', '5.7.0-android.42'],
-    ['2023-11-14 22:13:20', '2023-11-14 22:13:25', 'Android', '5.7.0-android.42'],
+    ['2023-11-16 17:13:20', '2023-11-16 17:14:20', 'Android', '5.7.1-android.43'],
+    ['2023-11-14 17:15:00', '2023-11-15 18:13:20', 'Android', '5.7.0-android.42'],
+    ['2023-11-14 17:13:20', '2023-11-14 17:13:25', 'Android', '5.7.0-android.42'],
   ]);
-  assert.match(h.elements.accountHistoryStatus.textContent, /3 sign-ins on 2 days, from 2023-11-14 22:13:20 to 2023-11-16 22:13:20\.$/);
+  assert.match(h.elements.accountHistoryStatus.textContent, /3 sign-ins on 2 days, from 2023-11-14 17:13:20 to 2023-11-16 17:13:20 New York time\.$/);
   await h.elements.ownerRefresh.listeners.click(); await settle();
   assert.equal(historyCalls().length, 2); assert.equal(h.elements.accountHistoryRows.children.length, 3);
   h.elements.accountHistoryClose.listeners.click();
