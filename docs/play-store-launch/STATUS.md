@@ -2,7 +2,7 @@
 
 Updated: 13 November 2026
 
-Release baseline: `origin/main` at `e23294c` (Your Pit Box 5.8.0, Android revision 44). The `play-store-launch` branch raises the Android revision to 45. The public website and Play listing are not yet updated.
+Release baseline: `origin/main` at `d530d8c` (Your Pit Box 5.8.0, Android revision 44). The `play-store-launch` branch raises the Android revision to 45. The public website has not yet deployed this branch, and the Play listing remains a saved draft.
 
 ## Confirmed
 
