@@ -142,8 +142,9 @@ public final class ProfileStoreCheck {
 
     private static void deliveryOutcomes() throws Exception {
         check(ProfileEvents.outcome(200) == ProfileEvents.Outcome.SENT);
-        for (int status : new int[]{400, 401, 403, 404, 409, 413}) check(ProfileEvents.outcome(status) == ProfileEvents.Outcome.REJECTED);
-        for (int status : new int[]{-1, 408, 429, 500, 502, 503, 302}) check(ProfileEvents.outcome(status) == ProfileEvents.Outcome.RETRY);
+        for (int status : new int[]{400, 401, 403, 409, 413, 422}) check(ProfileEvents.outcome(status) == ProfileEvents.Outcome.REJECTED);
+        // 404/405: a service without the sign-in routes yet. Keep the record.
+        for (int status : new int[]{-1, 404, 405, 408, 429, 500, 502, 503, 302}) check(ProfileEvents.outcome(status) == ProfileEvents.Outcome.RETRY);
 
         Map<String,String> saved = new HashMap<>();
         ProfileStore store = new ProfileStore(memory(saved));

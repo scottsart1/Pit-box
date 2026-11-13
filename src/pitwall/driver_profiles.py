@@ -255,15 +255,19 @@ class ProfileStore:
 
 # ----- Sign-in records -------------------------------------------------------
 
+REJECTED_STATUSES = frozenset({400, 401, 403, 409, 413, 422})
+
+
 def outcome(status: int) -> str:
-    """What a server answer means for a queued sign-in: sent, rejected or retry."""
+    """What a server answer means for a queued sign-in: sent, rejected or retry.
+
+    Only the answers the sign-in routes give a request they will never accept
+    drop it. A 404 or 405 comes from a service without those routes yet, so
+    the sign-in waits for it like any outage.
+    """
     if status == 200:
         return "sent"
-    if status in (408, 429) or status < 0 or status >= 500:
-        return "retry"
-    if status >= 400:
-        return "rejected"
-    return "retry"
+    return "rejected" if status in REJECTED_STATUSES else "retry"
 
 
 class SignInJournal:
