@@ -142,8 +142,9 @@ chaquopy {
             // run on Android: sounddevice/soundfile (PortAudio; replaced by
             // the sounddevice.py and soundfile.py in src/main/python) and
             // uvicorn's [standard] extras (uvloop, httptools), which have no
-            // Android builds. numpy is the newest Chaquopy provides for
-            // Python 3.13; the test suite passes on it.
+            // Android builds. NumPy comes from the hash-pinned Flet mobile
+            // wheels because Chaquopy's OpenBLAS dependency is 4 KB-only on
+            // x86_64. The Python API is also covered by shared engine tests.
             install("fastapi>=0.115")
             install("uvicorn>=0.30")
             install("wsproto")
@@ -157,7 +158,8 @@ chaquopy {
             install("pydantic-settings>=2.4")
             install("python-multipart>=0.0.9")
             install("f1-packets>=2026.1.1,<2027")
-            install("numpy==1.26.2")
+            install("numpy==2.4.6")
+            install("flet-libcpp-shared==27.2.12479018")
             install("jsonschema>=4.23")
             // Chaquopy publishes cp313 wheels for both supported ABIs.
             install("cryptography==42.0.8")

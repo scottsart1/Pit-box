@@ -7,6 +7,7 @@ For an AAB, bundletool/Play must still validate the generated APK alignment.
 from __future__ import annotations
 
 import argparse
+import io
 import struct
 import zipfile
 from pathlib import Path
@@ -36,13 +37,13 @@ def load_alignments(blob: bytes) -> list[int]:
 
 def check(path: Path) -> list[str]:
     problems: list[str] = []
+    inspected = 0
     with zipfile.ZipFile(path) as archive, path.open("rb") as raw:
         entries = [entry for entry in archive.infolist() if entry.filename.endswith(".so")]
-        if not entries:
-            return ["No native libraries found; expected Chaquopy and Python extensions"]
         for entry in entries:
             name = entry.filename
             try:
+                inspected += 1
                 alignments = load_alignments(archive.read(entry))
                 if any(align < 16384 for align in alignments):
                     problems.append(f"{name}: ELF load alignment {alignments}")
@@ -54,7 +55,29 @@ def check(path: Path) -> list[str]:
                         problems.append(f"{name}: ZIP data offset {offset} is not 16 KB aligned")
             except (ValueError, struct.error) as exc:
                 problems.append(f"{name}: could not inspect ELF ({exc})")
-        print(f"Inspected {len(entries)} native libraries in {path.name}")
+        # Chaquopy stores pip wheels inside .imy (ZIP) assets. These libraries
+        # are extracted at runtime, and the Android linker checks them too.
+        for package in archive.infolist():
+            if not package.filename.endswith(".imy"):
+                continue
+            try:
+                with zipfile.ZipFile(io.BytesIO(archive.read(package))) as nested:
+                    for entry in nested.infolist():
+                        if not entry.filename.endswith(".so"):
+                            continue
+                        inspected += 1
+                        name = f"{package.filename}!{entry.filename}"
+                        try:
+                            alignments = load_alignments(nested.read(entry))
+                            if any(align < 16384 for align in alignments):
+                                problems.append(f"{name}: ELF load alignment {alignments}")
+                        except (ValueError, struct.error) as exc:
+                            problems.append(f"{name}: could not inspect ELF ({exc})")
+            except zipfile.BadZipFile as exc:
+                problems.append(f"{package.filename}: could not inspect Chaquopy archive ({exc})")
+        if not inspected:
+            problems.append("No native libraries found; expected Chaquopy and Python extensions")
+        print(f"Inspected {inspected} native libraries in {path.name}")
     return problems
 
 

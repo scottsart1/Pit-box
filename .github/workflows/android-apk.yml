@@ -160,7 +160,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: android/wheels
-          key: android-wheels-${{ hashFiles('android/build-wheels.sh', 'android/check-wheels.py', 'android/native-requirements.txt') }}-${{ runner.os }}
+          key: android-wheels-${{ hashFiles('android/build-wheels.sh', 'android/check-wheels.py', 'android/download-mobile-wheels.py', 'android/native-requirements.txt') }}-${{ runner.os }}
 
       # Always run: the script verifies BOTH ABIs and repairs a partial cache.
       - name: Cross-compile and verify the native dependencies

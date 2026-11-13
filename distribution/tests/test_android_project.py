@@ -62,10 +62,12 @@ def test_every_desktop_dependency_is_installed_or_accounted_for():
         assert name in installed, f"{spec} from pyproject.toml is not installed by the APK"
 
 
-def test_numpy_is_pinned_to_a_version_chaquopy_provides():
-    # Chaquopy's repository, not PyPI, supplies numpy for Android; the pin
-    # must be one it has for Python 3.13, and the suite is run against it.
-    assert 'install("numpy==1.26.2")' in GRADLE
+def test_numpy_uses_the_16kb_mobile_wheels():
+    # Chaquopy's NumPy dependency includes a 4 KB x86_64 OpenBLAS. The
+    # pinned Flet wheels cover both Android ABIs and Python 3.13.
+    assert 'install("numpy==2.4.6")' in GRADLE
+    assert 'install("flet-libcpp-shared==27.2.12479018")' in GRADLE
+    assert (ROOT / "android" / "download-mobile-wheels.py").is_file()
 
 
 def test_socks_proxy_extra_is_installed_on_android_too():
