@@ -1,6 +1,6 @@
 # Data safety and Play declarations — draft for factual review
 
-Use this as an evidence checklist while answering the actual Play Console form. Do not mark the form complete until the candidate AAB and the live privacy policy match. Google's definitions are in [Data safety guidance](https://support.google.com/googleplay/android-developer/answer/10787469) and its [account deletion guidance](https://support.google.com/googleplay/android-developer/answer/13327111).
+Use this as an evidence checklist while answering the actual Play Console form. Do not mark the form complete until the candidate AAB and the live privacy policy match. The policy is live at `https://yourpitbox.com/privacy.html` (verified 13 November 2026). Google's definitions are in [Data safety guidance](https://support.google.com/googleplay/android-developer/answer/10787469) and its [account deletion guidance](https://support.google.com/googleplay/android-developer/answer/13327111).
 
 ## Off-device flows seen in the repository
 
@@ -30,10 +30,10 @@ Raw session databases, API keys, local profile names, PINs and email identifiers
 ## Other app-content declarations
 
 - **Foreground services:** manifest declares `connectedDevice|microphone` and corresponding permissions. Explain continuous user-visible telemetry reception and optional voice capture; record a genuine app demo if Play requests one. Verify the user's stop control and runtime microphone prompt in the release build. See [Google's foreground-service guidance](https://support.google.com/googleplay/android-developer/answer/16965181).
-- **Content rating:** complete the IARC questionnaire from actual content. The app displays game/racing data and allows optional AI conversations; do not guess an age rating in advance.
+- **Content rating:** the IARC questionnaire was completed on 13 November 2026 from actual app content. It returned Everyone/PEGI 3, with online content disclosed. Revisit if the release candidate adds content outside those answers.
 - **Sign-in details:** provide the reviewer steps in `STORE_LISTING.md`, including the local PIN setup and sample data. The optional AI provider-key access remains to be resolved before attesting to full reviewer access.
 
 ## Saved Play draft, not submitted
 
-The Data safety draft currently declares collection of app interactions (required, analytics), other user-generated content (optional AI requests, app functionality, collected and shared), voice/sound recordings (optional, app functionality, collected and shared), and device/other IDs (required, analytics). It answers “No app account creation” based on the offline local-profile exemption and “No external account login.” This is an implementation-based inference that must be checked again before submitting the form. The privacy-policy URL is not live yet, so the draft cannot be finalized.
+The Data safety draft currently declares collection of app interactions (required, analytics), other user-generated content (optional AI requests, app functionality, collected and shared), voice/sound recordings (optional, app functionality, collected and shared), and device/other IDs (required, analytics). It answers “No app account creation” based on the offline local-profile exemption and “No external account login.” This is an implementation-based inference that must be checked again before submitting the form. The live privacy-policy URL still needs to be entered in Play Console.
 - **Branding:** listing must identify the product as independent and avoid official Formula 1/FIA/EA/Codemasters branding or endorsement claims.
