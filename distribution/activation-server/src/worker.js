@@ -973,6 +973,13 @@ async function accountBudget(env, key, limit, seconds) {
 const ACCOUNT_PLATFORM = `CASE WHEN version LIKE '%-android%' THEN 'android'
   WHEN version LIKE '%-windows%' THEN 'windows' WHEN version LIKE '%-macos%' THEN 'macos' ELSE 'other' END`;
 const ACCOUNT_HISTORY_LIMIT = 500;
+// Calendar day of a sign-in in New York (America/New_York). US Eastern time is
+// UTC-4 from 2:00 local on the second Sunday of March (07:00 UTC) until 2:00
+// local on the first Sunday of November (06:00 UTC), and UTC-5 otherwise.
+const EASTERN_SIGN_IN_DAY = `date(occurred_at - CASE
+  WHEN occurred_at >= CAST(strftime('%s', strftime('%Y', occurred_at, 'unixepoch') || '-03-01', 'weekday 0', '+7 days', '+7 hours') AS INTEGER)
+   AND occurred_at < CAST(strftime('%s', strftime('%Y', occurred_at, 'unixepoch') || '-11-01', 'weekday 0', '+6 hours') AS INTEGER)
+  THEN 14400 ELSE 18000 END, 'unixepoch')`;
 function accountPlatform(version) {
   const value = String(version || "");
   return value.includes("-android") ? "android" : value.includes("-windows") ? "windows"
@@ -989,11 +996,11 @@ async function readAccountReport(env) {
     env.DB.prepare(`SELECT account_id, COUNT(*) AS starts,
       SUM(CASE WHEN occurred_at >= ? THEN 1 ELSE 0 END) AS starts_30d,
       MIN(occurred_at) AS first_start, MAX(occurred_at) AS last_start,
-      COUNT(DISTINCT date(occurred_at, 'unixepoch')) AS active_days,
+      COUNT(DISTINCT ${EASTERN_SIGN_IN_DAY}) AS active_days,
       (SELECT latest.version FROM profile_sign_ins latest WHERE latest.account_id = s.account_id
         ORDER BY latest.occurred_at DESC LIMIT 1) AS version
       FROM profile_sign_ins s WHERE occurred_at >= ? GROUP BY account_id ORDER BY last_start DESC LIMIT 200`).bind(month, cutoff),
-    env.DB.prepare(`SELECT date(occurred_at, 'unixepoch') AS day, COUNT(*) AS starts,
+    env.DB.prepare(`SELECT ${EASTERN_SIGN_IN_DAY} AS day, COUNT(*) AS starts,
       COUNT(DISTINCT account_id) AS accounts FROM profile_sign_ins WHERE occurred_at >= ?
       GROUP BY day ORDER BY day DESC`).bind(month),
     // Profiles active in the last 30 days: how many came back on another day,
@@ -1002,7 +1009,7 @@ async function readAccountReport(env) {
       COALESCE(SUM(CASE WHEN recent_days >= 2 THEN 1 ELSE 0 END), 0) AS returning_accounts,
       COALESCE(SUM(CASE WHEN first_start >= ? THEN 1 ELSE 0 END), 0) AS new_accounts
       FROM (SELECT account_id, MIN(occurred_at) AS first_start,
-        COUNT(DISTINCT CASE WHEN occurred_at >= ? THEN date(occurred_at, 'unixepoch') END) AS recent_days
+        COUNT(DISTINCT CASE WHEN occurred_at >= ? THEN ${EASTERN_SIGN_IN_DAY} END) AS recent_days
         FROM profile_sign_ins WHERE occurred_at >= ? GROUP BY account_id HAVING MAX(occurred_at) >= ?)`)
       .bind(month, month, cutoff, month),
     env.DB.prepare(`SELECT ${ACCOUNT_PLATFORM} AS platform, COUNT(DISTINCT account_id) AS accounts, COUNT(*) AS starts
@@ -1021,7 +1028,7 @@ async function readAccountHistory(env, accountId) {
   const cutoff = accountNow() - ACCOUNT_RETENTION_DAYS * 86400;
   const result = await env.DB.batch([
     env.DB.prepare(`SELECT COUNT(*) AS starts, MIN(occurred_at) AS first_start, MAX(occurred_at) AS last_start,
-      COUNT(DISTINCT date(occurred_at, 'unixepoch')) AS active_days
+      COUNT(DISTINCT ${EASTERN_SIGN_IN_DAY}) AS active_days
       FROM profile_sign_ins WHERE account_id = ? AND occurred_at >= ?`).bind(accountId, cutoff),
     env.DB.prepare(`SELECT occurred_at, received_at, version FROM profile_sign_ins
       WHERE account_id = ? AND occurred_at >= ? ORDER BY occurred_at DESC LIMIT ?`).bind(accountId, cutoff, ACCOUNT_HISTORY_LIMIT),

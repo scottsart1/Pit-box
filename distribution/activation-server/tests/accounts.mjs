@@ -131,6 +131,26 @@ test('the owner report follows each profile: returning, new, platform and latest
   assert.ok(!JSON.stringify(result).includes('device'));
   f.db.close();
 });
+test('sign-in days and active days follow New York time, including daylight saving',async()=>{
+  const f=fixture(),a=await register(f),base=event(a),at=iso=>({...base,event_id:randomUUID(),occurred_at:Date.parse(iso)/1000});
+  const day=Math.floor(Date.now()/86400000)*86400000-10*86400000,stamp=(offset)=>new Date(day+offset).toISOString();
+  // 03:30 and 03:55 UTC fall on the previous New York day in both EST and EDT; 12:00 UTC on the same day.
+  for(const iso of [stamp(3.5*3600000),stamp(3.92*3600000),stamp(12*3600000)]) assert.equal((await send(f.env,'sign-in',at(iso))).status,200);
+  const result=await (await report(f)).json(),ny=new Intl.DateTimeFormat('en-CA',{timeZone:'America/New_York'});
+  const prev=ny.format(day+3.5*3600000),same=ny.format(day+12*3600000);
+  assert.notEqual(prev,same);
+  assert.deepEqual(result.daily.map(r=>[r.day,r.starts]),[[same,1],[prev,2]]);
+  assert.equal(result.accounts[0].active_days,2);
+  assert.equal((await (await history(f,a.account_id)).json()).summary.active_days,2);
+  // 2026-03-08 06:59 UTC is still EST (01:59 local); 07:00 UTC is 03:00 EDT. Both are March 8 in New York,
+  // and 2026-11-01 05:30 UTC (01:30 EDT) and 06:30 UTC (01:30 EST) are both November 1.
+  const db=f.db,days=sql=>db.prepare(sql).all().map(r=>r.d);
+  const src=await readFile(new URL('../src/worker.js',import.meta.url),'utf8'),expr=src.match(/const EASTERN_SIGN_IN_DAY = `([\s\S]*?)`;/)[1];
+  const q=t=>db.prepare(`SELECT ${expr} AS d FROM (SELECT ? AS occurred_at)`).get(Date.parse(t)/1000).d;
+  assert.deepEqual(['2026-03-08T04:59:59Z','2026-03-08T05:00:00Z','2026-03-08T06:59:59Z','2026-03-08T07:00:00Z','2026-11-01T03:59:59Z','2026-11-01T04:00:00Z','2026-11-02T04:59:59Z','2026-11-02T05:00:00Z'].map(q),
+    ['2026-03-07','2026-03-08','2026-03-08','2026-03-08','2026-10-31','2026-11-01','2026-11-01','2026-11-02']);
+  f.db.close();
+});
 test('one profile\'s sign-in history is newest first, owner-only and never another profile\'s',async()=>{
   const f=fixture(),a=await register(f),b=await register(f),data=event(a);
   for(const item of [ago(data,2), data, ago(data,1)]) assert.equal((await send(f.env,'sign-in',item)).status,200);

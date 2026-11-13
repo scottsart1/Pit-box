@@ -173,7 +173,7 @@
     for (const id of metricIds) text(id, "—");
     el("historyDetails").hidden = true;
     text("metricPlatformSplit", "Windows / Android"); text("metricNewEmails", "Release-news signups");
-    text("ownerUpdated", `Updated ${new Date(data.generated_at).toLocaleString()} · dates below use UTC`);
+    text("ownerUpdated", `Updated ${new Date(data.generated_at).toLocaleString()} · download and signup dates below use UTC; profile sign-ins use New York time`);
     const d = data.downloads;
     text("downloadAvailability", d ? (d.first_recorded_at ? `Live tracking since ${d.first_recorded_at.slice(0, 10)}.` : "No live download starts recorded yet.") : "Download data unavailable—not zero.");
     text("historyOverview", d?.history ? `${number(d.history.totals.all)} historical file reads · Windows ${number(d.history.totals.windows)} · Android ${number(d.history.totals.android)}` : "Historical snapshot unavailable—not zero.");
@@ -251,7 +251,13 @@
     el("loadMoreEmails").hidden = emailNext === null;
     el("copyAllEmails").disabled = data.total === 0;
   }
-  const utc = (seconds, length = 19) => new Date(seconds * 1000).toISOString().slice(0, length).replace("T", " ");
+  // Profile sign-ins are shown in New York time (US Eastern, EST/EDT).
+  const easternClock = new Intl.DateTimeFormat("en-US", {timeZone: "America/New_York", hourCycle: "h23",
+    year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit"});
+  const eastern = (seconds, withSeconds = true) => {
+    const p = Object.fromEntries(easternClock.formatToParts(new Date(seconds * 1000)).map(part => [part.type, part.value]));
+    return `${p.year}-${p.month}-${p.day} ${p.hour}:${p.minute}` + (withSeconds ? `:${p.second}` : "");
+  };
   const profilePlatform = value => { if (!Object.hasOwn(profilePlatforms, value)) throw new Error("Invalid profile report."); return profilePlatforms[value]; };
   const profileVersion = value => value === null || (typeof value === "string" && value.length <= 64);
   function validateAccounts(data) {
@@ -289,7 +295,7 @@
       text("metricReturning", number(s.returning)); text("metricNewProfiles", number(s.new_accounts));
       for (const item of data.accounts) {
         const tr = row("accountRows", [item.account_id, profilePlatform(item.platform), number(item.starts_30d), number(item.starts),
-          number(item.active_days), utc(item.first_start, 16), utc(item.last_start, 16), item.version || "—"]);
+          number(item.active_days), eastern(item.first_start, false), eastern(item.last_start, false), item.version || "—"]);
         const td = document.createElement("td"), button = document.createElement("button");
         button.type = "button"; button.className = "button ghost"; button.textContent = "Sign-ins";
         button.setAttribute("aria-label", `Show every sign-in for profile ${item.account_id}`);
@@ -338,10 +344,10 @@
       const data = validateHistoryReport(await api(`/owner/accounts/${id}`, current), id);
       if (current !== generation || request !== historyRequest) return;
       el("accountHistoryRows").replaceChildren();
-      for (const r of data.sign_ins) row("accountHistoryRows", [utc(r.occurred_at), utc(r.received_at), profilePlatform(r.platform), r.version]);
+      for (const r of data.sign_ins) row("accountHistoryRows", [eastern(r.occurred_at), eastern(r.received_at), profilePlatform(r.platform), r.version]);
       const s = data.summary;
       text("accountHistoryStatus", !s.starts ? "No sign-ins from this profile in the last 180 days."
-        : `${number(s.starts)} sign-ins on ${number(s.active_days)} days, from ${utc(s.first_start)} to ${utc(s.last_start)}.`
+        : `${number(s.starts)} sign-ins on ${number(s.active_days)} days, from ${eastern(s.first_start)} to ${eastern(s.last_start)} New York time.`
           + (data.sign_ins.length < s.starts ? ` Showing the latest ${number(data.sign_ins.length)}.` : ""));
     } catch (error) {
       if (current !== generation || request !== historyRequest) return;
