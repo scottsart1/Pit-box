@@ -25,16 +25,19 @@ public final class ProfileEvents {
     enum Outcome { SENT, REJECTED, RETRY }
 
     /**
-     * 200 is stored (or a duplicate). A 4xx the server returns for this exact
-     * request will be returned again on every retry, so the event is dropped
-     * rather than blocking every later event behind it. Rate limits, outages
-     * and network errors (status -1) keep it queued.
+     * 200 is stored (or a duplicate). The answers the sign-in routes give a
+     * request they will never accept (400 invalid, 401 wrong credential, 403,
+     * 409 event conflict, 413, 422) would repeat on every retry, so that event
+     * is dropped rather than blocking every later one. Everything else keeps
+     * it queued: rate limits, outages, network errors (status -1), and 404 or
+     * 405 from a service that does not have the sign-in routes yet.
      */
     static Outcome outcome(int status) {
         if (status == 200) return Outcome.SENT;
-        if (status == 429 || status == 408 || status < 0 || status >= 500) return Outcome.RETRY;
-        if (status >= 400) return Outcome.REJECTED;
-        return Outcome.RETRY;
+        switch (status) {
+            case 400: case 401: case 403: case 409: case 413: case 422: return Outcome.REJECTED;
+            default: return Outcome.RETRY;
+        }
     }
 
     static final class Journal {

@@ -183,7 +183,10 @@ def test_delivery_drops_rejections_and_waits_out_outages(tmp_path):
 
 
 @pytest.mark.parametrize(("status", "result"), [
-    (200, "sent"), (400, "rejected"), (401, "rejected"), (409, "rejected"),
+    (200, "sent"), (400, "rejected"), (401, "rejected"), (403, "rejected"), (409, "rejected"),
+    (413, "rejected"), (422, "rejected"),
+    # A service without the sign-in routes yet: keep the record for later.
+    (404, "retry"), (405, "retry"),
     (408, "retry"), (429, "retry"), (503, "retry"), (-1, "retry"), (302, "retry"),
 ])
 def test_server_answers_map_to_delivery_outcomes(status, result):
