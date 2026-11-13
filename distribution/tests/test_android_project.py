@@ -557,3 +557,21 @@ def test_emulator_retypes_what_a_starting_keyboard_swallowed(monkeypatch):
     screen.swallow = 1
     module.create_pin_profile("launch-1", *module.FIRST_DRIVER, first=True)
     assert screen.profiles == [("Smoke Driver", "pin", "2468")]
+
+
+def test_the_backend_warms_up_while_the_profile_screen_is_open():
+    java = ROOT / "android/app/src/main/java/com/yourpitbox/app"
+    activity = (java / "MainActivity.java").read_text(encoding="utf-8")
+    service = (java / "PitBoxService.java").read_text(encoding="utf-8")
+    assets = (java / "DashboardAssets.java").read_text(encoding="utf-8")
+    # The interpreter and libraries load during the intro and PIN entry.
+    assert 0 < activity.index("BackendWarmup.start(this)") < activity.index("new AccountGate(")
+    # One interpreter start for both; the warm-up and the service may both
+    # refresh the first profile's dashboard copy, one after the other.
+    assert "BackendWarmup.ensurePython(this)" in service and "Python.start(" not in service
+    assert "static synchronized File install(" in assets
+    # Only the profile screen is kept out of screen recordings, not the intro.
+    end_intro = activity[activity.index("private void endIntro()"):activity.index("private void profileOpened()")]
+    assert "FLAG_SECURE" in end_intro
+    on_create = activity[activity.index("protected void onCreate("):activity.index("private void endIntro()")]
+    assert "FLAG_SECURE" not in on_create

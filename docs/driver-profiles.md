@@ -35,6 +35,14 @@ profile's folder and never switched in place. CONNECTION shows the open driver
 with **Switch driver**, which stops the backend the way Quit does, so the
 session is saved and the capture finalized.
 
+While the profile screen is open, the backend's libraries load in the
+background (`pitwall.warmup`: the OpenAI client, FastAPI, uvicorn, numpy and
+the rest every profile shares; on Android the interpreter starts too). Most
+of a cold start is that import, so opening a profile leaves only its own
+settings, keys and history to load. The warm-up reads no settings and no
+keys and sets nothing in the environment, so it serves whichever profile
+opens: a driver who adds a new profile instead needs nothing undone.
+
 Wi-Fi history transfers copy only the open profile's history. A reinstall
 loses local credentials and creates new reporting identities; using the same
 email on another device does not link or recover local data.
@@ -45,8 +53,11 @@ email on another device does not link or recover local data.
 
 A 2.6-second native opening (five pit lights, the wordmark and a progress
 line) covers the profile screen while its encrypted index loads. Reduced-motion
-users get a static version. The intro and the profile screen use no WebView and
-no Python; the interpreter starts on the backend thread once a profile is open.
+users get a static version. The intro and the profile screen use no WebView.
+From the first frame a background thread (`BackendWarmup`) starts the
+interpreter, imports the backend's libraries and, after an update, refreshes
+the first profile's copy of the dashboard; the service reuses that
+interpreter once a profile is open.
 
 ### Profile screen
 
@@ -102,9 +113,10 @@ also write it to app-private storage for the emulator checks (readable only
 through `adb run-as` on the debug package). The peer-transfer listener is a
 separate TLS server and is unaffected.
 
-The profile screen sets `FLAG_SECURE` (no screenshots or task-switcher
-preview), never autofills or restores typed values, and clears a half-typed
-PIN when it leaves the screen.
+The profile screen sets `FLAG_SECURE` as it appears (no screenshots, screen
+recordings or task-switcher preview; the opening animation before it stays
+recordable), never autofills or restores typed values, and clears a
+half-typed PIN when it leaves the screen.
 
 #### When secure storage fails
 

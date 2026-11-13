@@ -77,6 +77,17 @@ def configure(files_dir: str, static_dir: str, microphone: bool = False) -> None
     _configured = True
 
 
+def warm_up() -> None:
+    """Import the backend's libraries while the profile screen is open.
+
+    Reads no settings and no keys, and sets nothing in the environment:
+    configure() does that for the profile the driver opens.
+    """
+    from pitwall.warmup import preload
+
+    preload()
+
+
 def _java_list(values) -> list:
     """A java.util.List (or Enumeration) as a Python list, by index."""
     from java import jclass
