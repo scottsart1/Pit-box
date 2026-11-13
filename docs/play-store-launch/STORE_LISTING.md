@@ -32,7 +32,9 @@ First Google Play test build of Your Pit Box 5.8.0. Includes local driver profil
 
 ## Reviewer access
 
-1. Launch the app and create a local driver profile. Use a disposable four-digit PIN or any email address you control. No email verification is sent; the email mode is only a local identifier. The reviewer does not need a developer-supplied account.
+**Draft only. Do not submit this section as Play's access declaration yet.** Google's [review guidance](https://support.google.com/googleplay/android-developer/answer/15748846) allows instructions for a user-set PIN, so the local profile can be explained with exact steps. Confirm whether optional AI/voice requires a reusable provider test key before attesting to full access.
+
+1. On a clean installation, enter `Play Review` as the driver name, choose the four-digit PIN method, enter `2468` twice, and tap Create. This makes a profile stored only on the review device, without email verification or a server account. On later starts, open `Play Review` with `2468`. The PIN is review guidance for a fresh install, not a credential for any existing user profile.
 2. Open the dashboard and choose sample data to inspect Drive, strategy and analysis without racing hardware. The sample feed is labeled as sample data.
 3. Live reception needs a supported game sending F1 2026 UDP telemetry to the Android device on the same reachable network. This hardware/game setup is optional for reviewing the interface and local sample flow.
 4. AI reasoning and spoken radio need the reviewer's own provider API key and may create provider charges. Do not require those services for core telemetry review.
