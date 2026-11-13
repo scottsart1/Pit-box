@@ -575,3 +575,34 @@ def test_the_backend_warms_up_while_the_profile_screen_is_open():
     assert "FLAG_SECURE" in end_intro
     on_create = activity[activity.index("protected void onCreate("):activity.index("private void endIntro()")]
     assert "FLAG_SECURE" not in on_create
+
+
+def test_emulator_profile_taps_wait_for_the_screen_they_open(monkeypatch):
+    spec = importlib.util.spec_from_file_location("emulator_smoke", ROOT / "android/emulator-smoke.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    def screen(*ids):
+        nodes = "".join(f'<node resource-id="com.yourpitbox.app:id/{i}" bounds="[0,{n * 100}][400,{n * 100 + 80}]" />'
+                        for n, i in enumerate(ids))
+        return ET.fromstring(f"<hierarchy>{nodes}</hierarchy>")
+
+    # The dump straight after a tap can still show the previous screen: the
+    # unlock form after "other driver", and the PIN form after "Email".
+    unlock = screen("gate_credential", "gate_submit", "gate_other_driver")
+    picker = screen("gate_new_driver")
+    pin_form = screen("gate_name", "gate_method_email", "gate_credential", "gate_confirm", "gate_submit")
+    email_form = screen("gate_name", "gate_method_email", "gate_credential", "gate_submit")
+    snapshots = iter([unlock, picker, pin_form, pin_form, email_form])
+    taps = []
+    monkeypatch.setattr(module, "ui_tree", lambda label: next(snapshots))
+    monkeypatch.setattr(module, "tap_node", lambda node: taps.append(node.get("resource-id").rsplit("/", 1)[1]))
+    monkeypatch.setattr(module.time, "sleep", lambda seconds: None)
+    tree = module.open_setup("second-driver", unlock)
+    assert module.gate_field(tree, "gate_confirm") is not None
+    tree = module.gate_tap("second-driver", tree, "gate_method_email", lambda t: (
+        module.gate_field(t, "gate_confirm") is None and module.gate_field(t, "gate_name") is not None))
+    assert tree is email_form
+    assert taps == ["gate_other_driver", "gate_new_driver", "gate_method_email"]
+    with pytest.raises(StopIteration):
+        next(snapshots)
