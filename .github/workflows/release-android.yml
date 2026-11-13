@@ -159,16 +159,26 @@ jobs:
           apk="$RUNNER_TEMP/$NAME"
           cp android/app/build/outputs/apk/release/app-release.apk "$apk"
           signature=$("$tools/apksigner" verify --verbose --print-certs "$apk")
-          grep -q 'Verified using v2 scheme (APK Signature Scheme v2): true' <<< "$signature"
-          grep -q 'Verified using v3 scheme (APK Signature Scheme v3): true' <<< "$signature"
-          certs=$(grep -c 'certificate SHA-256 digest:' <<< "$signature")
-          test "$certs" = 1
+          # Public facts only: the schemes and the certificate digest.
+          grep -E 'Verified using|certificate SHA-256 digest' <<< "$signature" || true
+          for scheme in v2 v3; do
+            grep -q "Verified using $scheme scheme (APK Signature Scheme $scheme): true" <<< "$signature" || {
+              echo "::error::The APK has no $scheme signature."
+              exit 1
+            }
+          done
+          certs=$(grep -c 'certificate SHA-256 digest:' <<< "$signature" || true)
+          test "$certs" = 1 || { echo "::error::The APK has $certs signing certificates, not 1."; exit 1; }
           grep -qi "certificate SHA-256 digest: $RELEASE_CERT_SHA256" <<< "$signature" || {
             echo "::error::The APK is not signed with the release key ($RELEASE_CERT_SHA256)."
             exit 1
           }
-          badging=$("$tools/aapt2" dump badging "$apk" | head -1)
-          grep -q "package: name='com.yourpitbox.app' versionCode='$REVISION' versionName='$VERSION-android.$REVISION'" <<< "$badging"
+          badging=$("$tools/aapt2" dump badging "$apk" | sed -n 1p)
+          echo "$badging"
+          grep -q "package: name='com.yourpitbox.app' versionCode='$REVISION' versionName='$VERSION-android.$REVISION'" <<< "$badging" || {
+            echo "::error::The APK is not com.yourpitbox.app $VERSION-android.$REVISION."
+            exit 1
+          }
           {
             echo "path=$apk"
             echo "size=$(stat -c %s "$apk")"
