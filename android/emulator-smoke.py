@@ -541,11 +541,25 @@ def await_gate(label: str, *, timeout: float = 45) -> ET.Element:
         time.sleep(1)
 
 
-def gate_tap(label: str, tree: ET.Element, name: str) -> ET.Element:
+def gate_tap(label: str, tree: ET.Element, name: str, until=None, *, timeout: float = 15) -> ET.Element:
+    """Tap a control and return the screen once `until(tree)` holds.
+
+    An injected tap can be handled after the next hierarchy dump, so a dump
+    straight after it may still show the previous screen. Acting on that one
+    taps controls the tap is about to replace.
+    """
     node = gate_node(tree, name)
     assert node is not None, f"Profile screen has no visible {name}; see {label}-ui.xml"
     tap_node(node)
-    return ui_tree(f"{label}-after-{name}")
+    deadline = time.monotonic() + timeout
+    attempt = 0
+    while True:
+        attempt += 1
+        tree = ui_tree(f"{label}-after-{name}-{attempt}")
+        if until is None or until(tree):
+            return tree
+        assert time.monotonic() < deadline,             f"Profile screen did not respond to {name}; see {label}-after-{name}-*-ui.xml"
+        time.sleep(0.5)
 
 
 def gate_field(tree: ET.Element, name: str) -> ET.Element | None:
@@ -628,8 +642,9 @@ def gate_submit(label: str):
 def open_setup(label: str, tree: ET.Element) -> ET.Element:
     """From one driver's PIN screen or the driver list, to + New driver."""
     if gate_node(tree, "gate_new_driver") is None:
-        tree = gate_tap(label, tree, "gate_other_driver")
-    tree = gate_tap(label, tree, "gate_new_driver")
+        tree = gate_tap(label, tree, "gate_other_driver",
+                        lambda t: gate_node(t, "gate_new_driver") is not None)
+    tree = gate_tap(label, tree, "gate_new_driver", lambda t: gate_node(t, "gate_name") is not None)
     assert gate_node(tree, "gate_name") is not None, f"Setup form did not open; see {label}-ui.xml"
     return tree
 
@@ -648,7 +663,10 @@ def create_pin_profile(label: str, name: str, pin: str, *, first: bool):
 def create_email_profile(label: str, name: str, email: str):
     tree = open_setup(label, await_gate(label))
     # Choose the method first, while the top of the form is on screen.
-    tree = gate_tap(label, tree, "gate_method_email")
+    # Choosing a method rebuilds the form; wait for the email form (it has no
+    # PIN confirmation) before typing into its new name field.
+    tree = gate_tap(label, tree, "gate_method_email", lambda t: (
+        gate_field(t, "gate_confirm") is None and gate_field(t, "gate_name") is not None))
     assert gate_node(tree, "gate_confirm") is None, "Email profiles must not ask for a PIN"
     tree = gate_fill(label, tree, "gate_name", name)
     gate_fill(label, gate_next(label), "gate_credential", email)
