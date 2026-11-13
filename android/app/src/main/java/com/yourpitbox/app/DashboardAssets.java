@@ -19,7 +19,9 @@ final class DashboardAssets {
         return versionName + "/" + versionCode + "/" + lastUpdateTime;
     }
 
-    static File install(File files, String installation, Source source) throws IOException {
+    // Serialized: the warm-up and the service can both refresh the first
+    // profile's copy, and the second must find the first one's result.
+    static synchronized File install(File files, String installation, Source source) throws IOException {
         File target = new File(files, "static");
         File stamp = new File(files, "static.version");
         if (target.isDirectory() && stamp.isFile() && installation.equals(readAll(stamp))) {

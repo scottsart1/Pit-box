@@ -248,18 +248,23 @@ button:disabled{opacity:.55;cursor:progress}
     screen(i18n.t('Opening your profile…'));
     const status = notice();
     say(status, i18n.t('Starting your pit box…'), true);
+    // Poll briefly: the screen frees its address only once this tab has
+    // learned where the dashboard will be, so every poll is waiting time.
+    const deadline = Date.now() + 5 * 60 * 1000;
+    const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
     let target = null;
-    for (let attempt = 0; attempt < 600 && !target; attempt++) {
+    while (!target && Date.now() < deadline) {
       try {
         const next = await call('/gate/next');
         if (next.url) target = next.url;
       } catch {
         target = location.origin;   // The profile screen has handed over this address.
       }
-      if (!target) await new Promise(resolve => setTimeout(resolve, 500));
+      if (!target) await pause(150);
     }
+    target = target || location.origin;
     const sameOrigin = new URL(target).origin === location.origin;
-    for (let attempt = 0; attempt < 600; attempt++) {
+    while (Date.now() < deadline) {
       try {
         if (sameOrigin) {
           const health = await fetch('/api/health', { cache: 'no-store' }).then(r => r.ok ? r.json() : null);
@@ -269,7 +274,7 @@ button:disabled{opacity:.55;cursor:progress}
           location.replace(target); return;
         }
       } catch { /* Still starting. */ }
-      await new Promise(resolve => setTimeout(resolve, 500));
+      await pause(250);
     }
     say(status, i18n.t('Your Pit Box is taking longer than usual to start. Keep this tab open; it continues automatically.'));
   }

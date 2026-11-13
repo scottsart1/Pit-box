@@ -277,6 +277,19 @@ def _wants_browser() -> bool:
     return os.environ.get("PITWALL_OPEN_BROWSER", "true").strip().lower() not in {"0", "false", "no", "off"}
 
 
+def start_warmup() -> threading.Thread:
+    """Import the backend's libraries while the driver is on the profile screen.
+
+    Reads no settings or keys (see pitwall.warmup), so whichever profile
+    opens, nothing needs undoing; the import after opening finds them loaded.
+    """
+    from .warmup import preload
+
+    thread = threading.Thread(target=preload, name="pitwall-warmup", daemon=True)
+    thread.start()
+    return thread
+
+
 def activate(root: Path, profile: dict[str, Any]) -> Path:
     """Point this process at the profile's folder before settings are read."""
     folder = profiles.data_dir(root, profile)
@@ -327,6 +340,7 @@ def open_profile(root: Path | None = None) -> tuple[dict[str, Any], ProfileGate,
     legacy_env = Path(os.environ.get("PITWALL_ENV_FILE", ".env")).resolve()
     gate = ProfileGate(root, legacy_env=legacy_env)
     server = serve(gate, port)
+    start_warmup()
     bound = server.server_address[1]
     close_splash()
     reuse = os.environ.pop("PITWALL_PROFILE_SCREEN_REUSE_PORT", "")

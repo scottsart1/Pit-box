@@ -147,7 +147,8 @@ public class MainActivity extends Activity {
         // screen while its encrypted index loads, then uncovers it. The backend
         // is not started, and no key is decrypted, until a profile is opened.
         startupContainer.setVisibility(View.INVISIBLE);
-        getWindow().addFlags(WindowManager.LayoutParams.FLAG_SECURE);
+        // Interpreter and libraries load while the driver reads and types.
+        BackendWarmup.start(this);
         accountGate = new AccountGate(this, this::profileOpened);
         accountGate.setVisibility(View.INVISIBLE);
         root.addView(accountGate, new FrameLayout.LayoutParams(-1, -1));
@@ -158,6 +159,9 @@ public class MainActivity extends Activity {
 
     private void endIntro() {
         if (isDestroyed() || isFinishing()) return;
+        // The profile screen is kept out of screenshots, recordings and the
+        // task switcher; the opening animation before it is not.
+        if (accountGate != null) getWindow().addFlags(WindowManager.LayoutParams.FLAG_SECURE);
         if (intro != null) { root.removeView(intro); intro = null; }
         if (accountGate != null) accountGate.reveal();
     }

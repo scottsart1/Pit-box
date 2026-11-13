@@ -144,11 +144,11 @@ public class PitBoxService extends Service {
 
     private void runBackend() {
         try {
-            if (!Python.isStarted()) {
-                Python.start(new com.chaquo.python.android.AndroidPlatform(getApplicationContext()));
-            }
+            // Usually already started, with the libraries imported, by the
+            // warm-up that runs while the profile screen is open.
+            BackendWarmup.ensurePython(this);
             File files = ProfileStore.directory(this);
-            File staticDir = installDashboard(files);
+            File staticDir = BackendWarmup.installDashboard(this, files);
             PyObject entry = Python.getInstance().getModule("pitbox_android");
             entry.callAttr("configure", files.getAbsolutePath(), staticDir.getAbsolutePath(), microphoneGranted());
             dashboardUrl = entry.callAttr("dashboard_url").toString();
@@ -202,28 +202,6 @@ public class PitBoxService extends Service {
             Python.getInstance().getModule("pitbox_android").callAttr("stop");
         } catch (Throwable error) {
             Log.w(TAG, "Stop request failed", error);
-        }
-    }
-
-    /**
-     * Copies the dashboard out of the APK's assets so the backend can serve it
-     * from a real directory. Refresh on every APK install, including a rebuilt
-     * candidate with the same version, so JavaScript matches the backend.
-     */
-    private File installDashboard(File files) throws IOException {
-        return DashboardAssets.install(files, installedVersion(), new DashboardAssets.Source() {
-            public String[] list(String path) throws IOException { return getAssets().list(path); }
-            public java.io.InputStream open(String path) throws IOException { return getAssets().open(path); }
-        });
-    }
-
-    private String installedVersion() {
-        try {
-            android.content.pm.PackageInfo info = getPackageManager().getPackageInfo(getPackageName(), 0);
-            long code = Build.VERSION.SDK_INT >= Build.VERSION_CODES.P ? info.getLongVersionCode() : info.versionCode;
-            return DashboardAssets.installationStamp(info.versionName, code, info.lastUpdateTime);
-        } catch (android.content.pm.PackageManager.NameNotFoundException error) {
-            return "unknown";
         }
     }
 
