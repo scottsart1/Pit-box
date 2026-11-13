@@ -197,11 +197,13 @@ Delivery rules:
 
 - `200` acknowledges the event (including duplicates and events older than the
   retention window, which the server acknowledges as expired).
-- `429`, `408`, `5xx` and network errors keep the event queued and end that
-  attempt, so an outage costs one request per minute.
-- Other `4xx` answers would repeat on every retry, so the event is dropped
-  rather than blocking later ones. Events whose profile no longer exists, and
-  malformed entries, are dropped too.
+- `400`, `401`, `403`, `409`, `413` and `422` are the answers the sign-in
+  routes give a request they will never accept. They would repeat on every
+  retry, so the event is dropped rather than blocking later ones. Events whose
+  profile no longer exists, and malformed entries, are dropped too.
+- Everything else keeps the event queued and ends that attempt, so an outage
+  costs one request per minute: `408`, `429`, `5xx`, network errors, and `404`
+  or `405` from a service that does not have the sign-in routes yet.
 - At most 500 events wait on a device; the oldest are dropped first.
 
 The server hashes the device credential with a separately stored HMAC secret,
@@ -210,10 +212,25 @@ separately, rejects timestamps more than five minutes in the future and keeps
 records for 180 days. These are client-reported sign-ins, not verified unique
 people or evidence of gameplay.
 
-`/owner/accounts` requires the owner key. It shows 30-day aggregate profiles
-and sign-ins, a daily breakdown, and the latest 200 profiles with first and
-last sign-in, active days and counts. Newsletter data and the optional
-anonymous usage report stay separate and are not joined.
+## Owner report
+
+The owner dashboard's *Driver profile sign-ins* section follows each profile
+by its random ID. Both routes require the owner key.
+
+- `GET /owner/accounts`: for the last 30 days, the profiles that signed in, the
+  sign-ins, the returning profiles (signed in on two or more days) and the new
+  profiles (first sign-in in the window); profiles and sign-ins by platform; and
+  sign-ins per day. It also lists the 200 most recently active profiles of the
+  last 180 days, each with its platform, 30-day and 180-day sign-ins, active
+  days, first and last sign-in, and the version of its latest sign-in.
+- `GET /owner/accounts/<profile id>`: that profile's sign-ins, newest first
+  (at most 500), each with device time, receipt time, platform and version.
+  *Sign-ins* on a profile row opens it on the dashboard.
+
+The platform comes from the version suffix (`-android`, `-windows`, `-macos`).
+A profile on another device, or after a reinstall, has a different ID: these
+are profiles, not people. Newsletter data and the optional anonymous usage
+report stay separate and are not joined.
 
 ## Cloudflare contract
 

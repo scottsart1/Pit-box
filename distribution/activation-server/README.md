@@ -248,6 +248,8 @@ verification, sender, or email-service binding is used.
 `POST /account/sign-in` records successful local sign-ins with durable retry and
 UUID deduplication. Both endpoints reject email, PIN, driver name and API key fields.
 `GET /owner/accounts` requires the existing owner token and returns pseudonymous
-profile totals and dates. Driver data and provider keys remain on-device in
+30-day totals (profiles, sign-ins, returning and new profiles), platform and daily
+breakdowns, and the 200 most recently active profiles. `GET /owner/accounts/<id>`
+returns one profile's sign-ins, newest first. Driver data and provider keys remain on-device in
 separate local profile stores. Existing optional anonymous usage and newsletters
 are unchanged. This is not cloud history backup or cross-device account matching.

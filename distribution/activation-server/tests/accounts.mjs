@@ -37,7 +37,7 @@ test('all successful sign-ins are recorded, retry IDs are deduplicated, and prof
   assert.equal((await send(f.env,'sign-in',event(a))).status,200);
   assert.equal((await send(f.env,'sign-in',event(b))).status,200);
   const result=await (await report(f)).json();assert.equal(result.metric,'profile_sign_ins');
-  assert.deepEqual(result.summary,{accounts:2,starts:3});
+  assert.deepEqual(result.summary,{accounts:2,starts:3,returning:0,new_accounts:2});
   assert.equal(result.accounts.find(p=>p.account_id===a.account_id).starts,2);f.db.close();
 });
 test('registration is idempotent and cannot replace another profile credential',async()=>{
@@ -107,4 +107,46 @@ test('scheduled retention prunes old sign-ins and expired rate limits',async()=>
   const work=[];await worker.scheduled({},f.env,{waitUntil:p=>work.push(p)});await Promise.all(work);
   assert.equal(f.db.prepare('SELECT COUNT(*) n FROM profile_sign_ins').get().n,0);
   assert.equal(f.db.prepare("SELECT COUNT(*) n FROM account_limits WHERE id='expired'").get().n,0);f.db.close();
+});
+const ago = (data, days) => ({...data, event_id: randomUUID(), occurred_at: data.occurred_at - days * 86400});
+const history = (f, id, token = f.env.OWNER_DASHBOARD_TOKEN) =>
+  worker.fetch(new Request('https://local.test/owner/accounts/' + id, {headers: {authorization: 'Bearer ' + token}}), f.env);
+test('the owner report follows each profile: returning, new, platform and latest version',async()=>{
+  const f=fixture(),phone=await register(f),pc=await register(f),once=await register(f);
+  const today=event(phone);
+  for(const data of [today, ago(today,3), ago(today,3), ago(today,40)]) assert.equal((await send(f.env,'sign-in',data)).status,200);
+  const desktop={...event(pc),version:'5.7.1-windows'};
+  for(const data of [desktop, ago(desktop,1)]) assert.equal((await send(f.env,'sign-in',data)).status,200);
+  assert.equal((await send(f.env,'sign-in',event(once))).status,200);
+  const result=await (await report(f)).json();
+  // Phone: 3 sign-ins on 2 days in 30 days, plus one older; PC: 2 days; the third once.
+  assert.deepEqual(result.summary,{accounts:3,starts:6,returning:2,new_accounts:2});
+  assert.equal(result.window_days,30);
+  const byId=Object.fromEntries(result.accounts.map(item=>[item.account_id,item]));
+  assert.deepEqual([byId[phone.account_id].starts,byId[phone.account_id].starts_30d,byId[phone.account_id].active_days],[4,3,3]);
+  assert.equal(byId[phone.account_id].platform,'android');
+  assert.equal(byId[pc.account_id].platform,'windows');
+  assert.equal(byId[pc.account_id].version,'5.7.1-windows');
+  assert.deepEqual(Object.fromEntries(result.platforms.map(item=>[item.platform,[item.accounts,item.starts]])),{android:[2,4],windows:[1,2]});
+  assert.ok(!JSON.stringify(result).includes('device'));
+  f.db.close();
+});
+test('one profile\'s sign-in history is newest first, owner-only and never another profile\'s',async()=>{
+  const f=fixture(),a=await register(f),b=await register(f),data=event(a);
+  for(const item of [ago(data,2), data, ago(data,1)]) assert.equal((await send(f.env,'sign-in',item)).status,200);
+  assert.equal((await send(f.env,'sign-in',event(b))).status,200);
+  const response=await history(f,a.account_id);assert.equal(response.status,200);
+  const result=await response.json();
+  assert.equal(result.metric,'profile_sign_in_history');
+  assert.equal(result.account_id,a.account_id);
+  assert.deepEqual(result.sign_ins.map(item=>item.occurred_at),[data.occurred_at,data.occurred_at-86400,data.occurred_at-2*86400]);
+  assert.deepEqual(result.summary,{starts:3,first_start:data.occurred_at-2*86400,last_start:data.occurred_at,active_days:3});
+  assert.ok(result.sign_ins.every(item=>item.platform==='android'&&Number.isSafeInteger(item.received_at)));
+  const body=JSON.stringify(result);assert.ok(!body.includes(b.account_id)&&!body.includes('device'));
+  assert.equal((await history(f,a.account_id,f.env.DOWNLOAD_REPORT_TOKEN)).status,401);
+  assert.equal((await history(f,'not-a-profile')).status,400);
+  assert.equal((await worker.fetch(new Request('https://local.test/owner/accounts/'+a.account_id+'?x=1',{headers:{authorization:'Bearer '+f.env.OWNER_DASHBOARD_TOKEN}}),f.env)).status,400);
+  const unknown=await (await history(f,randomUUID())).json();
+  assert.deepEqual([unknown.summary.starts,unknown.sign_ins.length],[0,0]);
+  f.db.close();
 });

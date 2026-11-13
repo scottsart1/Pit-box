@@ -38,3 +38,15 @@
 #loadMoreEmails { margin-top: 1rem; }
 @media (max-width: 720px) { .owner-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); } .owner-section, .owner-login { padding: 1rem; } }
 @media (max-width: 430px) { .owner-metrics { grid-template-columns: 1fr; } .owner-login .code-entry { flex-wrap: wrap; } .owner-header .wrap > span { display: none; } }
+.account-metrics { grid-template-columns: repeat(4, minmax(0, 1fr)); margin-block: 1rem; }
+.account-metrics article { padding: 1rem; }
+.account-metrics h3 { margin: 0; color: var(--ink-2); font-size: .9rem; }
+.account-metrics p { font-size: 1.75rem; }
+.account-history { margin-block: 1.2rem; padding-block: 1rem; }
+.account-history .owner-section-title h3 { margin: 0; overflow-wrap: anywhere; }
+.owner-section td .button { min-height: 44px; padding: .4rem .8rem; font-size: .85rem; white-space: nowrap; }
+@media (max-width: 720px) { .account-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+.owner-section .table-scroll { position: relative; }
+#accountRows td:first-child { font: .8rem var(--mono); min-width: 19ch; overflow-wrap: normal; }
+.account-table th, .account-table td { padding-inline: .55rem; }
+#accountRows td:nth-child(n+6):nth-child(-n+8), #accountHistoryRows td { white-space: nowrap; }
