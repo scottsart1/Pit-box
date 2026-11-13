@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Your Pit Box — privacy policy</title>
+<meta name="description" content="How Your Pit Box handles local racing data, driver profiles, optional AI, voice, and usage reports.">
+<link rel="canonical" href="https://yourpitbox.com/privacy.html">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<header class="site-header"><div class="wrap"><a class="brand" href="index.html"><span class="brand-mark" aria-hidden="true"></span> Your Pit Box</a><div class="header-actions"><a class="button ghost" href="index.html">Back to the site</a></div></div></header>
+<main class="wrap legal">
+<h1>Privacy policy</h1>
+<p class="updated">Last updated 13 November 2026. Your Pit Box is an independently developed app for Android and Windows. Questions or data requests: <a href="mailto:vale.scott00@gmail.com">vale.scott00@gmail.com</a>.</p>
+
+<h2>Local racing data and driver profiles</h2>
+<p>The app receives game telemetry on your device or local network. Session recordings, lap history, setup data, preferences, and saved driver profiles stay on that device unless you choose to export or transfer them to another device on your network. There is no automatic cloud backup or cross-device account sync. A local driver profile can be opened with an email address or a four-digit PIN; the email address, PIN, and driver name are not sent in profile sign-in reports. An email-only profile does not verify ownership of that address.</p>
+<p>Android stores profile metadata and provider API keys in encrypted storage backed by Android Keystore. Android's app data remains on the device when the app is updated in place with a compatible signing identity. Uninstalling the app or clearing its data removes local profiles and may remove recordings, settings, and keys; export records you want to keep first.</p>
+
+<h2>Required pseudonymous profile reports</h2>
+<p>When a driver profile is opened, the app sends a report to the developer's Cloudflare-hosted service. It includes a random profile ID, a random device credential, an event ID, the device's event time, and the app version. The server also records the time received and hashes the device credential before storage. These reports help the developer count profile opens and returning profiles. They are sent even when optional usage statistics are off. The report does not include the driver's email address, PIN, name, API keys, telemetry, recordings, voice, or conversation text. Reports can wait on the device while offline and are retried later. Server sign-in events are kept for up to 180 days, with scheduled cleanup. The separate random profile ID and hashed credential registration record does not currently have automatic expiry; contact us to request deletion. These reports are not a verified count of people or gameplay.</p>
+
+<h2>Optional usage statistics</h2>
+<p>Usage reporting starts off. If you turn it on in Settings, the app sends its platform and version, a random installation ID, and daily yes/no flags for app opens, active use, working driving telemetry, engineer replies, voice commands, lap comparisons, and history-transfer starts. It does not send telemetry values, recordings, audio, conversation text, names, email addresses, or API keys. The service hashes the installation ID before storage; the developer sees aggregate reports. Queued reports can remain on the device for up to seven days. Turning reporting off clears the local ID and unsent reports. Received daily records are kept for up to 90 days, and installation metadata expires 90 days after the last activity. Turning reporting off does not erase records already received.</p>
+
+<h2>AI and voice services you choose to use</h2>
+<p>Local telemetry, strategy, and saved-session analysis work without an AI provider. If you configure an API key and request model-backed answers, the app sends compact session context and selected computed results to the provider you chose: OpenAI, Anthropic, DeepSeek, Kimi / Moonshot AI, or a compatible endpoint you configure. The app sends your provider key to that provider to authorize the request. Cloud transcription sends recorded audio clips to OpenAI. Optional Realtime voice streams microphone audio to OpenAI while that session is active. Those providers process data under their own privacy terms and may charge your account separately. The developer does not receive your provider key or raw telemetry database through these features.</p>
+
+<h2>Other network activity</h2>
+<p>The app can check for public update information; the request includes its platform but no installation ID and can be switched off in Settings. If you choose to pair devices, saved sessions you select are copied to the paired device on your local network. Optional live UDP forwarding sends game packets to a destination you configure. The hosting and network providers that deliver requests process network addresses and technical request data. The app's usage and sign-in databases do not store your network address as a profile field.</p>
+<p>On the website, you may optionally subscribe by email to release news or submit a review. Those are separate from app usage and profile reports. The website explains the information requested at the point of submission. To remove a subscription or review, write to the address above.</p>
+
+<h2>Access and deletion</h2>
+<p>You can stop optional usage reporting in Settings, and you can remove local app data through Android's app settings or by uninstalling after exporting anything you want to keep. The app does not currently offer an individual in-app driver-profile deletion control. If you want help with data held by the developer, contact the address above. Pseudonymous records may be difficult to identify without the random profile or installation identifier on the original device; sign-in and usage records also expire under the retention periods above.</p>
+
+<h2>Changes</h2>
+<p>We will update this page when the app's data practices change. The date at the top identifies the current version.</p>
+</main>
+<footer class="site-footer"><div class="wrap footer-row"><div><strong style="color:#fff">Your Pit Box</strong> — an independent project.</div><div><a href="index.html">Back to the site</a> · <a href="eula.html">Licence terms</a></div></div></footer>
+</body>
+</html>

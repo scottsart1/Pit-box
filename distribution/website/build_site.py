@@ -30,7 +30,7 @@ ASSET_DIR = SITE_DIR / "assets"
 DRIVER_DASHBOARD_DIR = REPO_ROOT / "static" / "driver-dashboard"
 OUTPUT_DIR = SITE_DIR / "_site"
 
-PAGES = ("index.html", "guide.html", "diagnostics.html", "eula.html", "download-stats.html", "usage-stats.html", "owner.html")
+PAGES = ("index.html", "guide.html", "diagnostics.html", "eula.html", "privacy.html", "download-stats.html", "usage-stats.html", "owner.html")
 ASSETS = ("styles.css", "download.js", "reviews.js", "download-stats.js", "usage-stats.js", "owner.js", "owner.css", "_headers")
 
 # Scanned for placeholders alongside the pages. download.js carries the
