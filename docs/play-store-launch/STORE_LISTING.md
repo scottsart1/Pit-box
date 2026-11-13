@@ -1,12 +1,12 @@
 # Google Play listing draft
 
-App: **Your Pit Box**  
-Application ID: `com.yourpitbox.app`  
-Price: free  
-Suggested category: Sports  
-Support email: `vale.scott00@gmail.com`  
-Website: `https://yourpitbox.com`  
-Privacy policy: `https://yourpitbox.com/privacy.html` (must be live before entry)
+- App: **Your Pit Box**
+- Application ID: `com.yourpitbox.app`
+- Price: free
+- Suggested category: Sports
+- Support email: `vale.scott00@gmail.com`
+- Website: `https://yourpitbox.com`
+- Privacy policy: `https://yourpitbox.com/privacy.html` (live, verified 13 November 2026; enter in Play Console)
 
 ## Short description
 
