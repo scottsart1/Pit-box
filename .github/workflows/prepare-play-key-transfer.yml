@@ -1,0 +1,71 @@
+# Encrypt the existing Android app signing key for this app's Google Play key
+# import. The private keystore and passwords remain in the release environment.
+name: Prepare Play signing key transfer
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  transfer:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    environment: release
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Export key encrypted for Google Play
+        env:
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          test -n "$KEYSTORE_BASE64" && test -n "$KEYSTORE_PASSWORD" && test -n "$KEY_PASSWORD"
+          work="$RUNNER_TEMP/play-key-transfer"
+          mkdir -m 700 "$work"
+          trap 'rm -rf "$work"' EXIT
+          printf '%s' "$KEYSTORE_BASE64" | base64 --decode > "$work/release.keystore"
+          chmod 600 "$work/release.keystore"
+          if ! keytool -exportcert -rfc -alias pitbox-release \
+              -keystore "$work/release.keystore" -storepass "$KEYSTORE_PASSWORD" \
+              > "$work/cert.pem" 2> "$work/keytool.log"; then
+            echo '::error::The release keystore could not be opened.'
+            exit 1
+          fi
+          cert=$(openssl x509 -in "$work/cert.pem" -noout -fingerprint -sha256 | cut -d= -f2 | tr -d ':' | tr '[:upper:]' '[:lower:]')
+          test "$cert" = '20c2751e5c0ede43a2442331336b990433e53d9e512f3f1bca3e8d5bee4c6983' || {
+            echo '::error::The release key does not match existing Android installations.'
+            exit 1
+          }
+          curl --fail --silent --show-error --location \
+            https://www.gstatic.com/play-apps-publisher-rapid/signing-tool/prod/pepk.jar \
+            --output "$work/pepk.jar"
+          echo 'aaccc0774b240aa5304bdad2a49865e92f229ca73209ecb6eaafe75dc858e24e  '"$work/pepk.jar" | sha256sum --check
+          if ! java -jar "$work/pepk.jar" \
+              --keystore="$work/release.keystore" \
+              --alias=pitbox-release \
+              --output="$RUNNER_TEMP/play-key-transfer.zip" \
+              --include-cert \
+              --rsa-aes-encryption \
+              --encryption-key-path=.github/play-app-encryption-public-key.pem \
+              --keystore-pass="$KEYSTORE_PASSWORD" \
+              --key-pass="$KEY_PASSWORD" > "$work/pepk.log" 2>&1; then
+            echo '::error::PEPK could not export the release signing key.'
+            exit 1
+          fi
+          test -s "$RUNNER_TEMP/play-key-transfer.zip"
+          echo 'Encrypted signing key prepared for the Your Pit Box Play app.' >> "$GITHUB_STEP_SUMMARY"
+      - name: Retain encrypted transfer for Play import
+        uses: actions/upload-artifact@v4
+        with:
+          name: play-signing-key-transfer
+          path: ${{ runner.temp }}/play-key-transfer.zip
+          if-no-files-found: error
+          retention-days: 1
