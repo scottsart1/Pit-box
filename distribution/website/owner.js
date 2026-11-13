@@ -6,18 +6,35 @@
   const count = value => Number.isSafeInteger(value) && value >= 0;
   const platforms = ["windows", "android"];
   const titles = {app_started: "Opened the app", app_used: "Actively used the app", racing: "Qualifying driving telemetry", engineer: "Engineer replies", voice: "Voice commands", analysis: "Lap comparisons", transfer: "History-transfer starts"};
-  const tableIds = ["downloadPlatformRows", "downloadDailyRows", "historyDailyRows", "emailRows", "signupSourceRows", "usageSignalRows", "retentionRows", "versionRows", "accountRows"];
+  const tableIds = ["downloadPlatformRows", "downloadDailyRows", "historyDailyRows", "emailRows", "signupSourceRows", "usageSignalRows", "retentionRows", "versionRows"];
   const metricIds = ["metricRecorded", "metricDownloads", "metricRecentDownloads", "metricEmails", "metricActive", "metricRacing", "metricRetention"];
+  const accountTableIds = ["accountRows", "accountPlatformRows", "accountDailyRows"];
+  const accountMetricIds = ["metricProfiles", "metricSignIns", "metricReturning", "metricNewProfiles"];
+  const profilePlatforms = {android: "Android", windows: "Windows", macos: "macOS", other: "Other"};
+  const profileId = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
   const requests = new Set();
   let key = "", generation = 0, busy = false, copying = false;
   let lastInteraction = Date.now(), hiddenAt = null, emailSnapshot = null, emailNext = null, emailCount = 0;
+  let historyProfile = null, historyRequest = 0, historyOpener = null;
   const text = (id, value) => { el(id).textContent = value; };
   const interact = () => { lastInteraction = Date.now(); };
   for (const event of ["pointerdown", "keydown", "touchstart"]) window.addEventListener(event, interact, {passive: true});
 
+  function clearAccounts() {
+    for (const id of accountTableIds) el(id).replaceChildren();
+    for (const id of accountMetricIds) text(id, "—");
+  }
+  function closeHistory(restoreFocus = false) {
+    if (restoreFocus && historyOpener?.isConnected) historyOpener.focus();
+    historyProfile = historyOpener = null; historyRequest++;
+    el("accountHistoryRows").replaceChildren();
+    text("accountHistoryTitle", "Profile sign-ins"); text("accountHistoryStatus", "");
+    el("accountHistory").hidden = true;
+  }
   function clearData() {
     for (const id of tableIds) el(id).replaceChildren();
     for (const id of metricIds) text(id, "—");
+    clearAccounts(); closeHistory();
     for (const id of ["ownerUpdated", "metricRecordedSources", "metricPlatformSplit", "metricNewEmails", "historyOverview", "historyCoverage", "downloadAvailability", "usageAvailability", "emailStatus", "accountStatus"]) text(id, "");
     el("historyDetails").hidden = true;
     el("emailCopyText").value = "";
@@ -234,25 +251,102 @@
     el("loadMoreEmails").hidden = emailNext === null;
     el("copyAllEmails").disabled = data.total === 0;
   }
+  const utc = (seconds, length = 19) => new Date(seconds * 1000).toISOString().slice(0, length).replace("T", " ");
+  const profilePlatform = value => { if (!Object.hasOwn(profilePlatforms, value)) throw new Error("Invalid profile report."); return profilePlatforms[value]; };
+  const profileVersion = value => value === null || (typeof value === "string" && value.length <= 64);
+  function validateAccounts(data) {
+    const bad = () => { throw new Error("Invalid profile report."); };
+    const s = data?.summary;
+    if (data?.metric !== "profile_sign_ins" || !s || ![s.accounts, s.starts, s.returning, s.new_accounts].every(count)
+        || s.returning > s.accounts || s.new_accounts > s.accounts || s.accounts > s.starts) bad();
+    const seen = new Set();
+    for (const r of array(data.platforms, 4)) {
+      profilePlatform(r.platform);
+      if (seen.has(r.platform) || !count(r.accounts) || !count(r.starts) || r.accounts > r.starts) bad();
+      seen.add(r.platform);
+    }
+    const ids = new Set();
+    for (const r of array(data.accounts, 200)) {
+      profilePlatform(r.platform);
+      if (typeof r.account_id !== "string" || !profileId.test(r.account_id) || ids.has(r.account_id)
+          || ![r.starts, r.starts_30d, r.active_days, r.first_start, r.last_start].every(count)
+          || r.starts < 1 || r.starts_30d > r.starts || r.active_days < 1 || r.active_days > r.starts
+          || r.first_start > r.last_start || !profileVersion(r.version)) bad();
+      ids.add(r.account_id);
+    }
+    for (const r of array(data.daily, 31)) {
+      if (typeof r.day !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(r.day) || !count(r.starts) || !count(r.accounts) || r.accounts > r.starts) bad();
+    }
+    return data;
+  }
   async function loadAccounts(current) {
     try {
-      const data = await api("/owner/accounts", current);
+      const data = validateAccounts(await api("/owner/accounts", current));
       if (current !== generation) return;
-      if (data.metric !== "profile_sign_ins" || !count(data.summary?.accounts) || !count(data.summary?.starts)) throw new Error("Invalid account report.");
-      const rows = array(data.accounts, 200);
-      for (const item of rows) {
-        if (!/^[0-9a-f-]{36}$/.test(item.account_id) || !count(item.starts) || !count(item.active_days)
-            || !count(item.first_start) || !count(item.last_start)) throw new Error("Invalid account report.");
+      clearAccounts();
+      const s = data.summary;
+      text("metricProfiles", number(s.accounts)); text("metricSignIns", number(s.starts));
+      text("metricReturning", number(s.returning)); text("metricNewProfiles", number(s.new_accounts));
+      for (const item of data.accounts) {
+        const tr = row("accountRows", [item.account_id, profilePlatform(item.platform), number(item.starts_30d), number(item.starts),
+          number(item.active_days), utc(item.first_start, 16), utc(item.last_start, 16), item.version || "—"]);
+        const td = document.createElement("td"), button = document.createElement("button");
+        button.type = "button"; button.className = "button ghost"; button.textContent = "Sign-ins";
+        button.setAttribute("aria-label", `Show every sign-in for profile ${item.account_id}`);
+        button.setAttribute("aria-controls", "accountHistory");
+        button.addEventListener("click", () => { interact(); historyOpener = button; return openHistory(item.account_id); });
+        td.appendChild(button); tr.appendChild(td);
       }
-      el("accountRows").replaceChildren();
-      for (const item of rows) row("accountRows", [item.account_id, number(item.starts), number(item.active_days),
-        new Date(item.first_start * 1000).toISOString().slice(0, 19).replace("T", " "),
-        new Date(item.last_start * 1000).toISOString().slice(0, 19).replace("T", " ")]);
-      text("accountStatus", `${number(data.summary.accounts)} profiles / ${number(data.summary.starts)} sign-ins in the last 30 days. Offline records appear after reconnecting.`);
+      for (const r of data.platforms) row("accountPlatformRows", [profilePlatform(r.platform), number(r.accounts), number(r.starts)]);
+      for (const r of data.daily) row("accountDailyRows", [r.day, number(r.accounts), number(r.starts)]);
+      text("accountStatus", s.accounts || data.accounts.length
+        ? `${number(s.accounts)} profiles signed in ${number(s.starts)} times in the last 30 days. Choose Sign-ins on a profile to follow it over time.`
+        : "No profile sign-ins recorded yet. Sign-ins made offline appear after the device reconnects.");
+      if (historyProfile) await openHistory(historyProfile, false);
     } catch (error) {
       if (current !== generation) return;
-      el("accountRows").replaceChildren();
-      text("accountStatus", "Account reporting unavailable. This does not mean zero sign-ins.");
+      clearAccounts();
+      text("accountStatus", "Profile sign-ins are unavailable. This does not mean zero sign-ins.");
+    }
+  }
+  function validateHistoryReport(data, id) {
+    const bad = () => { throw new Error("Invalid profile history."); };
+    const s = data?.summary;
+    if (data?.metric !== "profile_sign_in_history" || data.account_id !== id || !s || !count(s.starts) || !count(s.active_days)
+        || s.active_days > s.starts || !count(data.limit)) bad();
+    if (s.starts ? !count(s.first_start) || !count(s.last_start) || s.first_start > s.last_start : s.first_start !== null || s.last_start !== null) bad();
+    const rows = array(data.sign_ins, 500);
+    if (rows.length > s.starts || rows.length > data.limit || (s.starts && !rows.length)) bad();
+    let previous = Infinity;
+    for (const r of rows) {
+      profilePlatform(r.platform);
+      if (!count(r.occurred_at) || !count(r.received_at) || r.occurred_at > previous || !profileVersion(r.version) || r.version === null) bad();
+      previous = r.occurred_at;
+    }
+    return data;
+  }
+  async function openHistory(id, focus = true) {
+    if (!key || !profileId.test(id)) return;
+    const current = generation, request = ++historyRequest;
+    const changed = historyProfile !== id;
+    historyProfile = id;
+    el("accountHistory").hidden = false;
+    text("accountHistoryTitle", `Profile ${id}`);
+    if (changed) { el("accountHistoryRows").replaceChildren(); text("accountHistoryStatus", "Loading sign-ins…"); }
+    if (focus) el("accountHistoryTitle").focus();
+    try {
+      const data = validateHistoryReport(await api(`/owner/accounts/${id}`, current), id);
+      if (current !== generation || request !== historyRequest) return;
+      el("accountHistoryRows").replaceChildren();
+      for (const r of data.sign_ins) row("accountHistoryRows", [utc(r.occurred_at), utc(r.received_at), profilePlatform(r.platform), r.version]);
+      const s = data.summary;
+      text("accountHistoryStatus", !s.starts ? "No sign-ins from this profile in the last 180 days."
+        : `${number(s.starts)} sign-ins on ${number(s.active_days)} days, from ${utc(s.first_start)} to ${utc(s.last_start)}.`
+          + (data.sign_ins.length < s.starts ? ` Showing the latest ${number(data.sign_ins.length)}.` : ""));
+    } catch (error) {
+      if (current !== generation || request !== historyRequest) return;
+      el("accountHistoryRows").replaceChildren();
+      text("accountHistoryStatus", error.name === "AbortError" ? "Loading this profile timed out. Retry shortly." : "This profile's sign-ins are unavailable. This does not mean zero sign-ins.");
     }
   }
   async function refresh() {
@@ -333,6 +427,7 @@
   el("ownerRefresh").addEventListener("click", () => { interact(); return refresh(); });
   el("ownerLock").addEventListener("click", () => lock());
   el("copyAllEmails").addEventListener("click", copyAll);
+  el("accountHistoryClose").addEventListener("click", () => { interact(); closeHistory(true); });
   el("selectEmails").addEventListener("click", () => { el("emailCopyText").focus(); el("emailCopyText").select(); });
   el("loadMoreEmails").addEventListener("click", async () => {
     if (busy || copying || emailNext === null) return;

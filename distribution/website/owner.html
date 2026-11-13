@@ -7,7 +7,7 @@
 <meta name="referrer" content="no-referrer">
 <title>Owner dashboard — Your Pit Box</title>
 <link rel="stylesheet" href="styles.css">
-<link rel="stylesheet" href="owner.css?v=20260918-history">
+<link rel="stylesheet" href="owner.css?v=20261113-profiles">
 </head>
 <body class="owner-page">
 <header class="owner-header"><div class="wrap"><a class="brand" href="index.html"><span class="brand-mark" aria-hidden="true"></span>Your Pit Box</a><span>Owner dashboard</span><button id="ownerLock" class="button ghost" type="button" hidden>Lock dashboard</button></div></header>
@@ -44,10 +44,23 @@
       <details><summary>Where signups come from</summary><div class="table-scroll" tabindex="0"><table><caption>Subscriber totals by signup source</caption><thead><tr><th>Source</th><th>Subscribers</th></tr></thead><tbody id="signupSourceRows"></tbody></table></div></details>
       <p class="owner-note">Copy all includes every address in a fresh, paginated snapshot, not only the visible rows. Treat this list as private and use it for the release updates people requested.</p>
     </section>
-    <section id="accountSection" class="owner-section"><div class="owner-section-title"><h2>Returning driver profiles</h2><span>Successful local sign-ins</span></div>
-      <p id="accountStatus">Account reporting has not loaded.</p>
-      <div class="table-scroll" tabindex="0"><table><caption>Most recent 200 profiles, up to 180 days</caption><thead><tr><th>Profile ID</th><th>Sign-ins</th><th>Active days</th><th>First start (UTC)</th><th>Last start (UTC)</th></tr></thead><tbody id="accountRows"></tbody></table></div>
-      <p class="owner-note">Each local profile has a random ID. Every successful sign-in is queued, including offline sign-ins; retries are deduplicated. Reinstalls and profiles on another device have separate IDs. Times come from the device clock. Counts do not prove unique people or gameplay. These records are separate from optional usage and newsletter subscribers. Email addresses, PINs, driver names and API keys are not included.</p>
+    <section id="accountSection" class="owner-section"><div class="owner-section-title"><h2>Driver profile sign-ins</h2><span>The same profile across sign-ins · UTC</span></div>
+      <p id="accountStatus" role="status" aria-live="polite">Profile sign-ins have not loaded.</p>
+      <div class="owner-metrics account-metrics">
+        <article><h3>Profiles · 30 days</h3><p id="metricProfiles">—</p><span>Signed in at least once</span></article>
+        <article><h3>Sign-ins · 30 days</h3><p id="metricSignIns">—</p><span>Every successful profile opening</span></article>
+        <article><h3>Returning profiles</h3><p id="metricReturning">—</p><span>Signed in on 2+ of the last 30 days</span></article>
+        <article><h3>New profiles · 30 days</h3><p id="metricNewProfiles">—</p><span>First sign-in in the last 30 days</span></article>
+      </div>
+      <div class="table-scroll" tabindex="0"><table class="account-table"><caption>Most recent 200 profiles from the last 180 days, latest sign-in first</caption><thead><tr><th>Profile ID</th><th>Platform</th><th>30-day sign-ins</th><th>180-day sign-ins</th><th>Active days</th><th>First sign-in (UTC)</th><th>Last sign-in (UTC)</th><th>Latest version</th><th><span class="sr-only">Sign-in history</span></th></tr></thead><tbody id="accountRows"></tbody></table></div>
+      <div id="accountHistory" class="owner-history account-history" hidden>
+        <div class="owner-section-title"><h3 id="accountHistoryTitle" tabindex="-1">Profile sign-ins</h3><button id="accountHistoryClose" class="button ghost" type="button">Close</button></div>
+        <p id="accountHistoryStatus" role="status" aria-live="polite"></p>
+        <div class="table-scroll" tabindex="0"><table><caption>Every retained sign-in for this profile, newest first</caption><thead><tr><th>Signed in (UTC)</th><th>Received (UTC)</th><th>Platform</th><th>Version</th></tr></thead><tbody id="accountHistoryRows"></tbody></table></div>
+      </div>
+      <details><summary>Sign-ins by platform · last 30 days</summary><div class="table-scroll" tabindex="0"><table><caption>Profiles and sign-ins by platform, from the version each device reported</caption><thead><tr><th>Platform</th><th>Profiles</th><th>Sign-ins</th></tr></thead><tbody id="accountPlatformRows"></tbody></table></div></details>
+      <details><summary>Daily sign-ins · last 30 days</summary><div class="table-scroll" tabindex="0"><table><caption>Days with at least one sign-in, newest first</caption><thead><tr><th>Date (UTC)</th><th>Profiles</th><th>Sign-ins</th></tr></thead><tbody id="accountDailyRows"></tbody></table></div></details>
+      <p class="owner-note">Each local driver profile has a random ID, and every successful sign-in is reported with it, so one row follows the same profile over time. Sign-ins made offline are queued and appear after the device reconnects; retries are counted once. A profile on another device, or after a reinstall, has a different ID. Times come from the device clock; Received is when the report arrived. Counts do not prove unique people or gameplay. Email addresses, PINs, driver names and API keys are never included.</p>
     </section>
     <section id="usageSection" class="owner-section"><div class="owner-section-title"><h2>App use &amp; retention</h2><span>Opted-in installations only</span></div><p id="usageAvailability"></p>
       <div class="table-scroll" tabindex="0"><table><caption>Product-use signals in the last 30 calendar days</caption><thead><tr><th>Signal</th><th>Windows</th><th>Android</th><th>All</th></tr></thead><tbody id="usageSignalRows"></tbody></table></div>
@@ -59,6 +72,6 @@
   </div>
   <noscript>Enable JavaScript to unlock the private dashboard.</noscript>
 </main>
-<script src="owner.js?v=20261013-version-sort" defer></script>
+<script src="owner.js?v=20261113-profiles" defer></script>
 </body>
 </html>

@@ -173,17 +173,117 @@ test('versions render newest first across platforms and stay sorted after refres
   assert.deepEqual(rows(), []);
 });
 
-test('account starts render separately and clear on lock; unavailable never becomes zero', async () => {
-  const accounts = {metric:'profile_sign_ins', summary:{accounts:1,starts:3}, accounts:[{
-    account_id:'12345678-1234-4123-8123-123456789abc', starts:3, active_days:2, first_start:1700000000, last_start:1700086400
-  }]};
-  const h = harness(async url => response(url.includes('/overview') ? overview : url.includes('/accounts') ? accounts : emails));
-  await h.login();
-  assert.equal(h.elements.accountRows.children.length,1);
-  assert.match(h.elements.accountStatus.textContent,/1 profiles \/ 3 sign-ins/);
+const profile = '12345678-1234-4123-8123-123456789abc', other = '87654321-4321-4321-8321-cba987654321';
+const accounts = {metric: 'profile_sign_ins', retention_days: 180, window_days: 30, account_limit: 200,
+  summary: {accounts: 2, starts: 5, returning: 1, new_accounts: 1},
+  platforms: [{platform: 'android', accounts: 1, starts: 4}, {platform: 'windows', accounts: 1, starts: 1}],
+  accounts: [
+    {account_id: profile, platform: 'android', version: '5.7.1-android.43', starts: 6, starts_30d: 4, active_days: 3, first_start: 1700000000, last_start: 1700172800},
+    {account_id: other, platform: 'windows', version: '5.7.1-windows', starts: 1, starts_30d: 1, active_days: 1, first_start: 1700086400, last_start: 1700086400},
+  ],
+  daily: [{day: '2023-11-16', accounts: 1, starts: 2}, {day: '2023-11-15', accounts: 2, starts: 3}]};
+const profileHistory = {metric: 'profile_sign_in_history', account_id: profile, retention_days: 180, limit: 500,
+  summary: {starts: 3, active_days: 2, first_start: 1700000000, last_start: 1700172800},
+  sign_ins: [
+    {occurred_at: 1700172800, received_at: 1700172860, version: '5.7.1-android.43', platform: 'android'},
+    {occurred_at: 1700000100, received_at: 1700090000, version: '5.7.0-android.42', platform: 'android'},
+    {occurred_at: 1700000000, received_at: 1700000005, version: '5.7.0-android.42', platform: 'android'},
+  ]};
+const cellsOf = element => element.children.map(tr => tr.children.map(td => td.textContent));
+const routes = (overrides = {}) => async url => {
+  for (const [path, body] of Object.entries(overrides)) if (url.endsWith(path)) return typeof body === 'function' ? body() : response(body);
+  if (url.includes('/overview')) return response(overview);
+  if (url.endsWith(`/owner/accounts/${profile}`)) return response(profileHistory);
+  if (url.endsWith('/owner/accounts')) return response(accounts);
+  return response(emails);
+};
+
+test('profile sign-ins show each profile with platform, 30- and 180-day counts and latest version', async () => {
+  const h = harness(routes()); await h.login();
+  assert.equal(h.elements.metricProfiles.textContent, '2'); assert.equal(h.elements.metricSignIns.textContent, '5');
+  assert.equal(h.elements.metricReturning.textContent, '1'); assert.equal(h.elements.metricNewProfiles.textContent, '1');
+  assert.deepEqual(h.elements.accountRows.children.map(tr => tr.children.slice(0, 8).map(td => td.textContent)), [
+    [profile, 'Android', '4', '6', '3', '2023-11-14 22:13', '2023-11-16 22:13', '5.7.1-android.43'],
+    [other, 'Windows', '1', '1', '1', '2023-11-15 22:13', '2023-11-15 22:13', '5.7.1-windows'],
+  ]);
+  assert.deepEqual(cellsOf(h.elements.accountPlatformRows), [['Android', '1', '4'], ['Windows', '1', '1']]);
+  assert.deepEqual(cellsOf(h.elements.accountDailyRows), [['2023-11-16', '1', '2'], ['2023-11-15', '2', '3']]);
+  assert.match(h.elements.accountStatus.textContent, /2 profiles signed in 5 times in the last 30 days/);
+  const button = h.elements.accountRows.children[0].children[8].children[0];
+  assert.equal(button.textContent, 'Sign-ins'); assert.equal(button.type, 'button');
+  assert.match(button.attributes['aria-label'], new RegExp(profile));
+  assert.equal(h.elements.accountHistory.hidden, true);
+});
+
+test('one profile\'s sign-ins open newest first, follow refreshes, and clear on close and lock', async () => {
+  const h = harness(routes()); await h.login();
+  await h.elements.accountRows.children[0].children[8].children[0].listeners.click(); await settle();
+  const historyCalls = () => h.calls.filter(call => call.url.endsWith(`/owner/accounts/${profile}`));
+  assert.equal(historyCalls().length, 1);
+  assert.equal(historyCalls()[0].options.headers.Authorization, 'Bearer private-owner-fixture-key-not-a-secret');
+  assert.equal(h.elements.accountHistory.hidden, false);
+  assert.equal(h.elements.accountHistoryTitle.textContent, `Profile ${profile}`);
+  assert.deepEqual(cellsOf(h.elements.accountHistoryRows), [
+    ['2023-11-16 22:13:20', '2023-11-16 22:14:20', 'Android', '5.7.1-android.43'],
+    ['2023-11-14 22:15:00', '2023-11-15 23:13:20', 'Android', '5.7.0-android.42'],
+    ['2023-11-14 22:13:20', '2023-11-14 22:13:25', 'Android', '5.7.0-android.42'],
+  ]);
+  assert.match(h.elements.accountHistoryStatus.textContent, /3 sign-ins on 2 days, from 2023-11-14 22:13:20 to 2023-11-16 22:13:20\.$/);
+  await h.elements.ownerRefresh.listeners.click(); await settle();
+  assert.equal(historyCalls().length, 2); assert.equal(h.elements.accountHistoryRows.children.length, 3);
+  h.elements.accountHistoryClose.listeners.click();
+  assert.equal(h.elements.accountHistory.hidden, true); assert.equal(h.elements.accountHistoryRows.children.length, 0);
+  await h.elements.ownerRefresh.listeners.click(); await settle();
+  assert.equal(historyCalls().length, 2); // a closed panel is not reloaded
+  await h.elements.accountRows.children[0].children[8].children[0].listeners.click(); await settle();
   h.elements.ownerLock.listeners.click();
-  assert.equal(h.elements.accountRows.children.length,0);
-  assert.equal(h.elements.accountStatus.textContent,'');
+  for (const id of ['accountRows', 'accountPlatformRows', 'accountDailyRows', 'accountHistoryRows']) assert.equal(h.elements[id].children.length, 0);
+  for (const id of ['metricProfiles', 'metricSignIns', 'metricReturning', 'metricNewProfiles']) assert.equal(h.elements[id].textContent, '—');
+  assert.equal(h.elements.accountHistory.hidden, true); assert.equal(h.elements.accountStatus.textContent, '');
+  assert.equal(h.elements.accountHistoryStatus.textContent, '');
+});
+
+test('a profile history shows only what was asked for, and partial lists say so', async () => {
+  const many = {...profileHistory, summary: {...profileHistory.summary, starts: 900}};
+  const h = harness(routes({[`/owner/accounts/${profile}`]: many})); await h.login();
+  await h.elements.accountRows.children[0].children[8].children[0].listeners.click(); await settle();
+  assert.match(h.elements.accountHistoryStatus.textContent, /900 sign-ins.*Showing the latest 3\./);
+  for (const wrong of [{...profileHistory, account_id: other}, {...profileHistory, sign_ins: [...profileHistory.sign_ins].reverse()},
+    {...profileHistory, sign_ins: [{...profileHistory.sign_ins[0], platform: 'ios'}]}, {...profileHistory, metric: 'profile_sign_ins'}]) {
+    const bad = harness(routes({[`/owner/accounts/${profile}`]: wrong})); await bad.login();
+    await bad.elements.accountRows.children[0].children[8].children[0].listeners.click(); await settle();
+    assert.equal(bad.elements.accountHistoryRows.children.length, 0);
+    assert.match(bad.elements.accountHistoryStatus.textContent, /unavailable\. This does not mean zero/);
+  }
+  const failing = harness(routes({[`/owner/accounts/${profile}`]: () => ({ok: false, status: 503})})); await failing.login();
+  await failing.elements.accountRows.children[0].children[8].children[0].listeners.click(); await settle();
+  assert.match(failing.elements.accountHistoryStatus.textContent, /unavailable/); assert.equal(failing.elements.ownerData.hidden, false);
+});
+
+test('missing or malformed profile reports never show zero sign-ins', async () => {
   const missing = harness(); await missing.login();
-  assert.match(missing.elements.accountStatus.textContent,/unavailable/);
+  assert.match(missing.elements.accountStatus.textContent, /unavailable\. This does not mean zero sign-ins/);
+  assert.equal(missing.elements.metricProfiles.textContent, '—'); assert.equal(missing.elements.accountRows.children.length, 0);
+  const corruptions = [
+    d => { delete d.summary.returning; },
+    d => { d.summary.returning = 3; },
+    d => { d.accounts[0].account_id = 'not-a-profile-id-but-thirty-six-char'; },
+    d => { d.accounts[1].account_id = profile; },
+    d => { d.accounts[0].starts_30d = 7; },
+    d => { d.accounts[0].first_start = d.accounts[0].last_start + 1; },
+    d => { d.accounts[0].platform = 'ios'; },
+    d => { d.accounts[0].version = 'x'.repeat(65); },
+    d => { d.platforms.push({...d.platforms[0]}); },
+    d => { d.daily[0].day = '16/11/2023'; },
+    d => { d.accounts = Array(201).fill(d.accounts[0]); },
+  ];
+  for (const corrupt of corruptions) {
+    const data = structuredClone(accounts); corrupt(data);
+    const h = harness(routes({'/owner/accounts': data})); await h.login();
+    assert.match(h.elements.accountStatus.textContent, /unavailable/, corrupt.toString());
+    assert.equal(h.elements.accountRows.children.length, 0); assert.equal(h.elements.metricSignIns.textContent, '—');
+  }
+  const empty = {...accounts, summary: {accounts: 0, starts: 0, returning: 0, new_accounts: 0}, platforms: [], accounts: [], daily: []};
+  const none = harness(routes({'/owner/accounts': empty})); await none.login();
+  assert.match(none.elements.accountStatus.textContent, /No profile sign-ins recorded yet/); assert.equal(none.elements.metricProfiles.textContent, '0');
 });

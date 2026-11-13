@@ -825,6 +825,11 @@ async function handleOwner(request, env, path) {
       if ([...params].length) return ownerJson(request, {code: "invalid_query"}, 400);
       return ownerJson(request, await readAccountReport(env));
     }
+    if (path.startsWith("/owner/accounts/")) {
+      const accountId = path.slice("/owner/accounts/".length);
+      if ([...params].length || !accountUUID(accountId)) return ownerJson(request, {code: "invalid_query"}, 400);
+      return ownerJson(request, await readAccountHistory(env, accountId.toLowerCase()));
+    }
     if (path === "/owner/overview") {
       if ([...params].length) return ownerJson(request, {code: "invalid_query"}, 400);
       const [downloadResponse, usageResponse, subscribers] = await Promise.all([
@@ -963,23 +968,69 @@ async function accountBudget(env, key, limit, seconds) {
     .bind(`${key}:${bucket}`, expires, limit).first();
   return !!row;
 }
+// The app reports its version with the platform it runs on, for example
+// 5.7.1-android.43 or 5.7.1-windows; that suffix is the only platform signal.
+const ACCOUNT_PLATFORM = `CASE WHEN version LIKE '%-android%' THEN 'android'
+  WHEN version LIKE '%-windows%' THEN 'windows' WHEN version LIKE '%-macos%' THEN 'macos' ELSE 'other' END`;
+const ACCOUNT_HISTORY_LIMIT = 500;
+function accountPlatform(version) {
+  const value = String(version || "");
+  return value.includes("-android") ? "android" : value.includes("-windows") ? "windows"
+    : value.includes("-macos") ? "macos" : "other";
+}
 async function readAccountReport(env) {
   const cutoff = accountNow() - ACCOUNT_RETENTION_DAYS * 86400;
   const month = accountNow() - 30 * 86400;
   const result = await env.DB.batch([
     env.DB.prepare(`SELECT COUNT(DISTINCT account_id) AS accounts, COUNT(*) AS starts
       FROM profile_sign_ins WHERE occurred_at >= ?`).bind(month),
-    env.DB.prepare(`SELECT account_id, COUNT(*) AS starts, MIN(occurred_at) AS first_start,
-      MAX(occurred_at) AS last_start, COUNT(DISTINCT date(occurred_at, 'unixepoch')) AS active_days
-      FROM profile_sign_ins WHERE occurred_at >= ? GROUP BY account_id ORDER BY last_start DESC LIMIT 200`).bind(cutoff),
+    // Each profile's sign-ins over the retained period and the last 30 days,
+    // with the version of its latest sign-in.
+    env.DB.prepare(`SELECT account_id, COUNT(*) AS starts,
+      SUM(CASE WHEN occurred_at >= ? THEN 1 ELSE 0 END) AS starts_30d,
+      MIN(occurred_at) AS first_start, MAX(occurred_at) AS last_start,
+      COUNT(DISTINCT date(occurred_at, 'unixepoch')) AS active_days,
+      (SELECT latest.version FROM profile_sign_ins latest WHERE latest.account_id = s.account_id
+        ORDER BY latest.occurred_at DESC LIMIT 1) AS version
+      FROM profile_sign_ins s WHERE occurred_at >= ? GROUP BY account_id ORDER BY last_start DESC LIMIT 200`).bind(month, cutoff),
     env.DB.prepare(`SELECT date(occurred_at, 'unixepoch') AS day, COUNT(*) AS starts,
       COUNT(DISTINCT account_id) AS accounts FROM profile_sign_ins WHERE occurred_at >= ?
       GROUP BY day ORDER BY day DESC`).bind(month),
+    // Profiles active in the last 30 days: how many came back on another day,
+    // and how many signed in for the first time in the retained period.
+    env.DB.prepare(`SELECT COUNT(*) AS active,
+      COALESCE(SUM(CASE WHEN recent_days >= 2 THEN 1 ELSE 0 END), 0) AS returning_accounts,
+      COALESCE(SUM(CASE WHEN first_start >= ? THEN 1 ELSE 0 END), 0) AS new_accounts
+      FROM (SELECT account_id, MIN(occurred_at) AS first_start,
+        COUNT(DISTINCT CASE WHEN occurred_at >= ? THEN date(occurred_at, 'unixepoch') END) AS recent_days
+        FROM profile_sign_ins WHERE occurred_at >= ? GROUP BY account_id HAVING MAX(occurred_at) >= ?)`)
+      .bind(month, month, cutoff, month),
+    env.DB.prepare(`SELECT ${ACCOUNT_PLATFORM} AS platform, COUNT(DISTINCT account_id) AS accounts, COUNT(*) AS starts
+      FROM profile_sign_ins WHERE occurred_at >= ? GROUP BY platform ORDER BY starts DESC`).bind(month),
   ]);
   if (result.some(r => !r.success)) throw new Error("Profile report unavailable");
-  return {metric: "profile_sign_ins", retention_days: ACCOUNT_RETENTION_DAYS,
-    summary: result[0].results[0], accounts: result[1].results, daily: result[2].results,
-    account_limit: 200};
+  const retention = result[3].results[0];
+  return {metric: "profile_sign_ins", retention_days: ACCOUNT_RETENTION_DAYS, window_days: 30,
+    summary: {...result[0].results[0], returning: retention.returning_accounts, new_accounts: retention.new_accounts},
+    platforms: result[4].results,
+    accounts: result[1].results.map(item => ({...item, platform: accountPlatform(item.version)})),
+    daily: result[2].results, account_limit: 200};
+}
+// One profile's sign-ins, newest first, for following the same profile over time.
+async function readAccountHistory(env, accountId) {
+  const cutoff = accountNow() - ACCOUNT_RETENTION_DAYS * 86400;
+  const result = await env.DB.batch([
+    env.DB.prepare(`SELECT COUNT(*) AS starts, MIN(occurred_at) AS first_start, MAX(occurred_at) AS last_start,
+      COUNT(DISTINCT date(occurred_at, 'unixepoch')) AS active_days
+      FROM profile_sign_ins WHERE account_id = ? AND occurred_at >= ?`).bind(accountId, cutoff),
+    env.DB.prepare(`SELECT occurred_at, received_at, version FROM profile_sign_ins
+      WHERE account_id = ? AND occurred_at >= ? ORDER BY occurred_at DESC LIMIT ?`).bind(accountId, cutoff, ACCOUNT_HISTORY_LIMIT),
+  ]);
+  if (result.some(r => !r.success)) throw new Error("Profile history unavailable");
+  return {metric: "profile_sign_in_history", account_id: accountId, retention_days: ACCOUNT_RETENTION_DAYS,
+    summary: result[0].results[0],
+    sign_ins: result[1].results.map(item => ({...item, platform: accountPlatform(item.version)})),
+    limit: ACCOUNT_HISTORY_LIMIT};
 }
 async function handleAccount(request, env, path) {
   if (request.method !== "POST") return accountResponse({code: "method_not_allowed"}, 405);
