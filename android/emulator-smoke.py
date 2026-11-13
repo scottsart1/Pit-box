@@ -623,6 +623,14 @@ def gate_fill(label: str, tree: ET.Element, name: str, value: str) -> ET.Element
         time.sleep(0.5)
         tree = ui_tree(f"{label}-typed-{name}-{attempt}")
         node = gate_field(tree, name)
+        # Some emulator dumps briefly expose only the keyboard window just
+        # after input. Do not type the value again until the form is visible.
+        for retry in range(1, 5):
+            if node is not None:
+                break
+            time.sleep(0.5)
+            tree = ui_tree(f"{label}-typed-{name}-{attempt}-form-{retry}", allow_empty=True)
+            node = gate_field(tree, name)
         if field_holds(node, value):
             return tree
         assert node is not None and node.get("focused") == "true", \

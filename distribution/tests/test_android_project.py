@@ -366,6 +366,7 @@ class _FakeProfileScreen:
         self.hidden = set()         # fields currently behind the keyboard
         self.swallow = 0            # typed values the starting keyboard drops
         self.done_hides_keyboard_once = False
+        self.keyboard_only_after_type_once = False
         self.launch()
 
     def launch(self):
@@ -430,6 +431,10 @@ class _FakeProfileScreen:
 
     def tree(self, label, allow_empty=False):
         self.dumps += 1
+        if self.keyboard_only_after_type_once and "-typed-gate_name-" in label:
+            self.keyboard_only_after_type_once = False
+            return ET.fromstring('<hierarchy><node class="android.widget.FrameLayout" '
+                                 'content-desc="Keyboard" bounds="[0,600][800,800]" /></hierarchy>')
         if self.screen == "intro" and self.dumps > 1:
             self._uncover()
         if self.screen == "opened":
@@ -577,6 +582,15 @@ def test_emulator_uses_submit_button_when_ime_done_only_hides_keyboard(monkeypat
     module.create_pin_profile("launch-1", *module.FIRST_DRIVER, first=True)
     assert screen.profiles == [("Smoke Driver", "pin", "2468")]
     assert screen.screen == "opened"
+
+
+def test_emulator_waits_out_keyboard_only_snapshot_before_retyping(monkeypatch):
+    module, screen = _smoke_with_fake_profiles(monkeypatch)
+    screen.profiles.append(("Smoke Driver", "pin", "2468"))
+    screen.launch()
+    screen.keyboard_only_after_type_once = True
+    module.create_email_profile("second-driver", *module.SECOND_DRIVER)
+    assert screen.profiles[1] == ("Second Driver", "email", "second.driver@example.test")
 
 
 def test_the_backend_warms_up_while_the_profile_screen_is_open():
