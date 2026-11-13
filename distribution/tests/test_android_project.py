@@ -365,6 +365,7 @@ class _FakeProfileScreen:
         self.profiles = []          # (name, method, secret)
         self.hidden = set()         # fields currently behind the keyboard
         self.swallow = 0            # typed values the starting keyboard drops
+        self.done_hides_keyboard_once = False
         self.launch()
 
     def launch(self):
@@ -431,6 +432,9 @@ class _FakeProfileScreen:
         self.dumps += 1
         if self.screen == "intro" and self.dumps > 1:
             self._uncover()
+        if self.screen == "opened":
+            return ET.fromstring('<hierarchy><node class="android.webkit.WebView" '
+                                 'bounds="[0,0][800,800]" /></hierarchy>')
         body = "".join(
             f'<node resource-id="{self.PREFIX + rid if rid else ""}" text="{text}" content-desc="{desc}" '
             f'enabled="true" focused="{str(rid == self.focus).lower()}" password="{str(self.password(rid)).lower()}" '
@@ -452,6 +456,8 @@ class _FakeProfileScreen:
                 self.screen = "picker"
             elif rid == "gate_new_driver":
                 self._setup()
+            elif rid == "gate_submit":
+                self._enter()
             elif self.screen == "picker" and text:
                 self._unlock(next(p for p in self.profiles if p[0] == text))
         elif args[:3] == ("shell", "input", "text"):
@@ -476,6 +482,9 @@ class _FakeProfileScreen:
             return
         if self.screen == "setup" and self.focus == "gate_credential" and self.method == "pin":
             self.focus = "gate_confirm"
+            return
+        if self.done_hides_keyboard_once:
+            self.done_hides_keyboard_once = False
             return
         secret = self.values.get("gate_credential", "")
         if self.screen == "setup":
@@ -560,6 +569,14 @@ def test_emulator_retypes_what_a_starting_keyboard_swallowed(monkeypatch):
     screen.swallow = 1
     module.create_pin_profile("launch-1", *module.FIRST_DRIVER, first=True)
     assert screen.profiles == [("Smoke Driver", "pin", "2468")]
+
+
+def test_emulator_uses_submit_button_when_ime_done_only_hides_keyboard(monkeypatch):
+    module, screen = _smoke_with_fake_profiles(monkeypatch)
+    screen.done_hides_keyboard_once = True
+    module.create_pin_profile("launch-1", *module.FIRST_DRIVER, first=True)
+    assert screen.profiles == [("Smoke Driver", "pin", "2468")]
+    assert screen.screen == "opened"
 
 
 def test_the_backend_warms_up_while_the_profile_screen_is_open():
