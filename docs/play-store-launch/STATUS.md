@@ -17,9 +17,9 @@ Release baseline: `origin/main` at `e23294c` (Your Pit Box 5.8.0, Android revisi
 
 ## Blocking work
 
-1. Build and verify a signed AAB with a new version code. Confirm its certificate and Play App Signing choice preserve the existing APK upgrade path before the first Play upload.
+1. Build and verify a signed AAB with a new version code using `prepare-play-bundle.yml` after merge. Confirm the Play **app signing certificate**, distinct from the upload certificate, preserves the existing APK upgrade path before the first Play upload. See `SIGNING.md`.
 2. Run the release candidate on a 16 KB page-size device or emulator, and test upgrade from an installed signed APK with saved history, settings, profiles, and keys.
-3. Publish and verify the privacy policy; complete Play's Data safety and account-deletion answers from the actual implementation. Local driver profiles also send pseudonymous sign-in events to the developer's server; the existing licence and website wording that says “no account” is stale.
+3. Publish and verify the privacy policy; complete Play's Data safety and account-deletion answers from the actual implementation. The local profile appears to meet Google's offline-account exemption, but the owner must confirm no unpublished cloud login or recovery exists. Local driver profiles also send pseudonymous sign-in events to the developer's server; the existing public licence and website wording that says “no account” is stale until this branch deploys.
 4. Validate the prepared phone and tablet screenshot candidates, icon, and feature graphic against the final build; then complete the store listing and app-content forms.
 5. Start a closed test with 12 real, consenting testers and keep them opted in for 14 continuous days. Apply for production access with actual results. Public production rollout requires owner approval.
 
