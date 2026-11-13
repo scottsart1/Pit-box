@@ -170,7 +170,7 @@ jobs:
           SIZE: ${{ steps.installer.outputs.size }}
           SHA256: ${{ steps.installer.outputs.sha256 }}
         run: |
-          mb=$(awk "BEGIN { printf \"%.1f\", $SIZE / 1048576 }")
+          mb=$(awk "BEGIN { printf \"%.1f\", $SIZE / 1000000 }")  # the website quotes decimal MB
           {
             echo "### Windows $VERSION is the live download"
             echo

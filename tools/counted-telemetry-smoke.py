@@ -69,6 +69,11 @@ def main():
             item.close()
         process = subprocess.Popen(command, cwd=root, env=env,
                                    startupinfo=startup, creationflags=subprocess.CREATE_NO_WINDOW)
+        if args.executable:
+            # The installed app opens on the driver-profile screen. Create the
+            # first driver the way that page does; its data folder is empty.
+            smoke.open_driver_profile(process, web_port, data, 120, first=True, existing_data=False)
+            report["checks"].append("driver_profile_created")
         smoke.wait_for_health(process, web_port, version, data, 120)
         before = smoke.request_json(web_port, "/api/v1/network/status")["datagrams"]
         assert smoke.request_json(web_port, "/api/v1/usage")["enabled"] is False
