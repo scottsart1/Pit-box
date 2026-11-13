@@ -73,3 +73,12 @@ def test_android_and_worker_use_the_release_environment_cloudflare_token() -> No
     for workflow in (RELEASE, WORKER):
         assert "secrets.CLOUDFLARE_RELEASE_API_TOKEN" in workflow
         assert "secrets.CLOUDFLARE_API_TOKEN" not in workflow
+
+
+def test_the_release_key_signs_with_the_schemes_the_workflow_requires() -> None:
+    gradle = (ROOT / "android" / "app" / "build.gradle.kts").read_text(encoding="utf-8")
+    distribution = gradle.split('create("distribution")', 1)[1].split("\n            }\n", 1)[0]
+    assert "enableV2Signing = true" in distribution
+    assert "enableV3Signing = true" in distribution
+    assert "for scheme in v2 v3; do" in RELEASE
+    assert 'Verified using $scheme scheme (APK Signature Scheme $scheme): true' in RELEASE

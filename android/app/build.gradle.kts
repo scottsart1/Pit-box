@@ -63,6 +63,11 @@ android {
                 storePassword = providers.environmentVariable("PITBOX_KEYSTORE_PASSWORD").get()
                 keyAlias = providers.environmentVariable("PITBOX_KEY_ALIAS").get()
                 keyPassword = providers.environmentVariable("PITBOX_KEY_PASSWORD").get()
+                // Every published APK so far carries v2 and v3 signatures
+                // (apksigner's defaults), and Release Android refuses one
+                // without both. AGP adds v3 only when asked.
+                enableV2Signing = true
+                enableV3Signing = true
             }
         }
     }
