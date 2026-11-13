@@ -1,10 +1,12 @@
 # Build the Windows installer on a GitHub-hosted Windows runner.
 #
-# release_windows.ps1 is the full release and runs on the owner's PC. This
-# workflow builds with PyInstaller/Inno Setup and smoke-tests the installed
-# artifact on a disposable Windows runner before anything can be published.
-# Candidate PR installers are workflow artifacts only. A manual run can also
-# attach its installer to a GitHub Release tagged with the app version.
+# This workflow builds with PyInstaller/Inno Setup and smoke-tests the
+# installed artifact on a disposable Windows runner before anything can be
+# published. Candidate PR installers are workflow artifacts only. A manual run
+# can also attach its installer to a GitHub Release tagged with the app
+# version. "Release Windows" (release-windows.yml) calls this workflow and
+# publishes the installer it builds, so a release needs no particular PC;
+# release_windows.ps1 remains the same release run from a Windows PC.
 #
 # Licensing tests generate temporary keys, so the full suite can run in CI
 # without accessing the production signing key.
@@ -25,6 +27,23 @@ on:
         description: Attach the installer to a GitHub Release tagged v<version>
         type: boolean
         default: false
+  # Release Windows builds through this workflow, so the published installer
+  # passed exactly the tests and smoke checks a candidate build does.
+  workflow_call:
+    inputs:
+      attach_release:
+        type: boolean
+        default: false
+    outputs:
+      version:
+        value: ${{ jobs.build.outputs.version }}
+      size:
+        value: ${{ jobs.build.outputs.size }}
+      sha256:
+        value: ${{ jobs.build.outputs.sha256 }}
+      artifact:
+        description: Name of the workflow artifact holding PitWall-Setup.exe
+        value: ${{ jobs.build.outputs.artifact }}
 
 permissions:
   contents: write
@@ -43,6 +62,11 @@ jobs:
        github.event.pull_request.head.repo.full_name == github.repository)
     runs-on: windows-latest
     timeout-minutes: 60
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      size: ${{ steps.installer.outputs.size }}
+      sha256: ${{ steps.installer.outputs.sha256 }}
+      artifact: PitWall-Setup-${{ steps.version.outputs.version }}
     steps:
       - uses: actions/checkout@v4
 
@@ -92,6 +116,7 @@ jobs:
           $sha = (Get-FileHash $installer -Algorithm SHA256).Hash
           if ($bytes -lt 1MB) { throw "$installer is only $bytes bytes" }
           "path=$installer" >> $env:GITHUB_OUTPUT
+          "size=$bytes" >> $env:GITHUB_OUTPUT
           "sha256=$sha" >> $env:GITHUB_OUTPUT
           "## PitWall-Setup.exe ${{ steps.version.outputs.version }}`n`n- $bytes bytes`n- SHA-256 ``$sha``" >> $env:GITHUB_STEP_SUMMARY
 
