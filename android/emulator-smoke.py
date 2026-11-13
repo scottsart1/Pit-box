@@ -385,6 +385,26 @@ def prove_fullscreen_keyboard():
     """A real pairing field must remain above the IME and restore on Back."""
     before = dismiss_usage_prompt("keyboard-before")
 
+    def pairing_field(tree, *, focused=False):
+        inputs = [node for node in tree.iter("node")
+                  if node.get("class") == "android.widget.EditText" and node_bounds(node)]
+        if focused:
+            return next((node for node in inputs if node.get("focused") == "true"), None)
+        by_id = next((node for node in inputs if node.get("resource-id") == "transferPairCode"), None)
+        if by_id is not None:
+            return by_id
+        # The 16 KB Android image's WebView omits HTML IDs in accessibility
+        # dumps. Locate the input directly below its visible label instead.
+        label = next((node for node in tree.iter("node")
+                      if node.get("text") == "Code from your other device" and node_bounds(node)), None)
+        if label is None:
+            return None
+        left, _, right, bottom = node_bounds(label)
+        matches = [node for node in inputs
+                   if (bounds := node_bounds(node)) and left <= bounds[0] < bounds[2] <= right
+                   and bottom <= bounds[1] < bottom + 250]
+        return min(matches, key=lambda node: node_bounds(node)[1]) if matches else None
+
     def web_bounds(tree):
         regions = [bounds for node in tree.iter("node")
                    if node.get("class") == "android.webkit.WebView" and (bounds := node_bounds(node))]
@@ -392,8 +412,7 @@ def prove_fullscreen_keyboard():
         return max(regions, key=lambda bounds: bounds[3] - bounds[1])
 
     full_view = web_bounds(before)
-    field = next((node for node in before.iter("node")
-                  if node.get("resource-id") == "transferPairCode" and node_bounds(node)), None)
+    field = pairing_field(before)
     assert field is not None, "Pairing input is not visible for keyboard QA"
     tap_node(field)
     try:
@@ -408,8 +427,7 @@ def prove_fullscreen_keyboard():
         after = ui_tree("keyboard-open")
         resized_view = web_bounds(after)
         assert resized_view[3] < full_view[3], "Keyboard covers the page instead of resizing its viewport"
-        focused = next((node for node in after.iter("node")
-                        if node.get("resource-id") == "transferPairCode" and node.get("focused") == "true"), None)
+        focused = pairing_field(after, focused=True)
         assert focused is not None and node_bounds(focused), "Pairing field lost focus or became invisible"
         bounds = node_bounds(focused)
         assert resized_view[1] <= bounds[1] < bounds[3] <= resized_view[3], "Focused input overlaps the keyboard"
