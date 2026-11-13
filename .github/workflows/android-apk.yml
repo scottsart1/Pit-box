@@ -118,7 +118,7 @@ jobs:
   apk:
     needs: checks
     runs-on: ubuntu-24.04
-    timeout-minutes: 60
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
 
@@ -232,12 +232,30 @@ jobs:
           emulator-options: -no-window -no-snapshot -noaudio -no-boot-anim -gpu swiftshader_indirect
           script: '"${{ steps.py313.outputs.python-path }}" android/emulator-smoke.py'
 
+      - name: Keep 4 KB runtime evidence separate
+        run: mv android/smoke-output android/smoke-output-4k
+
+      - name: Android 15 16 KB page-size runtime checks
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 35
+          target: google_apis_ps16k
+          arch: x86_64
+          profile: pixel_c
+          disable-animations: true
+          emulator-options: -no-window -no-snapshot -noaudio -no-boot-anim -gpu swiftshader_indirect
+          script: |
+            test "$(adb shell getconf PAGE_SIZE | tr -d '\r')" = 16384
+            "${{ steps.py313.outputs.python-path }}" android/emulator-smoke.py
+
       - name: Retain Android runtime evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: android-runtime-evidence-${{ github.run_id }}
-          path: android/smoke-output/
+          path: |
+            android/smoke-output-4k/
+            android/smoke-output/
           if-no-files-found: warn
 
       - name: Retain failed runtime APK for diagnosis
