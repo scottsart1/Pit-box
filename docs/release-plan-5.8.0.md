@@ -42,13 +42,11 @@ any APK whose certificate SHA-256 is not
    It builds and signs the APK, verifies the certificate, package and
    version code, and uploads `YourPitBox-5.8.0-android.44.apk` to
    `pitwall-downloads`. Its summary gives the size and SHA-256.
-3. **Windows release.** On the release PC, from an up-to-date `main`:
-   `powershell -NoProfile -ExecutionPolicy Bypass -File .\release_windows.ps1 -AllowUnsignedRelease`.
-   It runs the tests, builds and smoke-checks the installer, uploads it,
-   deploys the Worker and the site, and prints the installer's size and
-   SHA-256. As for 5.7.0, expect its last step ("Publish verified metadata
-   for the in-app update flag") to fail until step 4 is live; do not re-run
-   the script to finish.
+3. **Windows upload.** Run "Release Windows" on `main` with stage `upload`.
+   It runs the full suite, builds and smoke-checks the installer, uploads it
+   as `PitWall-Setup.exe` and confirms the public download serves it. Its
+   summary gives the size and SHA-256. Windows has one download name, so
+   visitors get 5.8.0 from this point.
 4. **Download commit.** One commit on `main` sets `ANDROID_KEY` in
    `distribution/activation-server/src/worker.js` (and the copy in
    `distribution/activation-server/tests/downloads.mjs`) to the new APK and
@@ -57,7 +55,8 @@ any APK whose certificate SHA-256 is not
 5. **Announce.**
    - Android: run "Release Android" with stage `notify`, the SHA-256 from
      step 2 and the notes below.
-   - Windows: `.\publish_release.ps1 -Platform windows -Version 5.8.0 -Artifact "$env:LOCALAPPDATA\PitWallBuild\artifacts\PitWall-Setup.exe" -NotesFile <notes.txt>`
+   - Windows: run "Release Windows" with stage `notify`, the SHA-256 from
+     step 3 and the notes below.
 
    Published metadata is immutable: a retry must use identical notes.
 6. **Verify.** The Worker's `/releases?platform=windows` and
