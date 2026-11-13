@@ -243,7 +243,8 @@ def wait_for_health(process, port: int, version: str, data_dir: Path, timeout: f
 SMOKE_DRIVER = ("Smoke Driver", "2468")
 
 
-def open_driver_profile(process, port: int, data_dir: Path, timeout: float, *, first: bool) -> dict:
+def open_driver_profile(process, port: int, data_dir: Path, timeout: float, *, first: bool,
+                        existing_data: bool = True) -> dict:
     """Use the driver-profile screen as its page does: create, or open by PIN."""
     deadline = time.monotonic() + timeout
     while True:
@@ -263,9 +264,11 @@ def open_driver_profile(process, port: int, data_dir: Path, timeout: float, *, f
     if first:
         if state.get("profiles") != []:
             raise SmokeFailure(f"A fresh data folder already lists driver profiles: {state}")
-        # The seeded data folder counts as an installation used before profiles.
-        if state.get("existing_data") is not True:
-            raise SmokeFailure("The driver-profile screen did not offer to attach existing data")
+        # A seeded data folder counts as an installation used before profiles;
+        # an empty one (only the licence marker) must not be offered as one.
+        if state.get("existing_data") is not existing_data:
+            raise SmokeFailure("The driver-profile screen did not offer to attach existing data"
+                               if existing_data else "A fresh data folder was offered as existing data")
         opened = request_json(port, "/gate/create", method="POST", body={"name": name, "method": "pin", "pin": pin})
     else:
         listed = state.get("profiles") or []
