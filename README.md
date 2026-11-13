@@ -1,8 +1,8 @@
-# Your Pit Box 5.7.1 — AI race engineer and driver dashboard
+# Your Pit Box 5.8.0 — AI race engineer and driver dashboard
 
 [Download Windows or Android](https://yourpitbox.com/#download),
 [try the Driver Dashboard](https://your-pit-box-driver-dashboard.sarthakvij123450.chatgpt.site/),
-or read the [release notes](docs/release-notes-5.7.1.md).
+or read the [release notes](docs/release-notes-5.8.0.md).
 
 Your Pit Box receives **F1 26** telemetry (UDP format **2026**) from a PS5, runs deterministic
 strategy/corner/setup analysis locally, keeps persistent SQLite history, answers spoken questions,
@@ -105,6 +105,19 @@ Only enable `PITWALL_WEB_LAN_ACCESS=true` when a phone/tablet needs the
 dashboard. Bind the web host to `0.0.0.0`, set a long
 `PITWALL_WEB_ACCESS_TOKEN`, and keep it on a trusted LAN. Your Pit Box never opens a
 router or firewall to the public internet automatically.
+
+## What changed in 5.8.0
+
+**A profile for every driver.** 5.8.0 is a release for Android (revision 44)
+and Windows. Each launch opens on a driver-profile screen: set up a profile
+with your name and either an email address or a 4-digit PIN, and everything
+already on the device is attached to it. Each further driver gets their own
+race history, settings, dashboard layout and API keys. *Switch driver* on
+CONNECTION changes driver. The libraries every driver shares load while the
+profile screen is open, so the app is ready sooner after the PIN. The
+database is unchanged, so history transfers between 5.7.x and 5.8.0 work as
+before. See the [release notes](docs/release-notes-5.8.0.md) and
+[Driver profiles](docs/driver-profiles.md).
 
 ## What changed in 5.7.1
 
