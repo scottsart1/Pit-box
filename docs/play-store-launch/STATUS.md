@@ -1,6 +1,6 @@
 # Google Play launch status
 
-Updated: 13 November 2026
+Updated: 14 November 2026
 
 Release baseline: `origin/main` at `77a4984` (Your Pit Box 5.8.0, Android revision 44). The `play-store-launch` branch raises the Android revision to 45. The Play listing remains a saved draft.
 
@@ -28,6 +28,10 @@ Release baseline: `origin/main` at `77a4984` (Your Pit Box 5.8.0, Android revisi
 5. Start a closed test with 12 real, consenting testers and keep them opted in for 14 continuous days. Apply for production access with actual results. Public production rollout requires owner approval.
 
 ## Next action
+
+The rerun of 43549581247 failed on the ordinary emulator because stock uiautomator returned a null active root during the first profile's submission. The backend health capture remained healthy and there was no app crash in the crash buffer. The existing interactive-window hierarchy reader is now installed before profile setup, including password metadata for masked PIN verification. Submission waits remain bounded and require the dashboard to appear.
+
+The first attempt's 16 KB failure was a separate WebView crash. Logcat identifies WebView 124's Trichrome renderer and MemoryInfra thread, followed by app termination and a fullscreen check against the launcher. The 16 KB job now uses Google's stable API 36 google_apis_ps16k x86_64 image, verified in Google's system-image catalog, instead of the API 35 image with WebView 124. The workflow still asserts a 16384-byte page size and runs the complete smoke suite. Both emulator flows require a fresh pass. API 35/WebView 124 compatibility remains unverified. Runtime build, page-size and WebView diagnostics are now retained.
 
 Run [43511382516](https://github.com/scottsart1/Pit-box/actions/runs/43511382516) passed regression checks and unsigned AAB native ELF alignment. The ordinary emulator failed after the second driver's name was entered because the first accessibility dump after pressing Next omitted the email field. The smoke test now waits for the expected field to gain focus before typing. The 16 KB runtime step did not run in that attempt. Require both emulator flows to pass before merging PR #66. The privacy-policy PR #70 is already merged.
 

@@ -131,6 +131,8 @@ def build_window_dump(root, output):
 
 
 def prepare_window_dump(smoke):
+    if smoke.UI_DUMP_JAR:
+        return
     jar = build_window_dump(smoke.ROOT, smoke.OUTPUT)
     destination = "/data/local/tmp/ypb-native-ui-dump.jar"
     smoke.adb("push", str(jar), destination)

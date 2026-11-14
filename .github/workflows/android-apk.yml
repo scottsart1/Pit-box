@@ -235,10 +235,10 @@ jobs:
       - name: Keep 4 KB runtime evidence separate
         run: mv android/smoke-output android/smoke-output-4k
 
-      - name: Android 15 16 KB page-size runtime checks
+      - name: Android 16 16 KB page-size runtime checks
         uses: reactivecircus/android-emulator-runner@v2
         with:
-          api-level: 35
+          api-level: 36
           target: google_apis_ps16k
           arch: x86_64
           profile: pixel_c

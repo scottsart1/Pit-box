@@ -668,7 +668,11 @@ def gate_submit(label: str):
     tapped_button = False
     while time.monotonic() < deadline:
         attempt += 1
-        tree = ui_tree(f"{label}-opening-{attempt}", allow_empty=True)
+        try:
+            tree = ui_tree(f"{label}-opening-{attempt}", allow_empty=True)
+        except UiProviderUnavailable:
+            time.sleep(0.5)
+            continue
         if any(node.get("class") == "android.webkit.WebView" and node_bounds(node)
                for node in tree.iter("node")) and gate_node(tree, "gate_submit") is None:
             return
@@ -800,8 +804,20 @@ def main():
     assert adb("shell", "getprop", "ro.kernel.qemu").stdout.strip() == b"1", "Smoke checks refuse physical devices"
     assert args.package == "com.yourpitbox.app.debug", "Smoke checks require the isolated debug package"
     OUTPUT.mkdir(parents=True, exist_ok=True)
+    native_spec = importlib.util.spec_from_file_location("native_engineering_qa", ROOT / "android/native-engineering-qa.py")
+    native_qa = importlib.util.module_from_spec(native_spec)
+    native_spec.loader.exec_module(native_qa)
+    # Read every interactive window from the first profile screen onward.
+    # uiautomator's active root can be null or contain only the keyboard.
+    native_qa.prepare_window_dump(sys.modules[__name__])
     expected_version = re.search(r'__version__ = "([^"]+)"', (ROOT / "src/pitwall/__init__.py").read_text()).group(1)
     adb("install", "-r", "-g", str(ROOT / args.apk))
+    for name, command in {
+        "runtime-page-size": ("shell", "getconf", "PAGE_SIZE"),
+        "runtime-build": ("shell", "getprop", "ro.build.fingerprint"),
+        "runtime-webview": ("shell", "dumpsys", "webviewupdate"),
+    }.items():
+        (OUTPUT / f"{name}.txt").write_bytes(adb(*command).stdout)
     adb("logcat", "-c")
     # A one-time OS tutorial can cover a fresh emulator's first immersive app.
     # Mark only that emulator tutorial seen; never change app permissions/data.
@@ -840,9 +856,6 @@ def main():
         adb("shell", "am", "start", "-W", "-n", f"{args.package}/com.yourpitbox.app.MainActivity")
         ui_passed = prove_transfer_ui()
         prove_fullscreen("foreground-return", swipe=True)
-        native_spec = importlib.util.spec_from_file_location("native_engineering_qa", ROOT / "android/native-engineering-qa.py")
-        native_qa = importlib.util.module_from_spec(native_spec)
-        native_spec.loader.exec_module(native_qa)
         native_qa.run(sys.modules[__name__], args.package, expected_version)
         prove_sqlite_lifecycle(args.package, "final")
         prove_profile_isolation(args.package, first_database, transfer_pin)

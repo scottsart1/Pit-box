@@ -593,6 +593,24 @@ def test_emulator_waits_out_keyboard_only_snapshot_before_retyping(monkeypatch):
     assert screen.profiles[1] == ("Second Driver", "email", "second.driver@example.test")
 
 
+def test_emulator_observes_profile_submission_after_a_missing_hierarchy(monkeypatch):
+    module, screen = _smoke_with_fake_profiles(monkeypatch)
+    original_tree = screen.tree
+    missing = []
+
+    def tree(label, allow_empty=False):
+        if "-opening-" in label and not missing:
+            missing.append(label)
+            raise module.UiProviderUnavailable("null root during profile opening")
+        return original_tree(label, allow_empty=allow_empty)
+
+    monkeypatch.setattr(module, "ui_tree", tree)
+    module.create_pin_profile("launch-1", *module.FIRST_DRIVER, first=True)
+    assert len(missing) == 1
+    assert screen.profiles == [("Smoke Driver", "pin", "2468")]
+    assert screen.screen == "opened"
+
+
 def test_emulator_rechecks_an_unavailable_dump_without_reentering_the_pin(monkeypatch):
     module, screen = _smoke_with_fake_profiles(monkeypatch)
     screen.profiles.append(("Smoke Driver", "pin", "2468"))
