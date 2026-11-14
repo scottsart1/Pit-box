@@ -593,6 +593,25 @@ def test_emulator_waits_out_keyboard_only_snapshot_before_retyping(monkeypatch):
     assert screen.profiles[1] == ("Second Driver", "email", "second.driver@example.test")
 
 
+def test_emulator_rechecks_an_unavailable_dump_without_reentering_the_pin(monkeypatch):
+    module, screen = _smoke_with_fake_profiles(monkeypatch)
+    screen.profiles.append(("Smoke Driver", "pin", "2468"))
+    screen.launch()
+    original_tree = screen.tree
+    missing = []
+
+    def tree(label, allow_empty=False):
+        if "-typed-gate_credential-" in label and not missing:
+            missing.append(label)
+            raise module.UiProviderUnavailable("UI hierarchy unavailable during IME transition")
+        return original_tree(label, allow_empty=allow_empty)
+
+    monkeypatch.setattr(module, "ui_tree", tree)
+    module.unlock_profile("launch-2", *module.FIRST_DRIVER)
+    assert len(missing) == 1
+    assert screen.screen == "opened"
+
+
 def test_emulator_waits_for_the_next_profile_field_through_a_keyboard_only_dump(monkeypatch):
     module, screen = _smoke_with_fake_profiles(monkeypatch)
     screen.profiles.append(("Smoke Driver", "pin", "2468"))

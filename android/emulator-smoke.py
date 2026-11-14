@@ -620,21 +620,22 @@ def gate_fill(label: str, tree: ET.Element, name: str, value: str) -> ET.Element
     await_keyboard()
     for attempt in range(1, 4):
         adb("shell", "input", "text", value.replace(" ", "%s"))
-        time.sleep(0.5)
-        tree = ui_tree(f"{label}-typed-{name}-{attempt}")
-        node = gate_field(tree, name)
-        # Some emulator dumps briefly expose only the keyboard window just
-        # after input. Do not type the value again until the form is visible.
-        for retry in range(1, 5):
+        node = None
+        # The accessibility provider can return only the keyboard, or fail to
+        # return a hierarchy while the IME settles. Observe before retyping.
+        for snapshot in range(1, 6):
+            time.sleep(0.5)
+            try:
+                tree = ui_tree(f"{label}-typed-{name}-{attempt}-form-{snapshot}", allow_empty=True)
+            except UiProviderUnavailable:
+                continue
+            node = gate_field(tree, name)
             if node is not None:
                 break
-            time.sleep(0.5)
-            tree = ui_tree(f"{label}-typed-{name}-{attempt}-form-{retry}", allow_empty=True)
-            node = gate_field(tree, name)
         if field_holds(node, value):
             return tree
         assert node is not None and node.get("focused") == "true", \
-            f"Profile screen's {name} lost focus while typing; see {label}-typed-{name}-{attempt}-ui.xml"
+            f"Profile screen's {name} lost focus while typing; see {label}-typed-{name}-{attempt}-form-*"
         current = node.get("text", "")
         adb("shell", "input", "keyevent", "KEYCODE_MOVE_END", *(["KEYCODE_DEL"] * (len(current) + len(value))))
         time.sleep(1)
