@@ -42,6 +42,7 @@ public final class AndroidUiHierarchy {
         attr(xml, "clickable", node.isClickable());
         attr(xml, "scrollable", node.isScrollable());
         attr(xml, "focused", node.isFocused());
+        attr(xml, "password", node.isPassword());
         attr(xml, "checked", node.isChecked());
         attr(xml, "selected", node.isSelected());
         attr(xml, "bounds", "[" + bounds.left + "," + bounds.top + "][" + bounds.right + "," + bounds.bottom + "]");

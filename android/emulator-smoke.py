@@ -385,6 +385,26 @@ def prove_fullscreen_keyboard():
     """A real pairing field must remain above the IME and restore on Back."""
     before = dismiss_usage_prompt("keyboard-before")
 
+    def pairing_field(tree, *, focused=False):
+        inputs = [node for node in tree.iter("node")
+                  if node.get("class") == "android.widget.EditText" and node_bounds(node)]
+        if focused:
+            return next((node for node in inputs if node.get("focused") == "true"), None)
+        by_id = next((node for node in inputs if node.get("resource-id") == "transferPairCode"), None)
+        if by_id is not None:
+            return by_id
+        # The 16 KB Android image's WebView omits HTML IDs in accessibility
+        # dumps. Locate the input directly below its visible label instead.
+        label = next((node for node in tree.iter("node")
+                      if node.get("text") == "Code from your other device" and node_bounds(node)), None)
+        if label is None:
+            return None
+        left, _, right, bottom = node_bounds(label)
+        matches = [node for node in inputs
+                   if (bounds := node_bounds(node)) and left <= bounds[0] < bounds[2] <= right
+                   and bottom <= bounds[1] < bottom + 250]
+        return min(matches, key=lambda node: node_bounds(node)[1]) if matches else None
+
     def web_bounds(tree):
         regions = [bounds for node in tree.iter("node")
                    if node.get("class") == "android.webkit.WebView" and (bounds := node_bounds(node))]
@@ -392,8 +412,7 @@ def prove_fullscreen_keyboard():
         return max(regions, key=lambda bounds: bounds[3] - bounds[1])
 
     full_view = web_bounds(before)
-    field = next((node for node in before.iter("node")
-                  if node.get("resource-id") == "transferPairCode" and node_bounds(node)), None)
+    field = pairing_field(before)
     assert field is not None, "Pairing input is not visible for keyboard QA"
     tap_node(field)
     try:
@@ -408,8 +427,7 @@ def prove_fullscreen_keyboard():
         after = ui_tree("keyboard-open")
         resized_view = web_bounds(after)
         assert resized_view[3] < full_view[3], "Keyboard covers the page instead of resizing its viewport"
-        focused = next((node for node in after.iter("node")
-                        if node.get("resource-id") == "transferPairCode" and node.get("focused") == "true"), None)
+        focused = pairing_field(after, focused=True)
         assert focused is not None and node_bounds(focused), "Pairing field lost focus or became invisible"
         bounds = node_bounds(focused)
         assert resized_view[1] <= bounds[1] < bounds[3] <= resized_view[3], "Focused input overlaps the keyboard"
@@ -602,39 +620,74 @@ def gate_fill(label: str, tree: ET.Element, name: str, value: str) -> ET.Element
     await_keyboard()
     for attempt in range(1, 4):
         adb("shell", "input", "text", value.replace(" ", "%s"))
-        time.sleep(0.5)
-        tree = ui_tree(f"{label}-typed-{name}-{attempt}")
-        node = gate_field(tree, name)
+        node = None
+        # The accessibility provider can return only the keyboard, or fail to
+        # return a hierarchy while the IME settles. Observe before retyping.
+        for snapshot in range(1, 6):
+            time.sleep(0.5)
+            try:
+                tree = ui_tree(f"{label}-typed-{name}-{attempt}-form-{snapshot}", allow_empty=True)
+            except UiProviderUnavailable:
+                continue
+            node = gate_field(tree, name)
+            if node is not None:
+                break
         if field_holds(node, value):
             return tree
         assert node is not None and node.get("focused") == "true", \
-            f"Profile screen's {name} lost focus while typing; see {label}-typed-{name}-{attempt}-ui.xml"
+            f"Profile screen's {name} lost focus while typing; see {label}-typed-{name}-{attempt}-form-*"
         current = node.get("text", "")
         adb("shell", "input", "keyevent", "KEYCODE_MOVE_END", *(["KEYCODE_DEL"] * (len(current) + len(value))))
         time.sleep(1)
     raise AssertionError(f"Profile screen's {name} did not take the typed value; see {label}-typed-{name}-*-ui.xml")
 
 
-def gate_next(label: str) -> ET.Element:
+def gate_next(label: str, name: str, *, timeout: float = 15) -> ET.Element:
     """The keyboard's Next key focuses, and scrolls to, the following field."""
     adb("shell", "input", "keyevent", "KEYCODE_ENTER")
-    time.sleep(0.5)
-    return ui_tree(f"{label}-next")
-
-
-def gate_submit(label: str):
-    """The keyboard's Done key on the last field opens the profile."""
-    adb("shell", "input", "keyevent", "KEYCODE_ENTER")
-    deadline = time.monotonic() + 30
+    deadline = time.monotonic() + timeout
     attempt = 0
     while time.monotonic() < deadline:
         attempt += 1
-        tree = ui_tree(f"{label}-opening-{attempt}", allow_empty=True)
-        if gate_node(tree, "gate_submit") is None and gate_node(tree, "gate_new_driver") is None:
+        time.sleep(0.5)
+        try:
+            tree = ui_tree(f"{label}-next-{name}-{attempt}", allow_empty=True)
+        except UiProviderUnavailable:
+            continue
+        node = gate_field(tree, name)
+        if node is not None and node.get("focused") == "true":
+            return tree
+    raise AssertionError(f"Profile field {name} did not gain focus; see {label}-next-{name}-*")
+
+
+def gate_submit(label: str):
+    """Open the profile, falling back to its button if IME Done only hides keys."""
+    adb("shell", "input", "keyevent", "KEYCODE_ENTER")
+    deadline = time.monotonic() + 30
+    attempt = 0
+    tapped_button = False
+    while time.monotonic() < deadline:
+        attempt += 1
+        try:
+            tree = ui_tree(f"{label}-opening-{attempt}", allow_empty=True)
+        except UiProviderUnavailable:
+            time.sleep(0.5)
+            continue
+        if any(node.get("class") == "android.webkit.WebView" and node_bounds(node)
+               for node in tree.iter("node")) and gate_node(tree, "gate_submit") is None:
             return
         notice = gate_node(tree, "gate_notice")
         message = (notice.get("text", "") if notice is not None else "").strip()
         assert not message or message.endswith("…"), f"Profile did not open: {message!r}"
+        if attempt >= 3 and not tapped_button and gate_node(tree, "gate_submit") is not None:
+            # A keyboard-only accessibility snapshot is transient. Once the
+            # form is visible again, explicitly use its submit control.
+            adb("shell", "input", "keyevent", "KEYCODE_BACK")
+            tree = ui_tree(f"{label}-submit-button")
+            button = gate_node(tree, "gate_submit")
+            if button is not None:
+                tap_node(button)
+                tapped_button = True
         time.sleep(1)
     raise AssertionError(f"Profile screen stayed open after submitting; see {label}-opening-*-ui.xml")
 
@@ -655,8 +708,8 @@ def create_pin_profile(label: str, name: str, pin: str, *, first: bool):
         tree = open_setup(label, tree)
     assert gate_node(tree, "gate_name") is not None, f"Setup form did not open; see {label}-ui.xml"
     tree = gate_fill(label, tree, "gate_name", name)
-    tree = gate_fill(label, gate_next(label), "gate_credential", pin)
-    gate_fill(label, gate_next(label), "gate_confirm", pin)
+    gate_fill(label, gate_next(label, "gate_credential"), "gate_credential", pin)
+    gate_fill(label, gate_next(label, "gate_confirm"), "gate_confirm", pin)
     gate_submit(label)
 
 
@@ -669,7 +722,7 @@ def create_email_profile(label: str, name: str, email: str):
         gate_field(t, "gate_confirm") is None and gate_field(t, "gate_name") is not None))
     assert gate_node(tree, "gate_confirm") is None, "Email profiles must not ask for a PIN"
     tree = gate_fill(label, tree, "gate_name", name)
-    gate_fill(label, gate_next(label), "gate_credential", email)
+    gate_fill(label, gate_next(label, "gate_credential"), "gate_credential", email)
     gate_submit(label)
 
 
@@ -751,8 +804,20 @@ def main():
     assert adb("shell", "getprop", "ro.kernel.qemu").stdout.strip() == b"1", "Smoke checks refuse physical devices"
     assert args.package == "com.yourpitbox.app.debug", "Smoke checks require the isolated debug package"
     OUTPUT.mkdir(parents=True, exist_ok=True)
+    native_spec = importlib.util.spec_from_file_location("native_engineering_qa", ROOT / "android/native-engineering-qa.py")
+    native_qa = importlib.util.module_from_spec(native_spec)
+    native_spec.loader.exec_module(native_qa)
+    # Read every interactive window from the first profile screen onward.
+    # uiautomator's active root can be null or contain only the keyboard.
+    native_qa.prepare_window_dump(sys.modules[__name__])
     expected_version = re.search(r'__version__ = "([^"]+)"', (ROOT / "src/pitwall/__init__.py").read_text()).group(1)
     adb("install", "-r", "-g", str(ROOT / args.apk))
+    for name, command in {
+        "runtime-page-size": ("shell", "getconf", "PAGE_SIZE"),
+        "runtime-build": ("shell", "getprop", "ro.build.fingerprint"),
+        "runtime-webview": ("shell", "dumpsys", "webviewupdate"),
+    }.items():
+        (OUTPUT / f"{name}.txt").write_bytes(adb(*command).stdout)
     adb("logcat", "-c")
     # A one-time OS tutorial can cover a fresh emulator's first immersive app.
     # Mark only that emulator tutorial seen; never change app permissions/data.
@@ -791,9 +856,6 @@ def main():
         adb("shell", "am", "start", "-W", "-n", f"{args.package}/com.yourpitbox.app.MainActivity")
         ui_passed = prove_transfer_ui()
         prove_fullscreen("foreground-return", swipe=True)
-        native_spec = importlib.util.spec_from_file_location("native_engineering_qa", ROOT / "android/native-engineering-qa.py")
-        native_qa = importlib.util.module_from_spec(native_spec)
-        native_spec.loader.exec_module(native_qa)
         native_qa.run(sys.modules[__name__], args.package, expected_version)
         prove_sqlite_lifecycle(args.package, "final")
         prove_profile_isolation(args.package, first_database, transfer_pin)
