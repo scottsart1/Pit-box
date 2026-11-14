@@ -539,6 +539,47 @@ def test_emulator_creates_reopens_and_switches_driver_profiles(monkeypatch):
     assert screen.screen == "opened" and screen.selected[0] == "Smoke Driver"
 
 
+@pytest.mark.parametrize("transition", ["keyboard", "previous_list", "unavailable"])
+def test_emulator_waits_for_selected_driver_form(monkeypatch, transition):
+    module, screen = _smoke_with_fake_profiles(monkeypatch)
+    screen.profiles = [("Smoke Driver", "pin", "2468"),
+                       ("Second Driver", "email", "second.driver@example.test")]
+    screen.screen = "picker"
+    previous_list = screen.tree("picker")
+    original_tree = screen.tree
+    missed = []
+
+    def tree(label, allow_empty=False):
+        if "-chosen-" in label and not missed:
+            missed.append(label)
+            if transition == "unavailable":
+                raise module.UiProviderUnavailable("No hierarchy during keyboard opening")
+            if transition == "previous_list":
+                return previous_list
+            return ET.fromstring('<hierarchy><node content-desc="Keyboard" /></hierarchy>')
+        return original_tree(label, allow_empty=allow_empty)
+
+    monkeypatch.setattr(module, "ui_tree", tree)
+    module.unlock_profile("first-driver-again", *module.FIRST_DRIVER)
+    assert len(missed) == 1
+    assert screen.screen == "opened" and screen.selected[0] == "Smoke Driver"
+    assert len(screen.profiles) == 2
+
+
+def test_emulator_selected_driver_wait_is_bounded(monkeypatch):
+    module, screen = _smoke_with_fake_profiles(monkeypatch)
+    screen.profiles = [("Smoke Driver", "pin", "2468"), ("Other", "pin", "1234")]
+    screen.screen = "picker"
+    original_tree = screen.tree
+    ticks = iter([0, 1, 2, 20])
+    monkeypatch.setattr(module.time, "monotonic", lambda: next(ticks))
+    monkeypatch.setattr(module, "ui_tree", lambda label, allow_empty=False:
+                        ET.Element("hierarchy") if "-chosen-" in label else original_tree(label))
+    with pytest.raises(AssertionError, match="unlock form did not appear"):
+        module.unlock_profile("first-driver-again", *module.FIRST_DRIVER)
+    assert screen.values == {}
+
+
 def test_emulator_reports_a_profile_that_refuses_to_open(monkeypatch):
     module, screen = _smoke_with_fake_profiles(monkeypatch)
     screen.profiles.append(("Smoke Driver", "pin", "2468"))

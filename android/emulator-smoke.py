@@ -733,7 +733,23 @@ def unlock_profile(label: str, name: str, secret: str):
         row = text_node(tree, name)
         assert row is not None, f"Driver {name!r} is not listed; see {label}-ui.xml"
         tap_node(row)
-        tree = ui_tree(f"{label}-chosen")
+        # Selecting a driver opens its keyboard. During that transition even
+        # the all-window reader can return only the IME or the previous list.
+        # Observe the resulting form before checking identity or entering PIN.
+        deadline = time.monotonic() + 15
+        attempt = 0
+        while True:
+            attempt += 1
+            try:
+                tree = ui_tree(f"{label}-chosen-{attempt}", allow_empty=True)
+            except UiProviderUnavailable:
+                tree = ET.Element("hierarchy")
+            if (gate_field(tree, "gate_credential") is not None
+                    and gate_node(tree, "gate_new_driver") is None):
+                break
+            assert time.monotonic() < deadline, \
+                f"Driver {name!r} unlock form did not appear; see {label}-chosen-*-ui.xml"
+            time.sleep(0.5)
     welcome = [node.get("text", "") for node in tree.iter("node") if name in node.get("text", "")]
     assert welcome, f"Unlock form is not for {name!r}; see {label}-ui.xml"
     gate_fill(label, tree, "gate_credential", secret)
