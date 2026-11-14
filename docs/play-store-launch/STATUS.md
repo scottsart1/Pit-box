@@ -29,4 +29,8 @@ Release baseline: `origin/main` at `77a4984` (Your Pit Box 5.8.0, Android revisi
 
 ## Next action
 
+Run [43511382516](https://github.com/scottsart1/Pit-box/actions/runs/43511382516) passed regression checks and unsigned AAB native ELF alignment. The ordinary emulator failed after the second driver's name was entered because the first accessibility dump after pressing Next omitted the email field. The smoke test now waits for the expected field to gain focus before typing. The 16 KB runtime step did not run in that attempt. Require both emulator flows to pass before merging PR #66. The privacy-policy PR #70 is already merged.
+
+The Work browser reached Google Play Console sign-in. An authenticated owner session is needed to resume the key import and draft declarations. Google's reviewer guidance permits a reviewer-created local PIN with instructions and requires access to all app functionality. A reviewer-supplied AI key is the owner's preference and remains unconfirmed as a sufficient access path.
+
 Complete the Play preparation branch and CI checks, then produce a private signed AAB candidate for internal testing. Do not upload a bundle until the app-signing identity is resolved.

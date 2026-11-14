@@ -641,11 +641,22 @@ def gate_fill(label: str, tree: ET.Element, name: str, value: str) -> ET.Element
     raise AssertionError(f"Profile screen's {name} did not take the typed value; see {label}-typed-{name}-*-ui.xml")
 
 
-def gate_next(label: str) -> ET.Element:
+def gate_next(label: str, name: str, *, timeout: float = 15) -> ET.Element:
     """The keyboard's Next key focuses, and scrolls to, the following field."""
     adb("shell", "input", "keyevent", "KEYCODE_ENTER")
-    time.sleep(0.5)
-    return ui_tree(f"{label}-next")
+    deadline = time.monotonic() + timeout
+    attempt = 0
+    while time.monotonic() < deadline:
+        attempt += 1
+        time.sleep(0.5)
+        try:
+            tree = ui_tree(f"{label}-next-{name}-{attempt}", allow_empty=True)
+        except UiProviderUnavailable:
+            continue
+        node = gate_field(tree, name)
+        if node is not None and node.get("focused") == "true":
+            return tree
+    raise AssertionError(f"Profile field {name} did not gain focus; see {label}-next-{name}-*")
 
 
 def gate_submit(label: str):
@@ -692,8 +703,8 @@ def create_pin_profile(label: str, name: str, pin: str, *, first: bool):
         tree = open_setup(label, tree)
     assert gate_node(tree, "gate_name") is not None, f"Setup form did not open; see {label}-ui.xml"
     tree = gate_fill(label, tree, "gate_name", name)
-    tree = gate_fill(label, gate_next(label), "gate_credential", pin)
-    gate_fill(label, gate_next(label), "gate_confirm", pin)
+    gate_fill(label, gate_next(label, "gate_credential"), "gate_credential", pin)
+    gate_fill(label, gate_next(label, "gate_confirm"), "gate_confirm", pin)
     gate_submit(label)
 
 
@@ -706,7 +717,7 @@ def create_email_profile(label: str, name: str, email: str):
         gate_field(t, "gate_confirm") is None and gate_field(t, "gate_name") is not None))
     assert gate_node(tree, "gate_confirm") is None, "Email profiles must not ask for a PIN"
     tree = gate_fill(label, tree, "gate_name", name)
-    gate_fill(label, gate_next(label), "gate_credential", email)
+    gate_fill(label, gate_next(label, "gate_credential"), "gate_credential", email)
     gate_submit(label)
 
 

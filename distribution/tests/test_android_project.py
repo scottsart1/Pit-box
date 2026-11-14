@@ -593,6 +593,25 @@ def test_emulator_waits_out_keyboard_only_snapshot_before_retyping(monkeypatch):
     assert screen.profiles[1] == ("Second Driver", "email", "second.driver@example.test")
 
 
+def test_emulator_waits_for_the_next_profile_field_through_a_keyboard_only_dump(monkeypatch):
+    module, screen = _smoke_with_fake_profiles(monkeypatch)
+    screen.profiles.append(("Smoke Driver", "pin", "2468"))
+    screen.launch()
+    original_tree = screen.tree
+    missed_next = []
+
+    def tree(label, allow_empty=False):
+        if "-next-gate_credential-" in label and not missed_next:
+            missed_next.append(label)
+            return ET.fromstring('<hierarchy><node content-desc="Keyboard" /></hierarchy>')
+        return original_tree(label, allow_empty=allow_empty)
+
+    monkeypatch.setattr(module, "ui_tree", tree)
+    module.create_email_profile("second-driver", *module.SECOND_DRIVER)
+    assert len(missed_next) == 1
+    assert screen.profiles[1] == ("Second Driver", "email", "second.driver@example.test")
+
+
 def test_the_backend_warms_up_while_the_profile_screen_is_open():
     java = ROOT / "android/app/src/main/java/com/yourpitbox/app"
     activity = (java / "MainActivity.java").read_text(encoding="utf-8")
