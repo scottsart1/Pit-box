@@ -609,6 +609,22 @@ def test_each_launch_opens_one_driver_profile_and_keeps_its_dashboard_storage():
     assert 'java.srcDir("../../distribution/tests/java")' in GRADLE
 
 
+def test_a_hardware_enter_on_a_profile_field_is_taken_before_the_input_method():
+    gate = (ROOT / "android/app/src/main/java/com/yourpitbox/app/AccountGate.java").read_text(encoding="utf-8")
+    # An input method can keep Enter's key-down and pass on only the key-up.
+    # The field then falls back to Android's focus search, which stops on a
+    # method button instead of the PIN and never submits from the last field.
+    handler = gate[gate.index("public boolean dispatchKeyEventPreIme("):gate.index("private void error(")]
+    assert "KeyEvent.KEYCODE_ENTER" in handler and "enterActions.get(focused)" in handler
+    # The field that took the key-down acts on its key-up, once.
+    assert handler.index("ACTION_DOWN") < handler.index("ACTION_UP") < handler.index("advance.run()")
+    assert "enterDownOn == focused" in handler
+    # Every chained field is registered, and a rebuilt form starts clean.
+    assert "enterActions.put(fields[i], advance)" in gate and "enterActions.clear()" in gate
+    # The soft keyboard's Next and Done still arrive as editor actions.
+    assert "setOnEditorActionListener" in gate
+
+
 def test_emulator_retypes_what_a_starting_keyboard_swallowed(monkeypatch):
     module, screen = _smoke_with_fake_profiles(monkeypatch)
     # On a fresh emulator the first text typed while the keyboard starts was lost.
