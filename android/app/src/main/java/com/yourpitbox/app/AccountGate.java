@@ -24,7 +24,9 @@ import android.widget.ScrollView;
 import android.widget.TextView;
 import org.json.JSONArray;
 import org.json.JSONObject;
+import java.util.HashMap;
 import java.util.Locale;
+import java.util.Map;
 
 /**
  * The native driver-profile screen shown once per app start.
@@ -51,6 +53,8 @@ public final class AccountGate extends ScrollView {
     private JSONObject selected;
     private boolean existingData, emailMode, busy;
     private String draftName = "";
+    private final Map<View, Runnable> enterActions = new HashMap<>();   // What Enter does on each chained field.
+    private View enterDownOn;
 
     public AccountGate(Activity activity, Runnable onUnlocked) {
         super(activity);
@@ -328,6 +332,7 @@ public final class AccountGate extends ScrollView {
 
     private void header(int title) {
         card.removeAllViews(); name = credential = confirmation = null; submit = null; notice = null;
+        enterActions.clear(); enterDownOn = null;
         TextView brand = text("YOUR PIT BOX", 12, R.color.pitbox_green);
         brand.setLetterSpacing(.16f); brand.setTypeface(null, Typeface.BOLD);
         brand.setImportantForAccessibility(IMPORTANT_FOR_ACCESSIBILITY_NO);
@@ -394,6 +399,8 @@ public final class AccountGate extends ScrollView {
      * A hardware Enter acts on key-up: the field that took the key-down then
      * also takes the key-up. Moving focus on key-down handed the key-up to
      * the next field, whose own Enter handling moved focus a second time.
+     * dispatchKeyEventPreIme takes that key before the input method does; the
+     * listener here serves the soft keyboard and any Enter it sends itself.
      */
     private void chain(EditText... fields) {
         for (int i = 0; i < fields.length; i++) {
@@ -402,6 +409,7 @@ public final class AccountGate extends ScrollView {
             for (int j = i + 1; j < fields.length && following == null; j++) following = fields[j];
             EditText next = following;
             Runnable advance = () -> { if (next != null) next.requestFocus(); else submit(); };
+            enterActions.put(fields[i], advance);
             fields[i].setImeOptions((next == null ? EditorInfo.IME_ACTION_DONE : EditorInfo.IME_ACTION_NEXT)
                 | EditorInfo.IME_FLAG_NO_EXTRACT_UI);
             fields[i].setOnEditorActionListener((view, action, event) -> {
@@ -412,6 +420,28 @@ public final class AccountGate extends ScrollView {
                 return true;
             });
         }
+    }
+
+    /**
+     * A hardware Enter on a chained field is handled before the input method
+     * sees it. An input method may keep the key-down and pass on only the
+     * key-up, or send an Enter of its own once it has finished with the text.
+     * A field that receives a key-up without its key-down falls back to
+     * Android's focus search, which stops on the method buttons under the
+     * name and, from the last field, moves on without opening the profile.
+     */
+    @Override public boolean dispatchKeyEventPreIme(KeyEvent event) {
+        int key = event.getKeyCode();
+        boolean enter = (key == KeyEvent.KEYCODE_ENTER || key == KeyEvent.KEYCODE_NUMPAD_ENTER) && event.hasNoModifiers();
+        View focused = enter ? findFocus() : null;
+        Runnable advance = focused == null ? null : enterActions.get(focused);
+        if (advance == null) return super.dispatchKeyEventPreIme(event);
+        if (event.getAction() == KeyEvent.ACTION_DOWN) {
+            enterDownOn = focused;
+        } else if (event.getAction() == KeyEvent.ACTION_UP && enterDownOn == focused) {
+            enterDownOn = null; advance.run();
+        }
+        return true;
     }
 
     private void error(int message) {
