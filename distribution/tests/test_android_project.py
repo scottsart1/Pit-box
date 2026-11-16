@@ -740,7 +740,8 @@ def test_emulator_profile_taps_wait_for_the_screen_they_open(monkeypatch):
     picker = screen("gate_new_driver")
     pin_form = screen("gate_name", "gate_method_email", "gate_credential", "gate_confirm", "gate_submit")
     email_form = screen("gate_name", "gate_method_email", "gate_credential", "gate_submit")
-    snapshots = iter([unlock, picker, pin_form, pin_form, email_form])
+    # Each tap is aimed from a second read that shows its control in the same place.
+    snapshots = iter([unlock, unlock, picker, picker, pin_form, pin_form, pin_form, email_form])
     taps = []
     monkeypatch.setattr(module, "ui_tree", lambda label: next(snapshots))
     monkeypatch.setattr(module, "tap_node", lambda node: taps.append(node.get("resource-id").rsplit("/", 1)[1]))
@@ -753,3 +754,42 @@ def test_emulator_profile_taps_wait_for_the_screen_they_open(monkeypatch):
     assert taps == ["gate_other_driver", "gate_new_driver", "gate_method_email"]
     with pytest.raises(StopIteration):
         next(snapshots)
+
+
+def test_emulator_profile_taps_follow_a_form_the_keyboard_moves(monkeypatch):
+    spec = importlib.util.spec_from_file_location("emulator_smoke", ROOT / "android/emulator-smoke.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    def unlock(top):
+        return ET.fromstring('<hierarchy><node resource-id="com.yourpitbox.app:id/gate_other_driver" '
+                             f'bounds="[0,{top}][400,{top + 80}]" /></hierarchy>')
+
+    picker = ET.fromstring('<hierarchy><node resource-id="com.yourpitbox.app:id/gate_new_driver" '
+                           'bounds="[0,0][400,80]" /></hierarchy>')
+    listed = lambda t: module.gate_node(t, "gate_new_driver") is not None
+    taps = []
+    monkeypatch.setattr(module, "tap_node", lambda node: taps.append(module.node_bounds(node)[1]))
+    monkeypatch.setattr(module.time, "sleep", lambda seconds: None)
+
+    # The unlock form is read before its keyboard opens and lifts it: the tap
+    # waits until two reads in a row agree on where the control is.
+    snapshots = iter([unlock(500), unlock(500), picker])
+    monkeypatch.setattr(module, "ui_tree", lambda label: next(snapshots))
+    assert module.gate_tap("second-driver", unlock(900), "gate_other_driver", listed) is picker
+    assert taps == [500]
+
+    # The form moves just as the tap is sent: one read elsewhere may be a
+    # screen in transition, two in a row mean the tap missed.
+    taps.clear()
+    snapshots = iter([unlock(900), unlock(500), unlock(500), picker])
+    monkeypatch.setattr(module, "ui_tree", lambda label: next(snapshots))
+    assert module.gate_tap("second-driver", unlock(900), "gate_other_driver", listed) is picker
+    assert taps == [900, 500]
+
+    # A control that stays where it was tapped is never tapped twice.
+    taps.clear()
+    snapshots = iter([unlock(900), unlock(900), unlock(900), unlock(900), picker])
+    monkeypatch.setattr(module, "ui_tree", lambda label: next(snapshots))
+    assert module.gate_tap("second-driver", unlock(900), "gate_other_driver", listed) is picker
+    assert taps == [900]
