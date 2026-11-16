@@ -25,6 +25,13 @@ export CIBW_PLATFORM=android
 export CIBW_ARCHS="${CIBW_ARCHS:-arm64_v8a x86_64}"
 export CIBW_BUILD="cp313-*"
 export CIBW_BUILD_FRONTEND=uv
+# Rust's Android linker defaults to 4 KB segments for these source builds.
+# The target-specific flags keep host build scripts unchanged while making
+# each extension loadable on 16 KB Android devices.
+export CARGO_TARGET_AARCH64_LINUX_ANDROID_RUSTFLAGS="-C link-arg=-Wl,-z,max-page-size=16384 -C link-arg=-Wl,-z,common-page-size=16384"
+export CARGO_TARGET_X86_64_LINUX_ANDROID_RUSTFLAGS="-C link-arg=-Wl,-z,max-page-size=16384 -C link-arg=-Wl,-z,common-page-size=16384"
+
+"$PYTHON" "$HERE/download-mobile-wheels.py"
 
 while IFS= read -r entry || [ -n "$entry" ]; do
   [[ -z "$entry" || "$entry" == \#* ]] && continue

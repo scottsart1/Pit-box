@@ -118,7 +118,7 @@ jobs:
   apk:
     needs: checks
     runs-on: ubuntu-24.04
-    timeout-minutes: 60
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
 
@@ -160,7 +160,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: android/wheels
-          key: android-wheels-${{ hashFiles('android/build-wheels.sh', 'android/check-wheels.py', 'android/native-requirements.txt') }}-${{ runner.os }}
+          key: android-wheels-${{ hashFiles('android/build-wheels.sh', 'android/check-wheels.py', 'android/download-mobile-wheels.py', 'android/native-requirements.txt') }}-${{ runner.os }}
 
       # Always run: the script verifies BOTH ABIs and repairs a partial cache.
       - name: Cross-compile and verify the native dependencies
@@ -171,6 +171,21 @@ jobs:
       - name: Build the isolated debug APK
         working-directory: android
         run: ./gradlew --no-daemon testDebugUnitTest assembleDebug -Ppitbox.buildPython=${{ steps.py313.outputs.python-path }}
+
+      - name: Build an unsigned Play-format bundle for validation
+        working-directory: android
+        run: ./gradlew --no-daemon bundleRelease -Ppitbox.prepareUnsignedRelease=true -Ppitbox.buildPython=${{ steps.py313.outputs.python-path }}
+
+      - name: Check bundle native ELF alignment
+        run: python tools/check_android_native_alignment.py android/app/build/outputs/bundle/release/app-release.aab
+
+      - name: Retain unsigned Play-format bundle for inspection
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-play-unsigned-${{ github.sha }}
+          path: android/app/build/outputs/bundle/release/app-release.aab
+          if-no-files-found: error
+          retention-days: 7
 
       - name: Prepare non-debug release APK for offline signing
         if: github.event_name == 'workflow_dispatch' && inputs.prepare_release_apk
@@ -217,12 +232,30 @@ jobs:
           emulator-options: -no-window -no-snapshot -noaudio -no-boot-anim -gpu swiftshader_indirect
           script: '"${{ steps.py313.outputs.python-path }}" android/emulator-smoke.py'
 
+      - name: Keep 4 KB runtime evidence separate
+        run: mv android/smoke-output android/smoke-output-4k
+
+      - name: Android 16 16 KB page-size runtime checks
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 36
+          target: google_apis_ps16k
+          arch: x86_64
+          profile: pixel_c
+          disable-animations: true
+          emulator-options: -no-window -no-snapshot -noaudio -no-boot-anim -gpu swiftshader_indirect
+          script: |
+            test "$(adb shell getconf PAGE_SIZE | tr -d '\r')" = 16384
+            "${{ steps.py313.outputs.python-path }}" android/emulator-smoke.py
+
       - name: Retain Android runtime evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: android-runtime-evidence-${{ github.run_id }}
-          path: android/smoke-output/
+          path: |
+            android/smoke-output-4k/
+            android/smoke-output/
           if-no-files-found: warn
 
       - name: Retain failed runtime APK for diagnosis

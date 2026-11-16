@@ -1,6 +1,7 @@
 .gradle/
 .wheel-build/
 wheels/
+app/src/main/jniLibs/
 smoke-output/
 local.properties
 *.apk

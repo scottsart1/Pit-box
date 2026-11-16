@@ -9,7 +9,9 @@ import android.view.accessibility.AccessibilityWindowInfo;
 import java.io.StringWriter;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.IdentityHashMap;
 import java.util.List;
+import java.util.Map;
 import org.xmlpull.v1.XmlSerializer;
 
 /** Read-only emulator QA dump, including native popups outside the active window. */
@@ -42,6 +44,7 @@ public final class AndroidUiHierarchy {
         attr(xml, "clickable", node.isClickable());
         attr(xml, "scrollable", node.isScrollable());
         attr(xml, "focused", node.isFocused());
+        attr(xml, "password", node.isPassword());
         attr(xml, "checked", node.isChecked());
         attr(xml, "selected", node.isSelected());
         attr(xml, "bounds", "[" + bounds.left + "," + bounds.top + "][" + bounds.right + "," + bounds.bottom + "]");
@@ -75,14 +78,31 @@ public final class AndroidUiHierarchy {
                 | AccessibilityServiceInfo.FLAG_REPORT_VIEW_IDS
                 | AccessibilityServiceInfo.FLAG_INCLUDE_NOT_IMPORTANT_VIEWS;
             ui.setServiceInfo(service);
+            // While a window opens, closes or is laid out again, it can be
+            // listed without a root for a moment. Taking the first roots
+            // available then returned the keyboard alone, without the
+            // application under it. Wait for an application window's root,
+            // and briefly for every other listed window's.
             List<AccessibilityWindowInfo> windows = new ArrayList<>();
+            Map<AccessibilityWindowInfo, AccessibilityNodeInfo> roots = new IdentityHashMap<>();
             long deadline = System.nanoTime() + 5_000_000_000L;
+            long settleBy = 0;
             do {
                 windows.clear();
+                roots.clear();
+                boolean application = false, missing = false;
                 for (AccessibilityWindowInfo window : ui.getWindows()) {
-                    if (window.getDisplayId() == 0 && window.getRoot() != null) windows.add(window);
+                    if (window.getDisplayId() != 0) continue;
+                    AccessibilityNodeInfo root = window.getRoot();
+                    if (root == null) { missing = true; continue; }
+                    windows.add(window);
+                    roots.put(window, root);
+                    application |= window.getType() == AccessibilityWindowInfo.TYPE_APPLICATION;
                 }
-                if (!windows.isEmpty()) break;
+                if (application) {
+                    if (settleBy == 0) settleBy = System.nanoTime() + 1_000_000_000L;
+                    if (!missing || System.nanoTime() >= settleBy) break;
+                }
                 Thread.sleep(100);
             } while (System.nanoTime() < deadline);
             if (windows.isEmpty()) throw new IllegalStateException("No interactive window roots on emulator display0");
@@ -97,10 +117,11 @@ public final class AndroidUiHierarchy {
                 xml.startTag("", "window");
                 attr(xml, "id", window.getId());
                 attr(xml, "layer", window.getLayer());
+                attr(xml, "type", window.getType());
                 attr(xml, "active", window.isActive());
                 attr(xml, "focused", window.isFocused());
                 attr(xml, "title", text(window.getTitle()));
-                visit(xml, window.getRoot(), 0, 0);
+                visit(xml, roots.get(window), 0, 0);
                 xml.endTag("", "window");
             }
             xml.endTag("", "hierarchy");

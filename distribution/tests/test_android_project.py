@@ -62,10 +62,12 @@ def test_every_desktop_dependency_is_installed_or_accounted_for():
         assert name in installed, f"{spec} from pyproject.toml is not installed by the APK"
 
 
-def test_numpy_is_pinned_to_a_version_chaquopy_provides():
-    # Chaquopy's repository, not PyPI, supplies numpy for Android; the pin
-    # must be one it has for Python 3.13, and the suite is run against it.
-    assert 'install("numpy==1.26.2")' in GRADLE
+def test_numpy_uses_the_16kb_mobile_wheels():
+    # Chaquopy's NumPy dependency includes a 4 KB x86_64 OpenBLAS. The
+    # pinned Flet wheels cover both Android ABIs and Python 3.13.
+    assert 'install("numpy==2.4.6")' in GRADLE
+    assert 'install("flet-libcpp-shared==27.2.12479018")' in GRADLE
+    assert (ROOT / "android" / "download-mobile-wheels.py").is_file()
 
 
 def test_socks_proxy_extra_is_installed_on_android_too():
@@ -92,7 +94,8 @@ def test_the_backend_is_a_source_root_not_a_copy():
 def test_candidate_targets_android_16_and_ci_tests_that_platform():
     assert "compileSdk = 36" in GRADLE and "targetSdk = 36" in GRADLE
     assert "platforms;android-36" in WORKFLOW and "api-level: 36" in WORKFLOW
-    assert "val androidRevision = 44" in GRADLE
+    revision = re.search(r"val androidRevision = (\d+)", GRADLE)
+    assert revision is not None and int(revision.group(1)) >= 45
 
 
 def test_isolated_release_qa_package_cannot_replace_existing_apps():
@@ -362,6 +365,8 @@ class _FakeProfileScreen:
         self.profiles = []          # (name, method, secret)
         self.hidden = set()         # fields currently behind the keyboard
         self.swallow = 0            # typed values the starting keyboard drops
+        self.done_hides_keyboard_once = False
+        self.keyboard_only_after_type_once = False
         self.launch()
 
     def launch(self):
@@ -426,8 +431,15 @@ class _FakeProfileScreen:
 
     def tree(self, label, allow_empty=False):
         self.dumps += 1
+        if self.keyboard_only_after_type_once and "-typed-gate_name-" in label:
+            self.keyboard_only_after_type_once = False
+            return ET.fromstring('<hierarchy><node class="android.widget.FrameLayout" '
+                                 'content-desc="Keyboard" bounds="[0,600][800,800]" /></hierarchy>')
         if self.screen == "intro" and self.dumps > 1:
             self._uncover()
+        if self.screen == "opened":
+            return ET.fromstring('<hierarchy><node class="android.webkit.WebView" '
+                                 'bounds="[0,0][800,800]" /></hierarchy>')
         body = "".join(
             f'<node resource-id="{self.PREFIX + rid if rid else ""}" text="{text}" content-desc="{desc}" '
             f'enabled="true" focused="{str(rid == self.focus).lower()}" password="{str(self.password(rid)).lower()}" '
@@ -449,6 +461,8 @@ class _FakeProfileScreen:
                 self.screen = "picker"
             elif rid == "gate_new_driver":
                 self._setup()
+            elif rid == "gate_submit":
+                self._enter()
             elif self.screen == "picker" and text:
                 self._unlock(next(p for p in self.profiles if p[0] == text))
         elif args[:3] == ("shell", "input", "text"):
@@ -473,6 +487,9 @@ class _FakeProfileScreen:
             return
         if self.screen == "setup" and self.focus == "gate_credential" and self.method == "pin":
             self.focus = "gate_confirm"
+            return
+        if self.done_hides_keyboard_once:
+            self.done_hides_keyboard_once = False
             return
         secret = self.values.get("gate_credential", "")
         if self.screen == "setup":
@@ -522,6 +539,47 @@ def test_emulator_creates_reopens_and_switches_driver_profiles(monkeypatch):
     assert screen.screen == "opened" and screen.selected[0] == "Smoke Driver"
 
 
+@pytest.mark.parametrize("transition", ["keyboard", "previous_list", "unavailable"])
+def test_emulator_waits_for_selected_driver_form(monkeypatch, transition):
+    module, screen = _smoke_with_fake_profiles(monkeypatch)
+    screen.profiles = [("Smoke Driver", "pin", "2468"),
+                       ("Second Driver", "email", "second.driver@example.test")]
+    screen.screen = "picker"
+    previous_list = screen.tree("picker")
+    original_tree = screen.tree
+    missed = []
+
+    def tree(label, allow_empty=False):
+        if "-chosen-" in label and not missed:
+            missed.append(label)
+            if transition == "unavailable":
+                raise module.UiProviderUnavailable("No hierarchy during keyboard opening")
+            if transition == "previous_list":
+                return previous_list
+            return ET.fromstring('<hierarchy><node content-desc="Keyboard" /></hierarchy>')
+        return original_tree(label, allow_empty=allow_empty)
+
+    monkeypatch.setattr(module, "ui_tree", tree)
+    module.unlock_profile("first-driver-again", *module.FIRST_DRIVER)
+    assert len(missed) == 1
+    assert screen.screen == "opened" and screen.selected[0] == "Smoke Driver"
+    assert len(screen.profiles) == 2
+
+
+def test_emulator_selected_driver_wait_is_bounded(monkeypatch):
+    module, screen = _smoke_with_fake_profiles(monkeypatch)
+    screen.profiles = [("Smoke Driver", "pin", "2468"), ("Other", "pin", "1234")]
+    screen.screen = "picker"
+    original_tree = screen.tree
+    ticks = iter([0, 1, 2, 20])
+    monkeypatch.setattr(module.time, "monotonic", lambda: next(ticks))
+    monkeypatch.setattr(module, "ui_tree", lambda label, allow_empty=False:
+                        ET.Element("hierarchy") if "-chosen-" in label else original_tree(label))
+    with pytest.raises(AssertionError, match="unlock form did not appear"):
+        module.unlock_profile("first-driver-again", *module.FIRST_DRIVER)
+    assert screen.values == {}
+
+
 def test_emulator_reports_a_profile_that_refuses_to_open(monkeypatch):
     module, screen = _smoke_with_fake_profiles(monkeypatch)
     screen.profiles.append(("Smoke Driver", "pin", "2468"))
@@ -551,12 +609,101 @@ def test_each_launch_opens_one_driver_profile_and_keeps_its_dashboard_storage():
     assert 'java.srcDir("../../distribution/tests/java")' in GRADLE
 
 
+def test_a_hardware_enter_on_a_profile_field_is_taken_before_the_input_method():
+    gate = (ROOT / "android/app/src/main/java/com/yourpitbox/app/AccountGate.java").read_text(encoding="utf-8")
+    # An input method can keep Enter's key-down and pass on only the key-up.
+    # The field then falls back to Android's focus search, which stops on a
+    # method button instead of the PIN and never submits from the last field.
+    handler = gate[gate.index("public boolean dispatchKeyEventPreIme("):gate.index("private void error(")]
+    assert "KeyEvent.KEYCODE_ENTER" in handler and "enterActions.get(focused)" in handler
+    # The field that took the key-down acts on its key-up, once.
+    assert handler.index("ACTION_DOWN") < handler.index("ACTION_UP") < handler.index("advance.run()")
+    assert "enterDownOn == focused" in handler
+    # Every chained field is registered, and a rebuilt form starts clean.
+    assert "enterActions.put(fields[i], advance)" in gate and "enterActions.clear()" in gate
+    # The soft keyboard's Next and Done still arrive as editor actions.
+    assert "setOnEditorActionListener" in gate
+
+
 def test_emulator_retypes_what_a_starting_keyboard_swallowed(monkeypatch):
     module, screen = _smoke_with_fake_profiles(monkeypatch)
     # On a fresh emulator the first text typed while the keyboard starts was lost.
     screen.swallow = 1
     module.create_pin_profile("launch-1", *module.FIRST_DRIVER, first=True)
     assert screen.profiles == [("Smoke Driver", "pin", "2468")]
+
+
+def test_emulator_uses_submit_button_when_ime_done_only_hides_keyboard(monkeypatch):
+    module, screen = _smoke_with_fake_profiles(monkeypatch)
+    screen.done_hides_keyboard_once = True
+    module.create_pin_profile("launch-1", *module.FIRST_DRIVER, first=True)
+    assert screen.profiles == [("Smoke Driver", "pin", "2468")]
+    assert screen.screen == "opened"
+
+
+def test_emulator_waits_out_keyboard_only_snapshot_before_retyping(monkeypatch):
+    module, screen = _smoke_with_fake_profiles(monkeypatch)
+    screen.profiles.append(("Smoke Driver", "pin", "2468"))
+    screen.launch()
+    screen.keyboard_only_after_type_once = True
+    module.create_email_profile("second-driver", *module.SECOND_DRIVER)
+    assert screen.profiles[1] == ("Second Driver", "email", "second.driver@example.test")
+
+
+def test_emulator_observes_profile_submission_after_a_missing_hierarchy(monkeypatch):
+    module, screen = _smoke_with_fake_profiles(monkeypatch)
+    original_tree = screen.tree
+    missing = []
+
+    def tree(label, allow_empty=False):
+        if "-opening-" in label and not missing:
+            missing.append(label)
+            raise module.UiProviderUnavailable("null root during profile opening")
+        return original_tree(label, allow_empty=allow_empty)
+
+    monkeypatch.setattr(module, "ui_tree", tree)
+    module.create_pin_profile("launch-1", *module.FIRST_DRIVER, first=True)
+    assert len(missing) == 1
+    assert screen.profiles == [("Smoke Driver", "pin", "2468")]
+    assert screen.screen == "opened"
+
+
+def test_emulator_rechecks_an_unavailable_dump_without_reentering_the_pin(monkeypatch):
+    module, screen = _smoke_with_fake_profiles(monkeypatch)
+    screen.profiles.append(("Smoke Driver", "pin", "2468"))
+    screen.launch()
+    original_tree = screen.tree
+    missing = []
+
+    def tree(label, allow_empty=False):
+        if "-typed-gate_credential-" in label and not missing:
+            missing.append(label)
+            raise module.UiProviderUnavailable("UI hierarchy unavailable during IME transition")
+        return original_tree(label, allow_empty=allow_empty)
+
+    monkeypatch.setattr(module, "ui_tree", tree)
+    module.unlock_profile("launch-2", *module.FIRST_DRIVER)
+    assert len(missing) == 1
+    assert screen.screen == "opened"
+
+
+def test_emulator_waits_for_the_next_profile_field_through_a_keyboard_only_dump(monkeypatch):
+    module, screen = _smoke_with_fake_profiles(monkeypatch)
+    screen.profiles.append(("Smoke Driver", "pin", "2468"))
+    screen.launch()
+    original_tree = screen.tree
+    missed_next = []
+
+    def tree(label, allow_empty=False):
+        if "-next-gate_credential-" in label and not missed_next:
+            missed_next.append(label)
+            return ET.fromstring('<hierarchy><node content-desc="Keyboard" /></hierarchy>')
+        return original_tree(label, allow_empty=allow_empty)
+
+    monkeypatch.setattr(module, "ui_tree", tree)
+    module.create_email_profile("second-driver", *module.SECOND_DRIVER)
+    assert len(missed_next) == 1
+    assert screen.profiles[1] == ("Second Driver", "email", "second.driver@example.test")
 
 
 def test_the_backend_warms_up_while_the_profile_screen_is_open():
@@ -593,7 +740,8 @@ def test_emulator_profile_taps_wait_for_the_screen_they_open(monkeypatch):
     picker = screen("gate_new_driver")
     pin_form = screen("gate_name", "gate_method_email", "gate_credential", "gate_confirm", "gate_submit")
     email_form = screen("gate_name", "gate_method_email", "gate_credential", "gate_submit")
-    snapshots = iter([unlock, picker, pin_form, pin_form, email_form])
+    # Each tap is aimed from a second read that shows its control in the same place.
+    snapshots = iter([unlock, unlock, picker, picker, pin_form, pin_form, pin_form, email_form])
     taps = []
     monkeypatch.setattr(module, "ui_tree", lambda label: next(snapshots))
     monkeypatch.setattr(module, "tap_node", lambda node: taps.append(node.get("resource-id").rsplit("/", 1)[1]))
@@ -606,3 +754,42 @@ def test_emulator_profile_taps_wait_for_the_screen_they_open(monkeypatch):
     assert taps == ["gate_other_driver", "gate_new_driver", "gate_method_email"]
     with pytest.raises(StopIteration):
         next(snapshots)
+
+
+def test_emulator_profile_taps_follow_a_form_the_keyboard_moves(monkeypatch):
+    spec = importlib.util.spec_from_file_location("emulator_smoke", ROOT / "android/emulator-smoke.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    def unlock(top):
+        return ET.fromstring('<hierarchy><node resource-id="com.yourpitbox.app:id/gate_other_driver" '
+                             f'bounds="[0,{top}][400,{top + 80}]" /></hierarchy>')
+
+    picker = ET.fromstring('<hierarchy><node resource-id="com.yourpitbox.app:id/gate_new_driver" '
+                           'bounds="[0,0][400,80]" /></hierarchy>')
+    listed = lambda t: module.gate_node(t, "gate_new_driver") is not None
+    taps = []
+    monkeypatch.setattr(module, "tap_node", lambda node: taps.append(module.node_bounds(node)[1]))
+    monkeypatch.setattr(module.time, "sleep", lambda seconds: None)
+
+    # The unlock form is read before its keyboard opens and lifts it: the tap
+    # waits until two reads in a row agree on where the control is.
+    snapshots = iter([unlock(500), unlock(500), picker])
+    monkeypatch.setattr(module, "ui_tree", lambda label: next(snapshots))
+    assert module.gate_tap("second-driver", unlock(900), "gate_other_driver", listed) is picker
+    assert taps == [500]
+
+    # The form moves just as the tap is sent: one read elsewhere may be a
+    # screen in transition, two in a row mean the tap missed.
+    taps.clear()
+    snapshots = iter([unlock(900), unlock(500), unlock(500), picker])
+    monkeypatch.setattr(module, "ui_tree", lambda label: next(snapshots))
+    assert module.gate_tap("second-driver", unlock(900), "gate_other_driver", listed) is picker
+    assert taps == [900, 500]
+
+    # A control that stays where it was tapped is never tapped twice.
+    taps.clear()
+    snapshots = iter([unlock(900), unlock(900), unlock(900), unlock(900), picker])
+    monkeypatch.setattr(module, "ui_tree", lambda label: next(snapshots))
+    assert module.gate_tap("second-driver", unlock(900), "gate_other_driver", listed) is picker
+    assert taps == [900]
