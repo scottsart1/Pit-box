@@ -565,9 +565,27 @@ def gate_tap(label: str, tree: ET.Element, name: str, until=None, *, timeout: fl
     An injected tap can be handled after the next hierarchy dump, so a dump
     straight after it may still show the previous screen. Acting on that one
     taps controls the tap is about to replace.
+
+    The form is centred in the space the soft keyboard leaves, so it moves
+    when the keyboard opens or closes. The unlock form is first read before
+    its keyboard opens; a tap aimed from that read lands on the keyboard. The
+    control is tapped once two reads in a row show it in one place, and again
+    only if two later reads in a row show it somewhere else.
     """
     node = gate_node(tree, name)
     assert node is not None, f"Profile screen has no visible {name}; see {label}-ui.xml"
+    deadline = time.monotonic() + timeout
+    attempt = 0
+    while True:
+        attempt += 1
+        fresh = gate_node(ui_tree(f"{label}-before-{name}-{attempt}"), name)
+        if fresh is not None and node_bounds(fresh) == node_bounds(node):
+            break
+        assert time.monotonic() < deadline, \
+            f"Profile screen's {name} did not come to rest; see {label}-before-{name}-*-ui.xml"
+        node = fresh if fresh is not None else node
+        time.sleep(0.5)
+    tapped, moved = node_bounds(node), None
     tap_node(node)
     deadline = time.monotonic() + timeout
     attempt = 0
@@ -576,7 +594,15 @@ def gate_tap(label: str, tree: ET.Element, name: str, until=None, *, timeout: fl
         tree = ui_tree(f"{label}-after-{name}-{attempt}")
         if until is None or until(tree):
             return tree
-        assert time.monotonic() < deadline,             f"Profile screen did not respond to {name}; see {label}-after-{name}-*-ui.xml"
+        node = gate_node(tree, name)
+        bounds = node_bounds(node) if node is not None else None
+        if bounds is not None and bounds != tapped and bounds == moved:
+            tapped, moved = bounds, None
+            tap_node(node)
+        else:
+            moved = bounds if bounds != tapped else None
+        assert time.monotonic() < deadline, \
+            f"Profile screen did not respond to {name}; see {label}-after-{name}-*-ui.xml"
         time.sleep(0.5)
 
 
