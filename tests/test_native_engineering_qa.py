@@ -243,6 +243,18 @@ def test_all_window_dump_preserves_popup_and_underlying_windows(tmp_path, monkey
     assert calls == [("exec-out", "env", "CLASSPATH=/data/local/tmp/test.jar", "app_process", "/", "AndroidUiHierarchy")]
 
 
+def test_all_window_helper_waits_for_the_application_under_a_keyboard():
+    helper = (ROOT / "android/AndroidUiHierarchy.java").read_text(encoding="utf-8")
+    collect = helper[helper.index("ui.getWindows()"):helper.index("windows.sort(")]
+    # A window can be listed without a root while it opens or is laid out
+    # again. Dumping the first roots available returned the keyboard alone.
+    assert "AccessibilityWindowInfo.TYPE_APPLICATION" in collect
+    assert collect.index("if (application)") < collect.index("break;")
+    assert "if (!windows.isEmpty()) break;" not in helper
+    # The roots that were checked are the ones written, not a second read.
+    assert "roots.put(window, root)" in collect and "visit(xml, roots.get(window), 0, 0)" in helper
+
+
 def test_all_window_helper_runtime_failure_is_not_a_provider_skip(tmp_path, monkeypatch):
     monkeypatch.setattr(smoke, "OUTPUT", tmp_path)
     monkeypatch.setattr(smoke, "UI_DUMP_JAR", "/data/local/tmp/test.jar")
