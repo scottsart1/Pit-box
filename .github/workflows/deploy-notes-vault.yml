@@ -1,0 +1,51 @@
+name: Deploy notes vault
+
+# Deploys the notes vault Worker (yourpitbox.com/notes) from the public
+# scottsart1/inkwell repository, using this repository's Cloudflare key. The
+# Worker's code, tests and deploy script live in inkwell/web/notes-vault; this
+# workflow only checks them out and runs them. NOTES_LINK_ID is never set here:
+# the Worker's existing link is kept.
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: inkwell branch, tag or commit to deploy
+        default: main
+  push:
+    branches: [claude/deploy-notes-vault]
+    paths: [.github/workflows/deploy-notes-vault.yml]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: notes-vault-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: inkwell/web/notes-vault
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: scottsart1/inkwell
+          ref: ${{ inputs.ref || 'main' }}
+          path: inkwell
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Install
+        run: npm ci
+      - name: Typecheck
+        run: npx tsc --noEmit
+      - name: Test
+        run: npx vitest run
+      - name: Deploy
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: bash scripts/deploy.sh
