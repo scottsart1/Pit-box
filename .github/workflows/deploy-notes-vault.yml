@@ -44,8 +44,34 @@ jobs:
         run: npx tsc --noEmit
       - name: Test
         run: npx vitest run
+      # This repository's key can upload Workers but not edit their routes. The
+      # routes (yourpitbox.com/notes*) were set up once and stay as they are, so
+      # that one refusal is accepted; any other failure fails the job.
       - name: Deploy
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-        run: bash scripts/deploy.sh
+        run: |
+          set +e
+          bash scripts/deploy.sh 2>&1 | tee "$RUNNER_TEMP/deploy.log"
+          status=${PIPESTATUS[0]}
+          set -e
+          if [ "$status" -ne 0 ]; then
+            grep -q "Uploaded notes-vault" "$RUNNER_TEMP/deploy.log" \
+              && grep -q "notes-vault/routes) failed" "$RUNNER_TEMP/deploy.log" \
+              || exit "$status"
+            echo "::warning::The Worker code deployed; this key cannot edit routes, so the existing routes were kept."
+            # deploy.sh stopped before its clean-up: remove the old password secrets.
+            for old in NOTES_PASSWORD SESSION_SECRET; do
+              printf 'y\n' | npx --no-install wrangler secret delete "$old" --name notes-vault \
+                || echo "::warning::$old was not removed (it may already be gone)."
+            done
+          fi
+      - name: Check the vault answers
+        run: |
+          for _ in 1 2 3 4 5 6; do
+            curl -sS --fail https://yourpitbox.com/notes/api/ping | grep -q '"ok":true' && exit 0
+            sleep 10
+          done
+          echo "::error::https://yourpitbox.com/notes/api/ping does not answer."
+          exit 1
