@@ -1,0 +1,20 @@
+YourPitBox for NASCAR - development build
+
+This is an independent companion product. It is not affiliated with, endorsed
+by, or produced by NASCAR, iRacing, or the NASCAR 26 game publisher.
+
+NASCAR 26 native external telemetry is not confirmed. This build provides a
+Windows HUD observer with user calibration, manual observations, CSV imports,
+race planning, local radio briefs, and an optional OpenAI conversational crew
+chief. Actual NASCAR 26 integration has not yet passed a complete game-session
+validation. The sample race is synthetic and clearly labeled.
+
+The Windows app stores data in YourPitBoxNASCAR in your user profile, separately
+from YourPitBox for F1. HUD images are processed locally and not sent to OpenAI.
+If you configure your own API key and ask the conversational engineer a
+question, that question and relevant race evidence are sent to OpenAI. API
+usage is billed by your provider. The desktop key uses Windows user-account
+credential protection. Local calculations and radio briefs need no API key.
+
+Third-party dependency licenses are included in the application distribution.
+Do not use this simulation companion as guidance for real-world driving.
