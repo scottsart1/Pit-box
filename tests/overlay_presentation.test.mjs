@@ -85,7 +85,8 @@ test('Overlay acknowledges consecutive frames and keeps the strategy for a match
   assert.equal(h.text('pos'),'P2');
   assert.equal(h.text('strat'),'BOX NOW for HARD');
   assert.equal(socket.acks.length,2);
-  h.send({...s,strategy:{revision:10,unchanged:true}});
+  h.send({...s,player_position:3,strategy:{revision:10,unchanged:true}});
+  assert.equal(h.text('pos'),'P3');
   assert.equal(socket.acks[2].strategy,null);
   h.send({...s,strategy_revision:10});
   assert.equal(socket.acks[3].strategy,10);

@@ -21,7 +21,7 @@ const stamped=frame=>({...frame,packet_group_freshness:Object.fromEntries(['1','
  try{
   const page=await (await browser.newContext({viewport:{width:1280,height:800}})).newPage();
   const errors=[];page.on('pageerror',e=>errors.push(String(e)));
-  await page.addInitScript(()=>{window.__sockets=[];window.WebSocket=class{constructor(){this.sent=[];this.readyState=1;window.__sockets.push(this)}
+  await page.addInitScript(()=>{window.__sockets=[];window.WebSocket=class{static OPEN=1;constructor(){this.sent=[];this.readyState=1;window.__sockets.push(this)}
     send(text){this.sent.push(text)}close(){}addEventListener(){}removeEventListener(){}};});
   await page.route('**/*',async route=>{
    const url=new URL(route.request().url());if(url.origin!=='http://pitbox.test')return route.abort();
@@ -38,25 +38,27 @@ const stamped=frame=>({...frame,packet_group_freshness:Object.fromEntries(['1','
   const deliver=frame=>page.evaluate(f=>{const socket=window.__sockets.at(-1);socket.onmessage({data:JSON.stringify(f)});return socket.sent.at(-1)},stamped(frame));
 
   // A full frame: the page holds revision 3 and says so.
-  let ack=JSON.parse(await deliver({...base,strategy,strategy_revision:3}));
-  assert.deepEqual(ack,{ack:1,strategy:3});
   await page.getByRole('tab',{name:'DRIVE',exact:true}).click();
+  let ack=JSON.parse(await deliver({...base,strategy,strategy_revision:3}));
+  assert.deepEqual(ack,{ack:1,strategy:3,traces:true});
+  await page.locator('#traceCard').evaluate(card=>card.open=false);
   assert.match(await page.locator('#strategyMain').innerText(),/Box lap 14/);
 
   // Unchanged: the marker stands in for the strategy, which stays on screen.
   ack=JSON.parse(await deliver({...base,current_lap:11,strategy:{revision:3,unchanged:true},strategy_revision:3}));
-  assert.deepEqual(ack,{ack:1,strategy:3});
+  assert.deepEqual(ack,{ack:1,strategy:3,traces:false});
   assert.match(await page.locator('#strategyMain').innerText(),/Box lap 14/);
 
   // A marker for a revision the page does not hold: keep what is shown, ask for the strategy.
   ack=JSON.parse(await deliver({...base,strategy:{revision:9,unchanged:true},strategy_revision:9}));
-  assert.deepEqual(ack,{ack:1,strategy:null});
+  assert.deepEqual(ack,{ack:1,strategy:null,traces:false});
   assert.match(await page.locator('#strategyMain').innerText(),/Box lap 14/);
 
   // A new revision replaces it.
+  await page.locator('#traceCard').evaluate(card=>card.open=true);
   const moved={...strategy,recommended:{...strategy.recommended,instruction:'Box lap 16 for HARD.',box_lap:16,box_laps:[16]}};
   ack=JSON.parse(await deliver({...base,strategy:moved,strategy_revision:10}));
-  assert.deepEqual(ack,{ack:1,strategy:10});
+  assert.deepEqual(ack,{ack:1,strategy:10,traces:true});
   assert.match(await page.locator('#strategyMain').innerText(),/Box lap 16/);
   assert.deepEqual(errors,[]);
   console.log(JSON.stringify({result:'passed'}));
