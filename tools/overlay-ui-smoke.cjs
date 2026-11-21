@@ -24,13 +24,14 @@ const red=()=>frame({race_control_phase:'red_flag',strategy:{...frame().strategy
       page.on('pageerror',e=>errors.push(e.message));
       await context.addInitScript(()=>{
         window.qaClock=101000;Date.now=()=>window.qaClock;
-        window.qaSockets=[];window.WebSocket=class {constructor(){window.qaSockets.push(this);}};
+        window.qaSockets=[];window.WebSocket=class {static OPEN=1; readyState=1; send(){} constructor(){window.qaSockets.push(this);}};
       });
       let pendingRest;
       await page.route('**/*',route=>{
         const url=new URL(route.request().url());
         if(url.pathname==='/overlay')return route.fulfill({contentType:'text/html',body:html});
         if(url.pathname==='/api/state'){pendingRest=route;return;}
+        if(url.pathname==='/static/driver-dashboard/live-frames.js')return route.fulfill({contentType:'text/javascript',path:path.join(root,'static/driver-dashboard/live-frames.js')});
         if(url.pathname==='/static/driver-dashboard/model.mjs')return route.fulfill({contentType:'text/javascript',path:path.join(root,'static/driver-dashboard/model.mjs')});
         if(url.pathname==='/static/js/i18n.js')return route.fulfill({contentType:'text/javascript',path:path.join(root,'static/js/i18n.js')});
         return route.abort();

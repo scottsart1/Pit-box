@@ -63,13 +63,20 @@ async def test_legacy_catalog_backfill_is_batched_idempotent_and_uint64_safe(tmp
 
     catalog = SessionCatalog(path)
     first = await catalog.sync_legacy(batch_size=1)
-    second = await catalog.sync_legacy(batch_size=10)
+    second = await catalog.sync_legacy(batch_size=10, reconcile_sessions=False)
     third = await catalog.sync_legacy(batch_size=10)
     assert first["laps_inserted"] == 1
     assert first["laps_remaining"] == 1
     assert second["laps_inserted"] == 1
     assert second["laps_remaining"] == 0
     assert third["laps_inserted"] == 0
+    assert third["sessions_touched"] == 0
+
+    with sqlite3.connect(path) as db:
+        db.execute("UPDATE sessions SET ended_at=started_at+90")
+    late_finish = await catalog.sync_legacy()
+    assert late_finish["sessions_touched"] == 1
+    assert (await catalog.sync_legacy())["sessions_touched"] == 0
 
     key = session_id(uid)
     session = await catalog.get_session(key)

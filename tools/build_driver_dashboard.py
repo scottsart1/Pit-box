@@ -46,7 +46,7 @@ def bundled_catalogs() -> str:
 
 def build():
     modules = []
-    for name in ('i18n.mjs', 'display.mjs', 'model.mjs', 'render.mjs', 'preferences.mjs', 'dashboard.js'):
+    for name in ('live-frames.js', 'i18n.mjs', 'display.mjs', 'model.mjs', 'render.mjs', 'preferences.mjs', 'dashboard.js'):
         js = (ROOT / name).read_text(encoding='utf-8')
         js = re.sub(r'^import .*?;\s*', '', js, flags=re.M)
         js = re.sub(r'^export ', '', js, flags=re.M)
@@ -55,6 +55,7 @@ def build():
         modules.append(js)
     html = (ROOT / 'index.html').read_text(encoding='utf-8')
     html = html.replace('<link rel="stylesheet" href="dashboard.css">', '<style>' + (ROOT / 'dashboard.css').read_text(encoding='utf-8') + '</style>')
+    html = html.replace('<script src="live-frames.js"></script>', '')
     html = html.replace('<script type="module" src="dashboard.js"></script>',
                         '<script type="application/json" id="dashboardCatalogs">' + bundled_catalogs() + '</script>'
                         '<script>\n(()=>{\n' + '\n'.join(modules) + '\n})();\n</script>')

@@ -58,7 +58,7 @@ def test_memory_exhaustion_drops_the_connection_instead_of_crashing(monkeypatch)
     handler must treat it as a droppable frame, not a crash.
     """
 
-    async def exhausted() -> str:
+    async def exhausted(strategy_revision=None, *, include_traces=True) -> str:
         raise MemoryError
 
     # The frame is encoded by the store, under its lock, in one step.
@@ -92,3 +92,24 @@ def test_send_racing_a_client_close_ends_quietly(monkeypatch) -> None:
     with pytest.raises(Exception) as excinfo, TestClient(app).websocket_connect("/ws") as ws:
         ws.receive_json()
     assert not isinstance(excinfo.value, RuntimeError)
+
+
+def test_trace_visibility_applies_to_one_socket_and_reopens_with_current_data(monkeypatch):
+    from pitwall.state import StateStore
+
+    store = StateStore()
+    store.state.traces = [{"d": 10, "t": 1, "speed": 120}]
+    monkeypatch.setattr(app_module, "store", store)
+    monkeypatch.setattr(app_module, "WEBSOCKET_PUSH_INTERVAL_S", 0.01)
+    with TestClient(app).websocket_connect("/ws") as ws:
+        first = ws.receive_json()
+        assert first["traces"] == store.state.traces
+        ws.send_json({"strategy": first["strategy_revision"], "traces": False})
+        hidden = ws.receive_json()
+        assert hidden["traces"] == []
+        assert hidden["strategy"]["unchanged"] is True
+        with TestClient(app).websocket_connect("/ws") as legacy:
+            assert legacy.receive_json()["traces"] == first["traces"]
+        store.state.traces.append({"d": 30, "t": 2, "speed": 140})
+        ws.send_json({"strategy": first["strategy_revision"], "traces": True})
+        assert ws.receive_json()["traces"] == store.state.traces

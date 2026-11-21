@@ -520,8 +520,12 @@ async def _startup_catalog_sync() -> None:
     """Backfill legacy laps in resumable batches without delaying startup."""
 
     try:
+        reconcile_sessions = True
         while True:
-            report = await database.catalog.sync_legacy(batch_size=250)
+            report = await database.catalog.sync_legacy(
+                batch_size=250, reconcile_sessions=reconcile_sessions
+            )
+            reconcile_sessions = False
             if not int(report.get("laps_remaining", 0)):
                 return
             await asyncio.sleep(0)
@@ -1311,10 +1315,12 @@ async def websocket_state(websocket: WebSocket) -> None:
     # The strategy revision the client holds, from its last acknowledgement.
     # An older client acknowledges with "." and gets every frame in full.
     held_strategy: int | None = None
+    include_traces = True
     try:
         while True:
             try:
-                await websocket.send_text(await store.snapshot_live_json(held_strategy))
+                frame = await store.snapshot_live_json(held_strategy, include_traces=include_traces)
+                await websocket.send_text(frame)
             except MemoryError:
                 # Serializing a frame is the largest single allocation this
                 # process makes at 4 Hz, so when the machine is out of memory
@@ -1343,7 +1349,7 @@ async def websocket_state(websocket: WebSocket) -> None:
                 acknowledgement = await asyncio.wait_for(
                     websocket.receive_text(), timeout=WEBSOCKET_ACK_TIMEOUT_S
                 )
-                held_strategy = _held_strategy_revision(acknowledgement)
+                held_strategy, include_traces = _live_frame_preferences(acknowledgement)
             except TimeoutError:
                 log.warning(
                     "Dashboard stopped acknowledging live state after %.0fs; "
@@ -1357,14 +1363,16 @@ async def websocket_state(websocket: WebSocket) -> None:
         pass
 
 
-def _held_strategy_revision(acknowledgement: str) -> int | None:
-    """The strategy revision a dashboard says it holds, or None for "send it"."""
+def _live_frame_preferences(acknowledgement: str) -> tuple[int | None, bool]:
+    """Default to full frames for older clients and malformed acknowledgements."""
     try:
         value = json.loads(acknowledgement)
     except (TypeError, ValueError):
-        return None
-    revision = value.get("strategy") if isinstance(value, dict) else None
-    return revision if isinstance(revision, int) and not isinstance(revision, bool) else None
+        return None, True
+    if not isinstance(value, dict):
+        return None, True
+    revision = value.get("strategy")
+    return (revision if type(revision) is int else None), value.get("traces") is not False
 
 
 @app.post("/api/ask")

@@ -772,7 +772,7 @@ class StateStore:
                 self.state.analysis.clear()
                 # New questions after a rewind must not quote the abandoned
                 # branch's stop call or live tyre evidence while recomputing.
-                self.state.strategy.clear()
+                self.state.strategy = {}
                 self.state.run_serial += 1
                 changed = True
             if changed:
@@ -836,7 +836,7 @@ class StateStore:
         return low_t + fraction * (high_t - low_t)
 
     def _serialize_locked(
-        self, profile: SnapshotProfile, copy_values: bool = True
+        self, profile: SnapshotProfile, copy_values: bool = True, *, include_traces: bool = True
     ) -> dict[str, Any]:
         """Build one snapshot while the lock is held.
 
@@ -870,7 +870,7 @@ class StateStore:
                     drivers.append(serialized)
                 data[name] = drivers
             elif name == "traces":
-                if profile in {"analysis", "radio"}:
+                if not include_traces or profile in {"analysis", "radio"}:
                     data[name] = []
                 else:
                     # Keep the dashboard responsive on long circuits, and keep
@@ -961,7 +961,9 @@ class StateStore:
         async with self._lock:
             return self._serialize_locked("live")
 
-    async def snapshot_live_json(self, strategy_revision: int | None = None) -> str:
+    async def snapshot_live_json(
+        self, strategy_revision: int | None = None, *, include_traces: bool = True
+    ) -> str:
         """The live snapshot already encoded for a websocket frame.
 
         The live snapshot, without first deep-copying every field: the encoder
@@ -978,7 +980,7 @@ class StateStore:
                 self._live_strategy_ref = self.state.strategy
                 self._live_strategy_revision += 1
             revision = self._live_strategy_revision
-            data = self._serialize_locked("live", copy_values=False)
+            data = self._serialize_locked("live", copy_values=False, include_traces=include_traces)
             data["strategy_revision"] = revision
             if strategy_revision == revision:
                 data["strategy"] = {"revision": revision, "unchanged": True}
@@ -1272,7 +1274,8 @@ class StateStore:
         self, point: dict[str, Any], min_distance_m: float | None = None
     ) -> None:
         async with self._lock:
-            self._append_trace_locked(self.state, point, min_distance_m)
+            # This entry point accepts caller-owned data. Live UDP builds its own samples.
+            self._append_trace_locked(self.state, copy.deepcopy(point), min_distance_m)
 
     async def update_telemetry_and_trace(
         self,
@@ -1444,7 +1447,8 @@ class StateStore:
                     "setup": copy.deepcopy(start.get("setup", state.car_setup)),
                     "incidents": [copy.deepcopy(event) for event in state.events_log if event.get("lap") == old_lap
                                   and event.get("type") in {"PENA", "COLL", "RTMT", "SPTP", "SCAR", "RDFL"}],
-                    "trace": copy.deepcopy(state.traces),
+                    # The completed lap owns this buffer. The next lap gets a new one below.
+                    "trace": state.traces,
                     "created_at": time.time(),
                 }
                 if gap:
@@ -1469,7 +1473,7 @@ class StateStore:
                 state.completed_laps.append(summary)
                 state.completed_laps.sort(key=lambda row: row["lap_num"])
                 state.completed_laps = state.completed_laps[-100:]
-                state.traces.clear()
+                state.traces = []
 
             state.current_lap = max(0, int(new_lap))
             state.last_lap_ms = int(last_lap_ms)

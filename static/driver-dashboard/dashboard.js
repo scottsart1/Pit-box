@@ -71,11 +71,24 @@ function render(){
   $('sessionStatus').textContent=sourceLabel;$('trackStatus').textContent=m.flag.id==='finish'?i18n.t('Session complete'):m.fresh?m.track+' · '+m.session:i18n.t('Start a simulator session');$('raceModeSource').textContent=sourceLabel;
   updateStorageLabel();
 }
-function acceptState(s){if(!s||typeof s!=='object')return;currentState=s;receivedAt=Date.now();scheduleRender()}
+function acceptState(s, paint = scheduleRender){
+  if(!s||typeof s!=='object')return;
+  currentState=s;
+  receivedAt=Date.now();
+  paint();
+}
 function updateDemo(){acceptState(demoState($('scenarioSelect').value,tick))}
 function stopMotion(){clearInterval(motion);motion=null;$('motionButton').textContent=i18n.t('Play sample');$('motionButton').setAttribute('aria-pressed','false')}
 function disconnect(){clearTimeout(retry);retry=null;if(ws){ws.onclose=null;ws.close();ws=null}}
-function connect(){disconnect();if(source!=='live'||!installed)return;const socket=new WebSocket(`${location.protocol==='https:'?'wss':'ws'}://${location.host}/ws`);ws=socket;socket.onmessage=e=>{try{acceptState(JSON.parse(e.data))}catch{/* malformed frame stays stale */}if(socket.readyState===WebSocket.OPEN)socket.send('.')};socket.onclose=()=>{if(source==='live')retry=setTimeout(connect,1500)};socket.onerror=()=>socket.close()}
+function connect(){
+  disconnect();
+  if(source!=='live'||!installed)return;
+  const socket=new WebSocket(`${location.protocol==='https:'?'wss':'ws'}://${location.host}/ws`);
+  ws=socket;
+  socket.onmessage=receiveLiveFrames(socket, state => acceptState(state, render));
+  socket.onclose=()=>{if(source==='live')retry=setTimeout(connect,1500)};
+  socket.onerror=()=>socket.close();
+}
 function setSource(){stopMotion();disconnect();source=$('sourceSelect').value==='demo'?'demo':embedded?'embedded':'live';currentState=null;receivedAt=0;$('demoControls').hidden=source!=='demo';if(source==='demo')updateDemo();else if(source==='live')connect();else if(latestParent){currentState=latestParent;receivedAt=parentReceivedAt}scheduleRender()}
 function chooseLayout(id){if(!['auto',...LAYOUTS].includes(id))return;preferences.layout=id;save();history.replaceState(null,'',location.pathname+location.search+(id==='auto'?'':'#'+id));applyDisplay()}
 async function acquireWake(){if(!raceMode||document.visibilityState!=='visible'||!('wakeLock'in navigator))return;try{wakeLock=await navigator.wakeLock.request('screen')}catch{/* Browser settings may deny a wake lock. */}}

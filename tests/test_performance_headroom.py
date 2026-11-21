@@ -254,9 +254,9 @@ async def test_the_live_frame_leaves_out_what_no_screen_draws():
     ('{"strategy": true}', None), ('{"strategy": "4"}', None), ("[4]", None),
 ])
 def test_the_acknowledgement_names_the_strategy_held(text, expected):
-    from pitwall.app import _held_strategy_revision
+    from pitwall.app import _live_frame_preferences
 
-    assert _held_strategy_revision(text) == expected
+    assert _live_frame_preferences(text) == (expected, True)
 
 
 # --- PF-04: when the planner runs -----------------------------------------------------
@@ -334,3 +334,32 @@ async def test_continuous_changes_respect_the_floor(monkeypatch):
     await engineer._refresh_strategy_if_needed(_radio(32.0))
     assert strategy.recomputes == 2
     assert engineer._recomputes_per_min() == 2
+
+
+@pytest.mark.asyncio
+async def test_lap_trace_handoff_survives_more_packets_and_a_flashback():
+    store = StateStore()
+    await store.update(session_uid=7)
+    await store.transition_lap(1, 0, False, 5, 0, 0)
+    point = {"t": 3.0, "d": 90.0, "speed": 180, "slip": [0.1] * 4}
+    await store.add_trace_point(point)
+    old_buffer = store.state.traces
+    await store.transition_lap(2, 90000, False, 5, 0, 0)
+    finished = store.lap_queue.get_nowait()
+    assert finished["trace"] is old_buffer
+    await store.add_trace_point({"t": 91.0, "d": 30.0, "speed": 120})
+    await store.synchronize_session_epoch(7, 0, 1)
+    point["slip"][0] = 10
+    assert store.state.traces == []
+    assert finished["trace"] == [{"t": 3.0, "d": 90.0, "speed": 180, "slip": [0.1] * 4}]
+
+
+@pytest.mark.asyncio
+async def test_flashback_invalidates_the_strategy_held_by_a_dashboard():
+    store = StateStore()
+    await store.update(session_uid=7, strategy={"available": True})
+    first = json.loads(await store.snapshot_live_json())
+    await store.synchronize_session_epoch(7, 0, 1)
+    reset = json.loads(await store.snapshot_live_json(first["strategy_revision"]))
+    assert reset["strategy"] == {}
+    assert reset["strategy_revision"] > first["strategy_revision"]
