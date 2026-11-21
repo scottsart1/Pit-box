@@ -22,7 +22,8 @@ function harness(){
   const context=vm.createContext({normalizeState,finite,positive,i18n:globalThis.i18n,URLSearchParams,
     location:{search:'',protocol:'http:',host:'pitbox.test'},Date:{now:()=>time},
     document:{getElementById:get,body:{classList:{add(){}}}},fetch:()=>new Promise(()=>{}),
-    setTimeout:()=>{},setInterval:fn=>timers.push(fn),WebSocket:class{constructor(){sockets.push(this);}}});
+    setTimeout:()=>{},setInterval:fn=>timers.push(fn),WebSocket:class{static OPEN=1;readyState=1;acks=[];send(ack){this.acks.push(JSON.parse(ack));}constructor(){sockets.push(this);}}});
+  vm.runInContext(fs.readFileSync(new URL('../static/driver-dashboard/live-frames.js',import.meta.url),'utf8'),context);
   vm.runInContext(script,context);
   return {get,context,sockets,send:s=>sockets.at(-1).onmessage({data:JSON.stringify(s)}),tick:ms=>{time+=ms;timers.forEach(fn=>fn());},
     render:s=>context.render(s,{now:time}),text:id=>get(id).textContent};
@@ -73,4 +74,20 @@ test('Overlay socket close and silent expiry clear live output; a confirmed red 
   assert.match(h.text('strat'),/fresh MEDIUM/);assert.equal(h.text('tyre'),'—');
   h.send({...state(),packet_group_freshness:{'1':104.6,'2':104.6,'7':104.6,'10':104.6}});
   assert.equal(h.text('status'),'Live telemetry');assert.equal(h.text('alternative'),'');
+});
+
+test('Overlay acknowledges consecutive frames and keeps the strategy for a matching revision',()=>{
+  const h=harness(),s=state(),socket=h.sockets[0];
+  h.send({...s,strategy_revision:9});
+  assert.equal(socket.acks[0].strategy,9);
+  assert.equal(socket.acks[0].traces,false);
+  h.send({...s,player_position:2,strategy:{revision:9,unchanged:true}});
+  assert.equal(h.text('pos'),'P2');
+  assert.equal(h.text('strat'),'BOX NOW for HARD');
+  assert.equal(socket.acks.length,2);
+  h.send({...s,player_position:3,strategy:{revision:10,unchanged:true}});
+  assert.equal(h.text('pos'),'P3');
+  assert.equal(socket.acks[2].strategy,null);
+  h.send({...s,strategy_revision:10});
+  assert.equal(socket.acks[3].strategy,10);
 });

@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Your Pit Box Overlay</title>
 <script src="/static/js/i18n.js?v=5.8.0"></script>
+<script src="/static/driver-dashboard/live-frames.js?v=5.8.0"></script>
 <style>
 /* Transparent by default for OBS browser sources. Append ?bg=1 for an opaque
    panel when using this as a phone/tablet second screen. */
@@ -138,7 +139,7 @@ function accept(state){snapshot = state && typeof state === 'object' ? state : {
 function disconnect(){messageVersion++; transportLost = true; paint();}
 function connect(){
   const ws = new WebSocket((location.protocol === "https:" ? "wss://" : "ws://") + location.host + "/ws");
-  ws.onmessage = (ev) => { try { const state = JSON.parse(ev.data); messageVersion++; accept(state); } catch (e) {} };
+  ws.onmessage = receiveLiveFrames(ws, state => { messageVersion++; accept(state); });
   ws.onerror = disconnect;
   ws.onclose = () => {disconnect(); setTimeout(connect, 1000);};
 }

@@ -154,11 +154,13 @@ class SessionCatalog:
             with connection:
                 yield connection
 
-    async def sync_legacy(self, *, batch_size: int = 250) -> dict[str, int]:
+    async def sync_legacy(
+        self, *, batch_size: int = 250, reconcile_sessions: bool = True
+    ) -> dict[str, int]:
         if not 1 <= int(batch_size) <= 10_000:
             raise ValueError("batch_size must be between 1 and 10000")
         async with self._lock:
-            return await asyncio.to_thread(self._sync_legacy_sync, int(batch_size))
+            return await asyncio.to_thread(self._sync_legacy_sync, int(batch_size), reconcile_sessions)
 
     def _ensure_legacy_session(
         self,
@@ -207,6 +209,12 @@ class SessionCatalog:
                 status=CASE WHEN excluded.ended_at IS NOT NULL THEN 'complete'
                             ELSE recorded_sessions.status END,
                 updated_at=excluded.updated_at
+            WHERE recorded_sessions.legacy_session_uid IS NULL
+               OR recorded_sessions.track_id IS NOT excluded.track_id
+               OR recorded_sessions.session_type IS NOT excluded.session_type
+               OR recorded_sessions.mode_profile IS NOT excluded.mode_profile
+               OR (excluded.ended_at IS NOT NULL AND
+                   (recorded_sessions.ended_at IS NULL OR recorded_sessions.status IS NOT 'complete'))
             """,
             (
                 key,
@@ -238,15 +246,15 @@ class SessionCatalog:
         )
         return key, car_key
 
-    def _sync_legacy_sync(self, batch_size: int) -> dict[str, int]:
+    def _sync_legacy_sync(self, batch_size: int, reconcile_sessions: bool) -> dict[str, int]:
         inserted_sessions = 0
         inserted_laps = 0
         with self._connect() as db:
-            sessions = db.execute("SELECT * FROM sessions ORDER BY started_at, session_uid").fetchall()
-            for row in sessions:
-                before = db.total_changes
-                self._ensure_legacy_session(db, row)
-                inserted_sessions += int(db.total_changes > before)
+            if reconcile_sessions:
+                for row in db.execute("SELECT * FROM sessions ORDER BY started_at, session_uid"):
+                    before = db.total_changes
+                    self._ensure_legacy_session(db, row)
+                    inserted_sessions += int(db.total_changes > before)
 
             laps = db.execute(
                 """

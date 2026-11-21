@@ -2649,8 +2649,7 @@ class StrategyEngine:
         }
         mode = str(state.get("mode_profile", "race"))
         expected_points = sum(points_for_position(position, mode) * count for position, count in counts.items()) / total
-        upside = int(np.quantile(positions, 0.10, method="nearest"))
-        downside = int(np.quantile(positions, 0.90, method="nearest"))
+        upside, downside = map(int, np.quantile(positions, (0.10, 0.90), method="nearest"))
         exposure = {
             **finishing_chances(positions, mode),
             **(race.sensitivities(positions) if race is not None else {}),
@@ -3233,6 +3232,10 @@ class StrategyEngine:
             outcomes + race.plan_adjustment(plan, start_compound)
             if race is not None and race.samples == samples else outcomes
         )
+        risk_quantile = min(0.95, max(0.5, float(risk_quantile)))
+        p25, p50, p75, p90, risk_time = np.quantile(
+            outcomes, (0.25, 0.50, 0.75, 0.90, risk_quantile)
+        )
         return {
             "samples": samples,
             "simulation_samples": samples,
@@ -3242,15 +3245,13 @@ class StrategyEngine:
             "stint_evidence_samples": stint_evidence,
             "tyre_uncertainty_s": round(tyre_sigma, 4),
             "pit_uncertainty_s": round(pit_sigma, 4),
-            "p25_s": round(float(np.quantile(outcomes, 0.25)), 2),
-            "p50_s": round(float(np.quantile(outcomes, 0.50)), 2),
-            "p75_s": round(float(np.quantile(outcomes, 0.75)), 2),
-            "p90_s": round(float(np.quantile(outcomes, 0.90)), 2),
+            "p25_s": round(float(p25), 2),
+            "p50_s": round(float(p50), 2),
+            "p75_s": round(float(p75), 2),
+            "p90_s": round(float(p90), 2),
             # The configured quantile the plan is ranked on.
-            "risk_quantile": round(min(0.95, max(0.5, float(risk_quantile))), 3),
-            "risk_s": round(
-                float(np.quantile(outcomes, min(0.95, max(0.5, float(risk_quantile))))), 2
-            ),
+            "risk_quantile": round(risk_quantile, 3),
+            "risk_s": round(float(risk_time), 2),
             "mean_s": round(float(np.mean(outcomes)), 2),
             "uncertainty_s": round(float(np.std(outcomes)), 2),
             "evidence_samples": evidence,
